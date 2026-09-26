@@ -37,3 +37,20 @@ _Avoid_: UI host, Bun host, server, host (unqualified)
 **Bridge**:
 The message channel between a hosted app and the buffer that presents it. Only hosted apps get a bridge; other web content never does.
 _Avoid_: editor channel, event pipe
+
+## Agents
+
+**Coding agent**:
+A program such as Claude Code or Codex that runs in a terminal view and works in turns. A terminal view counts as running one once it sends an agent signal.
+_Avoid_: bot, assistant
+
+**Agent signal**:
+Something a coding agent reports that changes its agent state. It arrives in-band as a terminal escape sequence, or out of band from an agent hook.
+
+**Agent state**:
+Where a coding agent is in its turn: *working*, *blocked* (waiting for a decision from you), *done* (its turn ended while you weren't looking) or *idle* (its turn ended and you have seen it). The agent only reports that a turn ended. Emacs decides between done and idle.
+_Avoid_: agent status
+
+**Agent dashboard**:
+The Emacs buffer that lists every coding agent and its agent state, updated as they change.
+_Avoid_: sidebar
