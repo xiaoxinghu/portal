@@ -3,11 +3,22 @@
 Question: can a module loaded by GUI Emacs summon a launcher-sized, precisely
 positioned **real Emacs buffer inside an NSPanel**, without an M-x app?
 
-**Result so far:** real NSPanel hosting, graphical redisplay, keyboard input into
-its own minibuffer, pixelwise resizing, and placement on both connected monitors
-work on the tested GNU Emacs NS build. The system hotkey registers successfully;
-a physical press from another app still needs confirmation. App-targeted automation
-did not deliver a global hotkey event. Do not call that final step proven yet.
+**Design verdict: proceed with a dedicated, fixed-role launcher frame on the
+tested GNU Emacs NS build.** A small in-process module can own a real NSPanel
+while buffers, completion, capture, editing, and keymaps remain Elisp. No Emacs
+patch or separate launcher app was needed for the demonstrated workflows.
+
+The original generic forwarding implementation is rejected: a routine appearance
+change crashed Emacs. The revised experiment replaces it with explicit window
+compatibility methods, restores the original window before frame deletion, and
+rejects changes to the launcher's native role. This is not a general-purpose
+replacement for every EmacsWindow behavior or an unconditional release approval.
+
+Physical global shortcut delivery was subsequently observed: the native callback
+recorded four activations, and the real minibuffer returned `hello`. The expanded
+experiment passed 62 automated assertions and an additional native dead-key
+composition check ([saved results](evidence/launcher-checks.txt)). Fullscreen/Spaces acceptance remains pending a foreground
+user check; background-targeted automation cannot establish it reliably.
 
 ![Actual NSPanel with Emacs buffer and active minibuffer](evidence/launcher-panel.png)
 
@@ -23,6 +34,18 @@ Requires macOS, Xcode Command Line Tools, and a module-enabled GNU Emacs NS buil
 Defaults to `/Applications/Emacs.app`; `EMACS` overrides the GUI executable and
 `EMACS_INCLUDE` overrides the directory containing `emacs-module.h`.
 `./launcher-prototype.sh --build-only` just compiles the module.
+
+`./launcher-prototype.sh --workflows` also loads the installed Vertico, Consult,
+Marginalia, Corfu, Posframe, and Compat packages from `elpa/` under Emacs's normal
+user directory. `PORTAL_PROTOTYPE_ELPA` can override that location. It loads no
+user init and disables JIT native compilation in this isolated test process.
+In the demo buffer, **c** opens completion, **o** captures to the scratch file
+`build/launcher-capture.org`, **e** opens an editable buffer with Corfu, and
+**F8** restores the demo. These commands do not use personal capture templates.
+
+Run `M-x portal-prototype-run-checks`, `M-x portal-prototype-input-checks`, and
+`M-x portal-prototype-child-lifecycle-check` in that test Emacs for the automated
+checks. Results are written to `build/launcher-workflow-results.el`.
 
 The script starts a separate `emacs -Q` with a dedicated
 `portal-launcher-prototype` server. It does not load your init, install an app,
@@ -87,7 +110,7 @@ The second display's global frame starts at **2560,-483**, so the test includes
 unequal monitor origins and orientations. An offset of -137 right / +81 down
 at 713×407 produced the requested **2786,497** origin exactly.
 
-Additional observed checks:
+Additional observations from the first experiment:
 
 - Native runtime class `PortalPrototypePanel`, `isKindOfClass:NSPanel = true`,
   first responder `EmacsView`, content bounds equal requested window size.
@@ -97,7 +120,8 @@ Additional observed checks:
 - Escape dismissal, C-g prompt cancellation, and dismissal of an active prompt.
 - Successful global hotkey registration. Injecting the resulting notification
   into the Elisp filter exercises show/hide through the command loop, but does
-  **not** validate physical system shortcut delivery.
+  **not** validate physical system shortcut delivery. A subsequent physical test
+  recorded four native hotkey callbacks and the minibuffer answer `hello`.
 - Native module compiled with `-Wall -Wextra -Werror`; shell syntax and Elisp
   parentheses checked. Portal build succeeded. All 25 CTest suites passed
   across the initial run and rerun of 8 environment-related failures. Those
@@ -109,13 +133,82 @@ diagnostics in `build/launcher-prototype.log`. The native state includes a
 `hotkeyPresses` counter so a real system invocation can be distinguished from
 directly calling the presentation command.
 
+## Second experiment: compatibility and real workflows
+
+The initial failure was reproduced with:
+
+```elisp
+(set-frame-parameter portal-prototype-frame 'ns-appearance 'dark)
+```
+
+The isolated process exited with signal 6. The macOS crash report identified
+`-[EmacsWindow setAppearance]` dereferencing address `0x268`: generic forwarding
+sent the message into a donor window whose delegate had been cleared. The
+method reads an internal Emacs frame through that delegate.
+
+The replacement retains the original delegate and uses exactly two intentional
+donor methods: appearance calculation (then applying the resulting appearance
+to the panel) and accessibility text retrieval. It implements border width,
+restacking, and mouse-event retention on the actual panel. There is **no generic
+selector forwarding**, runtime class swapping, copied private frame layout, or
+Emacs patch. Outbound system drag-and-drop is explicitly cancelled in the
+prototype; it is not advertised as supported.
+
+The launcher frame cannot change its `undecorated`, `fullscreen`, `parent-frame`,
+or `tool-bar-lines` parameter. These changes can recreate native windows or
+invoke other EmacsWindow-only behavior. A dedicated launcher has no need to
+become a normal document window. Its buffers, fonts, theme appearance, size,
+and ordinary Emacs windows remain configurable. Deletion is supported: a
+pre-deletion hook restores the original EmacsWindow, and the next invocation
+creates a new frame while keeping the global hotkey registered.
+
+| Check | Observed result |
+| --- | --- |
+| Appearance dark → light → system | Correct native appearances; former crash eliminated |
+| Menlo 13/18/15, odd 713×407 size | Exact frame dimensions retained |
+| Forbidden native-role changes | Elisp error before native mutation |
+| 100 show/hide cycles | Completed, panel hidden afterward |
+| 20 delete/recreate cycles | View detached and restored correctly |
+| Delete parent with live child frame | Both deleted; next invocation recreated launcher |
+| Vertico/Marginalia completion | Real candidates rendered and `Hello world` selected |
+| Nested minibuffers | Both prompts stayed in launcher; no leaked recursive edit |
+| Org capture | Typed and finalized `Native panel capture experiment` in scratch file |
+| Corfu child-frame completion | Rendered, navigated, and accepted `message-box` |
+| Mouse click followed by typing | Continued editing in panel without missing-selector failure |
+| Native dead-key composition | Option-E showed marked text; E committed `é` |
+| Accessibility text | Panel now exposes buffer/prompt text; full VoiceOver behavior untested |
+| Busy Emacs | A 50ms timer was delayed beyond a 500ms non-yielding Lisp computation |
+| Portal regression suite | Build and all 25 CTest suites passed in one run |
+
+The native dead-key check temporarily set `ns-alternate-modifier` to `none` in
+the isolated Emacs, then restored it. It exercises native marked text and commit;
+it is not evidence for every Chinese/Japanese IME candidate-window workflow.
+
+![Real Vertico completion](evidence/launcher-vertico.png)
+![Real Org capture](evidence/launcher-capture.png)
+![Real Corfu child frame](evidence/launcher-corfu.png)
+
+Org initially moved focus to the controller because template expansion requests
+another window. Binding `display-buffer-overriding-action` to use the launcher's
+current window for that command fixed it. This is Elisp presentation policy,
+and illustrates why arbitrary existing commands may need small launcher wrappers.
+
+The follow-up ran on the built-in 1728×1117 Retina display; the earlier two-monitor
+measurements above remain the evidence for the external-display arrangement.
+
 ## Findings and limits
 
 An NSPanel is an NSWindow subclass; the content remains an EmacsView/NSView.
 This experiment moves the existing content view into a borderless,
-nonactivating, floating NSPanel. It retains the original EmacsWindow and routes
-unrecognized EmacsWindow-specific messages back to it. This is a narrow
-compatibility experiment, not a supported embedding API.
+nonactivating, floating NSPanel. Its small, explicit compatibility layer still
+depends on GNU Emacs NS implementation details. Only the exact Emacs build above
+has been tested. Other ports/builds are not implied to work.
+The relevant [EmacsWindow/EmacsView declarations](https://github.com/emacs-mirror/emacs/blob/a360712c9d272d950d8d8255ef74570f7e90b7d9/src/nsterm.h)
+are internal backend interfaces, not a supported buffer-embedding API. The
+reproduced crash demonstrates the main integration risk: a module defect can
+take down the whole Emacs process. A production integration should initially be
+opt-in and refuse unvalidated builds, with this compatibility code kept in one
+small, version-tested module.
 
 Two issues required explicit coordination with Elisp:
 
@@ -128,16 +221,23 @@ Two issues required explicit coordination with Elisp:
    restoring the selected frame. Native ownership alone does not remove Emacs's
    frame/minibuffer selection rules.
 
-This is encouraging evidence for merging a small presentation/hotkey capability
-into Portal while keeping buffer content, keymaps, prompts, and commands in
-Elisp. It does not justify committing to a general NSPanel host yet.
+The recommended scope for Portal is a private presentation module for a dedicated
+launcher frame, with tested Emacs versions and an explicit lifecycle. The
+experiment establishes that retaining real buffers does not require building a
+native result-list UI, a new renderer, or a separate application.
 
-Still to validate: physical global shortcut delivery, native fullscreen apps and
-Spaces, IME composition, accessibility (the panel AX tree currently exposes only
-the dialog), arbitrary packages/child frames, lifecycle changes to the original
-frame, and behavior while Emacs is busy. The callback queues an Elisp command,
-so a blocked Emacs command loop can delay presentation. Generic selector
-forwarding can act on the hidden donor window and is not a production strategy.
+Remaining release gates: real foreground fullscreen/Spaces behavior, full IME
+candidate windows and VoiceOver, longer use with the complete user configuration,
+and compatibility testing for every advertised Emacs version. TextEdit was put
+in native fullscreen for a test, but automation continued targeting background
+apps while the actual frontmost app remained Chrome. That does not prove overlay
+behavior in an active fullscreen Space, so the requested physical test is pending.
+
+Two constraints are settled rather than merely untested: Emacs must be running,
+and a blocked Emacs command loop delays launcher work. If independent startup or
+always-responsive presentation is required, an external helper/process is needed.
+The general-purpose arbitrary-frame NSPanel-hosting design is rejected; the
+fixed-role launcher design is the supported conclusion of this experiment.
 
 No Emacs patches, replacement text renderer, SwiftUI candidate list, or separate
 launcher app are involved. The current prototype is intentionally separate from

@@ -12,6 +12,8 @@
 (defvar portal-prototype-open nil)
 (defvar portal-prototype-log nil)
 (defvar portal-prototype-pending "")
+(defvar portal-prototype-pipe nil)
+(defvar portal-prototype-write-log t)
 
 (defun portal-prototype-record (event)
   (let ((entry (list :event event :time (float-time)
@@ -21,11 +23,13 @@
                                   (list (frame-pixel-width portal-prototype-frame)
                                         (frame-pixel-height portal-prototype-frame))))))
     (push entry portal-prototype-log)
-    (with-temp-file (expand-file-name "build/launcher-prototype-state.el" portal-prototype-directory)
-      (pp (reverse portal-prototype-log) (current-buffer)))))
+    (when portal-prototype-write-log
+      (with-temp-file (expand-file-name "build/launcher-prototype-state.el" portal-prototype-directory)
+        (pp (reverse portal-prototype-log) (current-buffer))))))
 
 (defun portal-prototype-show ()
   (interactive)
+  (unless (frame-live-p portal-prototype-frame) (portal-prototype-create-frame))
   (unless portal-prototype-open
     (setq portal-prototype-return-frame (selected-frame)))
   ;; Select the Lisp frame without activating Emacs.app. NSPanel owns native focus.
@@ -117,21 +121,31 @@
 
 (defun portal-prototype-stop ()
   (interactive)
+  (remove-hook 'delete-frame-functions #'portal-prototype-before-delete)
+  (advice-remove 'modify-frame-parameters #'portal-prototype-guard-parameters)
   (when (fboundp 'portal-prototype--stop) (portal-prototype--stop))
   (setq portal-prototype-open nil)
   (when (frame-live-p portal-prototype-frame) (delete-frame portal-prototype-frame))
   (setq portal-prototype-frame nil))
 
-(defun portal-prototype-start ()
-  (setq frame-resize-pixelwise t inhibit-startup-screen t)
-  (setq server-name "portal-launcher-prototype")
-  (when (server-running-p server-name)
-    (error "Launcher prototype is already running; quit that test Emacs first"))
-  (server-start)
-  (module-load (expand-file-name "build/launcher-prototype.dylib" portal-prototype-directory))
-  (let ((controller (selected-frame))
-        (pipe (make-pipe-process :name "launcher-prototype" :noquery t
-                                  :coding 'utf-8-unix :filter #'portal-prototype-filter)))
+(defun portal-prototype-before-delete (frame)
+  (when (eq frame portal-prototype-frame)
+    ;; Restore the actual EmacsWindow before Emacs destroys its frame/view.
+    (portal-prototype--detach)
+    (setq portal-prototype-frame nil portal-prototype-open nil)))
+
+(defun portal-prototype-guard-parameters (original frame parameters)
+  ;; This frame is a dedicated top-level launcher, with immutable native role.
+  ;; These changes rebuild the native window or require EmacsWindow-only logic.
+  (when (eq (or frame (selected-frame)) portal-prototype-frame)
+    (dolist (parameter parameters)
+      (when (and (memq (car parameter) '(undecorated fullscreen parent-frame tool-bar-lines))
+                 (not (equal (cdr parameter) (frame-parameter portal-prototype-frame (car parameter)))))
+        (user-error "Launcher frame parameter %s is fixed; use a normal Emacs frame for that" (car parameter)))))
+  (funcall original frame parameters))
+
+(defun portal-prototype-create-frame ()
+  (let ((controller (selected-frame)))
     (setq portal-prototype-frame
           (make-frame '((name . "portal-prototype-donor") (title . "portal-prototype-donor")
                         (visibility . nil) (minibuffer . t) (undecorated . t)
@@ -142,9 +156,25 @@
                         (vertical-scroll-bars . nil) (horizontal-scroll-bars . nil)
                         (no-focus-on-map . t) (no-other-frame . t) (unsplittable . t))))
     (set-window-buffer (frame-root-window portal-prototype-frame) (portal-prototype-buffer))
-    (portal-prototype--install "portal-prototype-donor" pipe
+    (portal-prototype--install "portal-prototype-donor" portal-prototype-pipe
                                (not (equal (getenv "PORTAL_PROTOTYPE_WINDOW") "emacs")))
-    (select-frame controller 'norecord))
+    (select-frame controller 'norecord)))
+
+(defun portal-prototype-start ()
+  (setq frame-resize-pixelwise t inhibit-startup-screen t)
+  ;; Keep this standalone test independent of the installed GCC trampoline setup.
+  (setq native-comp-enable-subr-trampolines nil)
+  (setq server-name "portal-launcher-prototype")
+  (when (server-running-p server-name)
+    (error "Launcher prototype is already running; quit that test Emacs first"))
+  (server-start)
+  (module-load (expand-file-name "build/launcher-prototype.dylib" portal-prototype-directory))
+  (setq portal-prototype-pipe
+        (make-pipe-process :name "launcher-prototype" :noquery t
+                           :coding 'utf-8-unix :filter #'portal-prototype-filter))
+  (portal-prototype-create-frame)
+  (add-hook 'delete-frame-functions #'portal-prototype-before-delete)
+  (advice-add 'modify-frame-parameters :around #'portal-prototype-guard-parameters)
   (add-hook 'kill-emacs-hook #'portal-prototype-stop)
   (set-frame-parameter nil 'title "Portal launcher experiment — controller")
   (switch-to-buffer (get-buffer-create "*Launcher experiment controls*"))

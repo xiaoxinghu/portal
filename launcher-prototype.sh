@@ -10,6 +10,12 @@ xcrun clang -bundle -fobjc-arc -Wall -Wextra -Werror -Wno-deprecated-declaration
     experiments/launcher-prototype.m -o build/launcher-prototype.tmp.dylib
 mv build/launcher-prototype.tmp.dylib build/launcher-prototype.dylib
 if [[ "${1:-}" == "--build-only" ]]; then exit 0; fi
+if [[ "${1:-}" == "--workflows" ]]; then
+    set -- -l "$PWD/experiments/launcher-workflows.el"
+else
+    set --
+fi
 exec "$EMACS_BIN" -Q -l "$PWD/portal-launcher-prototype.el" \
     --eval '(condition-case err (portal-prototype-start) (error (message "%s" (error-message-string err)) (kill-emacs 1)))' \
+    "$@" \
     >build/launcher-prototype.log 2>&1

@@ -18,13 +18,23 @@ static EventHandlerRef handler;
 static int channel = -1;
 static BOOL installed, changing;
 static NSUInteger presses;
+static NSUInteger unsupportedDrags;
 static NSRect requested;
+static NSString *lastResign;
+struct frame;
+
+// The sole Emacs-specific window method used on the retained original window.
+// It reads this build's frame appearance through its original EmacsView delegate.
+@interface NSWindow (PortalEmacsAppearance)
+- (void)setAppearance;
+@end
 
 static void notify(const char *message) {
     if (installed && channel >= 0) (void)write(channel, message, strlen(message));
 }
 
 @interface PortalPrototypePanel : NSPanel
+@property(nonatomic, strong) NSEvent *lastDragEvent;
 @end
 @implementation PortalPrototypePanel
 - (BOOL)canBecomeKeyWindow { return YES; }
@@ -35,20 +45,41 @@ static void notify(const char *message) {
 }
 - (void)resignKeyWindow {
     [super resignKeyWindow];
+    lastResign = NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier;
     if (installed && !changing && self.visible) {
         [self orderOut:nil];
         notify("blur\n");
     }
 }
-// EmacsView sends some EmacsWindow-specific messages (e.g. setLastDragEvent:).
-// Preserve its original window as the fallback receiver for this experiment.
-// This is deliberately NOT a supported general-purpose EmacsWindow replacement.
-- (id)forwardingTargetForSelector:(SEL)selector {
-    if ([donor respondsToSelector:selector]) {
-        NSLog(@"Launcher prototype forwards %@ to EmacsWindow", NSStringFromSelector(selector));
-        return donor;
-    }
-    return [super forwardingTargetForSelector:selector];
+// Explicit, bounded compatibility instead of forwarding arbitrary messages.
+- (NSInteger)borderWidth { return NSWidth(self.frame) - NSWidth(self.contentView.frame); }
+- (void)setAppearance {
+    [donor setAppearance];
+    self.appearance = donor.appearance;
+}
+- (id)accessibilityAttributeValue:(NSString *)attribute {
+    // EmacsWindow supplies buffer text here; AppKit still owns the panel's role,
+    // children and geometry. No copied Lisp representation or native renderer.
+    if ([attribute isEqualToString:NSAccessibilityValueAttribute]
+        || [attribute isEqualToString:NSAccessibilitySelectedTextAttribute])
+        return [donor accessibilityAttributeValue:attribute];
+    return [super accessibilityAttributeValue:attribute];
+}
+- (BOOL)restackWindow:(NSWindow *)window above:(BOOL)above {
+    if (self.parentWindow != window.parentWindow) return NO;
+    [self orderWindow:above ? NSWindowAbove : NSWindowBelow relativeTo:window.windowNumber];
+    return YES;
+}
+- (BOOL)mustNotDropOn:(NSView *)receiver { (void)receiver; return NO; }
+- (NSDragOperation)beginDrag:(NSDragOperation)operation forPasteboard:(NSPasteboard *)pasteboard
+                   withMode:(int)mode returnFrameTo:(struct frame **)frame
+               prohibitSame:(BOOL)prohibit followTooltip:(BOOL)follow {
+    // Outbound system drag-and-drop is outside the launcher experiment. Return
+    // a cancelled drag without forwarding window state into the hidden donor.
+    (void)operation; (void)pasteboard; (void)mode; (void)prohibit; (void)follow;
+    if (frame) *frame = NULL;
+    unsupportedDrags++;
+    return NSDragOperationNone;
 }
 @end
 
@@ -77,11 +108,8 @@ static OSStatus pressed(EventHandlerCallRef call, EventRef event, void *context)
     return noErr;
 }
 
-static void stop(void) {
-    installed = NO;
+static void detach(void) {
     changing = YES;
-    if (hotkey) { UnregisterEventHotKey(hotkey); hotkey = NULL; }
-    if (handler) { RemoveEventHandler(handler); handler = NULL; }
     [launcher orderOut:nil];
     if (launcher && launcher != donor) {
         launcher.delegate = nil;
@@ -92,17 +120,29 @@ static void stop(void) {
         [launcher close];
     }
     launcher = nil; content = nil; editor = nil; donor = nil; previousApp = nil;
-    if (channel >= 0) { close(channel); channel = -1; }
     changing = NO;
+}
+
+static void stop(void) {
+    installed = NO;
+    if (hotkey) { UnregisterEventHotKey(hotkey); hotkey = NULL; }
+    if (handler) { RemoveEventHandler(handler); handler = NULL; }
+    detach();
+    if (channel >= 0) { close(channel); channel = -1; }
 }
 
 static emacs_value install(emacs_env *env, ptrdiff_t count, emacs_value *args, void *data) {
     (void)count; (void)data;
-    if (installed) return fail(env, "Prototype already installed; stop it first");
+    if (launcher) return fail(env, "Prototype already attached; detach it first");
     NSString *title = stringValue(env, args[0]);
     for (NSWindow *window in NSApp.windows) if ([window.title isEqualToString:title]) { donor = window; break; }
     if (!donor) return fail(env, "Cannot find the prototype Emacs frame");
-    channel = env->open_channel(env, args[1]);
+    if (![donor isKindOfClass:NSClassFromString(@"EmacsWindow")]
+        || ![donor.delegate isKindOfClass:NSClassFromString(@"EmacsView")]) {
+        donor = nil;
+        return fail(env, "This experiment requires GNU Emacs's NS EmacsWindow/EmacsView");
+    }
+    if (channel < 0) channel = env->open_channel(env, args[1]);
     if (channel < 0) { donor = nil; return fail(env, "Cannot open notification pipe"); }
     fcntl(channel, F_SETFL, fcntl(channel, F_GETFL) | O_NONBLOCK);
     fcntl(channel, F_SETNOSIGPIPE, 1);
@@ -119,7 +159,8 @@ static emacs_value install(emacs_env *env, ptrdiff_t count, emacs_value *args, v
         panel.hidesOnDeactivate = NO;
         panel.becomesKeyOnlyIfNeeded = NO;
         panel.floatingPanel = YES;
-        donor.delegate = nil;
+        // Keep the original delegate for the explicit appearance/accessibility methods
+        // above. A nil delegate crashes EmacsWindow's setAppearance method.
         donor.contentView = [[NSView alloc] initWithFrame:NSZeroRect];
         panel.contentView = content;
         panel.delegate = editor;
@@ -134,13 +175,18 @@ static emacs_value install(emacs_env *env, ptrdiff_t count, emacs_value *args, v
     launcher.hasShadow = YES;
     launcher.opaque = NO;
     launcher.backgroundColor = [NSColor colorWithRed:0.09 green:0.10 blue:0.13 alpha:1];
+    launcher.appearance = donor.appearance;
+    launcher.acceptsMouseMovedEvents = YES;
     launcher.contentView.wantsLayer = YES;
     launcher.contentView.layer.cornerRadius = 14;
     launcher.contentView.layer.masksToBounds = YES;
     [launcher makeFirstResponder:editor];
-    EventTypeSpec type = { kEventClassKeyboard, kEventHotKeyPressed };
-    OSStatus status = InstallEventHandler(GetApplicationEventTarget(), pressed, 1, &type, NULL, &handler);
-    if (status == noErr) {
+    OSStatus status = noErr;
+    if (!handler) {
+        EventTypeSpec type = { kEventClassKeyboard, kEventHotKeyPressed };
+        status = InstallEventHandler(GetApplicationEventTarget(), pressed, 1, &type, NULL, &handler);
+    }
+    if (status == noErr && !hotkey) {
         EventHotKeyID identity = { 'PrLP', 1 };
         status = RegisterEventHotKey(kVK_ANSI_P, controlKey | optionKey | cmdKey,
                                     identity, GetApplicationEventTarget(), 0, &hotkey);
@@ -153,7 +199,8 @@ static emacs_value install(emacs_env *env, ptrdiff_t count, emacs_value *args, v
 
 static emacs_value show(emacs_env *env, ptrdiff_t count, emacs_value *args, void *data) {
     (void)count; (void)data;
-    if (!installed) return fail(env, "Prototype not installed");
+    if (!installed || !launcher) return fail(env, "Prototype not attached");
+    if ([editor window] != launcher) return fail(env, "Emacs replaced the native launcher window");
     double width = env->extract_integer(env, args[0]), height = env->extract_integer(env, args[1]);
     double dx = env->extract_integer(env, args[2]), dy = env->extract_integer(env, args[3]);
     NSInteger index = env->extract_integer(env, args[4]);
@@ -203,6 +250,12 @@ static emacs_value state(emacs_env *env, ptrdiff_t count, emacs_value *args, voi
     NSDictionary *value = @{@"installed":@(installed), @"class":launcher ? NSStringFromClass(launcher.class) : @"none",
         @"panel":@([launcher isKindOfClass:NSPanel.class]), @"visible":@(launcher.visible), @"key":@(launcher.keyWindow),
         @"appActive":@(NSApp.active), @"hotkeyPresses":@(presses), @"requested":rect(requested),
+        @"unsupportedDrags":@(unsupportedDrags),
+        @"viewAttached":@((BOOL)([editor window] == launcher && launcher != nil)),
+        @"onActiveSpace":@(launcher.onActiveSpace),
+        @"occlusionVisible":@((BOOL)((launcher.occlusionState & NSWindowOcclusionStateVisible) != 0)),
+        @"lastResignFrontmost":lastResign ?: @"none",
+        @"appearance":launcher.appearance.name ?: @"system",
         @"actual":rect(launcher.frame), @"content":rect(launcher.contentView.bounds),
         @"responder":launcher.firstResponder ? NSStringFromClass(launcher.firstResponder.class) : @"none",
         @"frontmost":NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier ?: @"none", @"screens":screens};
@@ -214,13 +267,21 @@ static emacs_value finish(emacs_env *env, ptrdiff_t count, emacs_value *args, vo
     stop();
     return env->intern(env, "nil");
 }
+static emacs_value releaseFrame(emacs_env *env, ptrdiff_t count, emacs_value *args, void *data) {
+    (void)count; (void)args; (void)data;
+    detach();
+    return env->intern(env, "nil");
+}
 
 int emacs_module_init(struct emacs_runtime *runtime) {
+    if (runtime->size < (ptrdiff_t)sizeof(*runtime)) return 1;
     emacs_env *env = runtime->get_environment(runtime);
+    if (env->size < (ptrdiff_t)sizeof(*env)) return 2;
     struct { const char *name; ptrdiff_t arity; emacs_function fn; } exports[] = {
         {"portal-prototype--install", 3, install}, {"portal-prototype--show", 5, show},
         {"portal-prototype--hide", 0, hide}, {"portal-prototype--state", 0, state},
-        {"portal-prototype--stop", 0, finish}
+        {"portal-prototype--stop", 0, finish},
+        {"portal-prototype--detach", 0, releaseFrame}
     };
     for (size_t i = 0; i < sizeof(exports) / sizeof(exports[0]); i++) {
         emacs_value args[] = {env->intern(env, exports[i].name),
