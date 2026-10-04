@@ -20,6 +20,78 @@ not built-in Org enforcement. Groups and prose links imply no dependencies.
 =SOURCE= records the original Markdown path. Existing states and checkbox marks
 are preserved independently; completion dates have not been invented.
 
+* Agent workflows :agents:
+** DONE Run durable implementation and review loops from pi :task:
+:PROPERTIES:
+:CUSTOM_ID: pi-task-loop
+:ID: edeb8259-9389-45eb-82e6-c3f32339ba36
+:END:
+
+*** Problem and outcome
+Start a task with =/task <file>= or a literal instruction. Keep a real Claude
+Code implementor in tmux and run a fresh in-process pi SDK reviewer for every
+iteration. Coordinate automatically through validated local state and Markdown
+feedback, with explicit human decisions and deterministic crash recovery.
+
+*** Plan and decisions
+- Ship a self-contained, opt-in pi package under =extensions/task/=; leave
+  Portal's native interfaces and personal agent configuration unchanged.
+- Keep =task.md= and =state.json= authoritative, append an event/intention log,
+  and publish numbered Markdown feedback through a structured reviewer tool.
+- Create implementation branches off =main= without changing the main checkout.
+  Review a fixed base/submission pair in a separate detached checkout.
+- Use the official interactive Claude CLI, direct tmux, and short wake-up text;
+  substantive instructions and results stay on disk. Retain normal permissions.
+- Use explicit pi SDK resources and persistent, independent reviewer sessions.
+  No ambient orchestration extensions or parent conversation enter a review.
+- Reconcile known interrupted states; fail closed on missing, stale or
+  contradictory evidence. Human-directed repair is separate from continuation.
+- Test with temporary repositories and fake agents; no paid model work during
+  automated checks. Document actual smoke coverage and limitations.
+
+*** Acceptance
+- [X] File, literal-text and existing-directory inputs initialize/resume safely.
+- [X] A rejected review automatically returns to the same implementor, and the
+  next review uses a fresh isolated session and the new committed submission.
+- [X] Approval requires valid tool output and the exact clean submitted commit;
+  stale, missing, interrupted or failed reviews cannot approve.
+- [X] Pause, decisions, lifecycle visibility, ownership and restart recovery are
+  explicit and covered by deterministic tests.
+- [X] Package installation, runtime prerequisites, operation and repair are
+  documented; relevant formatting, type and project checks pass.
+
+*** Outcome
+Shipped [[file:extensions/task/README.md][the opt-in pi task package]] with a disk-backed state store,
+structured submission helpers, interactive Claude/tmux transport, fresh pi SDK
+reviewers, human decisions and a human-confirmed, version-checked repair tool.
+Feedback is generated Markdown; state references exact paths and hashes. Checks
+reports are snapshotted and hashed. Interrupted or contradictory evidence never
+implicitly approves code. Lifecycle events distinguish root turns, permission
+waits and launch generations; old-launch hooks cannot update the current run.
+
+The first version targets macOS and uses its native =lockf= for crash-released
+ownership. File and directory fsync accompany atomic publication. Tasks live
+under Git's common directory, not in disposable implementation worktrees.
+Reviewers are read/search-only and inspect reported checks rather than running
+repository code. The package changes no personal configuration, permissions,
+Portal interfaces, or main checkout. Pause leaves the Claude terminal available.
+
+*** Verification
+- =cd extensions/task && bun run check=: TypeScript check and 33 passing tests.
+  Includes real Git repositories, real cross-process locks with SIGKILL recovery,
+  pi SDK/resource-loader smoke tests without model requests, and a two-round
+  real-tmux/Node integration using a fake interactive Claude process.
+- Regression coverage includes stale revisions and launch hooks, changed checks,
+  missing/orphan feedback, candidate-then-error/abort/conflict, human decisions,
+  explicit repair consent, interrupted review restart and exclusive coordination.
+- =bun run --cwd host check= and =bun run --cwd host typecheck=: passed.
+- =bun test host test/portal-pi.test.ts=: 20 tests passed.
+- =./build.sh= and =ctest --test-dir build --output-on-failure=: passed;
+  all 34 CTest suites passed.
+- =org-lint=: no findings. Task identities, dependencies and internal links checked.
+- No paid model requests or authenticated Claude/reviewer end-to-end run were
+  made. The package README describes the remaining opt-in live smoke test.
+
 * Launcher :launcher:
 Portal supplies native panel presentation and independent global shortcut
 registration. User configuration chooses the Elisp functions, completion UI and

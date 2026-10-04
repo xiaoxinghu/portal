@@ -1132,6 +1132,19 @@ Raw HTML is displayed as text, and a page-specific Content Security Policy
 blocks scripts. Bun currently marks its Markdown API unstable; it is tested
 here with the Bun version listed above.
 
+## Pi implementation/review loops (opt-in)
+
+The separate [pi task extension](extensions/task/README.md) adds `/task` to pi:
+start from a local task file or an instruction, keep an interactive Claude Code
+implementor in tmux, and automatically run a fresh in-process pi reviewer after
+each committed submission. State, Markdown feedback and an event log stay on disk;
+human decisions pause the loop and interrupted work can be resumed explicitly.
+
+This package requires no Portal UI or workmux and is not installed by the native
+build. Its local execution state does not change `project.org` or the Portal task
+browser. See its README for installation, prerequisites, permissions, tests and
+recovery limitations.
+
 ## Task view
 
 `M-x portal-tasks` lists the actionable tasks in the current project's
