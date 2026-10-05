@@ -49,6 +49,12 @@ portal_suite(service CATEGORY external FEATURES one EFFECTS desktop external
 '''
 
 
+# What a copy of the runner needs: it records the identity of its own
+# repository, which concurrent edits to this one must not change.
+RUNNER_FILES = ("test.sh", "test/runner.py", "test/suites.cmake", "docs/launcher-daily-use.md",
+                "test/global-shortcut-smoke.sh")
+
+
 def run_count(build, name):
     path = Path(build) / f"ran-{name}"
     return len(path.read_text().splitlines()) if path.exists() else 0
@@ -59,9 +65,19 @@ class RunnerTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.build = Path(self.temporary.name) / "build"
+        self.repository = Path(self.temporary.name) / "repository"
+        for name in RUNNER_FILES:
+            (self.repository / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / name, self.repository / name)
+        git = ["git", "-C", str(self.repository), "-c", "user.name=Test", "-c", "user.email=test@example.com",
+               "-c", "commit.gpgsign=false"]
+        subprocess.run(["git", "init", "-q", str(self.repository)], check=True)
+        subprocess.run([*git, "add", "-A"], check=True)
+        subprocess.run([*git, "commit", "-q", "-m", "runner"], check=True)
+        self.test_sh_path = str(self.repository / "test.sh")
         source = Path(self.temporary.name) / "source"
         source.mkdir()
-        (source / "CMakeLists.txt").write_text(REGISTRY.replace("@ROOT@", str(ROOT)))
+        (source / "CMakeLists.txt").write_text(REGISTRY.replace("@ROOT@", str(self.repository)))
         subprocess.run(["cmake", "-S", str(source), "-B", str(self.build)], check=True,
                        capture_output=True, timeout=60)
         self.lock = Path(self.temporary.name) / "desktop.lock"
@@ -69,7 +85,7 @@ class RunnerTests(unittest.TestCase):
         self.environment.pop("PORTAL_FAKE_SERVICE", None)
 
     def tsh(self, *arguments, timeout=60, **options):
-        return subprocess.run([str(ROOT / "test.sh"), *arguments, "--build-dir", str(self.build),
+        return subprocess.run([self.test_sh_path, *arguments, "--build-dir", str(self.build),
                                "--no-build"], capture_output=True, text=True, timeout=timeout,
                               env=options.pop("env", self.environment), **options)
 
@@ -210,7 +226,7 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(file.read(), "")
 
     def test_interruption_stops_the_suites_children_and_records_it(self):
-        process = subprocess.Popen([str(ROOT / "test.sh"), "unit", "--suite", "lingering",
+        process = subprocess.Popen([self.test_sh_path, "unit", "--suite", "lingering",
                                     "--build-dir", str(self.build), "--no-build"],
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    env=self.environment)
@@ -235,7 +251,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_manual_checks_record_what_a_person_reports(self):
         main, secondary = pty.openpty()
-        process = subprocess.Popen([str(ROOT / "test.sh"), "manual", "--interactive", "--allow-gui",
+        process = subprocess.Popen([self.test_sh_path, "manual", "--interactive", "--allow-gui",
                                     "--suite", "launcher-voiceover", "--build-dir", str(self.build),
                                     "--no-build"], stdin=secondary, stdout=secondary, stderr=secondary,
                                    env=self.environment)
