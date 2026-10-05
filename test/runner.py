@@ -423,23 +423,27 @@ DESKTOP_ARTIFACTS = ("portal.bundle/Contents/MacOS/portal.dylib", "portal-host",
 
 
 def artifacts(plan, build):
-    """The built files each of the plan's suites runs, relative to BUILD, and
-    each file's digest."""
+    """The built files each of the plan's suites needs, relative to BUILD, and
+    each file's digest, or None for a file that is missing. A suite needs each
+    path inside BUILD that one of its command's arguments is, or that one
+    assigns to a variable, whole, unless that path is a directory; and a
+    desktop suite needs the files graphical Emacs loads from the build."""
     build = Path(build).resolve()
     uses, digests = {}, {}
     for suite in plan.suites:
         paths = set()
         for argument in suite.command:
-            for candidate in re.findall(r"(/[^\"=\s]+)", argument):
-                path = Path(candidate).resolve()
-                if build in path.parents and path.is_file():
-                    paths.add(str(path.relative_to(build)))
+            for candidate in (argument, argument.partition("=")[2]):
+                if candidate.startswith("/"):
+                    path = Path(candidate).resolve()
+                    if build in path.parents and not path.is_dir():
+                        paths.add(str(path.relative_to(build)))
         if suite.desktop:
-            paths |= {name for name in DESKTOP_ARTIFACTS if (build / name).is_file()}
+            paths |= set(DESKTOP_ARTIFACTS)
         uses[suite.name] = sorted(paths)
         for name in paths:
             if name not in digests:
-                digests[name] = file_digest(build / name)
+                digests[name] = file_digest(build / name) if (build / name).is_file() else None
     return digests, uses
 
 
@@ -699,11 +703,22 @@ def previous_runs(directory):
     return sorted(runs, key=lambda run: (run.get("started") or "", run["path"]))
 
 
+def unchanged_artifacts(recorded, environment, name):
+    """Whether suite NAME needs the same built files as RECORDED, each present
+    then and now with the same digest."""
+    uses = environment["suite_artifacts"].get(name, [])
+    return (recorded.get("suite_artifacts", {}).get(name) == uses
+            and all(environment["artifacts"][path] is not None
+                    and recorded.get("artifacts", {}).get(path) == environment["artifacts"][path]
+                    for path in uses))
+
+
 def earlier_evidence(runs, inputs, environment, names):
     """For each suite in NAMES, its latest earlier result, and the run that
     recorded it, from finished runs of the same sources, tools and variables
-    with the same digests of the built files that suite runs. A suite that
-    failed in any iteration of a run failed in that run."""
+    in which the suite needed the same built files, with the same digests. A
+    suite missing a file it needs has no evidence. A suite that failed in any
+    iteration of a run failed in that run."""
     found = {}
     for run in runs:
         recorded = run.get("environment", {})
@@ -714,9 +729,7 @@ def earlier_evidence(runs, inputs, environment, names):
         latest = {}
         for result in run.get("results", []):
             name = result["name"]
-            uses = environment["suite_artifacts"].get(name, [])
-            if name not in names or any(recorded.get("artifacts", {}).get(path) != environment["artifacts"][path]
-                                        for path in uses):
+            if name not in names or not unchanged_artifacts(recorded, environment, name):
                 continue
             if name not in latest or result["status"] != "passed":
                 latest[name] = result

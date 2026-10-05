@@ -259,6 +259,51 @@ class RunnerTests(unittest.TestCase):
                 self.assertIn("tool-bad (", result.stderr)
         self.assertEqual(run_count(self.build, "tool-bad"), 1)
 
+    def test_missing_or_unfingerprinted_files_never_reuse_evidence(self):
+        self.assertEqual(self.tsh("unit", "--suite", "tool-a").returncode, 0)
+        # A deleted file the suite runs is required, not forgotten.
+        (self.build / "tool-a").unlink()
+        result = self.tsh("unit", "--suite", "tool-a")
+        self.assertNotIn("Not run:", result.stdout)
+        self.assertEqual(result.returncode, runner.FAILED, result.stdout)
+        self.assertIsNone(self.runs()[-1]["environment"]["artifacts"]["tool-a"])
+        # A build path with spaces is one argument, whose file is fingerprinted.
+        spaced = Path(self.temporary.name) / "dir with spaces" / "build"
+        subprocess.run(["cmake", "-S", str(Path(self.temporary.name) / "source"), "-B", str(spaced)],
+                       check=True, capture_output=True, timeout=60)
+        (spaced / "tool-a").write_text(TOOL)
+        run = lambda: subprocess.run([self.test_sh_path, "unit", "--suite", "tool-a", "--build-dir", str(spaced),
+                                      "--no-build"], capture_output=True, text=True, timeout=60, env=self.environment)
+        self.assertEqual(run().returncode, 0)
+        uses = runner.previous_runs(spaced / "test-runs")[-1]["environment"]["suite_artifacts"]
+        self.assertEqual(uses, {"tool-a": ["tool-a"]})
+        (spaced / "tool-a").write_text(TOOL + "exit 1\n")
+        result = run()
+        self.assertNotIn("Not run:", result.stdout)
+        self.assertEqual(result.returncode, runner.FAILED, result.stdout)
+        self.assertEqual(run_count(spaced, "tool-a"), 2)
+
+    def test_desktop_evidence_needs_the_files_graphical_emacs_loads(self):
+        files = [self.build / name for name in runner.DESKTOP_ARTIFACTS]
+        for file in files:
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text("built\n")
+        self.assertEqual(self.tsh("gui", "--suite", "window", "--allow-gui").returncode, 0)
+        self.assertIn("Not run:", self.tsh("gui", "--suite", "window", "--allow-gui").stdout)
+        self.assertEqual(run_count(self.build, "window"), 1)
+        # A missing injector, or a changed module, means new evidence.
+        files[2].unlink()
+        result = self.tsh("gui", "--suite", "window", "--allow-gui")
+        self.assertNotIn("Not run:", result.stdout)
+        self.assertEqual(run_count(self.build, "window"), 2)
+        # Restored as it was, the first run's evidence applies again.
+        files[2].write_text("built\n")
+        self.assertIn("Not run:", self.tsh("gui", "--suite", "window", "--allow-gui").stdout)
+        self.assertEqual(run_count(self.build, "window"), 2)
+        files[0].write_text("rebuilt\n")
+        self.assertNotIn("Not run:", self.tsh("gui", "--suite", "window", "--allow-gui").stdout)
+        self.assertEqual(run_count(self.build, "window"), 3)
+
     def test_relative_and_absolute_build_directories_record_the_same_results(self):
         relative = subprocess.run([self.test_sh_path, "unit", "--suite", "skips", "--suite", "alpha",
                                    "--build-dir", "build", "--no-build"], capture_output=True, text=True,

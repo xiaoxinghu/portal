@@ -129,8 +129,9 @@ it ran is incomplete.
 
 Reuse evidence instead of repeating it. A commit, push or review transition
 alone changes no input. Evidence for a suite is its latest result from a run
-with the same sources, tools and variables and the same digests of the built
-files that suite runs; other suites' files do not matter. When every selected
+with the same sources, tools and variables in which the suite needed the same
+built files, with the same digests; other suites' files do not matter, and a
+suite missing a file it needs has no evidence. When every selected
 suite has such a passing result, possibly from several runs, the runner cites
 them and runs nothing, judging them as the requested command would: a
 declared skip leaves `all` incomplete. Repeating them needs `--reason`, and so

@@ -7,3 +7,4 @@ node_modules/
 /.build/
 /native/.build/
 /host/.generated/
+__pycache__/
