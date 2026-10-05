@@ -368,6 +368,18 @@ the terminal as it exited; streamed subprocesses now read no input.
 - Known flakes, unchanged tests: `fits-vertico` failed 1 in 5 fresh launcher
   runs and the coexistence focus case 1 in 8 runs, on a machine in use.
 
+**Review round 2** found that artifact discovery dropped missing files and
+split paths containing spaces, so a deleted tool or an unfingerprinted
+changed one could be cited as passing. Fixed in `dda9a08`: a suite's built
+files are whole arguments and assigned values inside the build, a missing one
+stays required with no digest, and evidence needs the same set of files with
+the same digests. Two new runner tests (deleted tool; spaced build path with a
+tool made to fail; missing or changed implicit desktop files) fail against the
+previous runner and pass now; 23 runner tests pass under Python 3.14 and 3.9.
+Since the round-1 regression only the runner's evidence logic, its tests, docs,
+`.gitignore` and this record changed; the CTest registry, Lisp suites and
+scripts are identical, and `./test.sh` passed 39/39 on `dda9a08`.
+
 **External and manual:** not run. `agent-discovery-live` needs credentials,
 trusted projects and the three agents; `launcher-recipe` needs launcher.el;
 the eleven manual checks need a person. `./test.sh all` reports them
