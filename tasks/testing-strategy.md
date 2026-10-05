@@ -1,6 +1,6 @@
 ---
 id: testing-strategy
-status: todo
+status: done
 ---
 
 # Make test selection explicit, headless by default, and coverage-preserving
@@ -222,47 +222,127 @@ session alone does not isolate macOS focus.
 
 ## Acceptance
 
-- [ ] Every existing test/procedure is classified, including tests outside CTest;
+- [x] Every existing test/procedure is classified, including tests outside CTest;
   no behavior disappears without an evidenced replacement or explicit retained
   native/manual check.
-- [ ] Each category has its dedicated command; default/headless commands open no
+- [x] Each category has its dedicated command; default/headless commands open no
   windows and make no credentialed requests. A clean checkout has documented,
   reproducible setup and incremental prerequisites.
-- [ ] `--list` is non-disruptive; feature selection is exact; invalid/empty
+- [x] `--list` is non-disruptive; feature selection is exact; invalid/empty
   selections fail. Helper imports cannot broaden the selected suite.
-- [ ] Full regression covers all self-contained automated categories once, with
+- [x] Full regression covers all self-contained automated categories once, with
   explicit bounded stress iterations and retained cross-feature coexistence.
   Exhaustive `all` also covers external/manual checks, reporting incomplete and
   exiting nonzero if required prerequisites/evidence are missing.
-- [ ] GUI/external/manual execution requires the appropriate explicit gates;
+- [x] GUI/external/manual execution requires the appropriate explicit gates;
   overlapping GUI runs across worktrees cannot compete for desktop focus.
-- [ ] Runner tests cover planning, deduplication, gates, missing dependencies,
+- [x] Runner tests cover planning, deduplication, gates, missing dependencies,
   timeouts, failures, skips, cleanup, concurrency and aggregate exit status using
   harmless fake subprocesses. Testing runner safety does not itself steal focus.
-- [ ] Required Evil input cases run rather than skip. Reports distinguish passed,
+- [x] Required Evil input cases run rather than skip. Reports distinguish passed,
   failed, declared skipped, pending/manual and not selected results.
-- [ ] Headless task-client coverage exists; eligible completion/geometry matrices
+- [x] Headless task-client coverage exists; eligible completion/geometry matrices
   and stress separation reduce routine GUI work with a before/after behavioral
   mapping and regression-sensitivity evidence. Native focus/rendering coverage
   remains intact; no arbitrary speed target weakens tests.
-- [ ] Per-run evidence identifies tested inputs/environment, records durations and
+- [x] Per-run evidence identifies tested inputs/environment, records durations and
   all attempts, and supports safe reuse instead of redundant unchanged reruns.
-- [ ] `docs/testing.md`, `CONTRIBUTING.md` and `AGENTS.md` agree on selection,
+- [x] `docs/testing.md`, `CONTRIBUTING.md` and `AGENTS.md` agree on selection,
   commands, required gates, repetition and evidence. Existing documentation
   entry points still work; `CONTEXT.md` stays domain-focused.
-- [ ] Final implementation verification includes runner/headless tests and one
+- [x] Final implementation verification includes runner/headless tests and one
   approved full self-contained regression on the final candidate. Any subsequent
   change invalidates affected evidence; external/manual outcomes are explicitly
   recorded rather than inferred from the regression result.
 
 ## Verification and completion record
 
-Planning only. Keep `status: todo` and acceptance unchecked until implementation
-and verification finish. Record chosen browser tooling, final category mapping,
-behavior migrations, command results, relevant timings, and external/manual
-limitations here when completing the task.
+Implemented 2026-10-05/06. `./test.sh` runs [test/runner.py](../test/runner.py)
+(Python 3.9 standard library). [`portal_suite`](../test/suites.cmake) labels
+each CTest suite with one category, features, effects and needs; desktop,
+stress and external suites exist only in the `opt-in` CTest configuration, so
+plain `ctest` stays headless. Lisp suites run one file each through
+[portal-suite.el](../test/portal-suite.el); shared fixtures moved to
+`test/portal-gui-testing.el`, `portal-launcher-testing.el` and
+`portal-agents-testing.el`, which define no tests. Manual checks are listed in
+the runner and read their procedures from their documents.
 
-Task-authoring verification: the existing `host/tasks.ts` parser accepts the
-front matter, the all-task listing reports no Problems, the task detail renders,
-`bun list-todo-tasks.ts` lists this task, and `git diff --check` passes. No product
-code, test runner or testing policy was changed, and no GUI tests were launched.
+**Browser tooling:** `playwright-core` 1.63.0, exact in `host/package.json`
+and `bun.lock`; its WebKit 26.6 (revision 2359) installs into
+`build/playwright` (target `portal-test-browser`) and runs headless under
+`bun test`. Frontmost-app sampling showed no focus change during its runs.
+
+**Final category mapping** (`./test.sh all --list` prints each suite's tests):
+
+| Category | Suites |
+| --- | --- |
+| unit (30) | launcher, global-shortcut, startup, pi-extension, host-actions, host-tasks, todo-tasks, quick-terminal, terminal-metadata, terminal-choose, terminal-bindings, agents, agents-evil, tasks-view, terminal-consult, terminal-embark, view, toolbar, input, excalidraw, test-runner, launcher-geometry, channel, views, input-core, terminals, web-core, toolbar-core, shortcuts-core, module |
+| integration (9) | processes, agent-discovery, actions, ui-host, web, tasks, native-check-helpers, benchmark-tool, tasks-page |
+| gui (19) | web-gui, terminal-gui, terminal-startup-gui, coexistence-gui, excalidraw-gui, input-gui, markdown-gui, tasks-gui, toolbar-gui, terminal-choose-gui, agents-gui, global-shortcut-gui, tasks-view-gui, launcher-gui, launcher-daily-use-gui, native-focus, native-toolbar, native-launcher, native-shortcuts |
+| stress (3) | views-stress (headless), launcher-stress-gui, native-launcher-stress |
+| external (2) | agent-discovery-live, launcher-recipe |
+| manual (11) | global-shortcut-physical-keys and the ten rows of the launcher's hands-on validation |
+
+Formerly outside CTest: Python tests (now `native-check-helpers`,
+`benchmark-tool`, plus the new `test-runner`), `test/list-todo-tasks.test.ts`
+(`todo-tasks`), the standalone AppKit recipes (`native-*`, built by CMake),
+`terminal-shell-startup.sh` (`terminal-startup-gui`), `launcher-daily-use.sh`
+and `launcher-recipe.sh` (now wrappers of `./test.sh`), the combined GUI
+procedure (per-file GUI suites) and `global-shortcut-smoke.sh` (manual).
+`benchmark.sh` and `test/portal-agents-benchmark.el` remain measurements, not
+tests; `docs/agent-discovery/` holds a research harness, not tests.
+
+**Behavior migrations:**
+
+| Behavior | Before | Now | Sensitivity evidence |
+| --- | --- | --- | --- |
+| Picker results with stock and Vertico completion | 10 native presentations | batch `portal-launcher-completion-returns-what-completion-returns`; GUI keeps letters+Return, arrow+Return, Escape | Treating an empty result as cancel fails only the batch test |
+| Command completion stack, stock and enhanced | GUI, both | batch both; GUI enhanced | — (matching is Lisp; frames/visibility stay native) |
+| *Completions* shows nowhere, fixed and fitted | GUI, two sizes | batch both; GUI fitted | Removing the minibuffer display rule fails the batch test |
+| Placement arithmetic, 4 sizes × 2 offsets × displays | GUI, 8 placements per display | windowless `launcher-geometry` on 3 display areas; GUI 2 real placements per display | Removing the clamp fails `launcher-geometry` |
+| 100 hide/show and 20 delete cycles | routine GUI | `launcher-stress-gui`; routine keeps 3 and 2 | retained, not replaced |
+| 20 native attach/detach cycles | routine native check | `native-launcher-stress`; routine keeps 2 | retained |
+| Task page script | GUI only | `tasks-page`, 9 headless WebKit tests; GUI tasks suite unchanged | 9 of 10 page-script mutations fail a test; removing the scroll restore does not change browser WebKit's scroll, so `tasks-gui` keeps that evidence |
+| Live-agent suite's tmux identity case | external only, needing an env var | `agents-gui`, declared optional without tmux | — |
+
+**Measurements (same machine, 2026-10-06, with the user active on it):**
+headless before: serial `ctest` 50.7 s + separate Python/Bun 5.3 s, 289 ERT
+executions (10 duplicates), 2 Evil skips; after: `./test.sh` 17 s, parallel,
+no duplicates or skips. GUI before (base commit's documented procedures):
+combined suite 99 tests in 154.0 s wall (1 skip), daily-use 10.2 s and
+shell-startup 2.7 s re-running 3 of those tests, standalone checks 33.0 s
+including 20.2 s of recompilation; 7 GUI processes, about 201 s. After:
+desktop phase 209.8 s for 102 ERT tests (no duplicates) and 5 native runs,
+including stress formerly in routine runs; 21 GUI processes, one fresh Emacs
+per suite; routine launcher GUI tests 72.6 s → 63.6 s. Frontmost-app changes
+(10 vs 23) are confounded by the user's concurrent activity. A first base run
+is excluded: the measurement wrapper lacked lexical binding and idled until a
+1200 s watchdog stopped it.
+
+**Commands and results** (records in `build/test-runs/` of the worktree):
+
+- `./test.sh` (headless) on the final commit: 39 of 39 suites passed in 17 s;
+  from an empty build directory of an exported checkout, it configured, built
+  only the unit and integration prerequisites (11.1 s, including WebKit) and
+  passed 39 of 39 in 57 s, building no native module.
+- `./test.sh regression --allow-gui`, approved desktop time (option A): on
+  `07b07fd`, all 21 desktop suites passed and `ui-host` failed once from a
+  latent race in `portal-server-restarts-and-recovers-after-a-crash` (1 of 64
+  runs at 8 in parallel; 0 of 160 after waiting for the sentinel, `d1896ac`).
+  On `d1896ac`, 60 of 61 suites passed, 365 ERT executions: headless 17.9 s,
+  desktop 191.3 s. `portal-launcher-gui-minibuffer-panel-fits-vertico` drew
+  no Vertico rows before typing once, a timing flake under load in an
+  unchanged test; a recorded `--repeat 3` of `launcher-gui` on the same inputs
+  passed 3 of 3. Later commits changed only `test/test_runner.py` and the
+  browser install rule; the registry and desktop artifacts are identical, so
+  the desktop evidence stands and the headless aggregate was rerun.
+- Runner tests (15) pass under Python 3.14 and 3.9, including during
+  concurrent edits to the checkout; `bun run --cwd host check` and
+  `typecheck`, changed-Lisp byte compilation and `git diff --check` pass.
+- Mutation evidence is in the migration table above.
+
+**External and manual:** not run. `agent-discovery-live` needs credentials,
+trusted projects and the three agents; `launcher-recipe` needs launcher.el;
+the eleven manual checks need a person. `./test.sh all` reports them
+incomplete until they are done. Known flake: `fits-vertico`, 1 failure in 5
+fresh-Emacs launcher runs on a machine in use.
