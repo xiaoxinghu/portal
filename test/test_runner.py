@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import shutil
 import signal
@@ -445,9 +446,16 @@ class RegistryTests(unittest.TestCase):
         default = (ROOT / "build").resolve()
         desktop = [suite for suite in runner.load_suites(build) if suite.desktop]
         self.assertGreaterEqual(len(desktop), 20)
+        registered = (build / "CTestTestfile.cmake").read_text()
         for suite in desktop:
             with self.subTest(suite=suite.name):
                 command = list(suite.command)
+                if not command:
+                    # CTest lists no command for an executable not yet built.
+                    name = re.escape(suite.name)
+                    match = re.search(rf'add_test\((?:"{name}"|\[=\[{name}\]=\]) "([^"]+)"', registered)
+                    self.assertTrue(match, f"{suite.name} has no registered command")
+                    command = [match.group(1)]
                 if "portal-suite-graphical" in command or any(part.endswith(".sh") for part in command):
                     self.assertIn(f"PORTAL_TEST_BUILD={build}", command)
                 if "portal-suite-graphical" in command:
