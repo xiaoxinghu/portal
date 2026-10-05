@@ -58,6 +58,8 @@ guides for current behavior.
 
 ### Design and research records
 
+- [macOS GUI CI services](macos-gui-ci-research.md): provider comparison,
+  desktop and Metal requirements, and a proposed Portal acceptance pilot.
 - [Initial native-view research](../RESEARCH.md): original feasibility and
   proposed architecture, not current setup instructions.
 - [Input design proposal](input-design.md): research on the superseded
