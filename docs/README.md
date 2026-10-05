@@ -25,8 +25,9 @@ not as a parallel task store here.
 
 - [Contributing](../CONTRIBUTING.md): build/editor setup, distribution, worktrees
   and checks before a PR.
-- [Testing Portal](testing.md): batch coverage, graphical procedures, standalone
-  native checks and opt-in smoke tests. Recorded results are not a new test run.
+- [Testing Portal](testing.md): `./test.sh` categories, which checks a change
+  needs, desktop permission, evidence reuse and native procedures. Recorded
+  results are not a new test run.
 - [Domain vocabulary](../CONTEXT.md): view, terminal, hosted-app and Org task terms.
   See the [task format](tasks.md#writing-tasks) for Markdown identity and readiness.
 - [Implementation and native boundaries](architecture.md): state ownership,

@@ -2,72 +2,9 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Opt in with PORTAL_TEST_CLAUDE_DIRECTORY pointing at an already trusted project.
 ;; Starts plain Claude sessions, sends one harmless prompt, then exits them.
-(require 'portal-agents-gui-tests)
+(require 'portal-gui-testing)
 (declare-function portal--process-snapshot "portal-view" (variable))
 (declare-function portal--terminal-paste "portal-terminal" (target text &optional enter))
-
-(defun portal-discovery-gui--type (buffer text)
-  "Type TEXT and Return in BUFFER's shell or Claude session."
-  (portal--terminal-paste (buffer-local-value 'portal-view--target buffer) text t))
-
-(defun portal-discovery-gui--wait (predicate &optional seconds)
-  "Wait up to SECONDS (default 15) for PREDICATE through the real event loop."
-  (let ((deadline (+ (float-time) (or seconds 15))))
-    (while (and (not (funcall predicate)) (< (float-time) deadline))
-      (accept-process-output nil 0.02)
-      (redisplay t))
-    (ert-info ((format "Waiting for %S; rows: %S" predicate
-                       (and (buffer-live-p portal-agents--buffer)
-                            (with-current-buffer portal-agents--buffer tabulated-list-entries))))
-      (should (funcall predicate)))))
-
-(ert-deftest portal-discovery-gui-inherited-tmux-marker ()
-  (let ((fixture (getenv "PORTAL_TEST_PROCESS_SNAPSHOT"))
-        (tmux (executable-find "tmux")))
-    (skip-unless (and fixture tmux))
-    (portal-agents-gui--environment
-      (let* ((directory (file-truename (make-temp-file "portal-tmux-" t)))
-             (program (expand-file-name "claude" directory))
-             (socket (expand-file-name "socket" directory))
-             ;; Identity only: no real Claude request or credentials are needed.
-             (portal-agents-claude-program "/usr/bin/true")
-             (direct (portal-agents-gui--open "direct-identity"))
-             (nested (portal-agents-gui--open "nested-identity"))
-             (marker (format "%d/%s" (emacs-pid) (buffer-local-value 'portal-view--target nested))))
-        (unwind-protect
-            (progn
-              (copy-file fixture program)
-              (set-file-modes program #o700)
-              (portal-agents-gui--wait 1)
-              (portal-discovery-gui--type direct (concat (shell-quote-argument program) " --wait"))
-              (portal-discovery-gui--type
-               nested (mapconcat #'shell-quote-argument
-                                 (list tmux "-f" "/dev/null" "-S" socket "new-session" "-d"
-                                       (concat (shell-quote-argument program) " --wait")) " "))
-              ;; Verify the adversarial evidence really exists before asserting
-              ;; its absence from the dashboard: a foreground native executable
-              ;; named Claude with the exact Portal marker, on tmux's own PTY.
-              (portal-discovery-gui--wait
-               (lambda ()
-                 (seq-find (lambda (p) (and (equal (plist-get p :executable) program)
-                                            (equal (plist-get p :environment) marker)
-                                            (not (eql (plist-get p :tty-parent) (emacs-pid)))))
-                           (append (portal--process-snapshot "PORTAL_TERMINAL") nil))))
-              (portal-agents)
-              (portal-discovery-gui--wait (lambda () (portal-agents-gui--row direct)))
-              (should-not (portal-agents-gui--row nested))
-              ;; Attaching the tmux client still does not make its pane our TTY.
-              (portal-discovery-gui--type nested
-                                        (mapconcat #'shell-quote-argument
-                                                   (list tmux "-S" socket "attach-session") " "))
-              (portal-discovery-gui--wait
-               (lambda () (equal (process-lines tmux "-S" socket "display-message" "-p"
-                                                "#{session_attached}") '("1"))))
-              (with-current-buffer portal-agents--buffer (revert-buffer))
-              (should (portal-agents-gui--row direct))
-              (should-not (portal-agents-gui--row nested)))
-          (call-process tmux nil nil nil "-S" socket "kill-server")
-          (delete-directory directory t))))))
 
 (ert-deftest portal-discovery-gui-plain-claude ()
   (skip-unless (getenv "PORTAL_TEST_CLAUDE_DIRECTORY"))

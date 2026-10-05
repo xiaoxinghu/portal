@@ -56,8 +56,8 @@ multiple-instance workflow. Busy shells stay busy until completion or
 interrupt/reset. Frame deletion only hides the shell; quitting Emacs ends it,
 with no restart persistence. Exited shells do not silently restart: use reset.
 
-Run the buffer/window/project tests with `ctest --test-dir build -R quick-terminal`.
-`ctest --test-dir build -R terminal-metadata` uses the fake native module to check
+Run the buffer/window/project tests with `./test.sh unit --suite quick-terminal`.
+`./test.sh unit --suite terminal-metadata` uses the fake native module to check
 names, projects and directory reports: same-name project disambiguation,
 root lookups after renames, hidden reports, changes during opening, ignored
 directory reports, reassignment, exits/kills, all-field completion with Emacs
@@ -278,10 +278,10 @@ APIs—Consult's `consult--multi` and `consult--buffer-preview` source helpers a
 Embark's `embark--targets`—are confined to `portal-terminal-consult.el` and
 `portal-terminal-embark.el`.
 
-`ctest --test-dir build -R terminal-choose` checks pickers using Emacs completion
+`./test.sh unit --suite terminal-choose` checks pickers using Emacs completion
 and the fake native module: recent-use order, creation-order cycling, assigned
 projects, `M-a`, New, quick panels, closed terminals and kill confirmation.
-`-R 'terminal-(consult|embark)'` checks adapters against the releases above,
+`--suite terminal-consult --suite terminal-embark` checks adapters against the releases above,
 downloaded to `build/elpa` and hash-verified by CMake. A keyboard macro types into
 a real minibuffer, exercising Consult narrowing/preview/lookup and Embark targets,
 actions and Ibuffer export as in normal use.

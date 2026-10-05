@@ -1,10 +1,17 @@
 ;;; portal-launcher-daily-use-tests.el --- Launcher coexistence -*- lexical-binding: t; -*-
 ;; SPDX-License-Identifier: GPL-3.0-or-later
-;; Disposable graphical Emacs only; see launcher-daily-use.sh.
+;; Disposable graphical Emacs only: ./test.sh gui --suite
+;; launcher-daily-use-gui --allow-gui (docs/launcher-daily-use.md).
 
-(require 'portal-tests)
-(require 'portal-terminal-tests)
-(require 'portal-launcher-gui-tests)
+;; An optional file with only the completion and theme setup to validate,
+;; loaded before the tests. Do not name the normal init: it can start
+;; services or other UIs.
+(let ((config (getenv "PORTAL_LAUNCHER_CONFIG")))
+  (when (and config (not (string-empty-p config)))
+    (load config nil t)))
+
+(require 'portal-gui-testing)
+(require 'portal-launcher-testing)
 (declare-function portal--web-load "portal-web" (target url))
 (declare-function portal--launcher-inspect "portal-launcher" ())
 (declare-function portal--shortcuts "portal-global-shortcut" ())

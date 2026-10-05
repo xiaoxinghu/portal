@@ -1,8 +1,6 @@
 ;;; portal-toolbar-gui-tests.el --- Toolbar through the real module -*- lexical-binding: t; -*-
 ;; SPDX-License-Identifier: GPL-3.0-or-later
-(require 'portal-tests)
-(require 'portal-terminal-tests)
-(require 'portal-excalidraw-gui-tests)
+(require 'portal-gui-testing)
 
 (defun portal-toolbar-gui--state (key)
   "Return KEY of the selected pane's toolbar state."

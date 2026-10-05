@@ -9,6 +9,12 @@ required checks and generated-file boundaries. After rebuilding a loaded native
 module, restart Emacs; it does not hot-reload. Run native GUI checks in a
 disposable Emacs, since a native defect can crash the process.
 
+Before selecting or running checks, read [Testing Portal](docs/testing.md) and
+run tests through `./test.sh`. Ask the user before any run that opens windows,
+takes focus or uses external services (`--allow-gui`, `--allow-external`),
+saying which suites will run; defer it rather than weaken the checks. Cite a
+recorded run instead of repeating it with unchanged inputs.
+
 Before changing view ownership or platform interfaces, read
 [the native boundaries](docs/architecture.md) and its linked ADRs. When editing
 launcher examples, preserve the markers in [the launcher guide](docs/launcher.md):

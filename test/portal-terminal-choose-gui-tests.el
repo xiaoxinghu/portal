@@ -8,7 +8,7 @@
 ;; focused terminal, a native binding starts the picker.  C-] records the
 ;; state from inside the minibuffer; ESC ESC ESC cancels.
 
-(require 'portal-terminal-tests)
+(require 'portal-gui-testing)
 (declare-function portal-test-native-key "test-terminal-input" (code flags text &optional windowless))
 (declare-function portal-test-native-post-key "test-terminal-input" (code flags text &optional windowless))
 (declare-function portal-test-native-target-frame "test-terminal-input" (title))

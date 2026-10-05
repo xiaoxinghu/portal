@@ -1,12 +1,10 @@
 ;;; portal-markdown-gui-tests.el --- Markdown preview navigation in real WebKit -*- lexical-binding: t; -*-
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
-;; Previews run on the real app host from ./build.sh.  Load the other
-;; graphical suites and the test-only event injector first.
-(require 'portal-input-gui-tests)
+;; Previews run on the real app host from ./build.sh.  Load the test-only
+;; event injector first.
+(require 'portal-gui-testing)
 (declare-function portal-test-native-click "test-terminal-input" (x y))
-
-(defvar portal-markdown-gui--directory nil "The current test's Markdown folder.")
 
 (defmacro portal-markdown-gui--documents (&rest body)
   "Run BODY with the README preview of a folder of linked documents.
@@ -58,48 +56,10 @@ The folder is `portal-markdown-gui--directory'."
              (kill-buffer buffer)))
          (delete-directory portal-markdown-gui--directory t)))))
 
-(defun portal-markdown-gui--file (name)
-  "Return file NAME in the test folder."
-  (expand-file-name name portal-markdown-gui--directory))
-
-(defun portal-markdown-gui--write (name text)
-  "Write TEXT to file NAME in the test folder, creating its directory."
-  (let ((file (portal-markdown-gui--file name)))
-    (make-directory (file-name-directory file) t)
-    (with-temp-file file (insert text))))
-
 (defun portal-markdown-gui--link (text)
   "Follow the preview's link with TEXT as a page script would."
   (portal-excalidraw-gui--js
    (format "[...document.links].find(a => a.textContent === %S).click(); return true;" text)))
-
-(defun portal-markdown-gui--link-point (text)
-  "Scroll the preview's link with TEXT into view and return where to click it."
-  (portal-excalidraw-gui--js
-   (format "const a = [...document.links].find(a => a.textContent === %S);
-            a.scrollIntoView({block: 'center'}); const r = a.getBoundingClientRect();
-            return [Math.round(r.left + 3), Math.round(r.top + r.height / 2)];" text)))
-
-(defun portal-markdown-gui--click-link (text)
-  "Click the preview's link with TEXT with the real mouse."
-  (let ((point (portal-markdown-gui--link-point text)))
-    (should (portal-test-native-click (aref point 0) (aref point 1)))))
-
-(defun portal-markdown-gui--scroll ()
-  "Return the preview's vertical scroll position."
-  (portal-excalidraw-gui--js "return Math.round(window.scrollY);"))
-
-(defun portal-markdown-gui--event (type)
-  "Read the next queued native event, which must be TYPE, and run its command."
-  (let ((event (aref (with-timeout (5 (ert-fail (format "No %s event" type)))
-                       (read-key-sequence-vector nil))
-                     0)))
-    (should (eq (car-safe event) type))
-    (funcall (lookup-key global-map (vector type)) event)))
-
-(defun portal-markdown-gui--state ()
-  "Return the preview toolbar's state."
-  (portal-toolbar--action "state"))
 
 (ert-deftest portal-markdown-gui-links-go-back-and-forward-with-reading-position ()
   (portal-markdown-gui--documents

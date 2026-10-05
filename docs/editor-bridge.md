@@ -112,26 +112,26 @@ drawings; reopen them if old asset URLs are gone.
 and builds the native module. `bun run --cwd host typecheck` builds the
 Excalidraw assets and checks TypeScript.
 
-`ctest --test-dir build --output-on-failure` runs batch tests. Against the fake
+`./test.sh` runs the batch tests. Against the fake
 native module, `test/portal-web-tests.el` checks ordered `bridge` delivery to the
 buffer's bridge function. `test/portal-excalidraw-tests.el` covers opening the
 Excalidraw hosted app, bridge loading, scene persistence, save failures, stale
 replies and revert.
 
-`ctest --test-dir build -R web-core` runs `test/portal-web-tests.c`, the core's bridge and
+`./test.sh unit --suite web-core` runs `test/portal-web-tests.c`, the core's bridge and
 web rules against the fake platform: message order and coalescing, draining
 and re-arming, invalid senders and reserved types, ordinary pages, navigation
 decisions, handoffs after an escape, closed views and stale deliveries.
 
-The [standalone AppKit check](testing.md#standalone-appkit-checks) in `test/native-focus.swift`
-verifies a real WebKit bridge: ordered main-frame-only messages under one record
+The [standalone AppKit check](testing.md#standalone-appkit-checks) in `test/native-focus.swift`,
+the `native-focus` suite, verifies a real WebKit bridge: ordered main-frame-only messages under one record
 until received, operation after reload, failed delivery reaching Emacs, and no
 bridge for non-hosted views.
 
-Graphical tests require a disposable graphical Emacs with the
-[test event injector](testing.md#terminal-graphical-checks) loaded.
-Load `test/portal-excalidraw-gui-tests.el`; run `M-x ert` with selector
-`^portal-excalidraw-gui-`. Coverage includes real WKWebView, offline fonts, paste,
+The [graphical suite](testing.md#terminal-graphical-checks)
+`./test.sh gui --suite excalidraw-gui --allow-gui` runs
+`test/portal-excalidraw-gui-tests.el` in a disposable graphical Emacs with the
+test event injector. Coverage includes real WKWebView, offline fonts, paste,
 image round trips, several drawings, revert, hidden-state retention, and rapid
 `C-x C-s` delivery to Emacs. The test-only JavaScript evaluator is absent from
 the production module.

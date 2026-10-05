@@ -5,89 +5,8 @@
 ;; that start and stop live updates, and the timer refreshes the dashboard
 ;; while the event loop waits, as it does while a person types.
 
-(require 'portal-terminal-tests)
-(require 'portal-agents)
-
-(defmacro portal-agents-gui--environment (&rest body)
-  "Run BODY in one window with live updates every 0.2 seconds.
-Afterwards nothing is tracked, and no dashboard, terminal or timer remains."
-  (declare (indent 0))
-  `(progn
-     (skip-unless (eq window-system 'ns))
-     (let ((buffers (buffer-list))
-           (portal-agents-live-update t)
-           (portal-agents-live-update-interval 0.2))
-       (setq portal-agents--tracked nil)
-       (unwind-protect
-           (save-window-excursion
-             (delete-other-windows)
-             (select-frame-set-input-focus (selected-frame))
-             (sit-for 0.1)
-             ,@body)
-         (when (buffer-live-p portal-agents--buffer) (kill-buffer portal-agents--buffer))
-         (setq portal-agents--tracked nil)
-         (portal-terminal-close-all)
-         (dolist (buffer (buffer-list))
-           (unless (memq buffer buffers) (kill-buffer buffer))))
-       (should (= (portal-agents-gui--timers) 0)))))
-
-(defun portal-agents-gui--timers ()
-  "Return how many dashboard timers are scheduled."
-  (cl-count #'portal-agents--tick timer-list :key #'timer--function))
-
-(defun portal-agents-gui--wait (seconds)
-  "Run the event loop for SECONDS, with timers and redisplay.
-Unlike `sit-for', it waits while input is pending."
-  (let ((end (+ (float-time) seconds)))
-    (while (< (float-time) end)
-      (accept-process-output nil 0.05)
-      (redisplay))))
-
-(defun portal-agents-gui--settle ()
-  "Redisplay, which runs window hooks, and handle waiting native records."
-  (redisplay t)
-  (accept-process-output nil 0.05)
-  (redisplay t))
-
-(defun portal-agents-gui--open (name)
-  "Start a terminal named NAME in the selected window and return its buffer."
-  (portal-terminal-new)
-  (portal-terminal-rename name)
-  (current-buffer))
-
-(defun portal-agents-gui--row (buffer)
-  "Return BUFFER's row as the dashboard prints it, or nil."
-  (with-current-buffer portal-agents--buffer
-    (save-excursion
-      (goto-char (point-min))
-      (while (and (not (eobp)) (not (eq (car (tabulated-list-get-id)) buffer)))
-        (forward-line 1))
-      (append (tabulated-list-get-entry) nil))))
-
-(defun portal-agents-gui--view (buffer)
-  "Return where BUFFER's view is and whether it has the keyboard.
-Where is the window showing BUFFER at the view's edges, in any frame, nil
-when the view is hidden, or `elsewhere'."
-  (portal-agents-gui--settle)
-  (let* ((state (portal-terminal-test--state (buffer-local-value 'portal-view--target buffer)))
-         (edges (plist-get state :edges)))
-    (list (and (plist-get state :visible)
-               (or (seq-find (lambda (window)
-                               (and (eq (window-buffer window) buffer)
-                                    (equal (append (window-inside-pixel-edges window) nil) edges)))
-                             (window-list-1 nil 'nomini t))
-                   'elsewhere))
-          (and (plist-get state :focused) t))))
-
-(defun portal-agents-gui--visit (buffer)
-  "Show the dashboard in the selected window and type RET on BUFFER's row."
-  (switch-to-buffer portal-agents--buffer)
-  (portal-agents-gui--settle)
-  (goto-char (point-min))
-  (while (not (eq (car (tabulated-list-get-id)) buffer))
-    (forward-line 1))
-  (execute-kbd-macro (kbd "RET"))
-  (portal-agents-gui--settle))
+(require 'portal-gui-testing)
+(declare-function portal--process-snapshot "portal-view" (variable))
 
 (ert-deftest portal-agents-gui-visit-focuses-terminals ()
   (portal-agents-gui--environment
@@ -198,6 +117,54 @@ when the view is hidden, or `elsewhere'."
       (should-not (memq #'portal-agents--window-changed
                         (default-value 'window-state-change-functions)))
       (should (equal (portal-agents-gui--view terminal) (list window t))))))
+
+(ert-deftest portal-discovery-gui-inherited-tmux-marker ()
+  (let ((fixture (getenv "PORTAL_TEST_PROCESS_SNAPSHOT"))
+        (tmux (executable-find "tmux")))
+    (skip-unless (and fixture tmux))
+    (portal-agents-gui--environment
+      (let* ((directory (file-truename (make-temp-file "portal-tmux-" t)))
+             (program (expand-file-name "claude" directory))
+             (socket (expand-file-name "socket" directory))
+             ;; Identity only: no real Claude request or credentials are needed.
+             (portal-agents-claude-program "/usr/bin/true")
+             (direct (portal-agents-gui--open "direct-identity"))
+             (nested (portal-agents-gui--open "nested-identity"))
+             (marker (format "%d/%s" (emacs-pid) (buffer-local-value 'portal-view--target nested))))
+        (unwind-protect
+            (progn
+              (copy-file fixture program)
+              (set-file-modes program #o700)
+              (portal-agents-gui--wait 1)
+              (portal-discovery-gui--type direct (concat (shell-quote-argument program) " --wait"))
+              (portal-discovery-gui--type
+               nested (mapconcat #'shell-quote-argument
+                                 (list tmux "-f" "/dev/null" "-S" socket "new-session" "-d"
+                                       (concat (shell-quote-argument program) " --wait")) " "))
+              ;; Verify the adversarial evidence really exists before asserting
+              ;; its absence from the dashboard: a foreground native executable
+              ;; named Claude with the exact Portal marker, on tmux's own PTY.
+              (portal-discovery-gui--wait
+               (lambda ()
+                 (seq-find (lambda (p) (and (equal (plist-get p :executable) program)
+                                            (equal (plist-get p :environment) marker)
+                                            (not (eql (plist-get p :tty-parent) (emacs-pid)))))
+                           (append (portal--process-snapshot "PORTAL_TERMINAL") nil))))
+              (portal-agents)
+              (portal-discovery-gui--wait (lambda () (portal-agents-gui--row direct)))
+              (should-not (portal-agents-gui--row nested))
+              ;; Attaching the tmux client still does not make its pane our TTY.
+              (portal-discovery-gui--type nested
+                                        (mapconcat #'shell-quote-argument
+                                                   (list tmux "-S" socket "attach-session") " "))
+              (portal-discovery-gui--wait
+               (lambda () (equal (process-lines tmux "-S" socket "display-message" "-p"
+                                                "#{session_attached}") '("1"))))
+              (with-current-buffer portal-agents--buffer (revert-buffer))
+              (should (portal-agents-gui--row direct))
+              (should-not (portal-agents-gui--row nested)))
+          (call-process tmux nil nil nil "-S" socket "kill-server")
+          (delete-directory directory t))))))
 
 (provide 'portal-agents-gui-tests)
 ;;; portal-agents-gui-tests.el ends here

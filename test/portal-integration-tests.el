@@ -1,8 +1,8 @@
 ;;; portal-integration-tests.el --- Native feature coexistence -*- lexical-binding: t; -*-
 ;; SPDX-License-Identifier: GPL-3.0-or-later
-;; Load both graphical test suites and the test-only event injector first.
+;; Load the test-only event injector first.
 
-(require 'portal-terminal-tests)
+(require 'portal-gui-testing)
 (declare-function portal-test-native-focus-web "test-terminal-input" ())
 (declare-function portal--inspect "portal-view" (target))
 
@@ -12,14 +12,6 @@
           "document.onkeydown=()=>down++;"
           "document.onkeyup=()=>{up++;document.title="
           "document.querySelector('input').value+':'+down+':'+up}</script>"))
-
-(defun portal-integration-test--emacs-input ()
-  "Verify the real editor receives a complete Emacs key sequence."
-  (portal-test-native-post-key 7 (ash 1 18) "\C-x")
-  (portal-test-native-post-key 11 0 "b")
-  (should (equal (with-timeout (3 (ert-fail "Emacs did not regain keyboard input"))
-                   (read-key-sequence-vector nil))
-                 (vconcat (kbd "C-x b")))))
 
 (ert-deftest portal-integration-focus-and-cleanup-in-either-startup-order ()
   (skip-unless (fboundp 'portal-test-native-focus-web))

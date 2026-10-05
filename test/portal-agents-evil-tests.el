@@ -1,7 +1,7 @@
 ;;; portal-agents-evil-tests.el --- Dashboard navigation under Evil -*- lexical-binding: t; -*-
 ;; SPDX-License-Identifier: GPL-3.0-or-later
-(require 'portal-agents-tests
-         (expand-file-name "portal-agents-tests"
+(require 'portal-agents-testing
+         (expand-file-name "portal-agents-testing"
                            (file-name-directory
                             (or load-file-name
                                 (bound-and-true-p byte-compile-current-file)

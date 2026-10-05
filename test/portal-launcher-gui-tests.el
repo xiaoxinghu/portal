@@ -1,10 +1,7 @@
 ;;; portal-launcher-gui-tests.el --- Real NS panel lifecycle -*- lexical-binding: t; -*-
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Run only in a disposable graphical Emacs with the newly built module.
-(require 'ert)
-(require 'portal-launcher)
-(require 'portal-global-shortcut)
-(require 'portal-launcher-examples)
+(require 'portal-launcher-testing)
 (declare-function portal-test-hotkey "test-terminal-input" (hotkey pressed))
 (declare-function portal--launcher-inspect "portal-launcher" ())
 (declare-function portal--shortcuts "portal-global-shortcut" ())
@@ -19,50 +16,6 @@
 (defvar vertico-count)
 (defvar vertico--candidates-ov)
 (defvar vertico--index)
-
-(defmacro portal-launcher-gui--with-panel (&rest body)
-  (declare (indent 0))
-  `(progn
-     (skip-unless (eq window-system 'ns))
-     (let ((before (frame-list))
-           (ordinary (selected-window))
-           (ordinary-buffer (window-buffer))
-           (content (generate-new-buffer " *launcher GUI*"))
-           (portal-launcher-size '(720 420))
-           (portal-launcher-offset '(0 0))
-           (portal-launcher-screen nil))
-       (unwind-protect
-           (progn ,@body)
-         (portal-launcher-mode -1)
-         (portal-global-shortcut--remove-all)
-         (when (buffer-live-p content) (kill-buffer content))
-         (when (window-live-p ordinary) (select-window ordinary))
-         (dolist (frame (frame-list))
-           (unless (memq frame before) (delete-frame frame t)))
-         ;; Changing/deleting ordinary NS windows can asynchronously activate
-         ;; the previous app. Drain that cleanup before another test starts a
-         ;; session whose focus-loss observer would correctly cancel it.
-         (portal-launcher-gui--settle-focus))
-       (should-not portal-launcher--frame)
-       (should (equal before (frame-list)))
-       (should (eq (window-buffer ordinary) ordinary-buffer)))))
-
-(defun portal-launcher-gui--settle ()
-  (redisplay t)
-  (accept-process-output nil 0.05)
-  (redisplay t))
-
-(defun portal-launcher-gui--settle-focus ()
-  "Wait, up to 3 s, until the frontmost app has not changed for 0.5 s.
-AppKit can report an activation after the next session has started to
-watch focus. `sit-for' would return at once while input is pending."
-  (let ((deadline (+ (float-time) 3))
-        (front (portal-test-frontmost))
-        (since (float-time)))
-    (while (and (< (float-time) deadline) (< (- (float-time) since) 0.5))
-      (accept-process-output nil 0.05)
-      (let ((now (portal-test-frontmost)))
-        (unless (eql now front) (setq front now since (float-time)))))))
 
 (ert-deftest portal-launcher-gui-real-buffer-and-reuse ()
   (portal-launcher-gui--with-panel
@@ -86,7 +39,8 @@ watch focus. `sit-for' would return at once while input is pending."
       (should-not (plist-get (portal--launcher-inspect) :visible))
       (should (eq (portal-launcher-show) frame))
       (should (string-suffix-p "edited" (buffer-string)))
-      (dotimes (_ 100) (portal-launcher-hide) (should (eq (portal-launcher-show) frame)))
+      ;; The stress suite repeats this 100 times.
+      (dotimes (_ 3) (portal-launcher-hide) (should (eq (portal-launcher-show) frame)))
       (portal-launcher-hide))))
 
 (ert-deftest portal-launcher-gui-native-keyboard ()
@@ -104,22 +58,24 @@ watch focus. `sit-for' would return at once while input is pending."
 (ert-deftest portal-launcher-gui-geometry-and-appearance ()
   (portal-launcher-gui--with-panel
     (portal-launcher-show content)
+    ;; The placement arithmetic for every size and offset is checked
+    ;; without windows (test/native-launcher-geometry.swift); each display
+    ;; gets a default and an odd placement here, each placed exactly.
     (let ((screens (plist-get (portal--launcher-inspect) :screens)) measurements)
       (dotimes (index (length screens))
-        (dolist (size '((640 320) (720 420) (860 520) (713 407)))
-          (dolist (offset '((0 0) (-137 81)))
-            (let ((portal-launcher-screen index) (portal-launcher-size size)
-                  (portal-launcher-offset offset))
-              (portal-launcher-show)
-              (portal-launcher-gui--settle)
-              (let ((state (portal--launcher-inspect)))
-                (should (equal (plist-get state :requested) (plist-get state :actual)))
-                (should (equal (cddr (plist-get state :actual)) size))
-                (should (equal (list (frame-pixel-width portal-launcher--frame)
-                                    (frame-pixel-height portal-launcher--frame)) size))
-                (push (list :screen index :size size :offset offset
-                            :requested (plist-get state :requested) :actual (plist-get state :actual))
-                      measurements))))))
+        (pcase-dolist (`(,size ,offset) '(((720 420) (0 0)) ((713 407) (-137 81))))
+          (let ((portal-launcher-screen index) (portal-launcher-size size)
+                (portal-launcher-offset offset))
+            (portal-launcher-show)
+            (portal-launcher-gui--settle)
+            (let ((state (portal--launcher-inspect)))
+              (should (equal (plist-get state :requested) (plist-get state :actual)))
+              (should (equal (cddr (plist-get state :actual)) size))
+              (should (equal (list (frame-pixel-width portal-launcher--frame)
+                                  (frame-pixel-height portal-launcher--frame)) size))
+              (push (list :screen index :size size :offset offset
+                          :requested (plist-get state :requested) :actual (plist-get state :actual))
+                    measurements)))))
       (message "Launcher geometry: %S; screens: %S" (nreverse measurements) screens))
     (let ((portal-launcher-size '(713 407)))
       (dolist (appearance '(dark light nil))
@@ -141,7 +97,8 @@ watch focus. `sit-for' would return at once while input is pending."
 
 (ert-deftest portal-launcher-gui-delete-disable-and-child ()
   (portal-launcher-gui--with-panel
-    (dotimes (_ 20)
+    ;; The stress suite repeats this 20 times.
+    (dotimes (_ 2)
       (let ((frame (portal-launcher-show content)))
         (delete-frame frame t)
         (should-not (frame-live-p frame))
@@ -181,118 +138,11 @@ watch focus. `sit-for' would return at once while input is pending."
       (set-frame-parameter (window-frame ordinary) 'undecorated nil)
       (should (eq (portal-launcher-show) frame)))))
 
-(defun portal-launcher-gui--hotkey (name)
-  "The native hot key of the global shortcut NAME, for the injector."
-  (let ((id (cadr (assq name portal-global-shortcut--registrations))))
-    (plist-get (cl-find id (portal--shortcuts) :key (lambda (shortcut) (plist-get shortcut :id)))
-               :hotkey)))
-
-(defun portal-launcher-gui--press (name)
-  "Press and release NAME's chord, as Carbon reports it, and read the record."
-  (let ((hotkey (portal-launcher-gui--hotkey name)))
-    (should (portal-test-hotkey hotkey t))
-    (should (portal-test-hotkey hotkey nil)))
-  (portal-view--read-records))
-
-;; A running Emacs may already have the launcher guide's chords.
-(defconst portal-launcher-gui--chords
-  '(("Control-Option-Command-F" . "Control-Option-Command-F17")
-    ("Control-Option-Command-H" . "Control-Option-Command-F18")
-    ("Control-Option-Command-K" . "Control-Option-Command-F19")
-    ("Control-Option-Command-P" . "Control-Option-Command-F20"))
-  "The launcher guide's chords and the ones these tests set in their place.")
-
-(defun portal-launcher-gui--example (name)
-  "Load the launcher guide's example NAME on test chords with dynamic binding.
-A configuration file need not enable `lexical-binding'; the batch tests load
-the examples with both bindings."
-  (should-not (portal-launcher-examples-load (list name) nil portal-launcher-gui--chords)))
-
-(defun portal-launcher-gui--dismiss-shortcut ()
-  "Set the global shortcut `portal-launcher-gui', which presents a launcher.
-Pressed while a panel is open, it dismisses the panel."
-  (portal-global-shortcut-set 'portal-launcher-gui "Control-Option-Command-F16"
-                              (lambda () (interactive) (portal-launcher-present #'ignore))))
-
-(defvar portal-launcher-gui--action nil)
-(defun portal-launcher-gui--act ()
-  (interactive)
-  (funcall portal-launcher-gui--action))
-
-(defun portal-launcher-gui--drive (start strokes &optional action loop)
-  "Call START with native STROKES typed into its prompts; C-] calls ACTION.
-Strokes go to the panel while Emacs reads in a prompt or a persistent
-panel's buffer.  With LOOP, START only queues input, which the real command
-loop then reads, in a recursive edit that ends once STROKES are typed and
-the command loop waits with no session.  Return START's value, or nil."
-  (let* ((portal-launcher-gui--action action)
-         ;; A runner may call ERT from a timer, where quit is inhibited. Real
-         ;; command-loop invocation permits native C-g to unwind a minibuffer.
-         (inhibit-quit nil)
-         (quit-flag nil)
-         (map (make-sparse-keymap))
-         (global (current-global-map))
-         (depth (recursion-depth))
-         (base (if loop (1+ depth) depth))
-         (timer (run-with-timer
-                 0.1 0.1
-                 (lambda ()
-                   (cond
-                    ;; Deeper means a prompt, or a persistent panel's buffer.
-                    ((and strokes (> (recursion-depth) base))
-                     (portal-view--with-frame-title portal-launcher--frame #'portal-test-native-target-frame)
-                     (let ((stroke (pop strokes)))
-                       ;; Synthetic AppKit C-g gets held by this Emacs build
-                       ;; even in an ordinary read-string. Queue the Emacs
-                       ;; event for this one key; other strokes are native.
-                       (if (eq stroke 'quit)
-                           (setq unread-command-events (append unread-command-events '(7)))
-                         (apply #'portal-test-native-post-key stroke))))
-                    ((and loop (null strokes) (= (recursion-depth) base)
-                          (null unread-command-events) (not portal-launcher--session))
-                     (exit-recursive-edit)))))))
-    (set-keymap-parent map global)
-    (keymap-set map "C-]" #'portal-launcher-gui--act)
-    (use-global-map map)
-    (unwind-protect
-        (prog1 (with-timeout (10 (error "Launcher prompt timed out; pending input: %S" strokes))
-                 (if (not loop) (funcall start)
-                   (funcall start)
-                   (recursive-edit)
-                   nil))
-          (should-not strokes)
-          (should (= depth (recursion-depth)))
-          (should-not (active-minibuffer-window))
-          (should-not portal-launcher--session)
-          (should-not (plist-get (portal--launcher-inspect) :visible))
-          (when (frame-live-p portal-launcher--frame)
-            (should-not (frame-visible-p portal-launcher--frame))))
-      (cancel-timer timer)
-      (portal-test-native-target-frame nil)
-      (use-global-map global))))
-
-(defun portal-launcher-gui--present (command strokes &optional action options)
-  "Present COMMAND with native STROKES typed into its prompts; C-] calls ACTION.
-OPTIONS are `portal-launcher-present' keywords and values.  With
-:keep-open, STROKES also go to the panel's buffer after COMMAND returns."
-  (portal-launcher-gui--drive (lambda () (apply #'portal-launcher-present command options))
-                              strokes action))
-
-(defun portal-launcher-gui--text (text)
-  (let ((codes '((?a . 0) (?b . 11) (?c . 8) (?d . 2) (?e . 14) (?f . 3)
-                 (?g . 5) (?h . 4) (?i . 34) (?j . 38) (?k . 40) (?l . 37)
-                 (?m . 46) (?n . 45) (?o . 31) (?p . 35) (?q . 12) (?r . 15)
-                 (?s . 1) (?t . 17) (?u . 32) (?v . 9) (?w . 13) (?x . 7)
-                 (?y . 16) (?z . 6) (?! . 18) (?- . 27) (?\s . 49)
-                 (?0 . 29) (?1 . 18) (?2 . 19) (?3 . 20) (?4 . 21)
-                 (?5 . 23) (?6 . 22) (?7 . 26) (?8 . 28) (?9 . 25))))
-    (mapcar (lambda (char)
-              (list (alist-get (downcase char) codes) (if (or (<= ?A char ?Z) (= char ?!)) 131072 0)
-                    (string char))) text)))
-
 (ert-deftest portal-launcher-gui-picker-selection-without-typing ()
-  ;; A user's picker in a minibuffer panel, typed into with native keys.
-  ;; Portal returns whatever completion returns; it adds no input policy.
+  ;; A user's picker in a minibuffer panel, typed into with native keys:
+  ;; letters and Return, an arrow and Escape.  Portal returns whatever
+  ;; completion returns; portal-launcher-tests.el checks each input with
+  ;; stock completion and with Vertico, Orderless and Marginalia.
   (require 'vertico)
   (require 'orderless)
   (require 'marginalia)
@@ -310,17 +160,11 @@ OPTIONS are `portal-launcher-present' keywords and values.  With
           (unwind-protect
               (cl-flet ((pick (strokes)
                           (portal-launcher-gui--present picker strokes nil '(:kind minibuffer))))
-                (should (equal "Chess" (pick (append (portal-launcher-gui--text "Chess") '((36 0 "\r"))))))
-                (should (equal "Notes" (pick (append (portal-launcher-gui--text "Notes")
-                                                     '((36 0 "\r"))))))
-                ;; With Vertico, Return accepts the highlighted candidate
-                ;; with no typed text, the first or one chosen with arrows.
-                ;; Stock completion highlights nothing and returns "".
-                (should (equal (if enhanced "Calculator" "") (pick '((36 0 "\r")))))
-                (when enhanced
+                (if (not enhanced)
+                    (should (equal "Chess" (pick (append (portal-launcher-gui--text "Chess") '((36 0 "\r"))))))
+                  ;; Vertico's highlight, moved with an arrow, is accepted.
                   (should (equal "Calendar" (pick '((125 0 "\uf701") (36 0 "\r")))))
-                  (should (equal "Calculator" (pick '((125 0 "\uf701") (126 0 "\uf700") (36 0 "\r"))))))
-                (should-not (pick '((53 0 "\e")))))
+                  (should-not (pick '((53 0 "\e"))))))
             (vertico-mode -1)
             (marginalia-mode -1)))
         (should (eq reader completing-read-function))
@@ -406,11 +250,13 @@ OPTIONS are `portal-launcher-present' keywords and values.  With
         (when (get-buffer "*Hello*") (kill-buffer "*Hello*"))))))
 
 (ert-deftest portal-launcher-gui-session-stock-and-completion-stack ()
+  ;; The full completion stack in the native panel; portal-launcher-tests.el
+  ;; checks stock completion and this stack's matching.
   (portal-launcher-gui--with-panel
     (require 'vertico)
     (require 'orderless)
     (require 'marginalia)
-    (dolist (enhanced '(nil t))
+    (dolist (enhanced '(t))
       (let* ((completion-styles (if enhanced '(orderless basic) '(basic)))
              (completion-category-defaults nil)
              (rules display-buffer-alist)
@@ -445,16 +291,6 @@ OPTIONS are `portal-launcher-present' keywords and values.  With
         (should (eq rules display-buffer-alist))
         (should (eq maps emulation-mode-map-alists))
         (should (eq (selected-window) ordinary))))))
-
-;; Set PORTAL_LAUNCHER_SCREENSHOTS to a directory to keep pictures of the panel.
-(defun portal-launcher-gui--capture (name)
-  "Save the panel's Emacs drawing as NAME.png in $PORTAL_LAUNCHER_SCREENSHOTS."
-  (when-let* ((directory (getenv "PORTAL_LAUNCHER_SCREENSHOTS")))
-    (redisplay t)
-    (portal-view--with-frame-title portal-launcher--frame #'portal-test-native-target-frame)
-    (unwind-protect
-        (should (portal-test-capture-target (expand-file-name (concat name ".png") directory)))
-      (portal-test-native-target-frame nil))))
 
 (defun portal-launcher-gui--minibuffer-layout ()
   "Describe the minibuffer launcher's layout, from inside its prompt."
@@ -984,8 +820,8 @@ With EXACT, the text must also be that many default lines high."
 
 (ert-deftest portal-launcher-gui-minibuffer-panel-stock-completion ()
   (portal-launcher-gui--with-panel
-    ;; At a fixed size, then fitting its content.
-    (dolist (portal-launcher-size '((720 420) nil))
+    ;; Fitting its content; portal-launcher-tests.el also checks a fixed size.
+    (dolist (portal-launcher-size '(nil))
       (let ((windows (window-list (window-frame ordinary) t))
             shown)
         ;; Tab completes and Return accepts, but *Completions* shows nowhere.
@@ -1232,14 +1068,6 @@ The local command n reads a name in the minibuffer and greets it."
         (inhibit-read-only t))
     (goto-char (point-max))
     (insert "\nHello " name "!")))
-
-(defun portal-launcher-gui--check-unwound ()
-  "Check that a persistent presentation left no hooks or session."
-  (should-not portal-launcher--session)
-  (should-not (memq #'portal-launcher--dismiss-if-blurred (default-value 'post-command-hook)))
-  (should-not (memq #'portal-launcher--refit (default-value 'post-command-hook)))
-  (should-not (memq #'portal-launcher--hide-mode-lines window-buffer-change-functions))
-  (should-not (cl-find 'portal-launcher-blur unread-command-events :key #'car-safe)))
 
 (ert-deftest portal-launcher-gui-persistent-buffer ()
   (portal-launcher-gui--with-panel

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Standalone AppKit check; run using the command in docs/testing.md.
+// Standalone AppKit check: ./test.sh gui --suite native-focus --allow-gui.
 import AppKit
 import WebKit
 

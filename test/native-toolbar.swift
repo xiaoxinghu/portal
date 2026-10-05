@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Standalone AppKit/WebKit integration test. See docs/testing.md for the compiler command.
+// Standalone AppKit/WebKit integration test: ./test.sh gui --suite native-toolbar --allow-gui.
 // The core owns every toolbar's state (native/Core/toolbar.c); these checks
 // click real buttons, type into the real field and read what AppKit shows.
 import AppKit

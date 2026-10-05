@@ -5,13 +5,11 @@
 # starts a disposable Emacs that sets two shortcuts, a command and a lambda,
 # and records each call with the app in front. Override the chords with
 # PORTAL_SMOKE_FIRST and PORTAL_SMOKE_SECOND if another app has them, and the
-# two minutes allowed with PORTAL_SMOKE_SECONDS.
+# two minutes allowed with PORTAL_SMOKE_SECONDS. ./test.sh manual runs this.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-xcrun clang -fobjc-arc -Wall -Wextra -Werror -bundle \
-    -I "$(cat "$root/build/emacs-include.txt")" "$root/test/terminal-input.m" \
-    -framework AppKit -framework WebKit -framework Carbon -framework IOSurface \
-    -o "$root/build/test-terminal-input.dylib"
+# The CMake target rebuilds the test-only event injector only when it changed.
+cmake --build "$root/build" --target portal-test-injector
 first=${PORTAL_SMOKE_FIRST:-Control-Option-Command-8}
 second=${PORTAL_SMOKE_SECOND:-Control-Option-Command-9}
 seconds=${PORTAL_SMOKE_SECONDS:-120}

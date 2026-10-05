@@ -48,80 +48,10 @@ add_custom_command(
 add_custom_target(portal-ui-host ALL DEPENDS "${CMAKE_BINARY_DIR}/portal-host")
 
 if(BUILD_TESTING)
-    # Runs docs/launcher.md's examples; launcher.el is not needed.
-    add_test(NAME launcher
-        COMMAND "${EMACS}" --batch -Q -L "${CMAKE_SOURCE_DIR}" -L "${CMAKE_SOURCE_DIR}/test"
-            -l "${CMAKE_SOURCE_DIR}/test/portal-launcher-tests.el"
-            -f ert-run-tests-batch-and-exit)
-    set_tests_properties(launcher PROPERTIES TIMEOUT 30)
-    # The Lisp module on the real C core, with the fake backend's hot keys.
-    add_test(NAME global-shortcut
-        COMMAND "${CMAKE_COMMAND}" -E env "PORTAL_TEST_MODULE=$<TARGET_FILE:portal-test-module>"
-            "${EMACS}" --batch -Q --module-assertions -L "${CMAKE_SOURCE_DIR}"
-            -l "${CMAKE_SOURCE_DIR}/test/portal-global-shortcut-tests.el"
-            -f ert-run-tests-batch-and-exit)
-    set_tests_properties(global-shortcut PROPERTIES TIMEOUT 30)
-    # Exercise the documented absolute-path entry point in a fresh Emacs.
-    # Do not add the package directory with -L: Portal must load its own siblings.
-    add_test(NAME startup
-        COMMAND "${EMACS}" --batch -Q
-            -l "${CMAKE_SOURCE_DIR}/test/portal-startup-tests.el"
-            -f ert-run-tests-batch-and-exit)
-    set_tests_properties(startup PROPERTIES TIMEOUT 30)
-    add_executable(portal-process-tests test/portal-process-tests.c)
-    target_include_directories(portal-process-tests PRIVATE native/Core/include)
-    target_compile_options(portal-process-tests PRIVATE -Wall -Wextra -Werror)
-    add_test(NAME processes COMMAND portal-process-tests)
-    set_tests_properties(processes PROPERTIES TIMEOUT 30)
-    add_test(NAME pi-extension COMMAND "${BUN}" test "${CMAKE_SOURCE_DIR}/test/portal-pi.test.ts")
-    set_tests_properties(pi-extension PROPERTIES TIMEOUT 30)
-    add_test(NAME host-actions COMMAND "${BUN}" test "${CMAKE_SOURCE_DIR}/host/actions.test.ts")
-    add_test(NAME host-tasks COMMAND "${BUN}" test "${CMAKE_SOURCE_DIR}/host/tasks.test.ts")
-    add_test(NAME actions
-        COMMAND "${CMAKE_COMMAND}" -E env
-            "PORTAL_TEST_HOST=${CMAKE_BINARY_DIR}/portal-host"
-            "${EMACS}" --batch -Q -L "${CMAKE_SOURCE_DIR}" -L "${CMAKE_SOURCE_DIR}/test"
-            -l "${CMAKE_SOURCE_DIR}/test/portal-actions-tests.el"
-            -f ert-run-tests-batch-and-exit)
-    set_tests_properties(actions PROPERTIES TIMEOUT 30)
-    add_test(NAME ui-host
-        COMMAND "${CMAKE_COMMAND}" -E env
-            "PORTAL_TEST_HOST=${CMAKE_BINARY_DIR}/portal-host"
-            "${EMACS}" --batch -Q -L "${CMAKE_SOURCE_DIR}"
-            -l "${CMAKE_SOURCE_DIR}/test/portal-server-tests.el"
-            -f ert-run-tests-batch-and-exit)
-    set_tests_properties(ui-host PROPERTIES TIMEOUT 30)
-    add_test(NAME quick-terminal
-        COMMAND "${EMACS}" --batch -Q -L "${CMAKE_SOURCE_DIR}"
-            -l "${CMAKE_SOURCE_DIR}/test/portal-terminal-quick-tests.el"
-            -f ert-run-tests-batch-and-exit)
-    set_tests_properties(quick-terminal PROPERTIES TIMEOUT 30)
-    add_test(NAME terminal-metadata
-        COMMAND "${EMACS}" --batch -Q -L "${CMAKE_SOURCE_DIR}"
-            -l "${CMAKE_SOURCE_DIR}/test/portal-terminal-metadata-tests.el"
-            -f ert-run-tests-batch-and-exit)
-    set_tests_properties(terminal-metadata PROPERTIES TIMEOUT 30)
-    add_test(NAME terminal-choose
-        COMMAND "${EMACS}" --batch -Q -L "${CMAKE_SOURCE_DIR}"
-            -l "${CMAKE_SOURCE_DIR}/test/portal-terminal-choose-tests.el"
-            -f ert-run-tests-batch-and-exit)
-    set_tests_properties(terminal-choose PROPERTIES TIMEOUT 30)
-    add_test(NAME agents
-        COMMAND "${EMACS}" --batch -Q -L "${CMAKE_SOURCE_DIR}"
-            -l "${CMAKE_SOURCE_DIR}/test/portal-agents-tests.el"
-            -f ert-run-tests-batch-and-exit)
-    set_tests_properties(agents PROPERTIES TIMEOUT 30)
-    add_test(NAME agent-discovery
-        COMMAND "${CMAKE_COMMAND}" -E env
-            "PORTAL_TEST_PROCESS_SNAPSHOT=$<TARGET_FILE:portal-process-tests>"
-            "${EMACS}" --batch -Q -L "${CMAKE_SOURCE_DIR}"
-            -l "${CMAKE_SOURCE_DIR}/test/portal-agent-discovery-tests.el"
-            -f ert-run-tests-batch-and-exit)
-    set_tests_properties(agent-discovery PROPERTIES TIMEOUT 30)
     # The optional Consult and Embark adapters, the task view, agent dashboard
-    # under Evil and the launcher's graphical completion fixtures use the GNU
-    # and NonGNU ELPA releases the user guides name, downloaded once and checked
-    # by hash.
+    # and input under Evil and the launcher's graphical completion fixtures use
+    # the GNU and NonGNU ELPA releases the user guides name, downloaded once
+    # and checked by hash.
     set(elpa_packages
         "elpa.gnu.org/packages/consult-3.10=68aa5daeb701958482dccab3b23a454ff9a9be6b2f4c41fbcc7a353ecfeab096"
         "elpa.gnu.org/packages/embark-1.2=65e4553e709a9619016a635c435f648add310c75601b3b0818ca71c5b46678ea"
@@ -176,62 +106,244 @@ if(BUILD_TESTING)
         endif()
         list(APPEND elpa_load_path -L "${directory}")
     endforeach()
-    add_test(NAME agents-evil
-        COMMAND "${EMACS}" --batch -Q -L "${CMAKE_SOURCE_DIR}" ${elpa_load_path}
-            -l "${CMAKE_SOURCE_DIR}/test/portal-agents-evil-tests.el"
-            --eval "(ert-run-tests-batch-and-exit 'portal-agents-visit-works-with-evil-collection)")
-    set_tests_properties(agents-evil PROPERTIES TIMEOUT 30)
-    add_test(NAME tasks-view
-        COMMAND "${EMACS}" --batch -Q -L "${CMAKE_SOURCE_DIR}" ${elpa_load_path}
-            -l "${CMAKE_SOURCE_DIR}/test/portal-tasks-view-tests.el"
-            -f ert-run-tests-batch-and-exit)
-    set_tests_properties(tasks-view PROPERTIES TIMEOUT 30)
-    foreach(adapter consult embark)
-        add_test(NAME terminal-${adapter}
-            COMMAND "${EMACS}" --batch -Q -L "${CMAKE_SOURCE_DIR}" ${elpa_load_path}
-                -l "${CMAKE_SOURCE_DIR}/test/portal-terminal-${adapter}-tests.el"
-                -f ert-run-tests-batch-and-exit)
-        set_tests_properties(terminal-${adapter} PROPERTIES TIMEOUT 30)
+
+    # Suites are registered with portal_suite (test/suites.cmake); ./test.sh
+    # selects them and builds what they need first (docs/testing.md). Each
+    # Lisp suite is one test file run by test/portal-suite.el.
+    set(source "${CMAKE_SOURCE_DIR}")
+    set(lisp_suite -l "${source}/test/portal-suite.el" -f portal-suite-batch)
+    set(host_env "${CMAKE_COMMAND}" -E env "PORTAL_TEST_HOST=${CMAKE_BINARY_DIR}/portal-host")
+    find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+
+    # Unit: pure logic, the real C core with the fake platform, and batch Lisp.
+    # Runs docs/launcher.md's examples; launcher.el is not needed.
+    portal_suite(launcher CATEGORY unit FEATURES launcher
+        COMMAND "${EMACS}" --batch -Q -L "${source}" -L "${source}/test" ${elpa_load_path}
+            ${lisp_suite} "${source}/test/portal-launcher-tests.el")
+    # The Lisp module on the real C core, with the fake backend's hot keys.
+    portal_suite(global-shortcut CATEGORY unit FEATURES global-shortcut
+        COMMAND "${CMAKE_COMMAND}" -E env "PORTAL_TEST_MODULE=$<TARGET_FILE:portal-test-module>"
+            "${EMACS}" --batch -Q --module-assertions -L "${source}"
+            ${lisp_suite} "${source}/test/portal-global-shortcut-tests.el")
+    # Exercise the documented absolute-path entry point in a fresh Emacs.
+    # Do not add the package directory with -L: Portal must load its own siblings.
+    portal_suite(startup CATEGORY unit FEATURES startup
+        COMMAND "${EMACS}" --batch -Q ${lisp_suite} "${source}/test/portal-startup-tests.el")
+    portal_suite(pi-extension CATEGORY unit FEATURES agents
+        COMMAND "${BUN}" test "${source}/test/portal-pi.test.ts")
+    portal_suite(host-actions CATEGORY unit FEATURES host tasks
+        COMMAND "${BUN}" test "${source}/host/actions.test.ts")
+    portal_suite(host-tasks CATEGORY unit FEATURES host tasks
+        COMMAND "${BUN}" test "${source}/host/tasks.test.ts")
+    portal_suite(todo-tasks CATEGORY unit FEATURES tasks
+        COMMAND "${BUN}" test "${source}/test/list-todo-tasks.test.ts")
+    foreach(suite IN ITEMS quick-terminal=terminal-quick terminal-metadata=terminal-metadata
+            terminal-choose=terminal-choose terminal-bindings=terminal-bindings)
+        string(REPLACE "=" ";" suite "${suite}")
+        list(GET suite 0 name)
+        list(GET suite 1 file)
+        portal_suite(${name} CATEGORY unit FEATURES terminal
+            COMMAND "${EMACS}" --batch -Q -L "${source}" ${lisp_suite} "${source}/test/portal-${file}-tests.el")
     endforeach()
-    add_test(NAME view
-        COMMAND "${EMACS}" --batch -Q -L "${CMAKE_SOURCE_DIR}"
-            -l "${CMAKE_SOURCE_DIR}/test/portal-view-tests.el"
-            -f ert-run-tests-batch-and-exit)
-    set_tests_properties(view PROPERTIES TIMEOUT 30)
-    add_test(NAME web
+    portal_suite(agents CATEGORY unit FEATURES agents
+        COMMAND "${EMACS}" --batch -Q -L "${source}" ${lisp_suite} "${source}/test/portal-agents-tests.el")
+    portal_suite(agents-evil CATEGORY unit FEATURES agents
+        COMMAND "${EMACS}" --batch -Q -L "${source}" ${elpa_load_path}
+            ${lisp_suite} "${source}/test/portal-agents-evil-tests.el")
+    portal_suite(tasks-view CATEGORY unit FEATURES org-tasks
+        COMMAND "${EMACS}" --batch -Q -L "${source}" ${elpa_load_path}
+            ${lisp_suite} "${source}/test/portal-tasks-view-tests.el")
+    foreach(adapter consult embark)
+        portal_suite(terminal-${adapter} CATEGORY unit FEATURES terminal
+            COMMAND "${EMACS}" --batch -Q -L "${source}" ${elpa_load_path}
+                ${lisp_suite} "${source}/test/portal-terminal-${adapter}-tests.el")
+    endforeach()
+    portal_suite(view CATEGORY unit FEATURES view
+        COMMAND "${EMACS}" --batch -Q -L "${source}" ${lisp_suite} "${source}/test/portal-view-tests.el")
+    portal_suite(toolbar CATEGORY unit FEATURES toolbar
+        COMMAND "${EMACS}" --batch -Q -L "${source}" ${lisp_suite} "${source}/test/portal-toolbar-tests.el")
+    # Evil comes from build/elpa, so its two cases run rather than skip.
+    portal_suite(input CATEGORY unit FEATURES input
+        COMMAND "${EMACS}" --batch -Q -L "${source}" ${elpa_load_path}
+            ${lisp_suite} "${source}/test/portal-input-tests.el")
+    portal_suite(excalidraw CATEGORY unit FEATURES excalidraw
+        COMMAND "${EMACS}" --batch -Q -L "${source}" ${lisp_suite} "${source}/test/portal-excalidraw-tests.el")
+    # This runner, its Lisp suite runner and the helper files' isolation.
+    portal_suite(test-runner CATEGORY unit FEATURES test-tools TIMEOUT 120
+        COMMAND "${CMAKE_COMMAND}" -E env "EMACS=${EMACS}" "PORTAL_TEST_ELPA=${CMAKE_BINARY_DIR}/elpa"
+            "${Python3_EXECUTABLE}" -B -m unittest discover -s "${source}/test" -p test_runner.py)
+
+    # Integration: the compiled host, processes, PTYs and a headless browser.
+    add_executable(portal-process-tests test/portal-process-tests.c)
+    target_include_directories(portal-process-tests PRIVATE native/Core/include)
+    target_compile_options(portal-process-tests PRIVATE -Wall -Wextra -Werror)
+    portal_suite(processes CATEGORY integration FEATURES agents COMMAND portal-process-tests)
+    portal_suite(agent-discovery CATEGORY integration FEATURES agents
         COMMAND "${CMAKE_COMMAND}" -E env
-            "PORTAL_TEST_HOST=${CMAKE_BINARY_DIR}/portal-host"
-            "${EMACS}" --batch -Q -L "${CMAKE_SOURCE_DIR}"
-            -l "${CMAKE_SOURCE_DIR}/test/portal-web-tests.el"
-            -f ert-run-tests-batch-and-exit)
-    set_tests_properties(web PROPERTIES TIMEOUT 30)
-    add_test(NAME tasks
-        COMMAND "${CMAKE_COMMAND}" -E env
-            "PORTAL_TEST_HOST=${CMAKE_BINARY_DIR}/portal-host"
-            "${EMACS}" --batch -Q -L "${CMAKE_SOURCE_DIR}"
-            -l "${CMAKE_SOURCE_DIR}/test/portal-tasks-tests.el"
-            -f ert-run-tests-batch-and-exit)
-    set_tests_properties(tasks PROPERTIES TIMEOUT 30)
-    add_test(NAME toolbar
-        COMMAND "${EMACS}" --batch -Q -L "${CMAKE_SOURCE_DIR}"
-            -l "${CMAKE_SOURCE_DIR}/test/portal-toolbar-tests.el"
-            -f ert-run-tests-batch-and-exit)
-    set_tests_properties(toolbar PROPERTIES TIMEOUT 30)
-    add_test(NAME input
-        COMMAND "${EMACS}" --batch -Q -L "${CMAKE_SOURCE_DIR}"
-            -l "${CMAKE_SOURCE_DIR}/test/portal-input-tests.el"
-            -f ert-run-tests-batch-and-exit)
-    set_tests_properties(input PROPERTIES TIMEOUT 30)
-    add_test(NAME terminal-bindings
-        COMMAND "${EMACS}" --batch -Q -L "${CMAKE_SOURCE_DIR}"
-            -l "${CMAKE_SOURCE_DIR}/test/portal-terminal-bindings-tests.el"
-            -f ert-run-tests-batch-and-exit)
-    set_tests_properties(terminal-bindings PROPERTIES TIMEOUT 30)
-    add_test(NAME excalidraw
-        COMMAND "${EMACS}" --batch -Q -L "${CMAKE_SOURCE_DIR}"
-            -l "${CMAKE_SOURCE_DIR}/test/portal-excalidraw-tests.el"
-            -f ert-run-tests-batch-and-exit)
-    set_tests_properties(excalidraw PROPERTIES TIMEOUT 30)
+            "PORTAL_TEST_PROCESS_SNAPSHOT=$<TARGET_FILE:portal-process-tests>"
+            "${EMACS}" --batch -Q -L "${source}" ${lisp_suite} "${source}/test/portal-agent-discovery-tests.el")
+    portal_suite(actions CATEGORY integration FEATURES host tasks terminal
+        COMMAND ${host_env} "${EMACS}" --batch -Q -L "${source}" -L "${source}/test"
+            ${lisp_suite} "${source}/test/portal-actions-tests.el")
+    portal_suite(ui-host CATEGORY integration FEATURES host markdown
+        COMMAND ${host_env} "${EMACS}" --batch -Q -L "${source}"
+            ${lisp_suite} "${source}/test/portal-server-tests.el")
+    portal_suite(web CATEGORY integration FEATURES web host
+        COMMAND ${host_env} "${EMACS}" --batch -Q -L "${source}" ${lisp_suite} "${source}/test/portal-web-tests.el")
+    portal_suite(tasks CATEGORY integration FEATURES tasks host
+        COMMAND ${host_env} "${EMACS}" --batch -Q -L "${source}" ${lisp_suite} "${source}/test/portal-tasks-tests.el")
+    portal_suite(native-check-helpers CATEGORY integration FEATURES test-tools TIMEOUT 120
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s "${source}/test" -p test_native_checks.py)
+    portal_suite(benchmark-tool CATEGORY integration FEATURES terminal test-tools TIMEOUT 120
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s "${source}/test" -p test_benchmark.py)
+    # The task browser's page script in Playwright's headless WebKit, pinned
+    # by host/bun.lock and installed under the build directory.
+    set(browsers "${CMAKE_BINARY_DIR}/playwright")
+    add_custom_command(
+        OUTPUT "${browsers}/installed"
+        COMMAND "${BUN}" install --cwd "${source}/host" --frozen-lockfile
+        COMMAND "${CMAKE_COMMAND}" -E env "PLAYWRIGHT_BROWSERS_PATH=${browsers}"
+            "${BUN}" "${source}/host/node_modules/playwright-core/cli.js" install webkit
+        COMMAND "${CMAKE_COMMAND}" -E touch "${browsers}/installed"
+        DEPENDS host/package.json host/bun.lock
+        COMMENT "Installing Playwright's WebKit for headless browser tests"
+        VERBATIM)
+    add_custom_target(portal-test-browser DEPENDS "${browsers}/installed")
+    portal_suite(tasks-page CATEGORY integration FEATURES tasks web TIMEOUT 120
+        COMMAND "${CMAKE_COMMAND}" -E env "PLAYWRIGHT_BROWSERS_PATH=${browsers}"
+            "${BUN}" test "${source}/host/tasks-client.test.ts")
+
+    # Test-only native code: the event injector the graphical suites load and
+    # the standalone AppKit checks, built only for runs that use them.
+    set(injector "${CMAKE_BINARY_DIR}/test-terminal-input.dylib")
+    add_custom_command(
+        OUTPUT "${injector}"
+        COMMAND xcrun clang -fobjc-arc -Wall -Wextra -Werror -bundle
+            -I "${EMACS_INCLUDE}" "${source}/test/terminal-input.m"
+            -framework AppKit -framework WebKit -framework Carbon -framework IOSurface
+            -o "${injector}"
+        DEPENDS test/terminal-input.m
+        COMMENT "Building the test-only event injector"
+        VERBATIM)
+    add_custom_target(portal-test-injector DEPENDS "${injector}")
+    add_library(portal-check-core OBJECT EXCLUDE_FROM_ALL
+        native/Core/views.c native/Core/input.c native/Core/terminals.c native/Core/web.c
+        native/Core/toolbar.c native/Core/channel.c native/Core/shortcuts.c)
+    target_include_directories(portal-check-core PRIVATE native/Core/include)
+    target_compile_options(portal-check-core PRIVATE -Wall -Wextra -Werror)
+    set_target_properties(portal-check-core PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    set(check_sources
+        native/Backend.swift native/CoreCalls.swift native/NativeHost.swift native/NativeInput.swift
+        native/Launcher.swift native/Hotkeys.swift native/Views.swift native/Toolbar.swift
+        native/WebToolbar.swift native/WebView.swift
+        test/native-checks.swift test/native-terminal-stub.swift test/native-views.swift)
+    foreach(check focus toolbar launcher shortcuts launcher-geometry)
+        add_custom_command(
+            OUTPUT "${CMAKE_BINARY_DIR}/check-${check}"
+            COMMAND xcrun swiftc -swift-version 6 -warnings-as-errors
+                -I native/Core/include -import-objc-header test/native-core.h
+                ${check_sources} test/native-${check}.swift $<TARGET_OBJECTS:portal-check-core>
+                -framework AppKit -framework WebKit -framework Carbon
+                -o "${CMAKE_BINARY_DIR}/check-${check}"
+            DEPENDS ${check_sources} test/native-${check}.swift test/native-core.h
+                $<TARGET_OBJECTS:portal-check-core>
+            WORKING_DIRECTORY "${source}"
+            COMMENT "Building the standalone ${check} check"
+            COMMAND_EXPAND_LISTS
+            VERBATIM)
+    endforeach()
+    add_custom_target(portal-native-checks DEPENDS "${CMAKE_BINARY_DIR}/check-focus"
+        "${CMAKE_BINARY_DIR}/check-toolbar" "${CMAKE_BINARY_DIR}/check-launcher"
+        "${CMAKE_BINARY_DIR}/check-shortcuts")
+    # The launcher's placement arithmetic needs no application or window.
+    add_custom_target(portal-geometry-check DEPENDS "${CMAKE_BINARY_DIR}/check-launcher-geometry")
+    portal_suite(launcher-geometry CATEGORY unit FEATURES launcher
+        COMMAND "${CMAKE_BINARY_DIR}/check-launcher-geometry")
+
+    # Native GUI: disposable graphical Emacs with the built module and the
+    # injector, and the standalone checks. They open windows and take focus.
+    set(gui_suite "${EMACS}" -Q --module-assertions -L "${source}" -L "${source}/test" ${elpa_load_path}
+        -l "${source}/portal.el" --eval "(module-load \"${injector}\")"
+        -l "${source}/test/portal-suite.el" -f portal-suite-graphical)
+    portal_suite(web-gui CATEGORY gui FEATURES web EFFECTS desktop TIMEOUT 120
+        COMMAND ${gui_suite} "${source}/test/portal-tests.el")
+    portal_suite(terminal-gui CATEGORY gui FEATURES terminal input EFFECTS desktop TIMEOUT 300
+        COMMAND ${gui_suite} "${source}/test/portal-terminal-tests.el")
+    # A minimal environment and fixture dotfiles: the shell supplies PATH.
+    portal_suite(terminal-startup-gui CATEGORY gui FEATURES terminal EFFECTS desktop TIMEOUT 120
+        COMMAND "${CMAKE_COMMAND}" -E env "EMACS=${EMACS}" sh "${source}/test/terminal-shell-startup.sh")
+    portal_suite(coexistence-gui CATEGORY gui FEATURES coexistence web terminal input EFFECTS desktop TIMEOUT 120
+        COMMAND ${gui_suite} "${source}/test/portal-integration-tests.el")
+    portal_suite(excalidraw-gui CATEGORY gui FEATURES excalidraw web input EFFECTS desktop TIMEOUT 300
+        COMMAND ${gui_suite} "${source}/test/portal-excalidraw-gui-tests.el")
+    portal_suite(input-gui CATEGORY gui FEATURES input web EFFECTS desktop TIMEOUT 120
+        COMMAND ${gui_suite} "${source}/test/portal-input-gui-tests.el")
+    portal_suite(markdown-gui CATEGORY gui FEATURES markdown web input host EFFECTS desktop TIMEOUT 300
+        COMMAND ${gui_suite} "${source}/test/portal-markdown-gui-tests.el")
+    portal_suite(tasks-gui CATEGORY gui FEATURES tasks web input host terminal EFFECTS desktop TIMEOUT 300
+        COMMAND ${gui_suite} "${source}/test/portal-tasks-gui-tests.el")
+    portal_suite(toolbar-gui CATEGORY gui FEATURES toolbar coexistence web terminal excalidraw
+        EFFECTS desktop TIMEOUT 300
+        COMMAND ${gui_suite} "${source}/test/portal-toolbar-gui-tests.el")
+    portal_suite(terminal-choose-gui CATEGORY gui FEATURES terminal input EFFECTS desktop TIMEOUT 120
+        COMMAND ${gui_suite} "${source}/test/portal-terminal-choose-gui-tests.el")
+    # Without tmux, the case whose nested PTY needs it is a declared skip.
+    portal_suite(agents-gui CATEGORY gui FEATURES agents terminal EFFECTS desktop TIMEOUT 180
+        COMMAND "${CMAKE_COMMAND}" -E env "PORTAL_TEST_PROCESS_SNAPSHOT=$<TARGET_FILE:portal-process-tests>"
+            ${gui_suite} "${source}/test/portal-agents-gui-tests.el"
+            --allow-skip portal-discovery-gui-inherited-tmux-marker)
+    portal_suite(global-shortcut-gui CATEGORY gui FEATURES global-shortcut EFFECTS desktop TIMEOUT 120
+        COMMAND ${gui_suite} "${source}/test/portal-global-shortcut-gui-tests.el")
+    portal_suite(tasks-view-gui CATEGORY gui FEATURES org-tasks EFFECTS desktop TIMEOUT 120
+        COMMAND ${gui_suite} "${source}/test/portal-tasks-view-gui-tests.el")
+    # With one display, the case that moves the pointer between displays is a
+    # declared skip.
+    portal_suite(launcher-gui CATEGORY gui FEATURES launcher input EFFECTS desktop TIMEOUT 600
+        COMMAND ${gui_suite} "${source}/test/portal-launcher-gui-tests.el"
+            --allow-skip portal-launcher-gui-minibuffer-panel-stays-on-its-display)
+    portal_suite(launcher-daily-use-gui CATEGORY gui FEATURES launcher coexistence terminal web
+        EFFECTS desktop TIMEOUT 300
+        COMMAND ${gui_suite} "${source}/test/portal-launcher-daily-use-tests.el")
+    foreach(check focus toolbar launcher shortcuts)
+        set(features "${check}")
+        if(check STREQUAL "focus")
+            set(features input web)
+        elseif(check STREQUAL "shortcuts")
+            set(features global-shortcut)
+        endif()
+        portal_suite(native-${check} CATEGORY gui FEATURES ${features} EFFECTS desktop TIMEOUT 120
+            COMMAND "${CMAKE_BINARY_DIR}/check-${check}")
+    endforeach()
+
+    # Stress: bounded lifecycle churn, outside routine runs.
+    portal_suite(launcher-stress-gui CATEGORY stress FEATURES launcher EFFECTS desktop TIMEOUT 600
+        COMMAND ${gui_suite} "${source}/test/portal-launcher-stress-tests.el")
+    portal_suite(native-launcher-stress CATEGORY stress FEATURES launcher EFFECTS desktop TIMEOUT 120
+        COMMAND "${CMAKE_BINARY_DIR}/check-launcher" 20)
+
+    # External: real agents with credentials, and the third-party launcher.el
+    # recipe, each with its configured prerequisites.
+    portal_suite(agent-discovery-live CATEGORY external FEATURES agents terminal
+        EFFECTS desktop external TIMEOUT 900
+        NEEDS env:PORTAL_TEST_CLAUDE_DIRECTORY env:PORTAL_TEST_CODEX_DIRECTORY
+            env:PORTAL_TEST_PI_AGENT_DIR program:claude program:codex program:pi
+        COMMAND ${gui_suite} "${source}/test/portal-agent-discovery-gui-tests.el")
+    portal_suite(launcher-recipe CATEGORY external FEATURES launcher EFFECTS desktop external TIMEOUT 300
+        NEEDS env:PORTAL_LAUNCHER_EL
+        COMMAND ${gui_suite} "${source}/test/portal-launcher-recipe-tests.el")
+
+    # What each category's suites need built; ./test.sh builds these alone,
+    # never the native module for headless runs.
+    add_custom_target(portal-test-unit)
+    add_dependencies(portal-test-unit portal-test-module portal-channel-tests portal-views-tests
+        portal-input-tests portal-terminals-tests portal-web-tests portal-toolbar-tests
+        portal-shortcuts-tests portal-geometry-check)
+    add_custom_target(portal-test-integration)
+    add_dependencies(portal-test-integration portal-ui-host portal-process-tests portal-test-browser)
+    add_custom_target(portal-test-desktop)
+    add_dependencies(portal-test-desktop portal portal-ui-host portal-process-tests
+        portal-test-injector portal-native-checks)
 endif()
 # SwiftPM builds the one native module: the C bindings and the Swift backend.
 # Keep the bundle intact: Ghostty locates terminfo and shell integration here.

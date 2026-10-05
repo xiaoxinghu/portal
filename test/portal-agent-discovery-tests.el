@@ -1,7 +1,11 @@
 ;;; portal-agent-discovery-tests.el --- Discovery through dashboard rows -*- lexical-binding: t; -*-
 ;; SPDX-License-Identifier: GPL-3.0-or-later
-(require 'portal-agents-tests
-         (expand-file-name "portal-agents-tests" (file-name-directory (or load-file-name (bound-and-true-p byte-compile-current-file) buffer-file-name))))
+(require 'portal-agents-testing
+         (expand-file-name "portal-agents-testing"
+                           (file-name-directory
+                            (or load-file-name
+                                (bound-and-true-p byte-compile-current-file)
+                                buffer-file-name))))
 (declare-function portal--process-snapshot "portal-view" (variable))
 
 (defvar portal-discovery-test--processes nil)

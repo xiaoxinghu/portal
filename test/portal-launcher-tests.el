@@ -654,6 +654,110 @@ Return its buffer, as setup functions may."
   (should-not (memq #'portal-launcher--refit (default-value 'post-command-hook)))
   (should-not (memq #'portal-launcher--hide-mode-lines window-buffer-change-functions)))
 
+;; Completion in a minibuffer panel, typed into a real minibuffer.  Portal
+;; returns whatever the user's completion returns and adds no input policy;
+;; the graphical suite types a representative few of these with native keys.
+
+(declare-function vertico-mode "vertico" (&optional arg))
+(declare-function marginalia-mode "marginalia" (&optional arg))
+(defvar vertico-sort-function)
+
+(defmacro portal-launcher-test--completion (enhanced &rest body)
+  "Run BODY with stock completion, or Vertico, Orderless and Marginalia if
+ENHANCED, as the launcher guide's completion setups configure them."
+  (declare (indent 1))
+  `(progn
+     (require 'vertico)
+     (require 'orderless)
+     (require 'marginalia)
+     (let ((completion-styles (if ,enhanced '(orderless basic) '(basic)))
+           (completion-category-defaults nil)
+           (vertico-sort-function #'identity)
+           (minibuffer-history nil))
+       (vertico-mode (if ,enhanced 1 -1))
+       (marginalia-mode (if ,enhanced 1 -1))
+       (unwind-protect (progn ,@body)
+         (vertico-mode -1)
+         (marginalia-mode -1)))))
+
+(ert-deftest portal-launcher-completion-returns-what-completion-returns ()
+  ;; With Vertico, Return accepts the highlighted candidate with no typed
+  ;; text, the first or one chosen with arrows; stock completion highlights
+  ;; nothing and returns "".  Text that matches nothing is returned as is.
+  (portal-launcher-test--session
+    (let ((reader completing-read-function)
+          (window (selected-window))
+          (picker (lambda () (completing-read "Pick: " '("Calculator" "Calendar" "Chess")))))
+      (dolist (enhanced '(nil t))
+        (portal-launcher-test--completion enhanced
+          (cl-flet ((pick (keys) (portal-launcher-test--type keys picker :kind 'minibuffer)))
+            (should (equal "Chess" (pick "C h e s s RET")))
+            (should (equal "Notes" (pick "N o t e s RET")))
+            (should (equal (if enhanced "Calculator" "") (pick "RET")))
+            (when enhanced
+              (should (equal "Calendar" (pick "<down> RET")))
+              (should (equal "Calculator" (pick "<down> <up> RET"))))
+            (should-not (pick "<escape>"))))
+        (should (eq reader completing-read-function))
+        (should (eq window (selected-window))))
+      (should (equal (cl-remove-duplicates shown :test #'equal) '((minibuffer t)))))))
+
+(ert-deftest portal-launcher-completion-stack-completes-commands ()
+  ;; A command reader with category metadata, as M-x's: stock completion
+  ;; matches the whole name and Orderless its words, in the panel's own
+  ;; minibuffer; the call's display rules and keys go with it.
+  (portal-launcher-test--session
+    (dolist (enhanced '(nil t))
+      (portal-launcher-test--completion enhanced
+        (let ((rules display-buffer-alist)
+              (maps emulation-mode-map-alists)
+              (frames nil))
+          (should
+           (equal "forward-line"
+                  (portal-launcher-test--type
+                   (if enhanced "l i n e SPC f o r RET" "f o r w a r d - l i n e RET")
+                   (lambda ()
+                     (interactive)
+                     (minibuffer-with-setup-hook
+                         (lambda () (push (window-frame (active-minibuffer-window)) frames))
+                       (completing-read
+                        "Command: "
+                        (lambda (string predicate action)
+                          (if (eq action 'metadata) '(metadata (category . command))
+                            (complete-with-action action '("forward-line" "forward-char")
+                                                  string predicate)))
+                        nil t)))
+                   :kind 'minibuffer)))
+          (should (equal frames (list portal-launcher--frame)))
+          (should (eq rules display-buffer-alist))
+          (should (eq maps emulation-mode-map-alists)))))))
+
+(ert-deftest portal-launcher-completion-stock-list-shows-nowhere ()
+  ;; Tab completes and Return accepts in a minibuffer panel, fixed or
+  ;; fitting, but stock completion's *Completions* list shows nowhere.
+  (portal-launcher-test--session
+    (dolist (portal-launcher-size '((720 420) nil))
+      (portal-launcher-test--completion nil
+        (let ((windows (window-list nil t)) shown-lists)
+          (should
+           (equal "alpha"
+                  (portal-launcher-test--type
+                   "a TAB TAB h a RET"
+                   (lambda ()
+                     (minibuffer-with-setup-hook
+                         (lambda ()
+                           (add-hook 'post-command-hook
+                                     (lambda ()
+                                       (push (list (minibuffer-contents)
+                                                   (get-buffer-window "*Completions*" t))
+                                             shown-lists))
+                                     90 t))
+                       (completing-read "Pick: " '("alpha" "alps" "beta") nil t)))
+                   :kind 'minibuffer)))
+          (should (member '("alp" nil) shown-lists))
+          (should-not (cl-some #'cadr shown-lists))
+          (should (equal windows (window-list nil t))))))))
+
 (ert-deftest portal-launcher-keep-open-runs-commands-until-dismissed ()
   (portal-launcher-test--session
     (let ((depth (recursion-depth))

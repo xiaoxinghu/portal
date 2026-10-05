@@ -114,7 +114,7 @@ independently exercise rollback and verify that closed panels leave AppKit's
 window list after autoreleased objects drain.
 
 The [launcher guide](launcher.md) documents setup and customization; the
-[testing guide](testing.md#combined-graphical-suite) documents test invocation.
+[testing guide](testing.md#commands) documents test invocation.
 Plain buffer presentation refuses to hide an active launcher minibuffer; command sessions unwind it as described below.
 Outbound system drag-and-drop is cancelled. These geometry checks did not
 establish full IME, VoiceOver or normal-configuration behavior; the later

@@ -143,10 +143,13 @@ rules and refresh behavior.
 
 ## Verification
 
-`ctest --test-dir build --output-on-failure` includes app-host form/action tests
+`./test.sh` includes app-host form/action tests
 and the compiled-host → Emacs → fake-native launch flow. They cover ID-preserving
 moves, duplicate delivery, errors, closed/expired sources, foreign origins,
 root mismatch, reload/restart, literal shell arguments, and failed creation.
+The `tasks-page` suite runs task pages' script in Playwright's headless WebKit:
+in-place refreshes and their ordering, hidden and restored pages, kept folds,
+history, scroll and focus, status and edit actions, and error recovery.
 
 The same run sends status changes, a repeated change, refusal over unsaved edits,
 and Edit in Emacs from the compiled host through the command loop. `bun test host`

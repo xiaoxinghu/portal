@@ -86,26 +86,27 @@ handlers.
 
 ## Repeatable checks
 
-After building, run batch checks and the focused graphical checks:
+Run the batch checks, then the focused graphical suite:
 
 ```sh
-ctest --test-dir build --output-on-failure
-sh test/launcher-daily-use.sh > build/launcher-daily-use.log 2>&1
+./test.sh
+./test.sh gui --suite launcher-daily-use-gui --allow-gui
 ```
 
-The script compiles the test-only AppKit injector, opens disposable `emacs -Q`,
-runs two tests, prints ERT output and exits nonzero for failures or skips.
+The graphical suite opens a disposable `emacs -Q` with the test-only AppKit
+injector, runs two tests, and fails for failures or skips; `run.log` in its
+[recorded run](testing.md#skips-repetition-and-evidence) has ERT's output.
 Native windows temporarily take focus; wait for completion before using other apps.
-`EMACS` selects another executable, which must match the build's header and
-supported revision. The [combined graphical suite](testing.md#combined-graphical-suite)
-also exercises launcher lifecycle, focus, geometry and completion. Select
-`"^portal-launcher-"` instead of `"^portal-"` for only the 28 launcher tests.
+The configured Emacs must match the build's header and supported revision.
+`./test.sh gui --suite launcher --allow-gui` also runs the launcher's other
+graphical suites: lifecycle, focus, geometry and completion.
+[test/launcher-daily-use.sh](../test/launcher-daily-use.sh) runs the focused suite.
 
 To check an isolated completion/theme fragment without changing your init:
 
 ```sh
 PORTAL_LAUNCHER_CONFIG=/absolute/path/to/completion-and-theme.el \
-  sh test/launcher-daily-use.sh > build/launcher-configured.log 2>&1
+  ./test.sh gui --suite launcher-daily-use-gui --allow-gui
 ```
 
 The fragment adds installed packages to `load-path`, enables their modes and

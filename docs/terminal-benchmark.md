@@ -117,4 +117,4 @@ or composite “winner” hides these differences.
 Research checked 2026-09-18. Execution verified in standalone Ghostty and native
 Portal, including an Instruments capture. These smoke runs used different grids:
 they are not comparative performance results. Local harness verification:
-`python3 -B -m unittest discover -s test -p 'test_benchmark.py'`.
+`./test.sh integration --suite benchmark-tool`.

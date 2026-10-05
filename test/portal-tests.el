@@ -3,48 +3,9 @@
 ;; Run in a disposable graphical Emacs, with portal.el already loaded.  Web
 ;; buffers and placement are tested in batch by portal-web-tests.el.
 
-(require 'ert)
-(require 'portal)
-
+(require 'portal-gui-testing)
 (declare-function portal--inspect "portal-view" (target))
 (declare-function portal--web-load "portal-web" (target url))
-
-(defmacro portal-test--with-web (&rest body)
-  "Run BODY in one window, then kill the web buffers it opened."
-  (declare (indent 0))
-  `(progn
-     (skip-unless (eq window-system 'ns))
-     (let ((buffers (portal-view-buffers 'web)))
-       (save-window-excursion
-         (unwind-protect
-             (progn (delete-other-windows) ,@body)
-           (dolist (buffer (portal-view-buffers 'web))
-             (unless (memq buffer buffers) (kill-buffer buffer))))))))
-
-(defun portal-test--wait-for-page (title &optional target)
-  "Wait for web view TARGET to finish loading a page titled TITLE.
-TARGET defaults to the selected pane's view.  Return its state."
-  (let ((target (or target (portal-view-target)))
-        (deadline (+ (float-time) 15))
-        state)
-    (while (progn
-             (redisplay t)
-             (setq state (portal--inspect target))
-             (and (< (float-time) deadline)
-                  (not (and (equal (plist-get state :title) title)
-                            (not (plist-get state :loading))))))
-      (sleep-for 0.05))
-    (should (equal (plist-get state :title) title))
-    (should-not (plist-get state :loading))
-    (should-not (plist-get state :error))
-    state))
-
-(defun portal-test--shown (target window)
-  "Whether web view TARGET is visible within WINDOW's text area."
-  (redisplay t)
-  (let ((state (portal--inspect target)))
-    (and (plist-get state :visible)
-         (equal (plist-get state :edges) (window-inside-pixel-edges window)))))
 
 (ert-deftest portal-web-runs-javascript-and-keeps-its-page-while-hidden ()
   (portal-test--with-web

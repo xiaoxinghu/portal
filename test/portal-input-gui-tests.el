@@ -1,7 +1,6 @@
 ;;; portal-input-gui-tests.el --- Real WebKit input ownership -*- lexical-binding: t; -*-
 ;; SPDX-License-Identifier: GPL-3.0-or-later
-(require 'portal-excalidraw-gui-tests)
-(require 'portal-integration-tests)
+(require 'portal-gui-testing)
 
 (defconst portal-input-gui--control (ash 1 18))
 (defconst portal-input-gui--command (ash 1 20))

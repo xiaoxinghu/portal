@@ -1,45 +1,7 @@
 ;;; portal-excalidraw-gui-tests.el --- Real WKWebView drawing checks -*- lexical-binding: t; -*-
 ;; SPDX-License-Identifier: GPL-3.0-or-later
-(require 'ert)
-(require 'portal)
-(require 'portal-terminal-tests)
-(declare-function portal-test-web-eval "test-terminal-input" (script))
+(require 'portal-gui-testing)
 (declare-function portal-test-native-target-frame "test-terminal-input" (title))
-
-(defun portal-excalidraw-gui--js (script)
-  "Run SCRIPT in the actual webview, returning its result."
-  (should (portal-test-web-eval script))
-  (portal-terminal-test--wait (lambda () (portal-test-web-eval nil)))
-  (let ((result (json-parse-string (portal-test-web-eval nil) :object-type 'plist)))
-    (should-not (plist-get result :error))
-    (plist-get result :value)))
-
-(defmacro portal-excalidraw-gui--document (&rest body)
-  (declare (indent 0))
-  `(progn
-     (skip-unless (eq window-system 'ns))
-     (save-window-excursion
-       (let ((directory (make-temp-file "portal-drawing-gui-" t)) document)
-         (unwind-protect
-             (progn
-               (delete-other-windows)
-               (select-frame-set-input-focus (selected-frame))
-               (sit-for 0.1)
-               (should (portal-view--with-frame-title (selected-frame)
-                                                      #'portal-test-native-target-frame))
-               (find-file (expand-file-name "drawing.excalidraw" directory))
-               (setq document (current-buffer))
-               (portal-excalidraw--wait (lambda () portal-excalidraw--ready))
-               (redisplay t)
-               (portal-view-sync)
-               ,@body)
-           (when (buffer-live-p document)
-             (with-current-buffer document
-               (portal-excalidraw--close)
-               (set-buffer-modified-p nil)
-               (kill-buffer document)))
-           (portal-test-native-target-frame nil)
-           (delete-directory directory t))))))
 
 (ert-deftest portal-excalidraw-gui-loads-offline-editor-and-saves ()
   (portal-excalidraw-gui--document

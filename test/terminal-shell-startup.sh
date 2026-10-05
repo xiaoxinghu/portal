@@ -1,6 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Native regression: the shell supplies PATH and startup values, not Emacs.
+# CTest runs this as the terminal-startup-gui suite (docs/testing.md).
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 fixture=$(mktemp -d)
@@ -26,13 +27,11 @@ os.replace(sys.argv[1] + '.tmp', sys.argv[1])
 PY
 chmod +x "$fixture/tools/portal-startup-cli"
 cp "$fixture/tools/portal-startup-cli" "$fixture/tools/portal ' é\tool"
+# The suite's result variables pass through; nothing else from this shell.
 env -i HOME="$HOME" USER="$(id -un)" LOGNAME="$(id -un)" \
     PATH=/usr/bin:/bin:/usr/sbin:/sbin SHELL=/bin/zsh ZDOTDIR="$fixture/dotfiles" \
     PORTAL_TEST_SHELL_DIRECTORY="$fixture" \
+    PORTAL_TEST_RESULTS_DIR="${PORTAL_TEST_RESULTS_DIR:-}" PORTAL_TEST_SUITE="${PORTAL_TEST_SUITE:-}" \
     "${EMACS:-/Applications/Emacs.app/Contents/MacOS/Emacs}" -Q --module-assertions \
-    -L "$root" -l "$root/portal.el" -l "$root/test/portal-terminal-tests.el" \
-    --eval '(run-at-time 1 nil
-      (lambda ()
-        (let ((stats (ert-run-tests-batch "^portal-terminal-start-\\(uses-shell-startup\\|missing-program\\)")))
-          (with-current-buffer "*Messages*" (princ (buffer-string) (quote external-debugging-output)))
-          (kill-emacs (if (= (ert-stats-completed-unexpected stats) 0) 0 1)))))'
+    -L "$root" -L "$root/test" -l "$root/portal.el" -l "$root/test/portal-suite.el" \
+    -f portal-suite-graphical "$root/test/portal-terminal-startup-gui-tests.el"

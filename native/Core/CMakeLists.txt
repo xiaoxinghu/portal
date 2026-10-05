@@ -62,24 +62,23 @@ if(BUILD_TESTING)
             C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
     endforeach()
     set_target_properties(portal-test-module PROPERTIES PREFIX "")
-    add_test(NAME channel COMMAND portal-channel-tests)
-    set_tests_properties(channel PROPERTIES TIMEOUT 30)
-    add_test(NAME views COMMAND portal-views-tests)
-    set_tests_properties(views PROPERTIES TIMEOUT 30)
-    add_test(NAME input-core COMMAND portal-input-tests)
-    set_tests_properties(input-core PROPERTIES TIMEOUT 30)
-    add_test(NAME terminals COMMAND portal-terminals-tests)
-    set_tests_properties(terminals PROPERTIES TIMEOUT 30)
-    add_test(NAME web-core COMMAND portal-web-tests)
-    set_tests_properties(web-core PROPERTIES TIMEOUT 30)
-    add_test(NAME toolbar-core COMMAND portal-toolbar-tests)
-    set_tests_properties(toolbar-core PROPERTIES TIMEOUT 30)
-    add_test(NAME shortcuts-core COMMAND portal-shortcuts-tests)
-    set_tests_properties(shortcuts-core PROPERTIES TIMEOUT 30)
-    add_test(NAME module
+    include("${portal_root}/test/suites.cmake")
+    portal_suite(channel CATEGORY unit FEATURES core COMMAND portal-channel-tests)
+    portal_suite(views CATEGORY unit FEATURES core view COMMAND portal-views-tests)
+    portal_suite(input-core CATEGORY unit FEATURES core input COMMAND portal-input-tests)
+    portal_suite(terminals CATEGORY unit FEATURES core terminal COMMAND portal-terminals-tests)
+    portal_suite(web-core CATEGORY unit FEATURES core web COMMAND portal-web-tests)
+    portal_suite(toolbar-core CATEGORY unit FEATURES core toolbar COMMAND portal-toolbar-tests)
+    portal_suite(shortcuts-core CATEGORY unit FEATURES core global-shortcut COMMAND portal-shortcuts-tests)
+    portal_suite(module CATEGORY unit FEATURES core
         COMMAND "${CMAKE_COMMAND}" -E env "PORTAL_TEST_MODULE=$<TARGET_FILE:portal-test-module>"
             "${EMACS}" --batch -Q --module-assertions
-            -l "${portal_root}/test/portal-module-tests.el"
-            -f ert-run-tests-batch-and-exit)
-    set_tests_properties(module PROPERTIES TIMEOUT 30)
+            -l "${portal_root}/test/portal-suite.el" -f portal-suite-batch
+            "${portal_root}/test/portal-module-tests.el")
+    # Lifecycle churn through the real bindings, outside routine runs.
+    portal_suite(views-stress CATEGORY stress FEATURES core view TIMEOUT 120
+        COMMAND "${CMAKE_COMMAND}" -E env "PORTAL_TEST_MODULE=$<TARGET_FILE:portal-test-module>"
+            "${EMACS}" --batch -Q --module-assertions
+            -l "${portal_root}/test/portal-suite.el" -f portal-suite-batch
+            "${portal_root}/test/portal-module-stress-tests.el")
 endif()

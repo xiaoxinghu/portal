@@ -1,15 +1,21 @@
 ;;; portal-launcher-recipe-tests.el --- The launcher guide's launcher.el recipe -*- lexical-binding: t; -*-
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
-;; Optional integration smoke test, outside CTest: Portal does not need
-;; launcher.el.  Run with test/launcher-recipe.sh, which puts the package on
-;; `load-path', in a disposable graphical Emacs.  The guide's recipe runs in
-;; the real panel and reads native keys.  The input test mocks Spotlight,
-;; `open' and the browser; the launch test uses real Spotlight and `open' to
-;; activate Finder, which is already running.
+;; Optional external integration smoke test: Portal does not need
+;; launcher.el.  PORTAL_LAUNCHER_EL names the directory of the package's
+;; launcher.el; run with ./test.sh external --suite launcher-recipe
+;; --allow-external --allow-gui, in a disposable graphical Emacs.  The
+;; guide's recipe runs in the real panel and reads native keys.  The input
+;; test mocks Spotlight, `open' and the browser; the launch test uses real
+;; Spotlight and `open' to activate Finder, which is already running.
 
-(require 'portal-launcher-gui-tests)
+(require 'portal-launcher-testing)
+(let ((directory (getenv "PORTAL_LAUNCHER_EL")))
+  (unless (and directory (file-directory-p directory))
+    (error "Set PORTAL_LAUNCHER_EL to the directory of launcher.el"))
+  (add-to-list 'load-path (expand-file-name directory)))
 (require 'launcher)
+(message "launcher.el: %s" (locate-library "launcher"))
 (require 'vertico)
 (require 'orderless)
 (require 'marginalia)

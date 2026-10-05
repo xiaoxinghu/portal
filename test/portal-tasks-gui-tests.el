@@ -1,9 +1,9 @@
 ;;; portal-tasks-gui-tests.el --- The task browser in real WebKit -*- lexical-binding: t; -*-
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
-;; Task pages run on the real app host from ./build.sh.  Load the other
-;; graphical suites and the test-only event injector first.
-(require 'portal-markdown-gui-tests)
+;; Task pages run on the real app host from ./build.sh.  Load the test-only
+;; event injector first.
+(require 'portal-gui-testing)
 
 (defconst portal-tasks-gui--png
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jS1sAAAAASUVORK5CYII="

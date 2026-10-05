@@ -100,26 +100,39 @@ For distribution alternatives and size measurements, see
 
 ## Checks before a PR
 
+Read [Testing Portal](docs/testing.md) before choosing or running tests: it
+says which suites a change needs, which runs need permission to use the
+desktop, and when earlier evidence can be cited instead of a rerun.
+
 ```sh
 ./build.sh
-ctest --test-dir build --output-on-failure
+./test.sh                  # unit and headless integration suites
 bun run --cwd host check
 bun run --cwd host typecheck
-python3 -B -m unittest discover -s test -p 'test_*.py'
 git diff --check
 ```
 
-The build installs the locked host dependencies and CMake downloads hash-checked
-Emacs packages for integration tests. CTest exercises the real C core with a fake
-backend, Lisp behavior, and the compiled app host; it does not validate native
-windows. For native view, keyboard, toolbar or launcher changes, also run the
-relevant [graphical and standalone checks](docs/testing.md) in a disposable
-Emacs. They open windows and can take focus. Credential-dependent agent smoke
-tests and physical-key/manual checks are opt-in; report any not run.
+`./test.sh` builds what its suites need and records each run in
+`build/test-runs/`. Native view, keyboard, toolbar or launcher changes also need
+the affected graphical suites, such as `./test.sh gui --suite launcher
+--allow-gui`, and shared lifecycle, fixture or runner changes need
+`./test.sh regression --allow-gui`. These open windows and take focus: agents
+ask before running them. Credential-dependent and manual checks are
+`./test.sh external` and `./test.sh manual`; report any not run.
 
-For a focused change to the C core, the [standalone core build](docs/testing.md#c-core-checks)
-avoids Swift, Bun and Ghostty. CMake's registered tests are the source of truth
-for the batch suite; use `ctest --test-dir build -N` to list them.
+Byte-compile changed Lisp files without leaving `.elc` files beside them, adding
+`-L build/elpa/PACKAGE` for packages a test file requires:
+
+```sh
+emacs --batch -Q -L . -L test \
+  --eval '(setq byte-compile-dest-file-function (lambda (_) (make-temp-file "portal-" nil ".elc")))' \
+  -f batch-byte-compile CHANGED.el
+```
+
+The test commands do not replace formatting, type checking, Lisp compilation
+or `git diff --check`. For a focused change to the C core, the
+[standalone core build](docs/testing.md#c-core-checks) avoids Swift, Bun and
+Ghostty.
 
 ## Where to make changes
 
@@ -130,9 +143,9 @@ for the batch suite; use `ctest --test-dir build -N` to list them.
   `build/` outputs, SwiftPM checkouts and bundled editor assets are generated.
   Keep dependency versions in their manifests and lockfiles.
 - Launcher examples in [the launcher guide](docs/launcher.md) are executable test
-  fixtures. Preserve their `<!-- example: NAME -->` markers and run the `launcher`
-  CTest suite after editing them; tests load the actual blocks in both dynamic
-  and lexical binding modes.
+  fixtures. Preserve their `<!-- example: NAME -->` markers and run
+  `./test.sh unit --suite launcher` after editing them; tests load the actual
+  blocks in both dynamic and lexical binding modes.
 - Keep user instructions in `docs/`, contributor commands here and detailed
   test procedures in [Testing Portal](docs/testing.md). Link from the README
   rather than expanding it into a manual again. Preserve old README anchors

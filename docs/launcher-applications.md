@@ -55,15 +55,17 @@ function changes, leaving `M-x launcher` unchanged. The bang test reads
 
 ## Optional integration smoke test
 
-[test/launcher-recipe.sh](../test/launcher-recipe.sh) runs
+The external `launcher-recipe` suite runs
 [the recipe tests](../test/portal-launcher-recipe-tests.el) in a disposable
-graphical Emacs. It is not part of the build or CTest. Point it at a directory
-with launcher.el:
+graphical Emacs; Portal's build does not need launcher.el. Point it at a
+directory with launcher.el:
 
 ```sh
-./build.sh
-PORTAL_LAUNCHER_EL=/absolute/path/to/launcher.el-directory sh test/launcher-recipe.sh
+PORTAL_LAUNCHER_EL=/absolute/path/to/launcher.el-directory \
+  ./test.sh external --suite launcher-recipe --allow-external --allow-gui
 ```
+
+[test/launcher-recipe.sh](../test/launcher-recipe.sh) runs the same command.
 
 It loads the guide's recipe from a dynamically bound file, moves its chord to
 Control-Option-Command-F20 and types native key events into the real panel.

@@ -57,8 +57,8 @@ shortcuts. Runtime use needs neither Bun nor Node nor adjacent web assets; see
 Start with the [documentation index](docs/README.md) for user guides, design
 notes and research. [Contributing](CONTRIBUTING.md) covers the worktree workflow,
 editor setup, generated files and checks before a PR. [Testing Portal](docs/testing.md)
-contains graphical procedures and detailed coverage; [AGENTS.md](AGENTS.md)
-adds agent-specific working instructions.
+covers `./test.sh`, which checks a change needs, and native procedures;
+[AGENTS.md](AGENTS.md) adds agent-specific working instructions.
 
 For help or reproducible bug reports, use the repository's
 [GitHub issues](https://github.com/xiaoxinghu/portal/issues). Include the Emacs

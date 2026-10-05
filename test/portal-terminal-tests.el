@@ -1,33 +1,12 @@
 ;;; portal-terminal-tests.el --- Real native terminal checks -*- lexical-binding: t; -*-
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
-(require 'ert)
-(require 'json)
-(require 'portal-terminal)
-
-;; Tests kill live shells without asking; the prompt has its own tests.
-(setq portal-terminal-confirm-kill nil)
+(require 'portal-gui-testing)
 (declare-function portal--terminal-text "portal-terminal" (target))
-(declare-function portal--terminal-paste "portal-terminal" (target text &optional enter))
 (declare-function portal--inspect "portal-view" (target))
 (declare-function portal--close "portal-view" (target))
 (declare-function portal-test-native-key "test-terminal-input" (code flags text &optional windowless))
 (declare-function portal-test-native-post-key "test-terminal-input" (code flags text &optional windowless))
-
-(defvar portal-terminal-test--target nil
-  "The target of the terminal each test session starts with.")
-
-(defun portal-terminal-test--state (&optional target)
-  "Inspect TARGET, defaulting to the session's first terminal."
-  (portal--inspect (or target portal-terminal-test--target)))
-
-(defun portal-terminal-test--paste (text enter &optional target)
-  "Paste TEXT into TARGET, pressing Enter if ENTER is non-nil."
-  (portal--terminal-paste (or target portal-terminal-test--target) text enter))
-
-(defun portal-terminal-test--text (&optional target)
-  "Return TARGET's scrollback, defaulting to the session's first terminal."
-  (portal--terminal-text (or target portal-terminal-test--target)))
 
 (defconst portal-terminal-test--color-probe
   (expand-file-name "terminal-colors.py" (file-name-directory load-file-name)))
@@ -47,76 +26,6 @@
             (insert-file-contents receipt)
             (json-parse-buffer :object-type 'plist)))
       (delete-directory directory t))))
-
-(defun portal-terminal-test--wait (predicate)
-  "Wait for a real shell or native UI event, with a bounded timeout."
-  (let ((deadline (+ (float-time) 10)))
-    (while (and (not (funcall predicate)) (< (float-time) deadline))
-      (accept-process-output nil 0.02)
-      (redisplay t))
-    (should (funcall predicate))))
-
-(defmacro portal-terminal-test--session (&rest body)
-  (declare (indent 0))
-  `(progn
-     (skip-unless (eq window-system 'ns))
-     (save-window-excursion
-       (unwind-protect
-           (progn (delete-other-windows)
-                  (select-frame-set-input-focus (selected-frame))
-                  (sit-for 0.1)
-                  (portal-terminal)
-                  (let ((portal-terminal-test--target (portal-view-target))) ,@body))
-         (portal-terminal-close-all)))))
-
-(ert-deftest portal-terminal-start-uses-shell-startup ()
-  (skip-unless (eq window-system 'ns))
-  ;; test/terminal-shell-startup.sh launches a fresh native process with these
-  ;; dotfiles. Lisp-side setenv cannot change the native parent's environment.
-  (skip-unless (getenv "PORTAL_TEST_SHELL_DIRECTORY"))
-  (let* ((directory (file-truename (make-temp-file "portal-shell-launch-" t)))
-         (receipt (expand-file-name "receipt.json" directory))
-         (process-environment (copy-sequence process-environment))
-         (exec-path '("/usr/bin" "/bin"))
-         (arguments '("implement @tasks/space ' é.md" "$(touch SHOULD_NOT_EXIST)" "`pwd`"
-                      "" "a\\b" "line\nnext")))
-    (unwind-protect
-        (save-window-excursion
-          (setenv "PATH" "/usr/bin:/bin")
-          (setenv "PORTAL_LISP_ONLY" "must-not-be-exported")
-          (setenv "PORTAL_SHELL_PROFILE" "wrong")
-          (setenv "PORTAL_SHELL_RC" "wrong")
-          (should-not (executable-find "portal-startup-cli"))
-          (dolist (program (list "portal-startup-cli"
-                                 (expand-file-name "tools/portal ' é\\tool" (getenv "PORTAL_TEST_SHELL_DIRECTORY"))))
-            (let ((buffer (portal-terminal-start directory program (cons receipt arguments))))
-              (unwind-protect
-                  (progn
-                    (portal-terminal-test--wait (lambda () (file-exists-p receipt)))
-                    (let ((result (with-temp-buffer
-                                    (insert-file-contents receipt)
-                                    (json-parse-buffer :object-type 'plist :array-type 'list :null-object nil))))
-                      (should (equal (plist-get result :args) arguments))
-                      (should (equal (plist-get result :cwd) directory))
-                      (should (equal (plist-get result :profile) "login-loaded"))
-                      (should (equal (plist-get result :rc) "interactive-loaded"))
-                      (should-not (plist-get result :lisp))
-                      (should (equal (plist-get result :term) "xterm-ghostty"))
-                      (should (equal (plist-get result :inside) "portal-ghostty")))
-                    (should-not (file-exists-p (expand-file-name "SHOULD_NOT_EXIST" directory))))
-                (kill-buffer buffer)
-                (when (file-exists-p receipt) (delete-file receipt))))))
-      (delete-directory directory t))))
-
-(ert-deftest portal-terminal-start-missing-program-is-reported-in-terminal ()
-  (skip-unless (eq window-system 'ns))
-  (save-window-excursion
-    (let* ((buffer (portal-terminal-start temporary-file-directory "portal-no-such-program-4817" nil))
-           (target (buffer-local-value 'portal-view--target buffer)))
-      (unwind-protect
-          (portal-terminal-test--wait
-           (lambda () (string-search "portal-no-such-program-4817" (portal--terminal-text target))))
-        (kill-buffer buffer)))))
 
 (ert-deftest portal-terminal-theme-live-and-new-sessions ()
   (skip-unless (eq window-system 'ns))
@@ -636,16 +545,6 @@ The terminal does not use TRIGGER, so Emacs reads it, and STROKES after it."
         (kill-buffer source)
         (set-frame-parameter nil 'portal-project-context context)
         (delete-directory directory t)))))
-
-(defmacro portal-terminal-test--native-maps (&rest body)
-  (declare (indent 0))
-  `(unwind-protect
-       (let ((portal-terminal-native-map (make-sparse-keymap))
-             (portal-terminal-quick-native-map (make-sparse-keymap))
-             (portal-terminal--native-maps (cons (make-sparse-keymap) (make-sparse-keymap))))
-         (portal-terminal-refresh-bindings)
-         ,@body)
-     (portal-terminal-refresh-bindings)))
 
 (defun portal-terminal-test--native-binding (trigger &rest strokes)
   "Send TRIGGER and immediate follow-up STROKES through the native bridge."
