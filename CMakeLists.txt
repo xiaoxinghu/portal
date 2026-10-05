@@ -197,15 +197,15 @@ if(BUILD_TESTING)
     portal_suite(benchmark-tool CATEGORY integration FEATURES terminal test-tools TIMEOUT 120
         COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s "${source}/test" -p test_benchmark.py)
     # The task browser's page script in Playwright's headless WebKit, pinned
-    # by host/bun.lock and installed under the build directory.
+    # by host/bun.lock and installed under the build directory. The host's
+    # build installs the locked packages; a second install at once would race.
     set(browsers "${CMAKE_BINARY_DIR}/playwright")
     add_custom_command(
         OUTPUT "${browsers}/installed"
-        COMMAND "${BUN}" install --cwd "${source}/host" --frozen-lockfile
         COMMAND "${CMAKE_COMMAND}" -E env "PLAYWRIGHT_BROWSERS_PATH=${browsers}"
             "${BUN}" "${source}/host/node_modules/playwright-core/cli.js" install webkit
         COMMAND "${CMAKE_COMMAND}" -E touch "${browsers}/installed"
-        DEPENDS host/package.json host/bun.lock
+        DEPENDS host/bun.lock "${CMAKE_BINARY_DIR}/portal-host"
         COMMENT "Installing Playwright's WebKit for headless browser tests"
         VERBATIM)
     add_custom_target(portal-test-browser DEPENDS "${browsers}/installed")
