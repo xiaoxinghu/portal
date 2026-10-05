@@ -341,6 +341,33 @@ is excluded: the measurement wrapper lacked lexical binding and idled until a
   `typecheck`, changed-Lisp byte compilation and `git diff --check` pass.
 - Mutation evidence is in the migration table above.
 
+**Review round 1** found five defects, now fixed in `1604d52` and `0e0a2f0`:
+desktop entry points now take the module, app host and injector from the
+selected build (`PORTAL_TEST_BUILD`) and manual helpers its configured Emacs;
+`--build-dir` is made absolute; reuse is per suite, keyed to the digests of
+the files each suite runs and judged as the requested command would, so a
+reused declared skip leaves `all` incomplete and a failure needs `--reason` in
+any selection; and `--list` reads a copy of a configured registry, writing,
+building and downloading nothing. Runner tests grew to 21 (relative paths,
+reuse under `all`, per-suite artifacts with failure retries, a read-only
+listing checked with a recording fake `cmake`, helper build and Emacs, and the
+real registry's desktop commands). A manual helper in its own session hung up
+the terminal as it exited; streamed subprocesses now read no input.
+
+- An exported checkout with no default `build/`, configured only through
+  `--build-dir ../alt-build`: `unit` 30/30, including the registry check that
+  every desktop command uses that build; `--list` then worked, and no
+  `build/` appeared. With deliberately broken files in its default `build/`
+  (a junk module and injector, a host that exits 1), `web-gui`,
+  `markdown-gui` and `terminal-startup-gui` passed from the alternate build.
+- `./test.sh regression --allow-gui` on `0e0a2f0` (approved desktop time):
+  60/61 suites, 365 ERT executions, headless 33.6 s, desktop 204.5 s.
+  `portal-integration-focus-and-cleanup-in-either-startup-order` once lost an
+  injected `C-x b`; a recorded `--repeat 5` of `coexistence-gui` on identical
+  sources, tools and artifact digests passed 5/5.
+- Known flakes, unchanged tests: `fits-vertico` failed 1 in 5 fresh launcher
+  runs and the coexistence focus case 1 in 8 runs, on a machine in use.
+
 **External and manual:** not run. `agent-discovery-live` needs credentials,
 trusted projects and the three agents; `launcher-recipe` needs launcher.el;
 the eleven manual checks need a person. `./test.sh all` reports them
