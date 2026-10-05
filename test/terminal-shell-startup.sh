@@ -27,11 +27,12 @@ os.replace(sys.argv[1] + '.tmp', sys.argv[1])
 PY
 chmod +x "$fixture/tools/portal-startup-cli"
 cp "$fixture/tools/portal-startup-cli" "$fixture/tools/portal ' é\tool"
-# The suite's result variables pass through; nothing else from this shell.
+# The suite's result and build variables pass through; nothing else from this shell.
 env -i HOME="$HOME" USER="$(id -un)" LOGNAME="$(id -un)" \
     PATH=/usr/bin:/bin:/usr/sbin:/sbin SHELL=/bin/zsh ZDOTDIR="$fixture/dotfiles" \
     PORTAL_TEST_SHELL_DIRECTORY="$fixture" \
     PORTAL_TEST_RESULTS_DIR="${PORTAL_TEST_RESULTS_DIR:-}" PORTAL_TEST_SUITE="${PORTAL_TEST_SUITE:-}" \
+    PORTAL_TEST_BUILD="${PORTAL_TEST_BUILD:-$root/build}" \
     "${EMACS:-/Applications/Emacs.app/Contents/MacOS/Emacs}" -Q --module-assertions \
     -L "$root" -L "$root/test" -l "$root/portal.el" -l "$root/test/portal-suite.el" \
     -f portal-suite-graphical "$root/test/portal-terminal-startup-gui-tests.el"

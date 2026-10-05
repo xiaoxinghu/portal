@@ -46,7 +46,14 @@ portal_suite(churn CATEGORY stress FEATURES one COMMAND sh -c "${mark}")
 portal_suite(churn-window CATEGORY stress FEATURES one EFFECTS desktop COMMAND sh -c "${mark}")
 portal_suite(service CATEGORY external FEATURES one EFFECTS desktop external
     NEEDS env:PORTAL_FAKE_SERVICE program:sh COMMAND sh -c "${mark}")
+# Suites that run built files, whose digests their evidence depends on.
+foreach(tool a b bad)
+    portal_suite(tool-${tool} CATEGORY unit FEATURES tools COMMAND sh "${CMAKE_BINARY_DIR}/tool-${tool}")
+endforeach()
 '''
+
+# Each built tool records that it ran; tool-bad then fails.
+TOOL = 'echo ran >> "$(dirname "$0")/ran-$PORTAL_TEST_SUITE"\n'
 
 
 # What a copy of the runner needs: it records the identity of its own
@@ -80,6 +87,8 @@ class RunnerTests(unittest.TestCase):
         (source / "CMakeLists.txt").write_text(REGISTRY.replace("@ROOT@", str(self.repository)))
         subprocess.run(["cmake", "-S", str(source), "-B", str(self.build)], check=True,
                        capture_output=True, timeout=60)
+        for tool in ("a", "b", "bad"):
+            (self.build / f"tool-{tool}").write_text(TOOL + ("exit 1\n" if tool == "bad" else ""))
         self.lock = Path(self.temporary.name) / "desktop.lock"
         self.environment = dict(os.environ, PORTAL_TEST_DESKTOP_LOCK=str(self.lock))
         self.environment.pop("PORTAL_FAKE_SERVICE", None)
@@ -173,9 +182,23 @@ class RunnerTests(unittest.TestCase):
 
     def test_declared_skips_leave_the_exhaustive_run_incomplete(self):
         self.assertEqual(self.tsh("unit", "--suite", "skips").returncode, 0)
+        # The routine pass is reused, but judged as `all' judges it.
+        result = self.tsh("all", "--suite", "skips")
+        self.assertEqual(result.returncode, runner.INCOMPLETE, result.stdout + result.stderr)
+        self.assertIn("declared skips", result.stdout)
+        self.assertIn("declared: b", result.stdout)
+        self.assertEqual(run_count(self.build, "declared"), 1)
+        self.assertEqual(len(self.runs()), 1)
+        # Run again, it is incomplete too.
         result = self.tsh("all", "--suite", "skips", "--reason", "exhaustive scope")
         self.assertEqual(result.returncode, runner.INCOMPLETE, result.stdout)
         self.assertEqual(self.runs()[-1]["status"], "incomplete")
+        # A skip-free selection reused by `all' passes.
+        self.assertEqual(self.tsh("unit", "--suite", "alpha").returncode, 0)
+        result = self.tsh("all", "--suite", "alpha")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Not run:", result.stdout)
+        self.assertEqual(run_count(self.build, "alpha"), 1)
 
     def test_unchanged_inputs_reuse_evidence_and_reruns_need_a_reason(self):
         self.assertEqual(self.tsh("unit", "--suite", "one", "--suite", "two").returncode, 0)
@@ -197,12 +220,127 @@ class RunnerTests(unittest.TestCase):
         result = self.tsh("unit", "--suite", "failing")
         self.assertEqual(result.returncode, runner.REFUSED)
         self.assertIn("needs --reason", result.stderr)
+        result = self.tsh("unit", "--suite", "failing", "--suite", "two")
+        self.assertEqual(result.returncode, runner.REFUSED)
+        self.assertIn("failing (", result.stderr)
         result = self.tsh("unit", "--suite", "failing", "--repeat", "2", "--reason", "flake check")
         self.assertEqual(result.returncode, runner.FAILED)
         repeated = self.runs()[-1]
         self.assertEqual([item["iteration"] for item in repeated["results"]], [1, 2])
         self.assertEqual(len(self.runs()), 4)
         self.assertNotEqual(self.tsh("unit", "--repeat", "2").returncode, 0)
+
+    def test_evidence_follows_each_suites_own_built_files(self):
+        self.assertEqual(self.tsh("unit", "--suite", "tool-a", "--suite", "tool-b").returncode, 0)
+        # The aggregate covers a subset whose files are unchanged.
+        result = self.tsh("unit", "--suite", "tool-a")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("Not run:", result.stdout)
+        (self.build / "tool-b").write_text(TOOL + "# changed\n")
+        self.assertIn("Not run:", self.tsh("unit", "--suite", "tool-a").stdout)
+        self.assertEqual(run_count(self.build, "tool-a"), 1)
+        # A changed file the suite runs invalidates its evidence.
+        (self.build / "tool-a").write_text(TOOL + "# changed\n")
+        result = self.tsh("unit", "--suite", "tool-a")
+        self.assertEqual(result.returncode, 0)
+        self.assertNotIn("Not run:", result.stdout)
+        self.assertEqual(run_count(self.build, "tool-a"), 2)
+        latest = self.runs()[-1]["environment"]
+        self.assertEqual(latest["suite_artifacts"], {"tool-a": ["tool-a"]})
+        # A failure with unchanged files needs a reason in any selection.
+        self.assertEqual(self.tsh("unit", "--suite", "tool-bad", "--suite", "tool-a",
+                                  "--reason", "first run").returncode, runner.FAILED)
+        for selection in (("tool-bad",), ("tool-bad", "tool-b"), ("tools",)):
+            with self.subTest(selection=selection):
+                arguments = [part for name in selection for part in ("--suite", name)]
+                result = self.tsh("unit", *arguments)
+                self.assertEqual(result.returncode, runner.REFUSED, result.stdout)
+                self.assertIn("tool-bad (", result.stderr)
+        self.assertEqual(run_count(self.build, "tool-bad"), 1)
+
+    def test_relative_and_absolute_build_directories_record_the_same_results(self):
+        relative = subprocess.run([self.test_sh_path, "unit", "--suite", "skips", "--suite", "alpha",
+                                   "--build-dir", "build", "--no-build"], capture_output=True, text=True,
+                                  timeout=60, env=self.environment, cwd=self.temporary.name)
+        self.assertEqual(relative.returncode, 0, relative.stdout + relative.stderr)
+        absolute = self.tsh("unit", "--suite", "skips", "--suite", "alpha", "--reason", "compare paths")
+        self.assertEqual(absolute.returncode, 0, absolute.stdout + absolute.stderr)
+        first, second = self.runs()
+        for run in (first, second):
+            self.assertTrue(Path(run["path"]).is_absolute())
+            self.assertTrue((Path(run["path"]) / "iteration-1/headless/junit.xml").is_file())
+            self.assertTrue((Path(run["path"]) / "iteration-1/headless/declared.json").is_file())
+        summary = lambda run: [(r["name"], r["status"], r.get("declared_skips")) for r in run["results"]]
+        self.assertEqual(summary(first), summary(second))
+        self.assertIn(("declared", "passed", ["b"]), summary(first))
+        self.assertFalse((self.build / "build").exists())
+
+    def test_list_reads_only_a_configured_registry(self):
+        fakes = Path(self.temporary.name) / "fakes"
+        fakes.mkdir()
+        calls = Path(self.temporary.name) / "cmake-calls"
+        (fakes / "cmake").write_text(f'#!/bin/sh\necho "$@" >> {calls}\nexit 1\n')
+        (fakes / "cmake").chmod(0o755)
+        environment = dict(self.environment, PATH=f"{fakes}:{os.environ['PATH']}")
+        def snapshot(directory):
+            return sorted((str(path), path.stat().st_mtime_ns) for path in Path(directory).rglob("*"))
+        def listing(build):
+            return subprocess.run([self.test_sh_path, "all", "--list", "--build-dir", str(build)],
+                                  capture_output=True, text=True, timeout=60, env=environment)
+        missing = Path(self.temporary.name) / "unconfigured"
+        result = listing(missing)
+        self.assertEqual(result.returncode, runner.REFUSED)
+        self.assertIn("is missing", result.stderr)
+        self.assertFalse(missing.exists())
+        before = snapshot(self.build)
+        result = listing(self.build)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("tool-a", result.stdout)
+        self.assertEqual(snapshot(self.build), before)
+        # A registry older than its inputs is not read as current.
+        future = time.time() + 60
+        os.utime(self.repository / "test/suites.cmake", (future, future))
+        result = listing(self.build)
+        self.assertEqual(result.returncode, runner.REFUSED)
+        self.assertIn("is stale", result.stderr)
+        self.assertEqual(snapshot(self.build), before)
+        self.assertFalse(calls.exists())
+
+    def test_manual_helpers_get_the_selected_build_and_its_emacs(self):
+        fakes = Path(self.temporary.name) / "fakes"
+        fakes.mkdir()
+        emacs = fakes / "emacs"
+        emacs.write_text("#!/bin/sh\necho NS\n")
+        (fakes / "lsappinfo").write_text("#!/bin/sh\n")
+        for fake in fakes.iterdir():
+            fake.chmod(0o755)
+        subprocess.run(["cmake", f"-DEMACS={emacs}", str(self.build)], check=True, capture_output=True)
+        (self.repository / "test/global-shortcut-smoke.sh").write_text(
+            'echo "helper build=$PORTAL_TEST_BUILD emacs=$EMACS cwd=$(pwd)"\n')
+        main, secondary = pty.openpty()
+        process = subprocess.Popen([self.test_sh_path, "manual", "--interactive", "--allow-gui",
+                                    "--suite", "global-shortcut-physical-keys", "--build-dir", str(self.build),
+                                    "--no-build"], stdin=secondary, stdout=secondary, stderr=secondary,
+                                   env=dict(self.environment, EMACS="/elsewhere/emacs",
+                                            PATH=f"{fakes}:{os.environ['PATH']}"),
+                                   cwd=self.temporary.name)
+        os.close(secondary)
+        output = b""
+        answers = [(b"[y/n]", b"y\n"), (b"Result?", b"p\n"), (b"Notes", b"fake helper\n")]
+        deadline = time.monotonic() + 30
+        while process.poll() is None and time.monotonic() < deadline:
+            if select.select([main], [], [], 0.1)[0]:
+                with contextlib.suppress(OSError):
+                    output += os.read(main, 4096)
+                if answers and answers[0][0] in output.split(b"Procedure")[-1]:
+                    os.write(main, answers.pop(0)[1])
+        process.wait(timeout=10)
+        os.close(main)
+        self.assertEqual(process.returncode, 0, output.decode())
+        expected = f"helper build={self.build} emacs={emacs} cwd={self.repository.resolve()}"
+        self.assertIn(expected, output.decode().replace("\r", ""))
+        (check,) = self.runs()[-1]["results"]
+        self.assertEqual((check["status"], check["helper_exit_status"]), ("passed", 0))
 
     def test_desktop_runs_hold_one_lock_across_worktrees(self):
         with open(self.lock, "a+") as held:
@@ -296,6 +434,33 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(runner.changed_paths(before, {"a": "1", "c": "3"}), ["b", "c"])
 
 
+class RegistryTests(unittest.TestCase):
+    """The configured build's desktop suites use that build and its Emacs."""
+
+    def test_desktop_suites_use_the_configured_build(self):
+        build = Path(os.environ.get("PORTAL_TEST_BUILD_DIR") or ROOT / "build").resolve()
+        self.assertEqual(runner.registry_state(build, ROOT), "current",
+                         f"Configure {build} first: these tests read its registry")
+        emacs = runner.cache_value(build, "EMACS")
+        default = (ROOT / "build").resolve()
+        desktop = [suite for suite in runner.load_suites(build) if suite.desktop]
+        self.assertGreaterEqual(len(desktop), 20)
+        for suite in desktop:
+            with self.subTest(suite=suite.name):
+                command = list(suite.command)
+                if "portal-suite-graphical" in command or any(part.endswith(".sh") for part in command):
+                    self.assertIn(f"PORTAL_TEST_BUILD={build}", command)
+                if "portal-suite-graphical" in command:
+                    self.assertIn(emacs, command)
+                    self.assertNotIn("module-load", " ".join(command))
+                elif any(part.endswith(".sh") for part in command):
+                    self.assertIn(f"EMACS={emacs}", command)
+                else:
+                    self.assertEqual(Path(command[0]).resolve().parent, build)
+                if build != default:
+                    self.assertNotIn(str(default), " ".join(command))
+
+
 class SuiteRunnerTests(unittest.TestCase):
     """test/portal-suite.el runs exactly one file's tests and reports skips."""
 
@@ -338,6 +503,26 @@ class SuiteRunnerTests(unittest.TestCase):
             with self.subTest(file=file, options=options):
                 result, _ = self.suite(file, *options)
                 self.assertEqual(result.returncode, 1, result.stderr)
+
+    def test_graphical_suites_use_the_named_build(self):
+        build = self.directory / "build"
+        for name in ("portal.bundle/Contents/MacOS/portal.dylib", "portal-host", "test-terminal-input.dylib"):
+            (build / name).parent.mkdir(parents=True, exist_ok=True)
+            (build / name).write_text("")
+        probe = ["--eval", f"(princ (list (portal-suite-use-build {json.dumps(str(build))}) "
+                           "portal-view--module-file portal-server-program))"]
+        result = subprocess.run([EMACS, "--batch", "-Q", "-L", str(ROOT), "-l", str(ROOT / "portal.el"),
+                                 "-l", str(ROOT / "test/portal-suite.el"), *probe],
+                                capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "({0}/test-terminal-input.dylib {0}/portal.bundle/Contents/MacOS/portal.dylib "
+                                        "{0}/portal-host)".format(build))
+        (build / "portal-host").unlink()
+        result = subprocess.run([EMACS, "--batch", "-Q", "-L", str(ROOT), "-l", str(ROOT / "portal.el"),
+                                 "-l", str(ROOT / "test/portal-suite.el"), *probe],
+                                capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("portal-host is missing", result.stderr)
 
     def test_helper_files_define_no_tests(self):
         """Loading a shared fixture file must not add another suite's tests."""

@@ -25,6 +25,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import xml.etree.ElementTree as ElementTree
 from pathlib import Path
@@ -178,9 +179,26 @@ def static_tests(command, root=ROOT):
     return tuple(names)
 
 
+def copy_registry(build, destination):
+    """Copy BUILD's CTest files, following their subdirs(), into DESTINATION.
+    CTest writes a log beside the files it reads, even when only listing."""
+    pending = [Path(".")]
+    while pending:
+        relative = pending.pop()
+        source = Path(build) / relative / "CTestTestfile.cmake"
+        if source.is_file():
+            text = source.read_text()
+            (Path(destination) / relative).mkdir(parents=True, exist_ok=True)
+            (Path(destination) / relative / "CTestTestfile.cmake").write_text(text)
+            pending += [relative / name for name in re.findall(r'^subdirs\("([^"]+)"\)', text, re.M)]
+
+
 def load_suites(build, root=ROOT):
-    """The suites registered in BUILD, in registration order."""
-    output = run_output([ctest(), "--test-dir", str(build), "-C", "opt-in", "--show-only=json-v1"])
+    """The suites registered in BUILD, in registration order, read from a
+    copy so that reading writes nothing in BUILD."""
+    with tempfile.TemporaryDirectory() as registry:
+        copy_registry(build, registry)
+        output = run_output([ctest(), "--test-dir", registry, "-C", "opt-in", "--show-only=json-v1"])
     try:
         tests = json.loads(output)["tests"]
     except (ValueError, KeyError) as error:
@@ -323,11 +341,18 @@ def registry_inputs(root):
     return [root / "CMakeLists.txt", root / "native/Core/CMakeLists.txt", root / "test/suites.cmake"]
 
 
+def registry_state(build, root):
+    """Whether BUILD's test registry is missing, stale or current for ROOT."""
+    registry = Path(build) / "CTestTestfile.cmake"
+    if not (Path(build) / "CMakeCache.txt").exists() or not registry.exists():
+        return "missing"
+    newest = max((path.stat().st_mtime for path in registry_inputs(root) if path.exists()), default=0)
+    return "stale" if newest > registry.stat().st_mtime else "current"
+
+
 def configure(build, root, log):
     """Configure BUILD if it is new, or if the registry changed since."""
-    registry = Path(build) / "CTestTestfile.cmake"
-    if (Path(build) / "CMakeCache.txt").exists() and registry.exists() and all(
-            path.stat().st_mtime <= registry.stat().st_mtime for path in registry_inputs(root)):
+    if registry_state(build, root) == "current":
         return
     command = ["cmake", "-S", str(root), "-B", str(build)]
     if not (Path(build) / "CMakeCache.txt").exists():
@@ -391,19 +416,31 @@ def file_digest(path):
     return hasher.hexdigest()
 
 
+# Built files that desktop suites use without naming them: graphical Emacs
+# loads them from PORTAL_TEST_BUILD.
+DESKTOP_ARTIFACTS = ("portal.bundle/Contents/MacOS/portal.dylib", "portal-host",
+                     "test-terminal-input.dylib")
+
+
 def artifacts(plan, build):
-    """Digests of the built files the plan's suites run."""
+    """The built files each of the plan's suites runs, relative to BUILD, and
+    each file's digest."""
     build = Path(build).resolve()
-    paths = set()
+    uses, digests = {}, {}
     for suite in plan.suites:
+        paths = set()
         for argument in suite.command:
             for candidate in re.findall(r"(/[^\"=\s]+)", argument):
-                path = Path(candidate)
-                if str(path).startswith(str(build)) and path.is_file():
-                    paths.add(path)
+                path = Path(candidate).resolve()
+                if build in path.parents and path.is_file():
+                    paths.add(str(path.relative_to(build)))
         if suite.desktop:
-            paths |= {build / "portal.bundle/Contents/MacOS/portal.dylib", build / "portal-host"}
-    return {str(path.relative_to(build)): file_digest(path) for path in sorted(paths) if path.is_file()}
+            paths |= {name for name in DESKTOP_ARTIFACTS if (build / name).is_file()}
+        uses[suite.name] = sorted(paths)
+        for name in paths:
+            if name not in digests:
+                digests[name] = file_digest(build / name)
+    return digests, uses
 
 
 def environment_record(plan, build, environment):
@@ -430,8 +467,8 @@ def environment_record(plan, build, environment):
             variables[name] = value
             if Path(value).is_file():
                 variables[name + " sha256"] = file_digest(value)
-    record = {"tools": tools, "variables": variables, "artifacts": artifacts(plan, build)}
-    record["identity"] = digest(record)
+    record = {"tools": tools, "variables": variables, "identity": digest([tools, variables])}
+    record["artifacts"], record["suite_artifacts"] = artifacts(plan, build)
     return record
 
 
@@ -497,11 +534,14 @@ def interruptible():
             signal.signal(number, handler)
 
 
-def stream(command, log_file, environment, timeout):
+def stream(command, log_file, environment, timeout, cwd=None):
     """Run COMMAND, copying its output here and to LOG_FILE, for at most
-    TIMEOUT seconds; return its exit status."""
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               env=environment, start_new_session=True)
+    TIMEOUT seconds; return its exit status. It reads no input: in its own
+    session, so that `stop' reaches its whole tree, it must not share this
+    terminal, which it could hang up as it exits."""
+    process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, env=environment, start_new_session=True,
+                               cwd=cwd)
     deadline = time.monotonic() + timeout
     descriptor = process.stdout.fileno()
     try:
@@ -608,8 +648,9 @@ def ask(prompt, choices=None):
             return choices[answer.lower()]
 
 
-def manual_checks(checks, root, log, log_file):
-    """Guide a person through CHECKS and record what they report."""
+def manual_checks(checks, root, build, log, log_file):
+    """Guide a person through CHECKS and record what they report. Helper
+    scripts run from ROOT with BUILD and its configured Emacs."""
     operator = run_output(["git", "-C", str(root), "config", "user.name"]) or os.environ.get("USER", "")
     results = []
     for number, check in enumerate(checks, 1):
@@ -619,7 +660,10 @@ def manual_checks(checks, root, log, log_file):
         exit_status = None
         if check.command and ask("Run its helper script now? [y/n] ", {"y": True, "n": False}):
             log(f"Running {' '.join(check.command)}")
-            exit_status = stream(list(check.command), log_file, dict(os.environ), 600)
+            environment = dict(os.environ, PORTAL_TEST_BUILD=str(build))
+            if cache_value(build, "EMACS"):
+                environment["EMACS"] = cache_value(build, "EMACS")
+            exit_status = stream(list(check.command), log_file, environment, 600, cwd=root)
             print(f"The helper exited with status {exit_status}.")
         status = ask("Result? [p]ass, [f]ail, [n]ot tested: ",
                      {"p": "passed", "f": "failed", "n": "not-tested"})
@@ -655,14 +699,29 @@ def previous_runs(directory):
     return sorted(runs, key=lambda run: (run.get("started") or "", run["path"]))
 
 
-def covering_runs(runs, inputs, environment, names):
-    """Finished earlier runs of these inputs whose selection covers NAMES."""
-    return [run for run in runs
-            if run.get("inputs", {}).get("identity") == inputs
-            and run.get("environment", {}).get("identity") == environment
-            and run.get("inputs_stable")
-            and run.get("status") in ("passed", "failed", "incomplete")
-            and set(names) <= set(run.get("selection", {}).get("suites", []))]
+def earlier_evidence(runs, inputs, environment, names):
+    """For each suite in NAMES, its latest earlier result, and the run that
+    recorded it, from finished runs of the same sources, tools and variables
+    with the same digests of the built files that suite runs. A suite that
+    failed in any iteration of a run failed in that run."""
+    found = {}
+    for run in runs:
+        recorded = run.get("environment", {})
+        if (run.get("inputs", {}).get("identity") != inputs or not run.get("inputs_stable")
+                or recorded.get("identity") != environment["identity"]
+                or run.get("status") not in ("passed", "failed", "incomplete")):
+            continue
+        latest = {}
+        for result in run.get("results", []):
+            name = result["name"]
+            uses = environment["suite_artifacts"].get(name, [])
+            if name not in names or any(recorded.get("artifacts", {}).get(path) != environment["artifacts"][path]
+                                        for path in uses):
+                continue
+            if name not in latest or result["status"] != "passed":
+                latest[name] = result
+        found.update({name: (run, result) for name, result in latest.items()})
+    return found
 
 
 # Reporting.
@@ -770,7 +829,8 @@ def parse(argv):
     parser.add_argument("--reason", default="", help="why this run repeats earlier ones")
     parser.add_argument("--jobs", type=int, default=min(8, os.cpu_count() or 1),
                         help="headless suites to run at once")
-    parser.add_argument("--build-dir", type=Path, default=ROOT / "build")
+    parser.add_argument("--build-dir", type=Path, default=ROOT / "build",
+                        help="a build directory, relative to the current directory")
     parser.add_argument("--no-build", action="store_true",
                         help="use the build directory as it is")
     args = parser.parse_args(argv)
@@ -782,6 +842,8 @@ def parse(argv):
         parser.error("--repeat needs --reason: say what the repetition investigates")
     if args.jobs < 1:
         parser.error("--jobs must be at least 1")
+    # Suites run in the build directory: give them only absolute paths.
+    args.build_dir = Path(os.path.abspath(args.build_dir))
     return args
 
 
@@ -827,12 +889,19 @@ def main(argv=None, root=ROOT):
         if args.command == "evidence":
             return evidence(args)
         build = args.build_dir
+        if args.list:
+            state = registry_state(build, root)
+            if state != "current":
+                raise Refusal(f"The test registry in {build} is {state}. --list only reads a "
+                              f"configured build; configure it first with ./build.sh, "
+                              f"cmake --preset dev or a ./test.sh run, which can download "
+                              f"test packages")
+            print(describe_plan(plan(args.command, args.suite, load_suites(build, root)), args, root,
+                                detail=True))
+            return PASSED
         if not args.no_build:
             configure(build, root, say)
         the_plan = plan(args.command, args.suite, load_suites(build, root))
-        if args.list:
-            print(describe_plan(the_plan, args, root, detail=True))
-            return PASSED
         if args.repeat > 1 and the_plan.manual:
             raise Refusal("--repeat applies to automated suites, not manual checks")
         flags = {"--allow-gui": args.allow_gui, "--allow-external": args.allow_external,
@@ -891,17 +960,28 @@ def execute(args, the_plan, build, build_seconds, root, say):
         "build": {"targets": [] if args.no_build else the_plan.targets(), "seconds": build_seconds},
         "phases": [], "results": [], "status": "running",
     }
-    earlier = covering_runs(previous_runs(Path(build) / "test-runs"), record["inputs"]["identity"],
-                            record["environment"]["identity"], the_plan.automated_names)
-    if earlier and the_plan.suites and not the_plan.manual and not args.reason:
-        latest = earlier[-1]
-        if latest["status"] == "passed":
-            say(f"Not run: {latest['path']} passed these suites with the same inputs, tools and "
-                f"artifacts. Cite it, or pass --reason to run them again.")
-            return PASSED
-        raise Refusal(f"{latest['path']} {latest['status']} with the same inputs. Rerunning "
-                      f"unchanged inputs needs --reason, such as the documented issue it investigates")
-    record["earlier_attempts"] = [run["path"] for run in earlier]
+    names = the_plan.automated_names
+    found = earlier_evidence(previous_runs(Path(build) / "test-runs"), record["inputs"]["identity"],
+                             record["environment"], names)
+    if found and not the_plan.manual and not args.reason:
+        failed = sorted(f"{name} ({run['path']})" for name, (run, result) in found.items()
+                        if result["status"] != "passed")
+        if failed:
+            raise Refusal(f"With the same inputs, these failed: {', '.join(failed)}. Rerunning "
+                          f"unchanged inputs needs --reason, such as the documented issue it investigates")
+        if len(found) == len(names):
+            runs = sorted({run["path"] for run, _ in found.values()})
+            results = [found[name][1] for name in names]
+            if overall(args.command, results, True) == "passed":
+                say(f"Not run: {', '.join(runs)} passed these suites with the same inputs, tools "
+                    f"and artifacts. Cite them, or pass --reason to run the suites again.")
+                return PASSED
+            skips = sorted(f"{result['name']}: {', '.join(result['declared_skips'])}"
+                           for result in results if result.get("declared_skips"))
+            say(f"Not run, and incomplete for {args.command}: {', '.join(runs)} recorded these "
+                f"declared skips with the same inputs: {'; '.join(skips)}")
+            return INCOMPLETE
+    record["earlier_attempts"] = sorted({run["path"] for run, _ in found.values()})
     with contextlib.ExitStack() as stack:
         if any(item.desktop for item in the_plan.suites + the_plan.manual):
             stack.enter_context(desktop_lock(lock_path(root, build), {
@@ -929,7 +1009,7 @@ def execute(args, the_plan, build, build_seconds, root, say):
                         record["results"] += [dict(result, iteration=iteration) for result in results]
                         write()
                 if the_plan.manual:
-                    record["results"] += manual_checks(the_plan.manual, root, say, log_file)
+                    record["results"] += manual_checks(the_plan.manual, root, build, say, log_file)
             after = source_manifest(root)
             record["inputs_stable"] = digest(after) == record["inputs"]["identity"]
             if not record["inputs_stable"]:

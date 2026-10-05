@@ -8,20 +8,25 @@
 # two minutes allowed with PORTAL_SMOKE_SECONDS. ./test.sh manual runs this.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+# The build to use, and its configured Emacs, which ./test.sh manual passes.
+build=${PORTAL_TEST_BUILD:-$root/build}
+if [ -z "${EMACS:-}" ]; then
+    EMACS=$(sed -n 's/^EMACS:FILEPATH=//p' "$build/CMakeCache.txt" 2>/dev/null)
+fi
 # The CMake target rebuilds the test-only event injector only when it changed.
-cmake --build "$root/build" --target portal-test-injector
+cmake --build "$build" --target portal-test-injector
 first=${PORTAL_SMOKE_FIRST:-Control-Option-Command-8}
 second=${PORTAL_SMOKE_SECOND:-Control-Option-Command-9}
 seconds=${PORTAL_SMOKE_SECONDS:-120}
 log=$(mktemp -t portal-global-shortcut-smoke)
 echo "Switch to another app, then press $first and $second once each."
 echo "Emacs quits once both have run; it gives up after $seconds seconds."
-export PORTAL_SMOKE_ROOT="$root" PORTAL_SMOKE_LOG="$log" PORTAL_SMOKE_SECONDS="$seconds" \
+export PORTAL_TEST_BUILD="$build" PORTAL_SMOKE_LOG="$log" PORTAL_SMOKE_SECONDS="$seconds" \
     PORTAL_SMOKE_FIRST="$first" PORTAL_SMOKE_SECOND="$second"
 status=0
-"${EMACS:-/Applications/Emacs.app/Contents/MacOS/Emacs}" -Q -l "$root/portal.el" \
-    --eval '(module-load (expand-file-name "build/test-terminal-input.dylib"
-                                         (getenv "PORTAL_SMOKE_ROOT")))' \
+"${EMACS:-/Applications/Emacs.app/Contents/MacOS/Emacs}" -Q -L "$root" -L "$root/test" -l "$root/portal.el" \
+    -l "$root/test/portal-suite.el" \
+    --eval '(module-load (portal-suite-use-build (getenv "PORTAL_TEST_BUILD")))' \
     --eval '(let* ((log (getenv "PORTAL_SMOKE_LOG"))
                    (ran nil)
                    (record

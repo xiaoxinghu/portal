@@ -32,13 +32,18 @@ It never runs less than it names.
   name or feature; repeat it for more. An unknown name or a selection with no
   suite in the command's categories is refused.
 - `--list` prints the plan: suites, their tests, category, effects, declared
-  optional skips, setup and build targets. It runs nothing and needs no
-  permission. Test names are read from the suites' files.
+  optional skips, setup and build targets. It runs, builds and writes nothing
+  and needs no permission: it reads a configured build's registry, and refuses
+  when that is missing or older than the CMake files that define it. Test
+  names are read from the suites' files.
 - `--repeat N` (at most 20) runs the selection N times and needs `--reason`.
 - `--reason TEXT` records why a run repeats earlier ones (see below).
 - `--jobs N` sets how many headless suites run at once; desktop suites run
-  one at a time. `--build-dir DIR` selects another configured build, and
-  `--no-build` uses it as it is.
+  one at a time. `--build-dir DIR` selects another build, relative to the
+  current directory, and `--no-build` uses it as it is. Every suite uses that
+  build: graphical Emacs loads its module, app host and event injector, which
+  CTest names in `PORTAL_TEST_BUILD`, and manual helpers get it with its
+  configured Emacs.
 - `./test.sh evidence [RUN]` lists recorded runs or compares one with the tree.
 
 Exit status: 0 passed, 1 failed, 2 refused (nothing ran), 3 incomplete,
@@ -123,10 +128,14 @@ checks the source identity again at the end: a run whose inputs changed while
 it ran is incomplete.
 
 Reuse evidence instead of repeating it. A commit, push or review transition
-alone changes no input. When a passing run with the same inputs, tools and
-artifacts covers a selection, the runner cites it and runs nothing; repeating
-it, or retrying a failure with unchanged inputs, needs `--reason`. Do not run
-both an aggregate and a subset it covers for the same inputs unless
+alone changes no input. Evidence for a suite is its latest result from a run
+with the same sources, tools and variables and the same digests of the built
+files that suite runs; other suites' files do not matter. When every selected
+suite has such a passing result, possibly from several runs, the runner cites
+them and runs nothing, judging them as the requested command would: a
+declared skip leaves `all` incomplete. Repeating them needs `--reason`, and so
+does any selection including a suite that failed with unchanged evidence. Do
+not run both an aggregate and a subset it covers for the same inputs unless
 investigating a documented issue. `./test.sh evidence RUN` lists what changed
 since a run; changes to code or tests invalidate the affected evidence, while
 prose-only changes leave test evidence valid. Never retry until green:

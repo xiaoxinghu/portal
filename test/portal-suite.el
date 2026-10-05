@@ -12,11 +12,17 @@
 ;; only when at least one test ran and every test passed, or skipped and was
 ;; declared with `--allow-skip NAME' after FILE.  With PORTAL_TEST_RESULTS_DIR
 ;; set, each test's result is written there to SUITE.json, where SUITE is
-;; PORTAL_TEST_SUITE or FILE's base name.  This file defines no tests.
+;; PORTAL_TEST_SUITE or FILE's base name.  In graphical Emacs, with
+;; PORTAL_TEST_BUILD naming a build directory, Portal's module and app host
+;; and the test-only event injector come from that build, never from the
+;; source tree's default build.  This file defines no tests.
 
 (require 'ert)
 (require 'cl-lib)
 (require 'json)
+
+(defvar portal-view--module-file)
+(defvar portal-server-program)
 
 (defun portal-suite--arguments ()
   "Take the test file and its options from the remaining command line."
@@ -120,12 +126,33 @@
   "Also print a `message' of FORMAT-STRING and ARGUMENTS to standard error."
   (when format-string (apply #'portal-suite--print format-string arguments)))
 
+(defun portal-suite-use-build (build)
+  "Use BUILD's native module and app host; return its event injector file.
+Signal an error if BUILD lacks any of them."
+  (require 'portal-view)
+  (require 'portal-server)
+  (let ((module (expand-file-name "portal.bundle/Contents/MacOS/portal.dylib" build))
+        (host (expand-file-name "portal-host" build))
+        (injector (expand-file-name "test-terminal-input.dylib" build)))
+    (dolist (file (list module host injector))
+      (unless (file-exists-p file)
+        (error "%s is missing: build the desktop test prerequisites" file)))
+    (setq portal-view--module-file module
+          portal-server-program host)
+    injector))
+
 (defun portal-suite-graphical ()
   "Run the test file named on the command line in graphical Emacs, and exit.
 The tests start in the command loop once startup finishes.  Their messages,
 ERT's report among them, are also printed to standard error."
   (pcase-let ((`(,file ,allowed) (portal-suite--arguments)))
     (setq message-log-max t)
+    (when-let* ((build (getenv "PORTAL_TEST_BUILD"))
+                ((not (string-empty-p build))))
+      (condition-case err
+          (module-load (portal-suite-use-build build))
+        (error (portal-suite--print "portal-suite: %s" (error-message-string err))
+               (kill-emacs 1))))
     (portal-suite--load file)
     (run-at-time
      1 nil

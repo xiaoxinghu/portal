@@ -171,6 +171,7 @@ if(BUILD_TESTING)
     # This runner, its Lisp suite runner and the helper files' isolation.
     portal_suite(test-runner CATEGORY unit FEATURES test-tools TIMEOUT 120
         COMMAND "${CMAKE_COMMAND}" -E env "EMACS=${EMACS}" "PORTAL_TEST_ELPA=${CMAKE_BINARY_DIR}/elpa"
+            "PORTAL_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
             "${Python3_EXECUTABLE}" -B -m unittest discover -s "${source}/test" -p test_runner.py)
 
     # Integration: the compiled host, processes, PTYs and a headless browser.
@@ -261,18 +262,20 @@ if(BUILD_TESTING)
     portal_suite(launcher-geometry CATEGORY unit FEATURES launcher
         COMMAND "${CMAKE_BINARY_DIR}/check-launcher-geometry")
 
-    # Native GUI: disposable graphical Emacs with the built module and the
-    # injector, and the standalone checks. They open windows and take focus.
-    set(gui_suite "${EMACS}" -Q --module-assertions -L "${source}" -L "${source}/test" ${elpa_load_path}
-        -l "${source}/portal.el" --eval "(module-load \"${injector}\")"
-        -l "${source}/test/portal-suite.el" -f portal-suite-graphical)
+    # Native GUI: disposable graphical Emacs with this build's module, app
+    # host and injector (PORTAL_TEST_BUILD, read by test/portal-suite.el),
+    # and the standalone checks. They open windows and take focus.
+    set(gui_suite "${CMAKE_COMMAND}" -E env "PORTAL_TEST_BUILD=${CMAKE_BINARY_DIR}"
+        "${EMACS}" -Q --module-assertions -L "${source}" -L "${source}/test" ${elpa_load_path}
+        -l "${source}/portal.el" -l "${source}/test/portal-suite.el" -f portal-suite-graphical)
     portal_suite(web-gui CATEGORY gui FEATURES web EFFECTS desktop TIMEOUT 120
         COMMAND ${gui_suite} "${source}/test/portal-tests.el")
     portal_suite(terminal-gui CATEGORY gui FEATURES terminal input EFFECTS desktop TIMEOUT 300
         COMMAND ${gui_suite} "${source}/test/portal-terminal-tests.el")
     # A minimal environment and fixture dotfiles: the shell supplies PATH.
     portal_suite(terminal-startup-gui CATEGORY gui FEATURES terminal EFFECTS desktop TIMEOUT 120
-        COMMAND "${CMAKE_COMMAND}" -E env "EMACS=${EMACS}" sh "${source}/test/terminal-shell-startup.sh")
+        COMMAND "${CMAKE_COMMAND}" -E env "EMACS=${EMACS}" "PORTAL_TEST_BUILD=${CMAKE_BINARY_DIR}"
+            sh "${source}/test/terminal-shell-startup.sh")
     portal_suite(coexistence-gui CATEGORY gui FEATURES coexistence web terminal input EFFECTS desktop TIMEOUT 120
         COMMAND ${gui_suite} "${source}/test/portal-integration-tests.el")
     portal_suite(excalidraw-gui CATEGORY gui FEATURES excalidraw web input EFFECTS desktop TIMEOUT 300
