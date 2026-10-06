@@ -1,0 +1,19 @@
+For information about GNU Emacs and the GNU system, type C-h C-a.
+Running 7 tests (2026-10-05 18:47:09-0700, selector ‘(or "^portal-launcher-buffer-prototype-gui-" portal-launcher-gui-minibuffer-panel-vertico portal-launcher-gui-persistent-buffer)’)
+Launcher minibuffer layout (720 420): (:input "al" :kind minibuffer :windows t :root t :top 0 :spare 0 :clipped -234 :mode-line 0 :candidates 10 :index 1 :size (720 420) :native t :actual (303 235 720 420))
+Launcher minibuffer layout (640 320): (:input "al" :kind minibuffer :windows t :root t :top 0 :spare 0 :clipped -134 :mode-line 0 :candidates 10 :index 1 :size (640 320) :native t :actual (343 285 640 320))
+   passed  1/7  portal-launcher-gui-minibuffer-panel-vertico (2.095290 sec)
+Launcher persistent buffer: (:session t :depth 1 :visible t :key t :window t :buffer "*Hello*" :text "Hello world!
+Hello ok!" :mode-line 0)
+   passed  2/7  portal-launcher-gui-persistent-buffer (1.142359 sec)
+Prototype baseline: ((:frame #<frame Portal launcher 0x7595d45a50> :session 11 :kind minibuffer :size (720 158) :actual (303 337 720 158) :mode-line 0 :clipped 0 :candidate-rows 5 :buffer #<buffer  *Minibuf-1*> :input "" :root-is-input t :key t) (:frame #<frame Portal launcher 0x7595d45a50> :session 11 :kind minibuffer :size (720 100) :actual (303 395 720 100) :mode-line 0 :clipped -5 :candidate-rows 2 :buffer #<buffer  *Minibuf-1*> :input "Cal" :root-is-input t :key t))
+   passed  3/7  portal-launcher-buffer-prototype-gui-baseline (1.237331 sec)
+   passed  4/7  portal-launcher-buffer-prototype-gui-cancel-and-reenter (0.771830 sec)
+Prototype full-buffer: ((:frame #<frame Portal launcher 0x75961d2000> :session 19 :kind buffer :size (720 179) :actual (303 316 720 179) :mode-line 0 :clipped 0 :candidate-rows 5 :buffer #<buffer  *Minibuf-1*> :input "" :root-is-input t :key t) (:frame #<frame Portal launcher 0x75961d2000> :session 19 :kind buffer :size (720 116) :actual (303 379 720 116) :mode-line 0 :clipped 0 :candidate-rows 2 :buffer #<buffer  *Minibuf-1*> :input "Cal" :root-is-input t :key t))
+   passed  5/7  portal-launcher-buffer-prototype-gui-picker (1.227047 sec)
+Prototype shrink/regrow: ((:frame #<frame Portal launcher 0x7595c86000> :session 22 :kind buffer :size (720 179) :actual (303 316 720 179) :mode-line 0 :clipped 0 :candidate-rows 5 :buffer #<buffer  *Minibuf-1*> :input "" :root-is-input t :key t) (:frame #<frame Portal launcher 0x7595c86000> :session 22 :kind buffer :size (720 116) :actual (303 379 720 116) :mode-line 0 :clipped 0 :candidate-rows 2 :buffer #<buffer  *Minibuf-1*> :input "Cal" :root-is-input t :key t) (:frame #<frame Portal launcher 0x7595c86000> :session 22 :kind buffer :size (720 179) :actual (303 316 720 179) :mode-line 0 :clipped 0 :candidate-rows 5 :buffer #<buffer  *Minibuf-1*> :input "" :root-is-input t :key t) (:frame #<frame Portal launcher 0x7595c86000> :session 22 :kind buffer :size (720 100) :actual (303 395 720 100) :mode-line 0 :clipped -26 :candidate-rows -1 :buffer #<buffer  *Minibuf-1*> :input "zzzz" :root-is-input t :key t))
+   passed  6/7  portal-launcher-buffer-prototype-gui-shrink-regrow-and-no-match (2.067031 sec)
+Prototype transition: ((:frame #<frame Portal launcher 0x75967b9b90> :session 25 :kind buffer :size (720 179) :actual (303 316 720 179) :mode-line 0 :clipped 0 :candidate-rows 5 :buffer #<buffer  *Minibuf-1*> :input "" :root-is-input t :key t) (:frame #<frame Portal launcher 0x75967b9b90> :session 25 :kind buffer :size (720 420) :actual (303 75 720 420) :mode-line 0 :clipped -73 :candidate-rows nil :buffer #<buffer *Portal prototype chat*> :input nil :root-is-input nil :key t))
+   passed  7/7  portal-launcher-buffer-prototype-gui-transition (1.567105 sec)
+
+Ran 7 tests, 7 results as expected, 0 unexpected (2026-10-05 18:47:19-0700, 10.128615 sec)

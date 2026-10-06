@@ -1,0 +1,73 @@
+Test project /Users/xiaoxing/workspace/portal.worktrees/buffer-picker/build
+      Start  1: launcher
+ 1/34 Test  #1: launcher .........................   Passed    0.65 sec
+      Start  2: global-shortcut
+ 2/34 Test  #2: global-shortcut ..................   Passed    1.18 sec
+      Start  3: startup
+ 3/34 Test  #3: startup ..........................   Passed    0.39 sec
+      Start  4: processes
+ 4/34 Test  #4: processes ........................   Passed    0.03 sec
+      Start  5: pi-extension
+ 5/34 Test  #5: pi-extension .....................   Passed    0.01 sec
+      Start  6: vm-runner
+ 6/34 Test  #6: vm-runner ........................   Passed    1.13 sec
+      Start  7: host-actions
+ 7/34 Test  #7: host-actions .....................   Passed    0.04 sec
+      Start  8: host-tasks
+ 8/34 Test  #8: host-tasks .......................   Passed    0.05 sec
+      Start  9: actions
+ 9/34 Test  #9: actions ..........................   Passed    0.81 sec
+      Start 10: ui-host
+10/34 Test #10: ui-host ..........................   Passed    5.34 sec
+      Start 11: quick-terminal
+11/34 Test #11: quick-terminal ...................   Passed    1.22 sec
+      Start 12: terminal-metadata
+12/34 Test #12: terminal-metadata ................   Passed    0.96 sec
+      Start 13: terminal-choose
+13/34 Test #13: terminal-choose ..................   Passed    1.68 sec
+      Start 14: agents
+14/34 Test #14: agents ...........................   Passed    3.10 sec
+      Start 15: agent-discovery
+15/34 Test #15: agent-discovery ..................   Passed    5.52 sec
+      Start 16: agents-evil
+16/34 Test #16: agents-evil ......................   Passed    2.85 sec
+      Start 17: tasks-view
+17/34 Test #17: tasks-view .......................   Passed    4.52 sec
+      Start 18: terminal-consult
+18/34 Test #18: terminal-consult .................   Passed    2.46 sec
+      Start 19: terminal-embark
+19/34 Test #19: terminal-embark ..................   Passed    1.15 sec
+      Start 20: view
+20/34 Test #20: view .............................   Passed    2.27 sec
+      Start 21: web
+21/34 Test #21: web ..............................   Passed    1.85 sec
+      Start 22: tasks
+22/34 Test #22: tasks ............................   Passed    1.36 sec
+      Start 23: toolbar
+23/34 Test #23: toolbar ..........................   Passed    0.31 sec
+      Start 24: input
+24/34 Test #24: input ............................   Passed    0.41 sec
+      Start 25: terminal-bindings
+25/34 Test #25: terminal-bindings ................   Passed    0.30 sec
+      Start 26: excalidraw
+26/34 Test #26: excalidraw .......................   Passed    0.42 sec
+      Start 27: channel
+27/34 Test #27: channel ..........................   Passed    0.00 sec
+      Start 28: views
+28/34 Test #28: views ............................   Passed    0.00 sec
+      Start 29: input-core
+29/34 Test #29: input-core .......................   Passed    0.00 sec
+      Start 30: terminals
+30/34 Test #30: terminals ........................   Passed    0.00 sec
+      Start 31: web-core
+31/34 Test #31: web-core .........................   Passed    0.00 sec
+      Start 32: toolbar-core
+32/34 Test #32: toolbar-core .....................   Passed    0.00 sec
+      Start 33: shortcuts-core
+33/34 Test #33: shortcuts-core ...................   Passed    0.00 sec
+      Start 34: module
+34/34 Test #34: module ...........................   Passed    0.43 sec
+
+100% tests passed out of 34
+
+Total Test time (real) =  40.48 sec
