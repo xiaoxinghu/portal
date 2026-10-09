@@ -52,7 +52,7 @@ Accessibility permission."
   '(top-left top top-right left center right bottom-left bottom bottom-right)
   "Where `portal-status-show' can anchor the status panel on a screen.")
 
-(defconst portal-status-tones '(neutral progress success warning error)
+(defconst portal-status-tones '(neutral progress success warning error recording)
   "What a status can mean, for `portal-status-show'.")
 
 (defcustom portal-status-margin 24
@@ -96,9 +96,11 @@ Keywords:
 :max-lines how many lines TEXT may wrap to at the panel's width; the
            last is cut short with an ellipsis.  Default 1.
 :tone      what the status means, one of `portal-status-tones', which
-           marks it: a spinner for `progress', and a green, yellow or
-           red sign for `success', `warning' and `error'.  Default
-           `neutral', unmarked.
+           marks it: a spinner for `progress'; a green, yellow or red
+           sign for `success', `warning' and `error'; and for
+           `recording', a red dot that breathes, or holds still when
+           the system asks to reduce motion.  Default `neutral',
+           unmarked.
 :timeout   seconds after which the panel hides, unless shown again
            first.  Default nil: until `portal-status-hide'.
 

@@ -20,9 +20,9 @@ deferred.
 Added after trying the first version, following Hammerspoon's `hs.alert`,
 dunst, posframe and Raycast's HUD and toasts: nine positions, an offset, the
 screen, a fixed or bounded size, wrapping to several lines, a tone (neutral,
-progress with a spinner, success, warning, error) and a timeout. Icons
-chosen by the caller, colors, several panels at once and click actions are
-deferred.
+progress with a spinner, success, warning, error, recording with a
+breathing red dot) and a timeout. Icons chosen by the caller, colors,
+several panels at once and click actions are deferred.
 
 ## Plan
 

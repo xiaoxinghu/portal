@@ -77,6 +77,8 @@ static void test_positions(void)
     CHECK(show("Recording", "success", at("bottom", 0, 24)) && placed(658, 846, 124, 30));
     CHECK(portal_fake_status().tone == PORTAL_STATUS_SUCCESS);
     CHECK(portal_fake_status().lines == 1 && !strcmp(portal_fake_status().text, "Recording"));
+    CHECK(show("Recording", "recording", at("bottom", 0, 24)) && placed(658, 846, 124, 30));
+    CHECK(portal_fake_status().tone == PORTAL_STATUS_RECORDING);
     hide();
     hide();
 }

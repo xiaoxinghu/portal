@@ -7,7 +7,8 @@
 #include "core.h"
 #include "status.h"
 
-static const char *const tones[] = {"neutral", "progress", "success", "warning", "error"};
+static const char *const tones[] = {"neutral", "progress", "success", "warning", "error",
+                                    "recording"};
 
 /* Where an anchor puts the panel along one axis. */
 enum side { START, MIDDLE, END };

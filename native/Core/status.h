@@ -33,7 +33,7 @@ typedef struct portal_status_layout {
 } portal_status_layout;
 
 /* Show TEXT, which is not empty, with TONE, "neutral", "progress",
-   "success", "warning" or "error", in the status panel laid out as LAYOUT
+   "success", "warning", "error" or "recording", in the status panel laid out as LAYOUT
    says, replacing what it showed.  Fails, changing nothing, for an invalid
    argument, or when the platform cannot show it. */
 bool portal_status_present(portal_string text, portal_string tone,

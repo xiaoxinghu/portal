@@ -71,12 +71,12 @@ The calls still reach the module."
   (portal-system-tests--with
     (let (calls)
       (portal-system-tests--recording-status calls
-        (should-not (portal-status-show "Recording"))
+        (should-not (portal-status-show "Recording" :tone 'recording))
         (should-not (portal-status-show "Transcribing…" :tone 'progress))
         (should-not (portal-status-hide))
         (should-not (portal-status-hide)))
       (should (equal (nreverse calls)
-                     '((show "Recording" "neutral" "bottom" -1 0 24 0 0 0 0 1)
+                     '((show "Recording" "recording" "bottom" -1 0 24 0 0 0 0 1)
                        (show "Transcribing…" "progress" "bottom" -1 0 24 0 0 0 0 1)
                        (hide) (hide)))))))
 
