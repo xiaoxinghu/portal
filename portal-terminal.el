@@ -82,8 +82,10 @@ keyboard, [emacs] while Emacs does, and :exited once the program has."
   (add-hook 'kill-buffer-query-functions #'portal-terminal--kill-query nil t)
   (portal-input-mode 1)
   ;; Who has the keyboard, then the program's exit, after the mode name, as
-  ;; comint shows its process status there.
-  (setq mode-line-process '(portal-input-mode-line-process (portal-terminal--exited ":exited"))))
+  ;; comint shows its process status there.  The "" first makes the list a
+  ;; sequence; one that starts with a symbol is a conditional.
+  (setq mode-line-process
+        '("" portal-input-mode-line-process (portal-terminal--exited ":exited"))))
 (keymap-set portal-terminal-mode-map "RET" #'portal-terminal-focus)
 (keymap-set portal-terminal-mode-map "C-c C-k" #'portal-terminal-close)
 

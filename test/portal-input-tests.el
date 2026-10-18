@@ -18,7 +18,9 @@
     (portal-web-mode)
     (setq portal-view--target "web:7")
     (let ((portal-view--buffers (list (current-buffer))))
-      (should (equal mode-line-process '(portal-input-mode-line-process)))
+      ;; The list starts with a string: one starting with a symbol would be
+      ;; the conditional construct, and show nothing of the owner.
+      (should (equal mode-line-process '("" portal-input-mode-line-process)))
       (should (get 'portal-input-mode-line-process 'risky-local-variable))
       (should (equal (portal-input--mode-line-process) "[emacs]"))
       (portal-view--dispatch "focus web:7 1")
@@ -43,14 +45,24 @@
       (should-not mode-line-process)
       (portal-input-mode 1)
       (portal-input-mode 1)
-      (should (equal mode-line-process '(portal-input-mode-line-process))))))
+      (should (equal mode-line-process '("" portal-input-mode-line-process)))))
+  ;; A buffer's own construct keeps its shape as one element, and comes back.
+  (dolist (own '((busy ":on" ":off") ":%s" (busy ":on")))
+    (with-temp-buffer
+      (setq mode-line-process own)
+      (portal-input-mode 1)
+      (should (equal mode-line-process (list "" 'portal-input-mode-line-process own)))
+      (portal-input-mode -1)
+      (should (equal mode-line-process own)))))
 
 (ert-deftest portal-input-terminal-mode-line-adds-the-exit ()
   (with-temp-buffer
     (portal-terminal-mode)
     (should (equal mode-line-process
-                   '(portal-input-mode-line-process (portal-terminal--exited ":exited"))))
-    (should (equal (portal-input--mode-line-process) "[emacs]"))))
+                   '("" portal-input-mode-line-process (portal-terminal--exited ":exited"))))
+    (should (equal (portal-input--mode-line-process) "[emacs]"))
+    (portal-input-mode -1)
+    (should (equal mode-line-process '(portal-terminal--exited ":exited")))))
 
 (defvar portal-input-test--called nil)
 (defun portal-input-test--save () (interactive) (setq portal-input-test--called t))
