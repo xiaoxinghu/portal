@@ -98,14 +98,9 @@ The folder is `portal-markdown-gui--directory'."
     (should (eq (car-safe event) type))
     (funcall (lookup-key global-map (vector type)) event)))
 
-(defun portal-markdown-gui--state ()
-  "Return the preview toolbar's state."
-  (portal-toolbar--action "state"))
-
 (ert-deftest portal-markdown-gui-links-go-back-and-forward-with-reading-position ()
   (portal-markdown-gui--documents
     (let ((preview (current-buffer)))
-      (should-not (alist-get 'back (portal-markdown-gui--state)))
       (portal-excalidraw-gui--js "window.scrollTo(0, 1200); return true;")
       (should (= (portal-markdown-gui--scroll) 1200))
       (portal-markdown-gui--link "Architecture")
@@ -114,7 +109,6 @@ The folder is `portal-markdown-gui--directory'."
       ;; which can come just after the page reports its title.
       (portal-terminal-test--wait
        (lambda () (equal (buffer-name preview) "*portal: arch notes.md*")))
-      (should (alist-get 'back (portal-markdown-gui--state)))
       (portal-excalidraw-gui--js "window.scrollTo(0, 700); return true;")
       ;; Relative links resolve from the new document's folder.
       (should (portal-excalidraw-gui--js
@@ -124,11 +118,9 @@ The folder is `portal-markdown-gui--directory'."
       (portal-terminal-test--wait
        (lambda () (equal (buffer-name preview) "*portal: README.md*")))
       (portal-terminal-test--wait (lambda () (= (portal-markdown-gui--scroll) 1200)))
-      (should (alist-get 'forward (portal-markdown-gui--state)))
       (call-interactively (key-binding "r"))
       (portal-test--wait-for-page "arch notes.md")
       (portal-terminal-test--wait (lambda () (= (portal-markdown-gui--scroll) 700)))
-      (should-not (alist-get 'forward (portal-markdown-gui--state)))
       ;; g rereads the file on screen.
       (portal-markdown-gui--write "docs é/arch notes.md" "# Rewritten\n")
       (call-interactively (key-binding "g"))
@@ -139,11 +131,8 @@ The folder is `portal-markdown-gui--directory'."
       ;; A new link after going back discards the old forward branch.
       (portal-web-back)
       (portal-test--wait-for-page "README.md")
-      (should-not (alist-get 'back (portal-markdown-gui--state)))
-      (should (alist-get 'forward (portal-markdown-gui--state)))
       (portal-markdown-gui--link "Other")
       (portal-test--wait-for-page "other.md")
-      (should-not (alist-get 'forward (portal-markdown-gui--state)))
       ;; A heading fragment scrolls to the heading; lookup by file still works.
       (portal-web-back)
       (portal-test--wait-for-page "README.md")
@@ -200,7 +189,6 @@ The folder is `portal-markdown-gui--directory'."
       (let ((source-window (selected-window))
             (scroll (portal-markdown-gui--scroll)))
         (should (portal-test--shown target origin))
-        (should (alist-get 'forward (with-selected-window origin (portal-markdown-gui--state))))
         ;; Clicking the preview selects its pane and gives it the keyboard.
         (portal-test-native-click 300 5)
         (portal-markdown-gui--event 'portal-input-select)

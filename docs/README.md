@@ -9,7 +9,7 @@ Run shell examples from the repository root, not `docs/`.
 | I want to… | Guide |
 | --- | --- |
 | Install Portal, build its native part, upgrade it or fix installation problems | [Install Portal](install.md) |
-| Move between Emacs and a native view | [Keyboard ownership and toolbars](keyboard.md) |
+| Move between Emacs and a native view | [Keyboard ownership](keyboard.md) |
 | Open HTML, URLs or a saved Markdown preview | [Web views and previews](web-views.md) |
 | Draw and save offline | [Local Excalidraw drawings](excalidraw.md) |
 | Run shells, switch terminals or use a quick terminal | [Terminals and optional Consult/Embark adapters](terminals.md) |
@@ -54,7 +54,5 @@ feature ships today; see the user guides for current behavior.
 
 ### Design records
 
-- [Toolbar design](toolbar-design.md): implemented controls and later ownership
-  updates, with historical alternatives.
 - [Bun distribution options](bun-distribution.md): the private Bun bootstrap,
   size measurements and alternatives to revisit.

@@ -81,12 +81,9 @@ final class NativeInput: NativeInputHandler {
         Core.focus(target, focused)
     }
 
-    func handleKeyEvent(_ event: NSEvent) -> Bool { handleKeyEvent(event, content: true) }
-
     /// What to do with EVENT, a key event in the view's window: true if this
-    /// took it. With CONTENT false, it is for the view's own controls, such
-    /// as its find field, not for its app.
-    func handleKeyEvent(_ event: NSEvent, content: Bool) -> Bool {
+    /// took it.
+    func handleKeyEvent(_ event: NSEvent) -> Bool {
         // Recovery must work even before Lisp acknowledges, without a JS flush.
         if event.type == .keyDown, portal_input_is_escape(portal_chord(event)) {
             escape()
@@ -113,20 +110,11 @@ final class NativeInput: NativeInputHandler {
             return true
         case PORTAL_KEY_TAKE: return true
         case PORTAL_KEY_OFFER:
-            if content, let offer {
-                trigger = event
-                held = []
-                offering = true
-                offer(event)
-                return true
-            }
-            // The view's own text field, such as its find field, uses Control
-            // and Option chords, as any AppKit field does, and no Command chord.
-            guard event.modifierFlags.contains(.command) else { return false }
-            if Core.unused(target, event) == PORTAL_KEY_HOLD {
-                trigger = event
-                held = []
-            }
+            guard let offer else { return false }
+            trigger = event
+            held = []
+            offering = true
+            offer(event)
             return true
         default: return false
         }

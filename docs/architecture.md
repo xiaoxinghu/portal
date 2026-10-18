@@ -35,7 +35,7 @@ and vice versa.
 
 The C bindings register every Lisp function, convert arguments and results, and
 route lifecycle functions to the core's view registry, input to its handoff,
-and terminal, web and toolbar functions to their respective core rules. The core owns Portal's rules; `portal.h` contains only platform
+and terminal and web functions to their respective core rules. The core owns Portal's rules; `portal.h` contains only platform
 primitives and callbacks into the core
 ([ADR 0003](adr/0003-platform-interface-primitives.md)). `native/Backend.swift`
 implements the macOS primitives. They use plain C types: borrowed UTF-8 arguments
@@ -80,8 +80,8 @@ retry placement or close.
 ## Terminal rules and metadata
 
 The core owns terminal rules in `native/Core/terminals.c`. The platform supplies
-six terminal or engine primitives: list themes, apply a named or default theme,
-paste text, press Enter, read all text, and set font size. Before creation, the
+five terminal or engine primitives: list themes, apply a named or default theme,
+paste text, press Enter, and read all text. Before creation, the
 core validates options: `:directory` must be a string; `:command`, `:argv` and
 `:theme` a string or nil; `:command` and `:argv` mutually exclusive; and `:theme`
 a platform-listed name. The adapter decodes `:argv` into literal arguments and
@@ -94,8 +94,7 @@ earlier terminals keep the new theme; it and later terminals keep the old one.
 on success. Enter has its own primitive because input replays real native events
 without synthetic keys. Reading text on macOS selects all, leaving the selection
 active. The macOS platform owns Ghostty types, binding strings such as
-`select_all` and `set_font_size`, and the system-appearance default theme. The
-core tracks terminal text sizes, initially `PORTAL_TERMINAL_POINTS`.
+`select_all`, and the system-appearance default theme.
 
 Every platform reports a terminal's `:ready`, `:title`, `:pwd`, `:columns`,
 `:rows` and `:exited`. `:title` and `:pwd` hold values last set and reported by the
@@ -128,46 +127,31 @@ single outstanding `bridge` record, accepting messages based on platform-observe
 sender facts, never page claims.
 
 Platform primitives parse URLs into platform spelling and, per view, load a URL,
-navigate history (back, forward or reload, as an enum), post messages, set zoom or
-appearance, find text, and call shared-script functions with JSON arguments.
-Finds and calls answer asynchronously with core-supplied tokens. The core stores
+navigate history (back, forward or reload, as an enum), post messages and set
+the appearance; `portal--web-go` steps the history by name. The core stores
 URLs in platform/WebKit spelling: percent-encoded spaces and punycode Unicode
 hosts. Byte-for-byte comparisons leave equivalence to one parser. Platform
-callbacks report posted messages, navigation requests, page commits, load
-completion, history changes, failures, find/call completion and heading counts.
-They identify views by target, so post-close completions reach nothing.
+callbacks report posted messages, navigation requests, page commits and
+failures. They identify views by target, so post-close completions reach nothing.
 
-Shared JavaScript for local links and toolbar contents lives in
-`native/Core/scripts`, compiled into the core with `#embed`; platforms need
-neither script files nor the app host at runtime. Each script is a function
-started in an isolated world with platform-specific transport; only platform
-glue names WebKit. Hosted apps see only `window.portalBridge`, with `postMessage`
+The shared JavaScript for local links lives in `native/Core/scripts`, compiled
+into the core with `#embed`; platforms need neither script files nor the app
+host at runtime. The script is a function started in an isolated world with
+platform-specific transport; only platform glue names WebKit. Hosted apps see only `window.portalBridge`, with `postMessage`
 and `receive`.
 
-## Toolbar state
+## Keyboard ownership in the mode line
 
-The core's `native/Core/toolbar.c` owns each view's layout, fixed at opening from
-`:toolbar` or, for terminals, `:quick`; zoom or text size, including zoom steps
-and 1 to 255 point limits; TOC visibility and heading count; and find text and
-matches. It reads keyboard ownership from the input core and back/forward
-availability from the web core, never copying them. After potential display
-changes, it builds a `portal_toolbar` snapshot including visibility and colors.
-Only changed snapshots reach the platform for drawing; comparison needs no JSON
-serialization. A toolbar shows only while its view has the keyboard, a command
-handoff is pending, or its find field is open, and only over the pane's mode
-line, whose edges Emacs sends with each placement; otherwise Emacs's mode line
-shows, and the content never resizes. Clicks, find text, Lisp commands and
-shortcuts share code and state; `portal--toolbar-action` returns that state as
-JSON.
-
-Searches run serially: a contents-script count, then a find. Changed text replaces
-waiting searches; load completion discards pre-load results and searches again;
-unrequested results reach nothing. Opening find focuses the field through
-`portal_toolbar_focus`; closing focuses the page through `portal_view_focus`
-only if the view still owns the keyboard, never reclaiming it from Emacs or
-another view. The platform draws AppKit buttons and the search field, handles
-layout, SF Symbols, tooltips, accessibility, tracking areas and appearance changes,
-and converts face colors to `NSColor`s.
+The core's `native/Core/input.c` sends a `focus TARGET 1` or `focus TARGET 0`
+record on each change of whether a view has the keyboard, whatever made it:
+RET or a click into the view, the escape key, a handoff to Emacs, a click
+elsewhere, or hiding the view. `portal-input.el` keeps the answer in the
+buffer and puts `portal-input-mode-line-process` in `mode-line-process`, the
+slot Emacs reserves for a buffer's state after its mode name, so the default
+mode line and packages that render that variable, such as doom-modeline, show
+`Ghostty[app]` while the view has the keyboard and `Ghostty[emacs]` while Emacs
+does, with the terminal's `:exited` after it. Nothing native draws over Emacs:
+the view fills the pane's body, and the mode line stays Emacs's.
 
 ## System-wide keys
 

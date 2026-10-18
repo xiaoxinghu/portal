@@ -66,8 +66,8 @@ static bool went(const char *expected, ...)
     return !strcmp(keys, wanted);
 }
 
-/* The records sent since the last call, valid until the next. */
-static const char *received(void)
+/* Every record sent since the last call, valid until the next. */
+static const char *received_all(void)
 {
     static char buffer[4096];
     ssize_t count = read(records, buffer, sizeof buffer - 1);
@@ -75,18 +75,54 @@ static const char *received(void)
     return buffer;
 }
 
-/* Whether the records since the last call are EXPECTED, a format. */
-static bool sent(const char *expected, ...)
+/* The handoff records sent since the last call, valid until the next:
+   without the focus records that each change of the keyboard sends, which
+   test_focus_changes_reach_emacs checks. */
+static const char *received(void)
+{
+    static char buffer[4096];
+    const char *all = received_all();
+    size_t length = 0;
+    while (*all) {
+        const char *end = strchr(all, '\n');
+        size_t line = end ? (size_t) (end - all + 1) : strlen(all);
+        if (strncmp(all, "focus ", 6)) {
+            memcpy(buffer + length, all, line);
+            length += line;
+        }
+        all += line;
+    }
+    buffer[length] = '\0';
+    return buffer;
+}
+
+static bool same_records(const char *got, const char *expected, va_list arguments)
 {
     char wanted[1024];
-    va_list arguments;
-    va_start(arguments, expected);
     vsnprintf(wanted, sizeof wanted, expected, arguments);
-    va_end(arguments);
-    const char *got = received();
     if (strcmp(got, wanted))
         fprintf(stderr, "Expected records \"%s\", got \"%s\"\n", wanted, got);
     return !strcmp(got, wanted);
+}
+
+/* Whether the handoff records since the last call are EXPECTED, a format. */
+static bool sent(const char *expected, ...)
+{
+    va_list arguments;
+    va_start(arguments, expected);
+    bool same = same_records(received(), expected, arguments);
+    va_end(arguments);
+    return same;
+}
+
+/* Whether every record since the last call is EXPECTED, a format. */
+static bool sent_all(const char *expected, ...)
+{
+    va_list arguments;
+    va_start(arguments, expected);
+    bool same = same_records(received_all(), expected, arguments);
+    va_end(arguments);
+    return same;
 }
 
 /* The serial of the one handoff record TYPE for TARGET sent since the last
@@ -158,7 +194,7 @@ static char *open_view(const char *kind, bool quick)
                                {.name = text("quick"), .flag = true}};
     portal_text target = {0}, error = {0};
     if (!portal_views_open(text(kind), options, quick ? 2 : 1, &target, &error)
-        || !portal_views_place(text(target.data), (portal_edges) {0, 0, 100, 100}, NULL, text("frame"),
+        || !portal_views_place(text(target.data), (portal_edges) {0, 0, 100, 100}, text("frame"),
                                &error))
         abort();
     CHECK(act(target.data, "focus", 0));
@@ -541,7 +577,7 @@ static void test_hiding_or_closing_ends_a_handoff(void)
     /* A hidden view cannot have the keyboard. */
     CHECK(!act(terminal, "focus", 0));
     CHECK(sent(""));
-    CHECK(portal_views_place(text(terminal), (portal_edges) {0, 0, 100, 100}, NULL, text("frame"),
+    CHECK(portal_views_place(text(terminal), (portal_edges) {0, 0, 100, 100}, text("frame"),
                              &error));
     CHECK(act(terminal, "focus", 0));
 
@@ -742,6 +778,54 @@ static void test_configurable_escape(void)
     close_view(web);
 }
 
+/* Each change of whether a view has the keyboard reaches Emacs as a focus
+   record, whatever made it, for the view's mode line; nothing else does. */
+static void test_focus_changes_reach_emacs(void)
+{
+    portal_option options[] = {{.name = text("directory"), .is_string = true, .string = text("/")}};
+    portal_text target = {0}, error = {0};
+    CHECK(portal_views_open(text("terminal"), options, 1, &target, &error));
+    char *terminal = target.data;
+    CHECK(portal_views_place(text(terminal), (portal_edges) {0, 0, 100, 100}, text("frame"),
+                             &error));
+    CHECK(sent_all(""));
+    /* Emacs gives the view the keyboard, and takes it back; a report of no
+       change sends nothing. */
+    CHECK(act(terminal, "focus", 0));
+    CHECK(act(terminal, "focus", 0));
+    portal_input_focus(text(terminal), true);
+    CHECK(sent_all("focus %s 1\n", terminal));
+    CHECK(act(terminal, "unfocus", 0));
+    CHECK(sent_all("focus %s 0\n", terminal));
+    /* A handoff takes it from the view, after the handoff's own record,
+       and Emacs gives it back once the command is done. */
+    CHECK(act(terminal, "focus", 0));
+    press('x', S);
+    const char *got = received_all();
+    char prefix[64], tail[64];
+    snprintf(prefix, sizeof prefix, "focus %s 1\nkey %s ", terminal, terminal);
+    snprintf(tail, sizeof tail, " 120 8\nfocus %s 0\n", terminal);
+    int64_t serial = 0;
+    CHECK(!strncmp(got, prefix, strlen(prefix)));
+    CHECK(sscanf(got + strlen(prefix), "%" SCNd64, &serial) == 1 && serial > 0);
+    CHECK(strlen(got) > strlen(tail) && !strcmp(got + strlen(got) - strlen(tail), tail));
+    CHECK(act(terminal, "ack", serial));
+    CHECK(act(terminal, "finish", serial));
+    CHECK(sent_all(""));
+    CHECK(act(terminal, "focus", 0));
+    CHECK(sent_all("focus %s 1\n", terminal));
+    /* The user's escape and click move it, before the click's own record. */
+    portal_fake_escape();
+    CHECK(sent_all("focus %s 0\n", terminal));
+    CHECK(portal_fake_click(terminal));
+    CHECK(sent_all("focus %s 1\nselect %s\n", terminal, terminal));
+    /* Hiding the view returns the keyboard to Emacs. */
+    CHECK(portal_views_hide(text(terminal), &error));
+    CHECK(sent_all("focus %s 0\n", terminal));
+    close_view(terminal);
+    CHECK(went("held s-x"));
+}
+
 int main(void)
 {
     int fds[2];
@@ -763,6 +847,7 @@ int main(void)
     test_a_held_chord_takes_one_handoff();
     test_keys_after_a_whole_command_stay_with_emacs();
     test_configurable_escape();
+    test_focus_changes_reach_emacs();
     CHECK(!portal_fake_calls().misused);
     if (failures) {
         fprintf(stderr, "%d checks failed\n", failures);

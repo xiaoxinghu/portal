@@ -12,7 +12,7 @@
 (require 'portal-build)
 
 (declare-function portal--open "portal-view" (kind options))
-(declare-function portal--place "portal-view" (target edges title &optional bar))
+(declare-function portal--place "portal-view" (target edges title))
 (declare-function portal--hide "portal-view" (target))
 (declare-function portal--close "portal-view" (target))
 (declare-function portal--channel "portal-view" (process))
@@ -44,7 +44,7 @@ It is non-nil exactly while the buffer is in `portal-view--buffers'.")
 (defvar-local portal-view--window nil "The window showing this buffer's view, or nil.")
 (defvar-local portal-view--geometry nil
   "The placement last sent to the native view, or nil while it is hidden.
-The form is (FRAME FRAME-PIXEL-HEIGHT EDGES BAR).")
+The form is (FRAME FRAME-PIXEL-HEIGHT EDGES).")
 
 (defun portal-view--unsupported ()
   "Why this Emacs and its selected frame cannot run native views, or nil.
@@ -236,16 +236,6 @@ to, so that a buffer previewed there, such as by Consult, shows its view."
     (or (and (eq window (active-minibuffer-window)) (minibuffer-selected-window))
         window)))
 
-(defun portal-view--mode-line-edges (window)
-  "Return WINDOW's mode line as pixel edges [LEFT TOP RIGHT BOTTOM], or nil.
-The view's toolbar covers it while the view has the keyboard."
-  (let ((height (window-mode-line-height window)))
-    (when (> height 0)
-      (pcase-let ((`(,left ,_ ,right ,bottom) (window-pixel-edges window)))
-        (let ((bottom (- bottom (window-bottom-divider-width window))))
-          (vector left (- bottom height) (- right (window-right-divider-width window))
-                  bottom))))))
-
 (defun portal-view--sync-buffer (buffer)
   "Place BUFFER's view in its chosen window, or hide it when no window shows it.
 The chosen window is the selected pane, then the view's current window,
@@ -259,13 +249,12 @@ another frame moves it there.  Nothing is sent when nothing moved."
                          (t (car windows))))
            (frame (and window (window-frame window)))
            (geometry (and window (list frame (frame-pixel-height frame)
-                                       (vconcat (window-inside-pixel-edges window))
-                                       (portal-view--mode-line-edges window)))))
+                                       (vconcat (window-inside-pixel-edges window))))))
       (unless (equal geometry portal-view--geometry)
         (if geometry
             (portal-view--with-frame-title
              frame (lambda (title)
-                     (portal--place portal-view--target (nth 2 geometry) title (nth 3 geometry))))
+                     (portal--place portal-view--target (nth 2 geometry) title)))
           (portal--hide portal-view--target))
         (setq portal-view--geometry geometry))
       (setq portal-view--window window))))

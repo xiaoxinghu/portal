@@ -121,7 +121,6 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
 /// window when the view opens, and keeps running while the view is hidden.
 /// The core owns Portal's terminal rules (native/Core/terminals.c): it checks
 /// the options and theme names, and calls the primitives below on one session.
-/// Its toolbar and text size are the core's too (toolbar.c).
 @MainActor
 final class TerminalSession: PortalView {
     let target: String
@@ -208,13 +207,6 @@ final class TerminalSession: PortalView {
             throw NativeError.message("Ghostty could not select terminal text")
         }
         return surface.readSelection() ?? ""
-    }
-
-    func setFontSize(_ points: Double) throws {
-        let binding = String(format: "set_font_size:%g", points)
-        guard terminal.terminalSurface?.performBindingAction(binding) == true else {
-            throw NativeError.message("No terminal accepting text size changes")
-        }
     }
 
     func returnFocus() { input.host.returnFocus(from: terminal) }

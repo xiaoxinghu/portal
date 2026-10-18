@@ -87,8 +87,15 @@ bool portal_input_perform(portal_string target, portal_string action, int64_t se
    the caller sends next.  A TARGET that names no open view does nothing. */
 void portal_input_escape(portal_string target);
 
-/* Who has TARGET's keyboard, which its toolbar shows; Emacs for a TARGET
-   that names no open view. */
+/* Who has a view's keyboard: Emacs, the view, or Emacs handling the view's
+   handoff. */
+typedef enum portal_owner {
+    PORTAL_OWNER_EMACS,
+    PORTAL_OWNER_VIEW,
+    PORTAL_OWNER_PENDING,
+} portal_owner;
+
+/* Who has TARGET's keyboard; Emacs for a TARGET that names no open view. */
 portal_owner portal_input_owner(portal_string target);
 
 /* Emacs calls the module, from true until false; calls nest.  A focus change

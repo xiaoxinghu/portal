@@ -10,6 +10,48 @@
     (should (equal (key-description (vector (portal-input--event (nth 0 case) (nth 1 case))))
                    (nth 2 case)))))
 
+(ert-deftest portal-input-mode-line-names-who-has-the-keyboard ()
+  ;; After the mode name, in `mode-line-process', where comint and eat put
+  ;; a buffer's state; the view's focus record changes it.  Batch Emacs
+  ;; renders no mode line, so this checks the construct and what it says.
+  (with-temp-buffer
+    (portal-web-mode)
+    (setq portal-view--target "web:7")
+    (let ((portal-view--buffers (list (current-buffer))))
+      (should (equal mode-line-process '(portal-input-mode-line-process)))
+      (should (get 'portal-input-mode-line-process 'risky-local-variable))
+      (should (equal (portal-input--mode-line-process) "[emacs]"))
+      (portal-view--dispatch "focus web:7 1")
+      (should (portal-input--focused-p))
+      (should (equal (portal-input--mode-line-process) "[app]"))
+      (should (string-match-p (regexp-quote portal-input-escape-key)
+                              (get-text-property 0 'help-echo (portal-input--mode-line-process))))
+      (portal-view--dispatch "focus web:7 0")
+      (should (equal (portal-input--mode-line-process) "[emacs]"))
+      ;; A view closed while it had the keyboard sends no record its buffer
+      ;; can take: without a view, Emacs has the keyboard, and so it does
+      ;; with the next view in the buffer until that one says otherwise.
+      (portal-view--dispatch "focus web:7 1")
+      (setq portal-view--target nil)
+      (should (equal (portal-input--mode-line-process) "[emacs]"))
+      (setq portal-view--target "web:8")
+      (should (equal (portal-input--mode-line-process) "[emacs]"))
+      (portal-view--dispatch "focus web:8 1")
+      (should (equal (portal-input--mode-line-process) "[app]"))
+      ;; Turning the mode off takes the construct out; on puts it back once.
+      (portal-input-mode -1)
+      (should-not mode-line-process)
+      (portal-input-mode 1)
+      (portal-input-mode 1)
+      (should (equal mode-line-process '(portal-input-mode-line-process))))))
+
+(ert-deftest portal-input-terminal-mode-line-adds-the-exit ()
+  (with-temp-buffer
+    (portal-terminal-mode)
+    (should (equal mode-line-process
+                   '(portal-input-mode-line-process (portal-terminal--exited ":exited"))))
+    (should (equal (portal-input--mode-line-process) "[emacs]"))))
+
 (defvar portal-input-test--called nil)
 (defun portal-input-test--save () (interactive) (setq portal-input-test--called t))
 

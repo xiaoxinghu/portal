@@ -4,8 +4,7 @@
    copies its arguments, calls the core, and converts and frees what it
    returns.  The lifecycle functions call views.h, portal--channel
    channel.h, the input functions input.h, the terminal functions
-   terminals.h, the web functions web.h, the toolbar functions toolbar.h,
-   the shortcut functions shortcuts.h, and the status panel's status.h.  No Emacs environment or value
+   terminals.h, the web functions web.h, the shortcut functions shortcuts.h, and the status panel's status.h.  No Emacs environment or value
    outlives the module call that received it. */
 #include <emacs-module.h>
 #include <errno.h>
@@ -20,7 +19,6 @@
 #include "shortcuts.h"
 #include "status.h"
 #include "terminals.h"
-#include "toolbar.h"
 #include "views.h"
 #include "web.h"
 
@@ -306,10 +304,9 @@ STRINGS(inspect, portal_views_inspect(a[0], result, error))
 STRINGS(web_load, portal_web_views_load(a[0], a[1], error))
 STRINGS(web_send, portal_web_views_send(a[0], a[1], error))
 STRINGS(web_receive, portal_web_views_receive(a[0], result, error))
+STRINGS(web_go, portal_web_views_go(a[0], a[1], error))
 STRINGS(terminal_themes, portal_terminals_themes(result, error))
 STRINGS(terminal_text, portal_terminals_text(a[0], result, error))
-STRINGS(toolbar_action, portal_toolbar_perform(a[0], a[1], result, error))
-STRINGS(toolbar_label, portal_toolbar_label(a[0], a[1], error))
 STRINGS(launcher_detach, portal_launcher_detach(error))
 STRINGS(launcher_prepare, portal_launcher_prepare(error))
 STRINGS(launcher_describe, portal_launcher_describe(result, error))
@@ -478,14 +475,11 @@ LISP_FUNCTION(Fopen)
 LISP_FUNCTION(Fplace)
 {
     portal_text target = {0}, title = {0}, error = {0};
-    portal_edges edges, bar;
-    bool has_bar = nargs > 3 && env->is_not_nil(env, args[3]);
+    portal_edges edges;
     emacs_value result = NULL;
     if (read_text(env, args[0], &target) && read_edges(env, args[1], &edges)
-        && read_text(env, args[2], &title) && (!has_bar || read_edges(env, args[3], &bar)))
-        result = done(env,
-                      portal_views_place(borrow(target), edges, has_bar ? &bar : NULL,
-                                         borrow(title), &error),
+        && read_text(env, args[2], &title))
+        result = done(env, portal_views_place(borrow(target), edges, borrow(title), &error),
                       &error);
     free(target.data);
     free(title.data);
@@ -684,97 +678,6 @@ LISP_FUNCTION(Finput)
     return result;
 }
 
-LISP_FUNCTION(Ftoolbar)
-{
-    bool shown = env->is_not_nil(env, args[0]);
-    portal_toolbar_show(shown);
-    return boolean(env, shown);
-}
-
-/* Read VALUE, an array of three numbers from 0 to 1, into *COLOR.  A value
-   of any other shape leaves it unset, for the platform's default. */
-static bool read_color(emacs_env *env, emacs_value value, portal_color *color)
-{
-    *color = (portal_color) {0};
-    if (!of_type(env, value, "vector") || env->vec_size(env, value) != 3)
-        return returning(env);
-    double components[3];
-    for (ptrdiff_t i = 0; i < 3; i++) {
-        emacs_value component = env->vec_get(env, value, i);
-        if (!of_type(env, component, "integer") && !of_type(env, component, "float"))
-            return returning(env);
-        components[i] = env->extract_float(env, env->funcall(env, symbol(env, "float"), 1,
-                                                             &component));
-        if (!returning(env))
-            return false;
-        if (!(components[i] >= 0 && components[i] <= 1))
-            return true;
-    }
-    *color = (portal_color) {true, components[0], components[1], components[2]};
-    return true;
-}
-
-/* JSON is an object of colors by name, such as {"background":[0,0.5,1]}:
-   the names of portal_colors' members, each an array of sRGB components;
-   and "font", an object of a "family" string and a "points" number.
-   Other names are ignored, and colors of other shapes, like missing ones,
-   leave the platform's defaults, as does a font of another shape. */
-LISP_FUNCTION(Ftoolbar_theme)
-{
-    emacs_value arguments[] = {args[0], symbol(env, ":object-type"), symbol(env, "alist"),
-                               symbol(env, ":array-type"), symbol(env, "array")};
-    emacs_value json = env->funcall(env, symbol(env, "json-parse-string"), 5, arguments);
-    if (!returning(env))
-        return NULL;
-    /* An object is an alist, and the empty object nil. */
-    if (env->is_not_nil(env, json) && !of_type(env, json, "cons")) {
-        signal_error(env, "Toolbar theme must be a JSON object", NULL);
-        return NULL;
-    }
-    static const struct {
-        const char *name;
-        size_t offset;
-    } roles[] = {
-        {"background", offsetof(portal_colors, background)},
-        {"border", offsetof(portal_colors, border)},
-        {"shadow", offsetof(portal_colors, shadow)},
-        {"foreground", offsetof(portal_colors, foreground)},
-        {"success", offsetof(portal_colors, success)},
-        {"accent", offsetof(portal_colors, accent)},
-        {"tint", offsetof(portal_colors, tint)},
-        {"strip", offsetof(portal_colors, strip)},
-    };
-    portal_colors colors;
-    for (size_t i = 0; i < sizeof roles / sizeof *roles; i++) {
-        emacs_value value = get(env, json, roles[i].name);
-        if (!returning(env)
-            || !read_color(env, value, (portal_color *) ((char *) &colors + roles[i].offset)))
-            return NULL;
-    }
-    portal_text family = {0};
-    double points = 0;
-    emacs_value font = get(env, json, "font");
-    if (!returning(env))
-        return NULL;
-    if (of_type(env, font, "cons")) {
-        emacs_value name = get(env, font, "family"), size = get(env, font, "points");
-        if (!returning(env))
-            return NULL;
-        if (of_type(env, name, "string") && !read_text(env, name, &family))
-            return NULL;
-        if (of_type(env, size, "integer") || of_type(env, size, "float")) {
-            points = env->extract_float(env, env->funcall(env, symbol(env, "float"), 1, &size));
-            if (!returning(env)) {
-                free(family.data);
-                return NULL;
-            }
-        }
-    }
-    portal_toolbar_paint(&colors, (portal_font) {borrow(family), points > 0 ? points : 0});
-    free(family.data);
-    return symbol(env, "t");
-}
-
 #define STRINGS_FUNCTION(name, result) \
     Fstrings, &(const struct strings_function) {name, result}
 
@@ -788,9 +691,8 @@ static const struct export {
     {"portal--open", 2, 2, Fopen, NULL,
      "Open a view of KIND (\"terminal\" or \"web\") with an OPTIONS plist; return its target, "
      "such as \"web:1\"."},
-    {"portal--place", 3, 4, Fplace, NULL,
-     "Show TARGET at EDGES [LEFT TOP RIGHT BOTTOM] in the frame titled TITLE, with its "
-     "toolbar over BAR, the pane's mode line edges, or none if BAR is nil."},
+    {"portal--place", 3, 3, Fplace, NULL,
+     "Show TARGET at EDGES [LEFT TOP RIGHT BOTTOM] in the frame titled TITLE."},
     {"portal--hide", 1, 1, STRINGS_FUNCTION(hide, RESULT_T),
      "Hide TARGET, keeping its session alive."},
     {"portal--close", 1, 1, STRINGS_FUNCTION(close_view, RESULT_T),
@@ -806,6 +708,8 @@ static const struct export {
      "Send the JSON object JSON to hosted web view TARGET's app over its bridge."},
     {"portal--web-receive", 1, 1, STRINGS_FUNCTION(web_receive, RESULT_STRING),
      "Return the messages hosted web view TARGET's app sent over its bridge, as a JSON array."},
+    {"portal--web-go", 2, 2, STRINGS_FUNCTION(web_go, RESULT_T),
+     "Move web view TARGET through its history by STEP, \"back\" or \"forward\"."},
     {"portal--web-appearance", 1, 1, Fweb_appearance, NULL,
      "Show every web view in APPEARANCE, \"light\" or \"dark\"; nil follows the system's."},
     {"portal--terminal-theme", 1, 1, Fterminal_theme, NULL,
@@ -852,13 +756,6 @@ static const struct export {
      "HEIGHT MIN-WIDTH MAX-WIDTH LINES."},
     {"portal--status-hide", 0, 0, STRINGS_FUNCTION(status_hide, RESULT_T),
      "Hide the status panel; do nothing when it is hidden."},
-    {"portal--toolbar", 1, 1, Ftoolbar, NULL, "Show or hide native toolbars live."},
-    {"portal--toolbar-theme", 1, 1, Ftoolbar_theme, NULL,
-     "Apply toolbar face colors from JSON RGB arrays."},
-    {"portal--toolbar-action", 2, 2, STRINGS_FUNCTION(toolbar_action, RESULT_STRING),
-     "Perform ACTION on TARGET and return its native state as JSON."},
-    {"portal--toolbar-label", 2, 2, STRINGS_FUNCTION(toolbar_label, RESULT_T),
-     "Show LABEL, what TARGET's view shows, on its toolbar."},
 };
 
 /* Run the Lisp function DATA, an export, at Emacs's request (input.h). */

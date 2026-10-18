@@ -38,10 +38,6 @@
   "Inspect TARGET, by default the selected pane's view."
   (portal--inspect (or target (portal-view-target))))
 
-(defun portal-web-test--toolbar (&optional target)
-  "Return the toolbar TARGET opened with."
-  (plist-get (plist-get (portal-web-test--state target) :options) :toolbar))
-
 (ert-deftest portal-web-appearance-starts-new-views-and-changes-open-ones ()
   (portal-web-test--environment
     (let ((original portal-web-appearance))
@@ -59,8 +55,6 @@
               (portal-open-url "https://example.com/")
               (should (equal (plist-get (plist-get (portal-web-test--state) :options) :appearance)
                              "dark"))
-              (should (equal (plist-get (plist-get (portal-web-test--state) :options) :toolbar)
-                             "navigation"))
               (should-not (equal (portal-view-target) system)))
             ;; An unknown appearance changes nothing.
             (setq portal-fake-native-log nil)
@@ -96,8 +90,7 @@
         (should (equal (portal-view-buffers 'web) (list first (current-buffer))))
         (dolist (target (list first-target second-target))
           (should (equal (plist-get (portal-web-test--state target) :url)
-                         "https://example.com/page"))
-          (should (equal (portal-web-test--toolbar target) "navigation")))
+                         "https://example.com/page")))
         (portal-view-sync)
         (should-not (plist-get (portal-web-test--state first-target) :visible))
         (should (plist-get (portal-web-test--state second-target) :visible))))
@@ -146,7 +139,6 @@
                   (target (portal-view-target)))
               (should (equal (buffer-name) "*portal: Résumé #%?.html*"))
               (should (equal (plist-get (portal-web-test--state) :url) url))
-              (should (equal (portal-web-test--toolbar) "contents"))
               (switch-to-buffer "*scratch*")
               (let ((default-directory directory))
                 (portal-render-html "Résumé #%?.html"))
@@ -174,12 +166,11 @@
             (portal-open-url url)
             (let ((page (current-buffer)))
               (switch-to-buffer (generate-new-buffer "client"))
-              (portal-web-open url "none")
+              (portal-web-open url)
               (let ((client (current-buffer)))
                 (portal-render-html file)
                 (let ((preview (current-buffer)))
                   (should-not (memq preview (list page client)))
-                  (should (equal (portal-web-test--toolbar) "contents"))
                   (switch-to-buffer page)
                   (portal-render-html file)
                   (should (eq (current-buffer) preview))
@@ -210,15 +201,14 @@
 (ert-deftest portal-web-open-gives-any-buffer-a-web-view ()
   (portal-web-test--environment
     (switch-to-buffer (generate-new-buffer "client"))
-    (should-error (portal-web-open "relative" "none") :type 'user-error)
+    (should-error (portal-web-open "relative") :type 'user-error)
     (should-not portal-fake-native-log)
-    (let ((target (portal-web-open "about:blank" "none")))
+    (let ((target (portal-web-open "about:blank")))
       (should (equal (portal-view-target) target))
       (should (eq major-mode 'fundamental-mode))
       ;; The shared prefix and RET reach the view.
       (should (equal (portal-input--target) target))
       (should (eq (key-binding (kbd "RET")) #'portal-input-focus))
-      (should (equal (portal-web-test--toolbar) "none"))
       (should (equal (plist-get (portal-web-test--state) :url) "about:blank"))
       (should (equal (portal-view-buffers 'web) (list (current-buffer)))))
     (switch-to-buffer (generate-new-buffer "plain"))
@@ -227,12 +217,12 @@
     (let ((targets (portal-fake-native-targets)))
       (dolist (failure '(portal--open portal--place portal--web-load))
         (let ((portal-fake-native-failures (list failure)))
-          (should-error (portal-web-open "about:blank" "navigation")))
+          (should-error (portal-web-open "about:blank")))
         (should-not portal-input-mode)
         (should-not (memq (current-buffer) (portal-view-buffers)))
         (should (equal (portal-fake-native-targets) targets))))
     ;; The buffer can still open a view afterwards.
-    (should (equal (portal-web-open "about:blank" "navigation") (portal-view-target)))))
+    (should (equal (portal-web-open "about:blank") (portal-view-target)))))
 
 (ert-deftest portal-web-hosted-apps-open-at-once-and-load-when-the-app-host-is-ready ()
   (portal-web-test--environment
@@ -246,14 +236,12 @@
             (let ((hello (current-buffer))
                   (hello-target (portal-view-target)))
               (should (equal (buffer-name) "*portal: hello*"))
-              (should (equal (portal-web-test--toolbar) "navigation"))
               (portal-render-markdown file)
               (let ((markdown (current-buffer))
                     (markdown-target (portal-view-target))
                     (markdown-url (concat "http://127.0.0.1:1/token/markdown?path="
                                           (url-hexify-string file))))
                 (should (equal (buffer-name) (format "*portal: %s*" (file-name-nondirectory file))))
-                (should (equal (portal-web-test--toolbar) "markdown"))
                 ;; Both views open at once, before the app host is ready.
                 (should (= starts 2))
                 (dolist (target (list hello-target markdown-target))
@@ -295,7 +283,6 @@
       (portal-about)
       (let ((about (current-buffer)) (target (portal-view-target)))
         (should (equal (buffer-name) "*portal: about*"))
-        (should (equal (portal-web-test--toolbar) "none"))
         (should (equal (plist-get (portal-web-test--state target) :url)
                        "http://127.0.0.1:1/token/about?portal=1.2.3&emacs=31.1%20%28test%29"))
         ;; Asking again shows the same page.
@@ -326,10 +313,9 @@
     (cl-letf (((symbol-function 'portal-start-server) #'ignore)
               ((symbol-function 'portal-server-url) (lambda () "http://127.0.0.1:1/token")))
       (switch-to-buffer (generate-new-buffer "client"))
-      (let ((target (portal-web-open-hosted "/hello" "none")))
+      (let ((target (portal-web-open-hosted "/hello")))
         (should (equal (portal-view-target) target))
         (should (eq major-mode 'fundamental-mode))
-        (should (equal (portal-web-test--toolbar) "none"))
         (should (equal (portal-fake-native-calls 'portal--web-load)
                        `((,target "about:blank") (,target "http://127.0.0.1:1/token/hello"))))))))
 
@@ -338,7 +324,7 @@
     (cl-letf (((symbol-function 'portal-start-server) #'ignore)
               ((symbol-function 'portal-server-url) (lambda () "http://127.0.0.1:1/token")))
       (switch-to-buffer (generate-new-buffer "client"))
-      (let ((target (portal-web-open-hosted "/app" "none"))
+      (let ((target (portal-web-open-hosted "/app"))
             received)
         (setq portal-web-bridge-function
               (lambda (message) (push (cons (buffer-name) message) received)))
@@ -401,31 +387,23 @@
         (portal-web-test--stop-host)
         (delete-file file)))))
 
-(ert-deftest portal-web-toolbar-commands-use-the-selected-pane-view ()
+(ert-deftest portal-web-history-commands-use-the-selected-pane-view ()
   (portal-web-test--environment
     (portal-open-url "https://example.com")
     (let ((target (portal-view-target))
-          (other (split-window-right))
-          calls)
-      (cl-letf (((symbol-function 'portal--toolbar-action)
-                 (lambda (target action)
-                   (push (list target action) calls)
-                   "{\"value\":110,\"toc\":true}")))
-        (should (= (portal-zoom-in) 110))
-        (should (portal-toggle-toc))
-        (portal-find)
-        (call-interactively (key-binding "l"))
-        (call-interactively (key-binding "r"))
-        (should (equal (reverse calls)
-                       `((,target "increase") (,target "toc") (,target "find")
-                         (,target "back") (,target "forward"))))
-        (should-error (portal-terminal-text-size-increase) :type 'user-error)
-        ;; A pane showing another buffer has no view to act on.
-        (set-window-buffer other (get-buffer "*scratch*"))
-        (select-window other)
-        (portal-view-sync)
-        (should-error (portal-zoom-in) :type 'user-error)
-        (should (= (length calls) 5))))))
+          (other (split-window-right)))
+      (setq portal-fake-native-log nil)
+      (call-interactively (key-binding "l"))
+      (call-interactively (key-binding "r"))
+      (portal-web-back)
+      (should (equal (portal-fake-native-calls 'portal--web-go)
+                     `((,target "back") (,target "forward") (,target "back"))))
+      ;; A pane showing another buffer has no view to act on.
+      (set-window-buffer other (get-buffer "*scratch*"))
+      (select-window other)
+      (portal-view-sync)
+      (should-error (portal-web-back) :type 'user-error)
+      (should (= (length (portal-fake-native-calls 'portal--web-go)) 3)))))
 
 ;; Markdown previews: navigation, handoff to Emacs, and return.
 
@@ -628,10 +606,10 @@ Markdown FILE gets its preview URL, and any other a file: URL."
            (origin (selected-window)))
       (should-error (with-current-buffer "*scratch*" (portal-render-open-in-emacs)) :type 'user-error)
       (should-error (portal-render-return) :type 'user-error)
-      ;; The toolbar opens the file on screen, after back or forward too.
+      ;; The command opens the file on screen, after back or forward too.
       (portal-web-test--record "page" target arch)
-      (portal-web-test--record "edit" target)
       (portal-web-test--run-events)
+      (portal-render-open-in-emacs)
       (should (equal buffer-file-name arch))
       (should-not (eq (selected-window) origin))
       (should-not (plist-get (portal-web-test--state target) :focused))

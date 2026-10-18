@@ -3,14 +3,6 @@
 import AppKit
 import WebKit
 
-@MainActor
-private final class BlackContent: NSView {
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor.black.setFill()
-        bounds.fill()
-    }
-}
-
 @main
 struct CheckFocus {
     @MainActor
@@ -29,12 +21,11 @@ struct CheckFocus {
         require(window.contentView).addSubview(editor)
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(editor)
-        let target = try Views.open(kind: "web", options: ViewOptions(values: ["toolbar": .string("navigation")]))
+        let target = try Views.open(kind: "web", options: ViewOptions(values: [:]))
         try Views.place(target, edges: [0, 0, 640, 480], title: window.title)
         try Views.load(target, "data:text/html,<input autofocus><title>Focus</title>")
-        let web = require(require(window.contentView).subviews.compactMap { ($0 as? NativeContainer)?.content as? WKWebView }.first)
-        let container = require(web.superview as? NativeContainer)
-        check(container.state.owner == .emacs)
+        let web = require(require(window.contentView).subviews.compactMap { $0 as? WKWebView }.first)
+        check(Views.owner(target) == PORTAL_OWNER_EMACS)
         // A responder nested below the webview exercises the same ancestry test
         // as WebKit's internal text input views.
         let input = NSTextView(frame: NSRect(x: 0, y: 0, width: 100, height: 40))
@@ -44,7 +35,7 @@ struct CheckFocus {
                                           (UInt16(47), .command, ".")] {
             check(window.makeFirstResponder(input))
             app.updateWindows()
-            check(container.state.owner == .view, "Focused content is still marked inactive")
+            check(Views.owner(target) == PORTAL_OWNER_VIEW, "Focused content is still marked inactive")
             let event = require(NSEvent.keyEvent(with: .keyDown, location: .zero,
                                         modifierFlags: flags, timestamp: 0,
                                         windowNumber: window.windowNumber, context: nil,
@@ -53,63 +44,33 @@ struct CheckFocus {
             app.sendEvent(event)
             if flags == .command {
                 check(window.firstResponder === editor, "Command-period did not return focus")
-                check(container.state.owner == .emacs, "Escaped content is still marked active")
+                check(Views.owner(target) == PORTAL_OWNER_EMACS, "Escaped content is still marked active")
             } else {
                 check(window.firstResponder === input, "Guest key unexpectedly left the app")
             }
         }
-        // Reconfigure while the same view is open, without a toolbar.
-        portal_toolbar_show(false)
+        // Reconfigure the escape while the same view is open.
         var error = portal_text()
         check(portal_input_set_escape(portal_chord(character: 103, modifiers: 10), &error))
         check(window.makeFirstResponder(input))
         app.updateWindows()
-        check(!container.state.visible && container.state.owner == .view)
+        check(Views.owner(target) == PORTAL_OWNER_VIEW)
         let escape = require(NSEvent.keyEvent(with: .keyDown, location: .zero,
             modifierFlags: [.control, .command], timestamp: 0, windowNumber: window.windowNumber,
             context: nil, characters: "\u{7}", charactersIgnoringModifiers: "g", isARepeat: false, keyCode: 5))
         app.sendEvent(escape)
         check(window.firstResponder === editor, "Configured chord did not return focus")
-        check(!container.state.visible && container.state.owner == .emacs)
+        check(Views.owner(target) == PORTAL_OWNER_EMACS)
         check(portal_input_set_escape(portal_chord(character: 46, modifiers: 8), &error))
-        portal_toolbar_show(true)
         check(window.makeFirstResponder(input))
         try Views.hide(target)
         check(window.firstResponder === editor, "Hiding did not restore focus")
         try Views.close(target)
-        print("Guest Escape stays native; default and configured escapes restore Emacs focus, with or without a toolbar")
-        checkInactiveCue(window: window)
+        print("Guest Escape stays native; default and configured escapes restore Emacs focus")
         try checkHosted(window: window)
         try checkBridge(window: window)
         try checkLinks(window: window, editor: editor)
         try checkChannel()
-    }
-
-    /// Draw the actual shared container: content keeps its own colors
-    /// whoever has the keyboard, which the toolbar over the mode line shows,
-    /// and gets every click.
-    @MainActor
-    static func checkInactiveCue(window: NSWindow) {
-        let content = BlackContent(frame: .zero)
-        var state = ToolbarState()
-        let container = NativeContainer(content: content, target: "", state: state)
-        container.frame = NSRect(x: 0, y: 0, width: 100, height: 100)
-        require(window.contentView).addSubview(container)
-        defer { container.removeFromSuperview() }
-        func red() -> CGFloat {
-            container.layoutSubtreeIfNeeded()
-            let bitmap = require(container.bitmapImageRepForCachingDisplay(in: container.bounds))
-            container.cacheDisplay(in: container.bounds, to: bitmap)
-            return require(require(bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2))
-                .usingColorSpace(.deviceRGB)).redComponent
-        }
-        for owner in [ToolbarState.Owner.view, .emacs, .pending] {
-            state.owner = owner
-            container.apply(state)
-            check(red() < 0.01, "Content changed color while \(owner) has the keyboard")
-            check(container.hitTest(NSPoint(x: 50, y: 50)) === content, "The container steals clicks")
-        }
-        print("Content keeps its colors and its clicks, whoever has the keyboard")
     }
 
     /// A full pipe delays records, without losing or reordering them: the
@@ -118,7 +79,7 @@ struct CheckFocus {
     /// drops the others.
     @MainActor
     static func checkChannel() throws {
-        let web = try Views.open(kind: "web", options: ViewOptions(values: ["toolbar": .string("none")]))
+        let web = try Views.open(kind: "web", options: ViewOptions(values: [:]))
         var fds: [Int32] = [0, 0]
         check(pipe(&fds) == 0)
         _ = fcntl(fds[0], F_SETFL, O_NONBLOCK)
@@ -184,7 +145,7 @@ struct CheckFocus {
         let (records, disconnect) = connectRecords()
         defer { disconnect() }
         let target = try Views.open(kind: "web", options: ViewOptions(values: [
-            "toolbar": .string("none"), "hosted": .flag(true)]))
+            "hosted": .flag(true)]))
         try Views.place(target, edges: [0, 0, 640, 480], title: window.title)
         var received = ""
         /// Wait for RECORD, then return the bridge's messages as [type, url] pairs.
@@ -203,7 +164,7 @@ struct CheckFocus {
         let page = "<title>Links</title><a style='display:block;height:80px' href='\(file)'>code</a>"
         let app = "data:text/html;base64," + Data(page.utf8).base64EncodedString()
         let first = "data:text/html,%3Ctitle%3EFirst%3C/title%3E"
-        let web = require(require(window.contentView).subviews.compactMap { ($0 as? NativeContainer)?.content as? WKWebView }.first)
+        let web = require(require(window.contentView).subviews.compactMap { $0 as? WKWebView }.first)
         // Every committed page is reported, including after going back.
         try Views.load(target, first)
         check(wait(for: "bridge \(target)\n") == [["page", first]])
@@ -233,8 +194,10 @@ struct CheckFocus {
         web.mouseDown(with: down)
         web.mouseUp(with: mouse(.leftMouseUp))
         check(file.utf8.count > Int(PIPE_BUF))
-        check(wait(for: "select \(target)\nbridge \(target)\n") == [["follow", file]],
-                     "The link did not reach Emacs")
+        // The click gives the view the keyboard, and the link returns it to
+        // Emacs: both reach Emacs's mode line before the records they cause.
+        check(wait(for: "focus \(target) 1\nselect \(target)\nfocus \(target) 0\nbridge \(target)\n")
+              == [["follow", file]], "The link did not reach Emacs")
         check(window.firstResponder === editor, "Following a link left the keyboard in the view")
         check(web.url?.scheme == "data" && !web.isLoading, "Following a local link left the page")
         try Views.close(target)
@@ -250,11 +213,11 @@ struct CheckFocus {
         var opened: [URL] = []
         WebSession.openInBrowser = { opened.append($0) }
         let target = try Views.open(kind: "web", options: ViewOptions(values: [
-            "toolbar": .string("none"), "hosted": .flag(true)]))
+            "hosted": .flag(true)]))
         try Views.place(target, edges: [0, 0, 640, 480], title: window.title)
         let app = "data:text/html,<title>App</title><script>onload=()=>location.href='https://example.com/'</script>"
         try Views.load(target, app)
-        let web = require(require(window.contentView).subviews.compactMap { ($0 as? NativeContainer)?.content as? WKWebView }.first)
+        let web = require(require(window.contentView).subviews.compactMap { $0 as? WKWebView }.first)
         check(!web.configuration.websiteDataStore.isPersistent, "A hosted app keeps its data")
         let deadline = Date(timeIntervalSinceNow: 10)
         while opened.isEmpty && Date() < deadline {
@@ -312,7 +275,7 @@ struct CheckFocus {
             """
         let app = "data:text/html;base64," + Data(page.utf8).base64EncodedString()
         let hosted = try Views.open(kind: "web", options: ViewOptions(values: [
-            "toolbar": .string("none"), "hosted": .flag(true)]))
+            "hosted": .flag(true)]))
         try Views.place(hosted, edges: [0, 0, 640, 480], title: window.title)
         try Views.load(hosted, app)
         var received = ""
@@ -348,7 +311,7 @@ struct CheckFocus {
         // once WebKit has parsed it: the app can post, and loading it again
         // reloads it.
         let spaced = "data:text/html,<title>A b</title><script>portalBridge.postMessage({type: 'spaced'})</script>"
-        let hostedPage = require(require(window.contentView).subviews.compactMap { ($0 as? NativeContainer)?.content as? WKWebView }.first)
+        let hostedPage = require(require(window.contentView).subviews.compactMap { $0 as? WKWebView }.first)
         var history: [Int] = []
         for _ in 0..<2 {
             try Views.load(hosted, spaced)
@@ -361,12 +324,12 @@ struct CheckFocus {
         check(history[0] == history[1], "Loading a raw URL again added a history entry")
         try Views.close(hosted)
 
-        let plain = try Views.open(kind: "web", options: ViewOptions(values: ["toolbar": .string("none")]))
+        let plain = try Views.open(kind: "web", options: ViewOptions(values: [:]))
         try Views.place(plain, edges: [0, 0, 640, 480], title: window.title)
         try Views.load(plain, app)
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.5))
         check(records().isEmpty, "A page that is not a hosted app reached the bridge")
-        let web = require(require(window.contentView).subviews.compactMap { ($0 as? NativeContainer)?.content as? WKWebView }.first)
+        let web = require(require(window.contentView).subviews.compactMap { $0 as? WKWebView }.first)
         var bridgeType = ""
         web.evaluateJavaScript("typeof portalBridge") { value, _ in bridgeType = value as? String ?? "" }
         wait { !bridgeType.isEmpty }

@@ -79,7 +79,7 @@ The first save of a new drawing asks for a filename."
 (defun portal-excalidraw--start ()
   "Open the drawing's web view.  It loads the app once the app host is ready."
   (setq portal-web-bridge-function #'portal-excalidraw--message)
-  (portal-web-open-hosted "/excalidraw/" "none"))
+  (portal-web-open-hosted "/excalidraw/"))
 
 (defun portal-excalidraw--scene (json &optional initial)
   "Replace the buffer with validated JSON; INITIAL establishes its baseline."

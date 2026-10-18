@@ -90,10 +90,6 @@ final class NativeView {
     /// Where the view is in its window. Parking keeps it, so hiding never
     /// resizes the page or the shell's grid.
     private var rectangle: CGRect
-    /// Its pane's mode line, which its toolbar covers, while attached.
-    private var bar: CGRect?
-    /// The toolbar the core drew last, which the view shows wherever it goes.
-    private var toolbar = ToolbarState()
 
     /// Make a view of TYPE, in the parking window with its session running.
     init(_ type: any PortalView.Type, target: String, options: ViewOptions) throws {
@@ -107,20 +103,17 @@ final class NativeView {
         detach()
     }
 
-    /// Show the view in HOST at RECTANGLE, with its toolbar over BAR, its
-    /// pane's mode line, if it has one. Checked before anything moves, so a
-    /// failure leaves the view where it was.
-    func attach(to next: NativeHost, rectangle: CGRect, bar: CGRect?) throws {
+    /// Show the view in HOST at RECTANGLE. Checked before anything moves, so
+    /// a failure leaves the view where it was.
+    func attach(to next: NativeHost, rectangle: CGRect) throws {
         guard next.view != nil else { throw NativeError.message("The view's frame was deleted") }
         self.rectangle = rectangle
-        self.bar = bar
         move(to: next)
         kind.attached()
     }
 
     func detach() {
         kind.detaching()
-        bar = nil
         move(to: Self.parking)
         host.hide(kind.surface)
     }
@@ -134,18 +127,6 @@ final class NativeView {
         [("focused", .flag(host.ownsFocus(kind.surface.nativeView)))] + kind.describe()
     }
 
-    /// Show TOOLBAR, now and wherever the view goes.
-    func draw(_ toolbar: ToolbarState) {
-        self.toolbar = toolbar
-        host.draw(toolbar, for: kind.surface)
-    }
-
-    /// Give the toolbar's find field the keyboard, if the view is attached.
-    func focusFind() {
-        guard host !== Self.parking else { return }
-        host.focusFind(kind.surface)
-    }
-
     /// Remove the view from its current window and add it to NEXT's, in one step.
     private func move(to next: NativeHost) {
         if next !== host {
@@ -153,6 +134,6 @@ final class NativeView {
             host = next
             kind.input.host = next
         }
-        next.place(kind.surface, rectangle: rectangle, bar: bar, toolbar: toolbar)
+        next.place(kind.surface, rectangle: rectangle)
     }
 }

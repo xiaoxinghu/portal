@@ -10,12 +10,10 @@ import WebKit
 private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, NativeSurface {
     var nativeView: NSView { self }
     weak var input: NativeInput?
-    private var toolbar: WebToolbar?
-    private var observations: [NSKeyValueObservation] = []
 
     /// The core decides what each key does: the page gets typing, and is
-    /// offered each chord (`offer`), which the toolbar's Command-F or Emacs
-    /// gets if the page does not use it.
+    /// offered each chord (`offer`), which Emacs gets if the page does not
+    /// use it.
     func handleKeyEvent(_ event: NSEvent) -> Bool { input?.handleKeyEvent(event) == true }
 
     /// A page focusing an element, as autofocus does, makes WebKit ask the
@@ -83,25 +81,16 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, Nati
     /// The view's target, which names it in every call to the core.
     let target: String
 
-    /// With CONTENTS, the page runs the contents script for its toolbar.
-    init(target: String, contents: Bool, hosted: Bool) {
+    init(target: String, hosted: Bool) {
         self.target = target
         let configuration = WKWebViewConfiguration()
         if hosted { configuration.websiteDataStore = .nonPersistent() }
         super.init(frame: .zero, configuration: configuration)
-        if contents { toolbar = WebToolbar(web: self, target: target) }
         if hosted { PageMessages.install(in: self) }
         KeyReports.install(in: self)
         navigationDelegate = self
         uiDelegate = self
-        observations = [observe(\.canGoBack) { page, _ in
-            MainActor.assumeIsolated { page.historyChanged() }
-        }, observe(\.canGoForward) { page, _ in
-            MainActor.assumeIsolated { page.historyChanged() }
-        }]
     }
-
-    private func historyChanged() { Core.history(target, back: canGoBack, forward: canGoForward) }
 
     /// Follows the system's appearance while the page shows it.
     private var system: NSKeyValueObservation?
@@ -201,8 +190,6 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, Nati
         if let url { Core.committed(target, url: url.absoluteString) }
     }
 
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { Core.loaded(target) }
-
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         if let offered { answer(offered, used: seen) }
         Core.failed(target, token: 0, message: "The page's web process stopped.")
@@ -284,9 +271,10 @@ private final class PageMessages: NSObject, WKScriptMessageHandler {
         controller.add(messages, contentWorld: .page, name: "portal")
         controller.addUserScript(WKUserScript(source: bridge, injectionTime: .atDocumentStart,
                                               forMainFrameOnly: true, in: .page))
-        let links = WKContentWorld.portal(PORTAL_SCRIPT_LINKS)
+        // The core's links script runs in its own world, out of the page's reach.
+        let links = WKContentWorld.world(name: "Portal links")
         controller.add(messages, contentWorld: links, name: "follow")
-        controller.addUserScript(WKUserScript(source: Core.script(PORTAL_SCRIPT_LINKS, handler: "follow"),
+        controller.addUserScript(WKUserScript(source: Core.linksScript(handler: "follow"),
                                               injectionTime: .atDocumentStart, forMainFrameOnly: true,
                                               in: links))
     }
@@ -308,9 +296,8 @@ private final class PageMessages: NSObject, WKScriptMessageHandler {
 }
 
 /// The web view kind: one WebKit page with its own browsing state. The page
-/// stays loaded while the view is hidden. The core decides what it loads,
-/// where it may go and what its toolbar shows, and keeps a hosted app's
-/// bridge (native/Core/web.c, toolbar.c).
+/// stays loaded while the view is hidden. The core decides what it loads and
+/// where it may go, and keeps a hosted app's bridge (native/Core/web.c).
 @MainActor
 final class WebSession: PortalView {
     /// Where a hosted app's links to other sites go. Checks replace it.
@@ -319,14 +306,12 @@ final class WebSession: PortalView {
     var surface: any NativeSurface { page }
     let input: NativeInput
 
-    /// A view with a `:toolbar`, which the core has checked, runs the contents
-    /// script. With `:hosted`, the page keeps no data between sessions and
-    /// gets the bridge's scripts. It starts in its `:appearance`, which the
-    /// core has checked too.
+    /// With `:hosted`, the page keeps no data between sessions and gets the
+    /// bridge's scripts. It starts in its `:appearance`, which the core has
+    /// checked.
     init(target: String, options: ViewOptions) throws {
-        let toolbar = try options.string("toolbar").map { $0 != "none" } ?? false
         let hosted = options.flag("hosted")
-        let page = WebPage(target: target, contents: toolbar, hosted: hosted)
+        let page = WebPage(target: target, hosted: hosted)
         let appearance = switch try options.string("appearance") {
         case "light": PORTAL_APPEARANCE_LIGHT
         case "dark": PORTAL_APPEARANCE_DARK
@@ -356,27 +341,16 @@ final class WebSession: PortalView {
 
     func post(_ json: String, token: UInt64) throws { try page.post(json, token: token) }
 
-    func zoom(_ scale: Double) { page.pageZoom = scale }
-
     func copy() throws { NSApp.sendAction(#selector(NSText.copy(_:)), to: keyboard, from: nil) }
 
     func paste() throws { NSApp.sendAction(#selector(NSText.paste(_:)), to: keyboard, from: nil) }
 
-    /// Where the view's keyboard input goes: the page, or its find field.
+    /// Where the view's keyboard input goes: the responder in the page, or the page.
     private var keyboard: NSResponder {
         input.host.ownsFocus(page) ? page.window?.firstResponder ?? page : page
     }
 
     func show(_ appearance: portal_appearance) { page.show(appearance) }
-
-    func find(_ query: String, backwards: Bool, token: UInt64) {
-        WebToolbar.find(page, target: page.target, query: query, backwards: backwards, token: token)
-    }
-
-    func call(_ script: portal_script, function: String, argument: String, token: UInt64) throws {
-        try WebToolbar.call(page, target: page.target, script: script, function: function,
-                            argument: argument, token: token)
-    }
 
     func describe() -> [(String, ViewValue)] {
         var state: [(String, ViewValue)] = [("loading", .flag(page.isLoading)),

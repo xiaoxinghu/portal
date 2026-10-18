@@ -6,7 +6,7 @@ Tests define coverage. Do not duplicate their inventory here.
 
 1. Run every [check before a PR](../CONTRIBUTING.md#checks-before-a-pr): CTest,
    Bun and Python tests, lint and type checks, then the graphical scripts.
-   For native view, keyboard, toolbar or launcher changes, also run the
+   For native view, keyboard or launcher changes, also run the
    relevant standalone checks below.
 2. Graphical checks open real windows, take keyboard focus and can crash.
    Run them in a logged-in desktop session and leave it alone meanwhile, or
@@ -161,7 +161,7 @@ and runs the suite in one fresh Emacs. The injector needs no Accessibility
 permission. Reuse it for other GUI suites, as
 [input-gui.sh](../test/input-gui.sh) does; keep dependency versions in CMake.
 
-For keyboard input and toolbar checks in a fresh Emacs process (the terminal
+For keyboard input checks in a fresh Emacs process (the terminal
 and coexistence tests run in the [view suite](#view-graphical-checks)):
 
 ```sh
@@ -207,8 +207,7 @@ build `31.1-349`. A deliberately stalled test, blocked in a synchronous
 then ran. These cases inject AppKit events into Emacs; they do not prove
 physical-key delivery.
 
-The standalone focus check below also verifies live escape rebinding and the
-inactive content cue, including rendering and click-through without a toolbar.
+The standalone focus check below also verifies live escape rebinding.
 Physical-key delivery on the affected macOS version still needs a manual check.
 
 ## Package installation checks
@@ -268,7 +267,7 @@ run them in the VM, pass the same `sh -c` command to `bash test/vm.sh`:
 ```sh
 sh -c '
 set -eu
-for core in channel views input terminals web toolbar shortcuts status; do
+for core in channel views input terminals web shortcuts status; do
   xcrun clang -std=c11 -Wall -Wextra -Werror -I native/Core/include \
     -c native/Core/$core.c -o build/$core.o
 done
@@ -276,16 +275,16 @@ xcrun swiftc -swift-version 6 -warnings-as-errors \
   -I native/Core/include -import-objc-header test/native-core.h \
   native/Backend.swift native/CoreCalls.swift native/NativeHost.swift native/NativeInput.swift \
   native/Launcher.swift native/Hotkeys.swift native/KeyPost.swift native/StatusPanel.swift \
-  native/Views.swift native/Toolbar.swift native/WebToolbar.swift native/WebView.swift \
+  native/Views.swift native/WebView.swift \
   test/native-checks.swift test/native-terminal-stub.swift test/native-views.swift \
   test/native-focus.swift build/channel.o build/views.o build/input.o build/terminals.o \
-  build/web.o build/toolbar.o build/shortcuts.o build/status.o \
+  build/web.o build/shortcuts.o build/status.o \
   -framework AppKit -framework WebKit -framework Carbon -o build/check-focus
 build/check-focus
 '
 ```
 
-Swap `test/native-toolbar.swift`, `test/native-launcher.swift`,
+Swap `test/native-launcher.swift`,
 `test/native-shortcuts.swift` or `test/native-status.swift` for
 `test/native-focus.swift`. Rename the output to match. These checks open real
 windows or register real hot keys.

@@ -1,6 +1,6 @@
 # The C core asks each platform only for primitives
 
-Portal's native module has two interfaces. Emacs calls ADR 0002's Lisp functions through `native/Core/emacs.c` into the C core. Platforms implement `native/Core/include/portal.h`: Swift on macOS today, possibly GTK on Linux later. This interface describes platform duties, not Portal features: create a native view, attach it to a frame at a rectangle, load a URL, message a page, paste into a terminal, or give a view the keyboard. Portal's rules live once, in the core: target identity, input handoff, notification order, bridge queue, and toolbar state. Platforms report key presses, page messages and title changes through core functions. New platforms implement a short primitive list; tests run the real core against a fake platform.
+Portal's native module has two interfaces. Emacs calls ADR 0002's Lisp functions through `native/Core/emacs.c` into the C core. Platforms implement `native/Core/include/portal.h`: Swift on macOS today, possibly GTK on Linux later. This interface describes platform duties, not Portal features: create a native view, attach it to a frame at a rectangle, load a URL, message a page, paste into a terminal, or give a view the keyboard. Portal's rules live once, in the core: target identity, input handoff, notification order and bridge queue. Platforms report key presses, page messages and title changes through core functions. New platforms implement a short primitive list; tests run the real core against a fake platform.
 
 Four rules apply:
 

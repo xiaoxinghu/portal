@@ -179,11 +179,6 @@ if(BUILD_TESTING)
             -l "${CMAKE_SOURCE_DIR}/test/portal-web-tests.el"
             -f ert-run-tests-batch-and-exit)
     set_tests_properties(web PROPERTIES TIMEOUT 30)
-    add_test(NAME toolbar
-        COMMAND ${test_emacs} -L "${CMAKE_SOURCE_DIR}"
-            -l "${CMAKE_SOURCE_DIR}/test/portal-toolbar-tests.el"
-            -f ert-run-tests-batch-and-exit)
-    set_tests_properties(toolbar PROPERTIES TIMEOUT 30)
     add_test(NAME input
         COMMAND ${test_emacs} -L "${CMAKE_SOURCE_DIR}"
             -l "${CMAKE_SOURCE_DIR}/test/portal-input-tests.el"

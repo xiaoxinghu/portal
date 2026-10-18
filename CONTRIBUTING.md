@@ -28,7 +28,7 @@ cmake --build --preset dev
 
 CMake locates Emacs, builds the Bun host, and invokes the native Swift package.
 `native/Package.swift` links two targets into one module: `PortalCore`,
-the portable C core, and `Portal`, the Swift backend containing the host, web, terminal, input and toolbar code. There are no separate feature libraries
+the portable C core, and `Portal`, the Swift backend containing the host, web, terminal and input code. There are no separate feature libraries
 or plugin builds. Ghostty dependency versions and the binary checksum are pinned
 through `native/Package.swift` and `native/Package.resolved`. Configuration writes
 the discovered header path to `build/emacs-include.txt`, which the package also
@@ -158,7 +158,7 @@ dependency change leaves a staged notice missing or the license inventory out of
 date; [Licenses and third-party notices](docs/licenses.md#when-dependencies-change)
 says what to update. CTest exercises the real C core with a fake
 backend, Lisp behavior, and the compiled app host; it does not validate native
-windows; the graphical checks do. For native view, keyboard, toolbar or
+windows; the graphical checks do. For native view, keyboard or
 launcher changes, also run the relevant [standalone checks](docs/testing.md#standalone-appkit-checks).
 Physical-key and manual checks are opt-in; report any not run.
 

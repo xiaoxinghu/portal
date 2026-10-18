@@ -75,11 +75,15 @@ process.  A terminal whose program has exited is killed without asking."
 RET focuses Ghostty.  The shell gets typing and Control and Meta chords; a
 Super chord reaches Emacs, which runs it in this buffer.
 `portal-input-escape-key' always returns focus to Emacs.  Scrollback
-belongs to Ghostty."
+belongs to Ghostty.  The mode line shows [app] while Ghostty has the
+keyboard, [emacs] while Emacs does, and :exited once the program has."
   (setq-local cursor-type nil)
   (add-hook 'kill-buffer-hook #'portal-terminal--dismiss-quick nil t)
   (add-hook 'kill-buffer-query-functions #'portal-terminal--kill-query nil t)
-  (portal-input-mode 1))
+  (portal-input-mode 1)
+  ;; Who has the keyboard, then the program's exit, after the mode name, as
+  ;; comint shows its process status there.
+  (setq mode-line-process '(portal-input-mode-line-process (portal-terminal--exited ":exited"))))
 (keymap-set portal-terminal-mode-map "RET" #'portal-terminal-focus)
 (keymap-set portal-terminal-mode-map "C-c C-k" #'portal-terminal-close)
 
@@ -142,8 +146,7 @@ ordinary file commands, and `list-buffers-directory', for buffer lists."
               default-directory directory
               list-buffers-directory directory))
       (unless (eq portal-terminal--exited (plist-get state :exited))
-        (setq portal-terminal--exited (plist-get state :exited)
-              mode-line-process (and portal-terminal--exited ":exited"))
+        (setq portal-terminal--exited (plist-get state :exited))
         (force-mode-line-update)))))
 
 (setf (alist-get "terminal" portal-view-record-handlers nil nil #'equal)

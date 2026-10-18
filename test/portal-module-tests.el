@@ -5,7 +5,7 @@
 ;; linked with test/portal-fake-backend.c instead of the macOS backend.  The
 ;; module file is named by PORTAL_TEST_MODULE; run with --module-assertions.
 ;; `portal--inspect' reports the core's state of a view and what the fake
-;; received, including the toolbar the core last drew for it.
+;; received.
 ;; test/portal-views-tests.c covers the core's registry in detail.
 
 (require 'ert)
@@ -16,15 +16,14 @@
   (module-load file))
 
 (defconst portal-module-tests--exports
-  '((portal--open 2 . 2) (portal--place 3 . 4) (portal--hide 1 . 1) (portal--close 1 . 1)
+  '((portal--open 2 . 2) (portal--place 3 . 3) (portal--hide 1 . 1) (portal--close 1 . 1)
     (portal--inspect 1 . 1) (portal--channel 1 . 1)
     (portal--web-load 2 . 2) (portal--web-send 2 . 2) (portal--web-receive 1 . 1)
-    (portal--web-appearance 1 . 1)
+    (portal--web-appearance 1 . 1) (portal--web-go 2 . 2)
     (portal--terminal-paste 2 . 3) (portal--terminal-text 1 . 1)
     (portal--terminal-theme 1 . 1) (portal--terminal-themes 0 . 0)
     (portal--terminal-bindings 1 . 1)
-    (portal--input 2 . 3) (portal--input-escape-key 2 . 2)
-    (portal--toolbar 1 . 1) (portal--toolbar-theme 1 . 1) (portal--toolbar-action 2 . 2))
+    (portal--input 2 . 3) (portal--input-escape-key 2 . 2))
   "The module exports and their arities.")
 
 (ert-deftest portal-module-escape-key-binding ()
@@ -151,21 +150,18 @@
     (should (stringp (documentation name)))))
 
 (ert-deftest portal-module-lifecycle ()
-  (let ((target (portal--open "web" '(:directory "~/Ωmega" :quick t :toolbar nil))))
+  (let ((target (portal--open "web" '(:directory "~/Ωmega" :quick t))))
     (should (string-match-p "\\`web:[0-9]+\\'" target))
     (let ((state (portal--inspect target)))
       (should (equal (plist-get state :kind) "web"))
       (should (integerp (plist-get state :id)))
       (should (equal (plist-get state :directory) "~/Ωmega"))
       (should (eq (plist-get state :quick) t))
-      (should (plist-member state :toolbar))
-      (should-not (plist-get state :toolbar))
       (should-not (plist-get state :visible))
       (should-not (plist-get state :edges)))
     (should (eq (portal--place target [10 20 110 220] "frame ✓") t))
     (let ((state (portal--inspect target)))
       (should (equal (plist-get state :edges) '(10 20 110 220)))
-      (should-not (plist-get state :bar))
       (should (equal (plist-get state :frame) "frame ✓"))
       (should (equal (plist-get state :size) '(100 200)))
       (should (eq (plist-get state :visible) t)))
@@ -316,29 +312,10 @@
                    '(error "Invalid native terminal binding")))
     (should (eq (portal--terminal-bindings (format binding "c" 2)) t)))
   (should (eq (portal--terminal-bindings "{\"regular\":[],\"quick\":[]}") t))
-  (let ((page (portal--open "web" '(:toolbar "navigation"))))
-    ;; The toolbar covers the pane's mode line, while the view has the keyboard.
-    (should (eq (portal--place page [0 0 100 100] "frame" [0 100 100 120]) t))
-    (should (equal (plist-get (portal--inspect page) :bar) '(0 100 100 20)))
-    (should (eq (plist-get (portal--inspect page) :strip) nil))
-    (should (eq (portal--input page "focus") t))
-    (should (eq (plist-get (portal--inspect page) :strip) t))
-    (should (eq (portal--toolbar nil) nil))
-    (should (eq (plist-get (portal--inspect page) :strip) nil))
-    (should (eq (portal--toolbar 'yes) t))
-    (should (eq (plist-get (portal--inspect page) :strip) t))
-    ;; Colors are arrays of numbers from 0 to 1; any other shape, like a
-    ;; missing color, leaves the platform's default.
-    (should (eq (portal--toolbar-theme "{\"background\":[0,0.5,1],\"other\":[1,1,1]}") t))
-    (should (equal (plist-get (portal--inspect page) :strip-background) '(0 500 1000)))
-    (dolist (color '("[0,0.5]" "[0,0.5,1.5]" "[0,\"0\",1]" "{\"red\":1}" "null"))
-      (should (eq (portal--toolbar-theme (format "{\"background\":%s}" color)) t))
-      (should-not (plist-get (portal--inspect page) :strip-background)))
-    (should (eq (portal--toolbar-theme "{}") t))
-    (should (equal (portal--toolbar-action page "increase")
-                   (concat "{\"back\":false,\"find\":false,\"forward\":false,\"headings\":false,"
-                           "\"match\":0,\"matches\":0,\"query\":\"\",\"toc\":false,\"value\":110}")))
-    (should (equal (plist-get (portal--inspect page) :zoom) 1.1))
+  (let ((page (portal--open "web" nil)))
+    (should (eq (portal--web-go page "back") t))
+    (should (eq (portal--web-go page "forward") t))
+    (should (equal (plist-get (portal--inspect page) :history) "back forward"))
     (portal--close page))
   ;; The fake app echoes what Emacs sends it, from the page Emacs loaded.
   (let ((web (portal--open "web" '(:hosted t :echo t))))
@@ -382,15 +359,10 @@
                       "{\"regular\":[],\"quick\":[{\"character\":\"x\",\"flags\":2,\"event\":120}]}")
                      . "Invalid native terminal binding")
                     ((portal--input ,web "unknown") . "Unknown Portal input action: unknown")
-                    ((portal--open "web" (:toolbar t))
-                     . "A web view's :toolbar must be \"navigation\", \"contents\", \"markdown\" or \"none\"")
-                    ((portal--toolbar-theme "[]") . "Toolbar theme must be a JSON object")
-                    ((portal--toolbar-theme "\"background\"") . "Toolbar theme must be a JSON object")
-                    ((portal--toolbar-action ,web "increase")
-                     . "No toolbar controls for this native view")
-                    ((portal--toolbar-action ,terminal "zoom-in")
-                     . "Unknown terminal toolbar action: zoom-in")
-                    ((portal--toolbar-action "web:0" "zoom-in") . "No Portal view web:0")))
+                    ((portal--web-go ,web "reload")
+                     . "Web history step must be \"back\" or \"forward\", not reload")
+                    ((portal--web-go ,terminal "back") . ,(concat "No Portal view " terminal))
+                    ((portal--web-go "web:0" "back") . "No Portal view web:0")))
       (should (equal (should-error (apply (caar case) (cdar case))) (list 'error (cdr case)))))
     ;; The terminal before the one that rejected the theme has it.
     (should (equal (plist-get (portal--inspect terminal) :theme) "Beta"))
@@ -410,9 +382,6 @@
                    '(wrong-type-argument integerp a)))
     (should (equal (should-error (portal--input 1 'action "serial"))
                    '(wrong-type-argument stringp 1)))
-    ;; Emacs parses a theme's JSON, and its signal is the parser's.
-    (should (eq (car (should-error (portal--toolbar-theme ""))) 'json-end-of-file))
-    (should (eq (car (should-error (portal--toolbar-theme 'json))) 'wrong-type-argument))
     ;; Signals leave no state behind: the next calls succeed.
     (should (eq (portal--place target [0 0 1 1] "title") t))
     (should (eq (condition-case nil (portal--hide 'target)

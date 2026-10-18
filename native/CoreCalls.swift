@@ -3,9 +3,9 @@ import AppKit
 import PortalCore
 
 // Calls between Swift and the C core outside the Lisp operations: the core's
-// notification pipe, input, what web pages do, what the user does with a
-// toolbar, terminal changes, hot key presses, the shared browser scripts, and
-// the timer primitive, all in native/Core/include/portal.h. The standalone
+// notification pipe, input, what web pages do, terminal changes, hot key
+// presses, the shared links script, and the timer primitive, all in
+// native/Core/include/portal.h. The standalone
 // checks compile this file too.
 
 extension String {
@@ -100,46 +100,16 @@ enum Core {
         borrowing([target, message]) { portal_web_failed($0[0], token, $0[1]) }
     }
 
-    static func loaded(_ target: String) {
-        borrow(target) { portal_web_loaded($0) }
-    }
-
-    static func history(_ target: String, back: Bool, forward: Bool) {
-        borrow(target) { portal_web_history($0, back, forward) }
-    }
-
-    static func found(_ target: String, token: UInt64, found: Bool) {
-        borrow(target) { portal_web_found($0, token, found) }
-    }
-
-    /// VALUE is nil for a call that failed or returned anything but an integer.
-    static func returned(_ target: String, token: UInt64, value: Int?) {
-        borrow(target) { portal_web_returned($0, token, value != nil, Int64(value ?? 0)) }
-    }
-
-    static func headings(_ target: String, _ count: Int) {
-        borrow(target) { portal_web_headings($0, Int64(count)) }
-    }
-
-    /// The user clicked BUTTON in TARGET's toolbar, or pressed its field's key for it.
-    static func clicked(_ target: String, _ button: portal_button) {
-        borrow(target) { portal_toolbar_clicked($0, button) }
-    }
-
-    static func typed(_ target: String, _ query: String) {
-        borrowing([target, query]) { portal_toolbar_typed($0[0], $0[1]) }
-    }
-
     /// What TARGET's terminal describes changed.
     static func terminalChanged(_ target: String) {
         borrow(target) { portal_terminal_changed($0) }
     }
 
-    /// The shared browser script SCRIPT, started in its world with a report
-    /// function that posts to that world's script message HANDLER. This glue
-    /// is the only part that names WebKit's transport.
-    static func script(_ script: portal_script, handler: String) -> String {
-        "(\n\(String(copying: portal_web_script(script)))\n)((value) => window.webkit.messageHandlers.\(handler).postMessage(value));\n"
+    /// The shared links script, started in its world with a report function
+    /// that posts to that world's script message HANDLER. This glue is the
+    /// only part that names WebKit's transport.
+    static func linksScript(handler: String) -> String {
+        "(\n\(String(copying: portal_web_links_script()))\n)((value) => window.webkit.messageHandlers.\(handler).postMessage(value));\n"
     }
 }
 
