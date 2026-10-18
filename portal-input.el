@@ -186,27 +186,16 @@ once."
          (dolist (buffer (portal-view-buffers))
            (with-current-buffer buffer (portal-input--tint)))))
 
-(defcustom portal-input-mode-line-icon t
-  "Whether a keyboard icon precedes the mode line's [app] or [emacs].
-It needs the nerd-icons package, which doom-modeline loads among others;
-without it the text stands alone."
-  :type 'boolean :group 'portal-input)
-(declare-function nerd-icons-mdicon "nerd-icons" (icon-name &rest args))
-
 (defun portal-input--mode-line-process ()
   "Return who has the keyboard, for `mode-line-process': [app] or [emacs].
-Each in its face, `portal-mode-line-app' or `portal-mode-line-emacs',
-after a keyboard icon where nerd-icons draws one."
-  (let* ((focused (portal-input--focused-p))
-         (face (if focused 'portal-mode-line-app 'portal-mode-line-emacs))
-         (help (if focused
-                   (format "The app has the keyboard; %s returns it to Emacs"
-                           portal-input-escape-key)
-                 "Emacs has the keyboard; RET enters the app")))
-    (concat (when (and portal-input-mode-line-icon (fboundp 'nerd-icons-mdicon))
-              (concat " " (propertize (nerd-icons-mdicon "nf-md-keyboard" :face face :v-adjust 0.0)
-                                      'help-echo help)))
-            (propertize (if focused "[app]" "[emacs]") 'face face 'help-echo help))))
+Each in its face, `portal-mode-line-app' or `portal-mode-line-emacs'."
+  (let ((focused (portal-input--focused-p)))
+    (propertize (if focused "[app]" "[emacs]")
+                'face (if focused 'portal-mode-line-app 'portal-mode-line-emacs)
+                'help-echo (if focused
+                               (format "The app has the keyboard; %s returns it to Emacs"
+                                       portal-input-escape-key)
+                             "Emacs has the keyboard; RET enters the app"))))
 
 (defconst portal-input-mode-line-process '(:eval (portal-input--mode-line-process))
   "Mode line construct naming who has the keyboard, after the major mode's name.

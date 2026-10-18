@@ -46,13 +46,12 @@ plain bold, `portal-mode-line-emacs`. While the app has the keyboard the
 pane's whole mode line also takes `portal-mode-line-app-line`, by default
 the theme's `highlight`, the way solaire-mode recolors its buffers, so the
 pane reads as the app's before anyone reads the tag, and explains why an
-Emacs key just typed into the app. With the nerd-icons package loaded, as
-doom-modeline loads it, a keyboard icon precedes the tag.
+Emacs key just typed into the app. Themes differ in how far `highlight` is
+from their mode line; inherit another of the theme's faces for more contrast.
 
 ```elisp
 (setq portal-input-mode-line-tint nil)   ; keep the mode line's usual colors
-(setq portal-input-mode-line-icon nil)   ; text only
-(set-face-attribute 'portal-mode-line-app-line nil :background "#3b2f1e")
+(set-face-attribute 'portal-mode-line-app-line nil :inherit 'secondary-selection)
 (set-face-attribute 'portal-mode-line-app nil :inherit 'error)
 ```
 

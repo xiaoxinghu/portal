@@ -124,10 +124,8 @@ from that thread."
   (portal-input-gui--page
     ;; The mode line renders who has the keyboard, and follows each change:
     ;; the tag in the state's face, and the whole line tinted for the app.
-    (cl-flet ((tag () (let ((text (substring-no-properties (format-mode-line mode-line-process))))
-                        (string-trim-left text "[^[]*")))
-              (tag-face () (let ((text (format-mode-line mode-line-process)))
-                             (get-text-property (1- (length text)) 'face text))))
+    (cl-flet ((tag () (substring-no-properties (format-mode-line mode-line-process)))
+              (tag-face () (get-text-property 0 'face (format-mode-line mode-line-process))))
       (portal-terminal-test--wait (lambda () (equal (tag) "[app]")))
       (should (eq (tag-face) 'portal-mode-line-app))
       (should (assq 'mode-line-active face-remapping-alist))
@@ -141,8 +139,7 @@ from that thread."
     (portal-input-focus)
     (should (portal-input--action "focused"))
     (portal-terminal-test--wait
-     (lambda () (string-suffix-p "[app]" (substring-no-properties
-                                         (format-mode-line mode-line-process)))))))
+     (lambda () (equal (substring-no-properties (format-mode-line mode-line-process)) "[app]")))))
 
 (ert-deftest portal-input-gui-web-configured-escape-preempts-the-page ()
   (portal-input-gui--page

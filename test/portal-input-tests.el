@@ -17,8 +17,7 @@
   (with-temp-buffer
     (portal-web-mode)
     (setq portal-view--target "web:7")
-    (let ((portal-view--buffers (list (current-buffer)))
-          (portal-input-mode-line-icon nil))
+    (let ((portal-view--buffers (list (current-buffer))))
       ;; The list starts with a string: one starting with a symbol would be
       ;; the conditional construct, and show nothing of the owner.
       (should (equal mode-line-process '("" portal-input-mode-line-process)))
