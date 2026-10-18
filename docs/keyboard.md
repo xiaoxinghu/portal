@@ -39,6 +39,23 @@ does, including while Emacs reads a command the view handed it. A terminal
 whose program has exited adds `:exited`, as in `Ghostty[emacs]:exited`.
 Hovering the indicator says how to move the keyboard.
 
+The state is colored the way Emacs colors a buffer's state elsewhere.
+`[app]` is bold in the theme's `warning` color, the face
+`portal-mode-line-app`, as compile colors its running status; `[emacs]` is
+plain bold, `portal-mode-line-emacs`. While the app has the keyboard the
+pane's whole mode line also takes `portal-mode-line-app-line`, by default
+the theme's `highlight`, the way solaire-mode recolors its buffers, so the
+pane reads as the app's before anyone reads the tag, and explains why an
+Emacs key just typed into the app. With the nerd-icons package loaded, as
+doom-modeline loads it, a keyboard icon precedes the tag.
+
+```elisp
+(setq portal-input-mode-line-tint nil)   ; keep the mode line's usual colors
+(setq portal-input-mode-line-icon nil)   ; text only
+(set-face-attribute 'portal-mode-line-app-line nil :background "#3b2f1e")
+(set-face-attribute 'portal-mode-line-app nil :inherit 'error)
+```
+
 The indicator is the construct `portal-input-mode-line-process`, which
 `portal-input-mode` puts in `mode-line-process`, the variable that comint,
 compile and eat use for the same purpose. The default mode line and packages

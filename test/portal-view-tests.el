@@ -68,6 +68,20 @@ Return the view's target."
         (should-not (equal second target))
         (should (equal (portal-view-buffers) (list (get-buffer "view") (current-buffer))))))))
 
+(ert-deftest portal-view-close-returns-the-mode-line-to-emacs ()
+  ;; The view's last focus record cannot reach a buffer without a target,
+  ;; so closing tells the input module itself.
+  (portal-view-test--environment
+    (switch-to-buffer (generate-new-buffer "view"))
+    (portal-terminal-mode)
+    (let ((target (portal-view-open 'terminal (list :directory temporary-file-directory))))
+      (portal-fake-native-send (format "focus %s 1\n" target))
+      (should (portal-input--focused-p))
+      (should (and portal-input--tint (assq 'mode-line-active face-remapping-alist)))
+      (portal-view-close)
+      (should-not (portal-input--focused-p))
+      (should-not (or portal-input--tint (assq 'mode-line-active face-remapping-alist))))))
+
 (ert-deftest portal-view-split-keeps-one-view-in-the-selected-pane ()
   (portal-view-test--environment
     (let* ((target (portal-view-test--open "view"))

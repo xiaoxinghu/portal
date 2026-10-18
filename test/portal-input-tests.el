@@ -17,7 +17,8 @@
   (with-temp-buffer
     (portal-web-mode)
     (setq portal-view--target "web:7")
-    (let ((portal-view--buffers (list (current-buffer))))
+    (let ((portal-view--buffers (list (current-buffer)))
+          (portal-input-mode-line-icon nil))
       ;; The list starts with a string: one starting with a symbol would be
       ;; the conditional construct, and show nothing of the owner.
       (should (equal mode-line-process '("" portal-input-mode-line-process)))
@@ -26,10 +27,28 @@
       (portal-view--dispatch "focus web:7 1")
       (should (portal-input--focused-p))
       (should (equal (portal-input--mode-line-process) "[app]"))
+      ;; The tag has the state's face, and the whole mode line the app's.
+      (should (eq (get-text-property 0 'face (portal-input--mode-line-process))
+                  'portal-mode-line-app))
+      (should (and portal-input--tint (assq 'mode-line-active face-remapping-alist)))
       (should (string-match-p (regexp-quote portal-input-escape-key)
                               (get-text-property 0 'help-echo (portal-input--mode-line-process))))
       (portal-view--dispatch "focus web:7 0")
       (should (equal (portal-input--mode-line-process) "[emacs]"))
+      (should (eq (get-text-property 0 'face (portal-input--mode-line-process))
+                  'portal-mode-line-emacs))
+      (should-not (or portal-input--tint (assq 'mode-line-active face-remapping-alist)))
+      ;; Turning the tint off, or the mode, drops the remapping at once.
+      (portal-view--dispatch "focus web:7 1")
+      (let ((portal-input-mode-line-tint nil)) (portal-input--tint))
+      (should-not portal-input--tint)
+      (portal-input--tint)
+      (should portal-input--tint)
+      (portal-input-mode -1)
+      (should-not (or portal-input--tint (assq 'mode-line-active face-remapping-alist)))
+      (portal-input-mode 1)
+      (should portal-input--tint)
+      (portal-view--dispatch "focus web:7 0")
       ;; A view closed while it had the keyboard sends no record its buffer
       ;; can take: without a view, Emacs has the keyboard, and so it does
       ;; with the next view in the buffer until that one says otherwise.

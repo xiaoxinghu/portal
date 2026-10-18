@@ -19,6 +19,9 @@
 (declare-function portal--input "portal-input" (target action &optional serial))
 
 (defvar portal-view-load-hook nil "Hook run after the native module loads.")
+(defvar portal-view-close-hook nil
+  "Normal hook run in a buffer whose Portal view has just closed.
+The buffer has no target by then, and may be about to be killed.")
 
 (defvar portal-view-record-handlers nil
   "How to handle each type of native record, as (\"TYPE\" . FUNCTION).
@@ -207,7 +210,8 @@ changes major mode."
     (remove-hook 'kill-buffer-hook #'portal-view-close t)
     (remove-hook 'change-major-mode-hook #'portal-view-close t)
     (unless portal-view--buffers (portal-view--hooks nil))
-    (portal--close target)))
+    (portal--close target)
+    (run-hooks 'portal-view-close-hook)))
 
 (defun portal-view-target (&optional window)
   "Return the target of the Portal view shown in WINDOW, or nil.

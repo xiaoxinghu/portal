@@ -14,6 +14,7 @@
 ;; The native core decides who gets each key (native/Core/input.c).
 
 (require 'cl-lib)
+(require 'face-remap)
 (require 'portal-view)
 
 (defgroup portal-input nil "Input for Portal native views." :group 'applications)
@@ -137,14 +138,75 @@ the same buffer, which has a new target, both count as Emacs's.")
   "Whether this buffer's view has the keyboard."
   (and portal-view--target (equal portal-input--focused portal-view--target)))
 
+(defface portal-mode-line-app
+  '((t :inherit (warning mode-line-emphasis)))
+  "The mode line's [app], while a view has the keyboard.
+Bold in the theme's `warning' color: the state in which Emacs's own keys
+may not work, as compile colors its running status."
+  :group 'portal-input)
+
+(defface portal-mode-line-emacs
+  '((t :inherit mode-line-emphasis))
+  "The mode line's [emacs], while Emacs has the keyboard."
+  :group 'portal-input)
+
+(defface portal-mode-line-app-line
+  '((t :inherit highlight))
+  "A Portal buffer's whole mode line while its view has the keyboard.
+`portal-input-mode-line-tint' remaps `mode-line-active' to it in that
+buffer, as solaire-mode recolors its buffers, so the pane reads as the
+app's whatever package draws the mode line.  By default the theme's
+`highlight', the color it gives the active item."
+  :group 'portal-input)
+
+(defvar-local portal-input--tint nil
+  "The face remapping that tints this buffer's mode line, while it does.")
+
+(defun portal-input--tint ()
+  "Tint this buffer's mode line while its view has the keyboard, else not.
+The tint is `portal-mode-line-app-line' in place of `mode-line-active',
+while `portal-input-mode-line-tint' says so."
+  (let ((wanted (and portal-input-mode-line-tint portal-input-mode (portal-input--focused-p))))
+    (cond ((and wanted (not portal-input--tint))
+           (setq portal-input--tint
+                 (face-remap-add-relative 'mode-line-active 'portal-mode-line-app-line)))
+          ((and portal-input--tint (not wanted))
+           (face-remap-remove-relative portal-input--tint)
+           (setq portal-input--tint nil)))
+    (force-mode-line-update)))
+
+(defcustom portal-input-mode-line-tint t
+  "Whether a Portal buffer's mode line takes `portal-mode-line-app-line'.
+It does while the buffer's view has the keyboard, so the whole pane says
+so, not only the tag after the mode name.  Changes reach open views at
+once."
+  :type 'boolean :group 'portal-input
+  :set (lambda (symbol value)
+         (set-default symbol value)
+         (dolist (buffer (portal-view-buffers))
+           (with-current-buffer buffer (portal-input--tint)))))
+
+(defcustom portal-input-mode-line-icon t
+  "Whether a keyboard icon precedes the mode line's [app] or [emacs].
+It needs the nerd-icons package, which doom-modeline loads among others;
+without it the text stands alone."
+  :type 'boolean :group 'portal-input)
+(declare-function nerd-icons-mdicon "nerd-icons" (icon-name &rest args))
+
 (defun portal-input--mode-line-process ()
-  "Return who has the keyboard, for `mode-line-process': [app] or [emacs]."
-  (let ((focused (portal-input--focused-p)))
-    (propertize (if focused "[app]" "[emacs]")
-                'help-echo (if focused
-                               (format "The app has the keyboard; %s returns it to Emacs"
-                                       portal-input-escape-key)
-                             "Emacs has the keyboard; RET enters the app"))))
+  "Return who has the keyboard, for `mode-line-process': [app] or [emacs].
+Each in its face, `portal-mode-line-app' or `portal-mode-line-emacs',
+after a keyboard icon where nerd-icons draws one."
+  (let* ((focused (portal-input--focused-p))
+         (face (if focused 'portal-mode-line-app 'portal-mode-line-emacs))
+         (help (if focused
+                   (format "The app has the keyboard; %s returns it to Emacs"
+                           portal-input-escape-key)
+                 "Emacs has the keyboard; RET enters the app")))
+    (concat (when (and portal-input-mode-line-icon (fboundp 'nerd-icons-mdicon))
+              (concat " " (propertize (nerd-icons-mdicon "nf-md-keyboard" :face face :v-adjust 0.0)
+                                      'help-echo help)))
+            (propertize (if focused "[app]" "[emacs]") 'face face 'help-echo help))))
 
 (defconst portal-input-mode-line-process '(:eval (portal-input--mode-line-process))
   "Mode line construct naming who has the keyboard, after the major mode's name.
@@ -162,7 +224,8 @@ mode off restores it; the terminal puts its :exited there.")
 (define-minor-mode portal-input-mode
   "Enter a Portal view with RET; `portal-input-escape-key' returns to Emacs.
 The mode line shows who has the keyboard, after the major mode's name:
-[app] while the view has it, [emacs] while Emacs does."
+[app] while the view has it, [emacs] while Emacs does, and the whole mode
+line takes `portal-mode-line-app-line' while the view has it."
   :lighter nil :keymap portal-input-mode-map
   (let ((wrapped (and (consp mode-line-process) (equal (car mode-line-process) "")
                       (eq (cadr mode-line-process) 'portal-input-mode-line-process))))
@@ -170,7 +233,8 @@ The mode line shows who has the keyboard, after the major mode's name:
            (setq mode-line-process (append '("" portal-input-mode-line-process)
                                            (and mode-line-process (list mode-line-process)))))
           ((and (not portal-input-mode) wrapped)
-           (setq mode-line-process (nth 2 mode-line-process))))))
+           (setq mode-line-process (nth 2 mode-line-process))))
+    (portal-input--tint)))
 
 (defun portal-input--target (&optional window)
   "Return the native target for WINDOW, defaulting to the selected window."
@@ -243,7 +307,9 @@ The click already gave the view the keyboard; this makes Emacs agree."
 (setf (alist-get "focus" portal-view-record-handlers nil nil #'equal)
       (lambda (target focused)
         (setq portal-input--focused (and (equal focused "1") target))
-        (force-mode-line-update)))
+        (portal-input--tint)))
+;; A view closed while it had the keyboard sends no last record.
+(add-hook 'portal-view-close-hook #'portal-input--tint)
 
 (defun portal-input--connect ()
   "Load the module, which has the input bridge."

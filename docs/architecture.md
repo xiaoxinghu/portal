@@ -150,8 +150,13 @@ buffer and puts `portal-input-mode-line-process` in `mode-line-process`, the
 slot Emacs reserves for a buffer's state after its mode name, so the default
 mode line and packages that render that variable, such as doom-modeline, show
 `Ghostty[app]` while the view has the keyboard and `Ghostty[emacs]` while Emacs
-does, with the terminal's `:exited` after it. Nothing native draws over Emacs:
-the view fills the pane's body, and the mode line stays Emacs's.
+does, with the terminal's `:exited` after it, each in a state face. While the
+view has the keyboard the buffer also remaps `mode-line-active` to
+`portal-mode-line-app-line`, so the pane's whole mode line changes color under
+every mode line package; `portal-view-close-hook` lets the input module drop
+the remap when a view closes before a last record could reach its buffer.
+Nothing native draws over Emacs: the view fills the pane's body, and the mode
+line stays Emacs's.
 
 ## System-wide keys
 

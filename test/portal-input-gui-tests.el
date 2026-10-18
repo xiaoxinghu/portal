@@ -122,19 +122,27 @@ from that thread."
 
 (ert-deftest portal-input-gui-web-command-period-returns-to-emacs ()
   (portal-input-gui--page
-    ;; The mode line renders who has the keyboard, and follows each change.
-    (portal-terminal-test--wait
-     (lambda () (equal (format-mode-line mode-line-process) "[app]")))
-    (portal-test-native-key 47 portal-input-gui--command ".")
-    (should-not (portal-input--action "focused"))
-    (should-not (portal-input--action "pending"))
-    (portal-terminal-test--wait
-     (lambda () (equal (format-mode-line mode-line-process) "[emacs]")))
+    ;; The mode line renders who has the keyboard, and follows each change:
+    ;; the tag in the state's face, and the whole line tinted for the app.
+    (cl-flet ((tag () (let ((text (substring-no-properties (format-mode-line mode-line-process))))
+                        (string-trim-left text "[^[]*")))
+              (tag-face () (let ((text (format-mode-line mode-line-process)))
+                             (get-text-property (1- (length text)) 'face text))))
+      (portal-terminal-test--wait (lambda () (equal (tag) "[app]")))
+      (should (eq (tag-face) 'portal-mode-line-app))
+      (should (assq 'mode-line-active face-remapping-alist))
+      (portal-test-native-key 47 portal-input-gui--command ".")
+      (should-not (portal-input--action "focused"))
+      (should-not (portal-input--action "pending"))
+      (portal-terminal-test--wait (lambda () (equal (tag) "[emacs]")))
+      (should (eq (tag-face) 'portal-mode-line-emacs))
+      (should-not (assq 'mode-line-active face-remapping-alist)))
     (portal-integration-test--emacs-input)
     (portal-input-focus)
     (should (portal-input--action "focused"))
     (portal-terminal-test--wait
-     (lambda () (equal (format-mode-line mode-line-process) "[app]")))))
+     (lambda () (string-suffix-p "[app]" (substring-no-properties
+                                         (format-mode-line mode-line-process)))))))
 
 (ert-deftest portal-input-gui-web-configured-escape-preempts-the-page ()
   (portal-input-gui--page
