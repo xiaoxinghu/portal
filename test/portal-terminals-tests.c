@@ -317,7 +317,7 @@ static void test_a_terminal_describes_itself(void)
     snprintf(expected, sizeof expected, "terminal %s\n", terminal);
     CHECK(sent(expected));
     CHECK(shows(terminal, "\"exited\":true", "\"ready\":true", NULL));
-    CHECK(portal_views_place(text(terminal), (portal_edges) {0, 0, 10, 10}, NULL, text("one"),
+    CHECK(portal_views_place(text(terminal), (portal_edges) {0, 0, 10, 10}, text("one"),
                              &error));
     CHECK(shows(terminal, "\"visible\":true", "\"exited\":true", NULL));
     size_t destroyed = portal_fake_calls().destroyed;

@@ -20,7 +20,7 @@ let package = Package(
     ],
     targets: [
         // The C core: the Emacs bindings, the view registry, input, terminal and
-        // web views' rules, toolbars, shortcuts, the notification pipe, and portal.h, the
+        // web views' rules, shortcuts, the notification pipe, and portal.h, the
         // interface the Swift backend implements. web.c embeds the shared browser scripts in scripts/. Core/CMakeLists.txt compiles the
         // same sources into the fake-backend tests.
         .target(name: "PortalCore", path: "Core", exclude: ["CMakeLists.txt", "scripts"],
@@ -31,8 +31,8 @@ let package = Package(
             .product(name: "GhosttyTheme", package: "libghostty-spm")
         ], path: ".", exclude: ["Core", "Info.plist"],
            sources: ["Backend.swift", "CoreCalls.swift", "NativeHost.swift", "NativeInput.swift",
-                     "Views.swift", "WebView.swift", "Terminal.swift", "Toolbar.swift",
-                     "WebToolbar.swift", "Launcher.swift", "Hotkeys.swift", "KeyPost.swift",
+                     "Views.swift", "WebView.swift", "Terminal.swift", "Launcher.swift",
+                     "Hotkeys.swift", "KeyPost.swift",
                      "StatusPanel.swift"],
            swiftSettings: [.unsafeFlags(["-warnings-as-errors"])])
     ]

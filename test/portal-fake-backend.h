@@ -17,26 +17,9 @@ struct portal_fake_calls {
     size_t focused, unfocused, replayed, discarded;
     size_t copied, pasted; /* Copy and Paste commands given to views' apps. */
     size_t listed, themed, entered; /* Theme lists, themes applied, and Enters tried. */
-    size_t fields;   /* Find fields given the keyboard. */
     size_t appeared; /* Web appearances set. */
 };
 struct portal_fake_calls portal_fake_calls(void);
-
-/* The toolbar the core last drew for TARGET's view, valid until it draws
-   again, and in *DRAWS how many times it drew; NULL before the first. */
-const portal_toolbar *portal_fake_toolbar(const char *target, size_t *draws);
-
-/* A find or a call the core asked a web view for, which a test answers as
-   the platform would, with portal_web_found or portal_web_returned. */
-struct portal_fake_request {
-    char target[32];
-    bool find;      /* A find, or else a call. */
-    char text[256]; /* A find's query, after "back " when backwards; or a
-                       call such as portalToolbar.count("x"). */
-    uint64_t token;
-};
-/* Take the oldest request not taken yet into *REQUEST; false for none. */
-bool portal_fake_request(struct portal_fake_request *request);
 
 /* While REFUSE, every view, web, terminal, hot key and key post primitive
    fails without doing anything, as a platform does when called on the wrong

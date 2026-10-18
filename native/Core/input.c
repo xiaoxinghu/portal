@@ -16,7 +16,7 @@
       offered each chord, and the platform reports one it did not use
       (portal_input_unused).
    4. To the view's shortcuts: Super-C copies and Super-V pastes in every
-      view; then the toolbar's (toolbar.c).
+      view.
    5. To Emacs, which reads the rest of the key sequence with the view's
       buffer's keymaps and runs its command.
 
@@ -26,8 +26,8 @@
 
    A focus change the platform reports while Emacs or the core is calling it
    is their own doing.  Any other is the user's: it abandons the view's
-   handoff.  Every change of who has a view's keyboard redraws its toolbar,
-   which shows it. */
+   handoff.  Every change of whether a view has the keyboard goes to Emacs as
+   a "focus" record, which its buffer's mode line shows. */
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,7 +36,6 @@
 #include "channel.h"
 #include "core.h"
 #include "input.h"
-#include "toolbar.h"
 #include "views.h"
 
 enum { MODIFIERS = PORTAL_SHIFT | PORTAL_CONTROL | PORTAL_META | PORTAL_SUPER };
@@ -146,6 +145,14 @@ static bool send(const char *type, const struct portal_input *view, int64_t seri
     return send_values(type, view, serial, &key, 1);
 }
 
+/* Tell Emacs whether VIEW has the keyboard: the record "focus TARGET 1" or
+   "focus TARGET 0", which its buffer's mode line shows. */
+static void report(const struct portal_input *view)
+{
+    portal_string field = {view->focused ? "1" : "0", 1};
+    portal_channel_send((portal_string) {"focus", 5}, view->target, &field, 1);
+}
+
 /* Free the error of a primitive the platform asked for, which has no one to
    report it to.  Called on the thread the platform must use, a primitive
    fails only when that is broken. */
@@ -196,7 +203,6 @@ bool portal_input_close(struct portal_input *view, portal_text *error)
     input.requests++;
     bool done = end(view, error);
     input.requests--;
-    portal_toolbar_refresh(view->target);
     return done;
 }
 
@@ -232,7 +238,7 @@ static bool shortcut(struct portal_input *view, portal_chord key)
         input.requests--;
         return true;
     }
-    return portal_toolbar_shortcut(view->target, key);
+    return false;
 }
 
 /* What happens to CHORD, pressed in VIEW, which its app did not use: a
@@ -298,9 +304,7 @@ portal_key portal_input_key(portal_string target, portal_chord chord, bool repea
     struct portal_input *view = portal_views_input(target);
     if (!view)
         return PORTAL_KEY_PASS;
-    portal_key result = decide(view, normalize(chord), chord, repeat);
-    portal_toolbar_refresh(target);
-    return result;
+    return decide(view, normalize(chord), chord, repeat);
 }
 
 portal_key portal_input_unused(portal_string target, portal_chord chord, bool repeat)
@@ -308,9 +312,7 @@ portal_key portal_input_unused(portal_string target, portal_chord chord, bool re
     struct portal_input *view = portal_views_input(target);
     if (!view)
         return PORTAL_KEY_TAKE;
-    portal_key result = unused(view, normalize(chord), chord, repeat);
-    portal_toolbar_refresh(target);
-    return result;
+    return unused(view, normalize(chord), chord, repeat);
 }
 
 void portal_input_focus(portal_string target, bool focused)
@@ -318,10 +320,12 @@ void portal_input_focus(portal_string target, bool focused)
     struct portal_input *view = portal_views_input(target);
     if (!view)
         return;
+    bool changed = view->focused != focused;
     view->focused = focused;
     if (!input.requests)
         abandon(view);
-    portal_toolbar_refresh(target);
+    if (changed)
+        report(view);
 }
 
 void portal_input_escape(portal_string target)
@@ -334,7 +338,6 @@ void portal_input_escape(portal_string target)
     input.requests++;
     ignore(portal_view_unfocus(view->view, &error), &error);
     input.requests--;
-    portal_toolbar_refresh(target);
 }
 
 portal_owner portal_input_owner(portal_string target)
@@ -414,7 +417,6 @@ bool portal_input_perform(portal_string target, portal_string action, int64_t se
     input.requests++;
     bool done = act(view, action, serial, result, error);
     input.requests--;
-    portal_toolbar_refresh(target);
     return done;
 }
 

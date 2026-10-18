@@ -22,8 +22,6 @@ The core (`native/Core/input.c`) routes keys pressed in a view to the first take
      unless they enable the kitty keyboard protocol; Portal gives those up.
    - Web pages are offered each chord and keep those they use.
 4. **The view's shortcuts.** Super-C copies and Super-V pastes in every view.
-   Toolbar shortcuts follow: Super-F finds in web pages, Super-R reloads them,
-   and Super-=, Super-- and Super-0 size terminal text.
 5. **Emacs** reads the remaining sequence, including plain keys, through the
    view buffer's keymaps, including Evil's, and runs the command as if typed there.
 
@@ -107,10 +105,9 @@ it, separate from platform-reported keyboard ownership. Lisp actions name the
 handoff serial and act only while it remains active; late acknowledgements or
 completions never affect other handoffs or views. Hiding, closing or Emacs's
 `unfocus` silently ends a handoff. User termination through the escape chord or a
-view click first sends `escape`. So do hosted local-link handoffs and toolbar
-Open in Emacs: the web core (`native/Core/web.c`) calls `portal_input_escape`
-before sending `bridge`. Emacs-initiated focus changes, such as opening find,
-never end handoffs. Pages never take the keyboard themselves: a page focusing
+view click first sends `escape`. So do hosted local-link handoffs: the web
+core (`native/Core/web.c`) calls `portal_input_escape` before sending
+`bridge`. Emacs-initiated focus changes never end handoffs. Pages never take the keyboard themselves: a page focusing
 an element, as autofocus does, makes WebKit ask the window for it, and the
 platform refuses unless the view has the keyboard or Emacs, the core or a click
 is giving it. The platform checks `portal_input_is_escape` before holding
@@ -148,7 +145,9 @@ do not inherit it. Input records include the handoff serial:
 | `cancel TARGET SERIAL 0` | `C-g` is pressed in the view while Emacs reads the rest of the sequence |
 | `escape TARGET SERIAL 0` | The configured escape cancels a handoff, as does a click that hands off to Emacs or selects the view's pane |
 
-Entering a view by click sends `select TARGET`; Emacs selects its pane. Terminal
+Entering a view by click sends `select TARGET`; Emacs selects its pane. Each
+change of whether a view has the keyboard, whatever moved it, sends
+`focus TARGET 1` or `focus TARGET 0`, which the buffer's mode line shows. Terminal
 title, working-directory or process-state changes send one `terminal TARGET`
 until Emacs inspects the view for the new text, of any length.
 
@@ -157,7 +156,8 @@ and dispatches through `portal-view-record-handlers`, calling each type's handle
 with the target buffer current. Missing buffers or handlers cause records to be
 dropped. Process-filter handlers never prompt. `portal-input` registers five
 input types and queues records as events such as
-`(portal-input-key (TARGET SERIAL CHARACTER MODIFIERS))` for the command loop.
+`(portal-input-key (TARGET SERIAL CHARACTER MODIFIERS))` for the command loop;
+a `focus` record only updates the buffer's mode line.
 `portal-web` registers `bridge` for hosted-app messages
 ([the bridge](editor-bridge.md)). `portal-terminal` registers `terminal`, caching
 `portal--inspect` results in the terminal buffer.

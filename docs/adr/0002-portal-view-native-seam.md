@@ -2,13 +2,12 @@
 
 Emacs drives every Portal view through lifecycle calls addressed by native target (`web:3`, `terminal:2`): open, place, hide, close, inspect. Kind-specific operations have named exports, such as `portal--web-send` and `portal--terminal-paste`. Each placement resolves the frame afresh by temporarily giving it a unique title; no frame information is cached across the seam. These choices are simplest for two view kinds and prevent stale information between Emacs and the native module.
 
-The native module exports these 19 functions:
+The native module exports these 17 functions:
 
 - **Lifecycle**, for every view kind: `portal--open`, `portal--place`, `portal--hide`, `portal--close`, `portal--inspect`, and `portal--channel` for the notification pipe.
-- **Web:** `portal--web-load`, `portal--web-appearance`, and the bridge's `portal--web-send` and `portal--web-receive`.
+- **Web:** `portal--web-load`, `portal--web-go`, `portal--web-appearance`, and the bridge's `portal--web-send` and `portal--web-receive`.
 - **Terminal:** `portal--terminal-paste`, `portal--terminal-text`, `portal--terminal-theme`, `portal--terminal-themes` and `portal--terminal-bindings`.
 - **Input:** `portal--input`.
-- **Toolbar:** `portal--toolbar`, `portal--toolbar-theme` and `portal--toolbar-action`.
 
 ## Considered Options
 

@@ -17,9 +17,12 @@
    http, https, file, data or about URL.  On failure the view keeps the
    address it had. */
 bool portal_web_views_load(portal_string target, portal_string url, portal_text *error);
+/* Move web view TARGET through its history by STEP, "back" or "forward",
+   as portal--web-go does; with no page to go to, nothing changes. */
+bool portal_web_views_go(portal_string target, portal_string step, portal_text *error);
 /* Check a web view's OPTIONS before the platform creates it: :appearance
    must be "light", "dark" or nil.  A later duplicate option wins, and other
-   options pass; toolbar.c checks :toolbar. */
+   options pass. */
 bool portal_web_views_check(const portal_option *options, size_t count, portal_text *error);
 /* Show every open web view's pages in APPEARANCE, "light" or "dark", or the
    system's for a null APPEARANCE, oldest first.  Any other APPEARANCE
@@ -43,19 +46,6 @@ struct portal_web_state *portal_web_state_new(const portal_option *options, size
 bool portal_web_state_hosted(const struct portal_web_state *state);
 /* Free STATE and any messages still waiting in it. */
 void portal_web_state_free(struct portal_web_state *state);
-
-/* For the toolbar, toolbar.c.  Whether web view TARGET's page can go back
-   and forward, as the platform last reported; false for a TARGET that names
-   no open web view. */
-void portal_web_views_history(portal_string target, bool *back, bool *forward);
-/* For toolbar.c: the URL TARGET's page committed last, if TARGET names a
-   web view that is not a hosted app and has committed one; else "".  A
-   hosted app's address names the app host, not what the app shows. */
-portal_string portal_web_views_page(portal_string target);
-/* The user asked, from hosted web view TARGET's toolbar, to open the
-   document it shows in Emacs: give Emacs the keyboard, then send the app's
-   buffer an "edit" message.  Does nothing for any other TARGET. */
-void portal_web_views_edit(portal_string target);
 
 /* For web.c, from views.c: TARGET's platform view, and its state in *STATE,
    if TARGET names an open web view.  Otherwise return NULL and, unless ERROR

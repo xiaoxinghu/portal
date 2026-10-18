@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.29)
 
 # Portal's C core, tested against a fake backend: the Emacs bindings, the view
 # registry, input handoff, terminal views, web views' rules and bridge,
-# toolbars, system-wide shortcuts, the status panel, and the notification pipe. This needs only a C compiler and Emacs: no Swift, Apple
+# system-wide shortcuts, the status panel, and the notification pipe. This needs only a C compiler and Emacs: no Swift, Apple
 # frameworks, Bun or Ghostty. The top-level project includes it, and it can be
 # configured alone to run just these tests. SwiftPM compiles the same sources
 # into the production module.
@@ -32,7 +32,7 @@ if(BUILD_TESTING)
     set(fake_backend "${portal_root}/test/portal-fake-backend.c")
     # The core's registry and pipe and the fake backend compile without
     # emacs-module.h, so nothing the platform calls can reach Emacs.
-    add_library(portal-test-core OBJECT views.c input.c terminals.c web.c toolbar.c channel.c
+    add_library(portal-test-core OBJECT views.c input.c terminals.c web.c channel.c
         shortcuts.c status.c "${fake_backend}")
     target_include_directories(portal-test-core PUBLIC include . "${portal_root}/test")
     set_target_properties(portal-test-core PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -50,14 +50,12 @@ if(BUILD_TESTING)
     target_link_libraries(portal-terminals-tests PRIVATE portal-test-core)
     add_executable(portal-web-tests "${portal_root}/test/portal-web-tests.c")
     target_link_libraries(portal-web-tests PRIVATE portal-test-core)
-    add_executable(portal-toolbar-tests "${portal_root}/test/portal-toolbar-tests.c")
-    target_link_libraries(portal-toolbar-tests PRIVATE portal-test-core)
     add_executable(portal-shortcuts-tests "${portal_root}/test/portal-shortcuts-tests.c")
     target_link_libraries(portal-shortcuts-tests PRIVATE portal-test-core)
     add_executable(portal-status-tests "${portal_root}/test/portal-status-tests.c")
     target_link_libraries(portal-status-tests PRIVATE portal-test-core)
     foreach(target portal-test-core portal-test-module portal-channel-tests portal-views-tests
-            portal-input-tests portal-terminals-tests portal-web-tests portal-toolbar-tests
+            portal-input-tests portal-terminals-tests portal-web-tests
             portal-shortcuts-tests portal-status-tests)
         target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
         set_target_properties(${target} PROPERTIES
@@ -74,8 +72,6 @@ if(BUILD_TESTING)
     set_tests_properties(terminals PROPERTIES TIMEOUT 30)
     add_test(NAME web-core COMMAND portal-web-tests)
     set_tests_properties(web-core PROPERTIES TIMEOUT 30)
-    add_test(NAME toolbar-core COMMAND portal-toolbar-tests)
-    set_tests_properties(toolbar-core PROPERTIES TIMEOUT 30)
     add_test(NAME shortcuts-core COMMAND portal-shortcuts-tests)
     set_tests_properties(shortcuts-core PROPERTIES TIMEOUT 30)
     add_test(NAME status-core COMMAND portal-status-tests)

@@ -1,4 +1,4 @@
-# Keyboard and toolbar controls
+# Keyboard controls
 
 [Documentation index](README.md) · [Build and run](../README.md#build-and-run)
 
@@ -13,7 +13,6 @@ reach Emacs:
 | Typing: plain and Shift keys, arrows, Return, Tab, Escape | The app, always |
 | A chord (Control, Option or Command with a key that types a character) the app uses | The app |
 | Command-C, Command-V | Copy and paste, in every view |
-| Command-F, Command-R | Find and reload, in a web view with a toolbar |
 | Any other chord | Emacs, as if typed in the view's buffer; Emacs reads the rest of its key sequence |
 | Command-period (`⌘.`, configurable) | Return to Emacs and stay there |
 | `RET`, or a click, while Emacs owns a Portal buffer | Enter the app |
@@ -28,12 +27,32 @@ or split keys.
 
 Commands finish minibuffer interaction before returning to the selected native
 view. Explicit unfocus, errors or selecting an ordinary buffer leave Emacs in
-control. `C-g` cancels Emacs key-sequence reading. The window's bottom shows
-who has the keyboard: Emacs's mode line while Emacs has it, and the view's
-toolbar, drawn over the mode line with a green line along its top, while the
-view has it. While Emacs reads a command the view handed it, the toolbar stays
-with a blue line and dot. Click the dot to return to Emacs. The content never
-changes color or size. Ordinary buffers get no global physical keybinding.
+control. `C-g` cancels Emacs key-sequence reading. The content never changes
+color or size. Ordinary buffers get no global physical keybinding.
+
+## Who has the keyboard
+
+The window's mode line says who has the keyboard, right after the major
+mode's name, where Emacs shows a buffer's process state: `Ghostty[app]` or
+`Portal Web[app]` while the view has it, and `Ghostty[emacs]` while Emacs
+does, including while Emacs reads a command the view handed it. A terminal
+whose program has exited adds `:exited`, as in `Ghostty[emacs]:exited`.
+Hovering the indicator says how to move the keyboard.
+
+The indicator is the construct `portal-input-mode-line-process`, which
+`portal-input-mode` puts in `mode-line-process`, the variable that comint,
+compile and eat use for the same purpose. The default mode line and packages
+that render that variable, such as doom-modeline, powerline, telephone-line
+and mood-line, show it without configuration. A hand-built
+`mode-line-format` includes it where it includes the mode name:
+
+```elisp
+(setq-default mode-line-format
+              '("%e" mode-line-front-space mode-line-buffer-identification "  "
+                mode-name mode-line-process "  " mode-line-misc-info))
+```
+
+## The escape key
 
 `portal-input-escape-key` reserves one chord across all native views, before
 an app can claim it. The default is `"s-."` (Command-period). Change it live with
@@ -50,25 +69,12 @@ The previous chord stops being reserved when the setting changes. The escape
 works during pending handoffs too, without waiting for Lisp or the app. macOS
 and system-wide shortcut utilities can still intercept keys before Portal.
 
-The toolbar covers the window's mode line exactly, so it takes no room from the
-content. Web pages have back, forward, find, zoom and reload; Markdown and HTML
-previews add a table of contents, and Markdown adds **Open in Emacs**.
-Terminals have text size controls; Excalidraw and quick terminals have no
-toolbar, nor do windows without a mode line. The opening command chooses a web
-view's toolbar. `(setq portal-toolbar nil)` hides toolbars live; `t` restores
-them. Colors follow Emacs faces, including theme changes.
+## Web page commands
 
-`portal-zoom-in`, `portal-zoom-out`, `portal-zoom-reset`, `portal-toggle-toc`,
-`portal-find`, `portal-web-back` (`l`), and `portal-web-forward` (`r`) use the
-same state as the buttons. Terminal equivalents are
-`portal-terminal-text-size-increase`, `portal-terminal-text-size-decrease`, and
-`portal-terminal-text-size-reset`; terminal Command-Plus, Command-Minus and
-Command-0 do the same, with or without a toolbar. Command-F runs `portal-find`
-in web views with toolbars; Command-R reloads the page, like the Reload button,
-unless the page claims those chords. In Portal web buffers, `s-f` and `s-r`
-(`portal-web-reload`) also work with Emacs focus. Find opens a toolbar field:
-Return/Shift-Return navigate matches; Escape closes it. State survives hiding
-and redisplay; reload preserves zoom and the TOC. Killing the buffer releases it.
+In Portal web buffers, `g` and `s-r` run `portal-web-reload`, and `l` and `r`
+run `portal-web-back` and `portal-web-forward`, with Emacs focus. Command-R
+reaches Emacs from inside the page too, unless the page claims the chord. A
+page's history survives hiding and redisplay; killing the buffer releases it.
 
 A terminal's native bindings can claim a chord its program would otherwise
 get, such as a Control chord (see [the input bridge](terminal-input-bridge.md)).

@@ -65,16 +65,16 @@ Relative links resolve from the displayed document's folder; local absolute
 paths and `file:` URLs also work. Following a Markdown link renames the buffer
 after that file: `g` rereads it, and `portal-render-markdown` on that file finds
 this preview.
-Toolbar Back/Forward, or `l` and `r` in the buffer, navigate previously shown
+`l` and `r` in the buffer, `portal-web-back` and `portal-web-forward`, navigate previously shown
 documents and restore reading positions. Following a new link after going back
 discards forward pages, as in a browser; opening files in Emacs or websites does not.
 
 One click opens a file in Emacs and selects its pane with editing focus. The
 preview keeps its pane and reading position; the file reuses another pane or
 splits the frame. `display-buffer-alist` still decides: if it uses the preview's
-pane, the hidden preview keeps its page. Toolbar **Open in Emacs**, or
-`M-x portal-render-open-in-emacs`, does the same for the displayed Markdown
-file, including after Back/Forward.
+pane, the hidden preview keeps its page. `M-x portal-render-open-in-emacs`
+does the same for the displayed Markdown file, including after going back or
+forward.
 
 To resume reading, click the preview to select and focus it, or select its pane
 and press `RET`. From elsewhere, `M-x portal-render-return` shows, selects and
@@ -119,13 +119,10 @@ scripts, styles and images. JavaScript is enabled by default.
   Inspect failed loads through `:error` in
   `(portal--inspect (portal-view-target))`.
 
-Lisp can give any buffer a web view: `(portal-web-open URL TOOLBAR)` opens and
-loads URL in the current buffer. TOOLBAR is `"navigation"` (back, forward,
-find, zoom and reload), `"contents"` (those plus a table of contents),
-`"markdown"` (those plus a table of contents and, for hosted apps, Open in Emacs)
-or `"none"`. Loading the current page, ignoring its fragment, reloads without
-adding history.
-`(portal-web-open-hosted PATH TOOLBAR)` instead opens immediately at `about:blank`
+Lisp can give any buffer a web view: `(portal-web-open URL)` opens and loads
+URL in the current buffer. Loading the current page, ignoring its fragment,
+reloads without adding history.
+`(portal-web-open-hosted PATH)` instead opens immediately at `about:blank`
 and loads hosted PATH, such as `"/hello"`, when the host is ready, starting it
 if needed. Hosted apps exchange JSON objects with their buffers over the
 [bridge](editor-bridge.md): `(portal-web-send PLIST)` sends to the app;

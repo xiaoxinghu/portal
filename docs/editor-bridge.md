@@ -43,10 +43,10 @@ signal errors, pages have no `window.portalBridge`, and the core drops all posts
 
 Core-only messages include `page` with each committed hosted page's URL
 (including Back/Forward), and `error` for failed loads or a stopped web process.
-Local `file:` clicks send `follow` with the URL; Markdown's **Open in Emacs**
-sends `edit`. Both first return the keyboard to Emacs, ending any key sequence
-it is reading, so `escape` precedes `bridge`.
-`portal-web.el` handles `page`, `follow` and `edit` for all hosted apps, tracking
+Local `file:` clicks send `follow` with the URL, after first returning the
+keyboard to Emacs, ending any key sequence it is reading, so `escape` precedes
+`bridge`.
+`portal-web.el` handles `page` and `follow` for all hosted apps, tracking
 the displayed page and visiting linked files without calling the buffer's bridge
 function. URLs use messages because long paths would not fit in records.
 Asynchronous AppKit/WebKit callbacks never retain an `emacs_env` or call Lisp;

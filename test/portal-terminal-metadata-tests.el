@@ -145,7 +145,8 @@ a folder, loose, in no project."
       ;; An exited program is not a closed buffer, and affects no other shell.
       (portal-metadata-test--report terminal :exited t)
       (should (eq (portal-metadata-test--get terminal :exited) t))
-      (should (equal (buffer-local-value 'mode-line-process terminal) ":exited"))
+      (should (equal (buffer-local-value 'mode-line-process terminal)
+                     '(portal-input-mode-line-process (portal-terminal--exited ":exited"))))
       (should (memq terminal (portal-terminal-buffers)))
       (should-not (portal-metadata-test--get other :exited))
       (let ((target (buffer-local-value 'portal-view--target terminal)))

@@ -38,23 +38,14 @@ static bool sent(const char *target, const char *format)
     return !strcmp(got, expected);
 }
 
-/* Open a web view with a Markdown preview's toolbar, hosted when HOSTED;
-   return its target to free. */
+/* Open a web view, hosted when HOSTED; return its target to free. */
 static char *open_web(bool hosted)
 {
-    portal_option options[] = {{.name = text("toolbar"), .is_string = true,
-                                .string = text("markdown")},
-                               {.name = text("hosted"), .flag = true}};
+    portal_option options[] = {{.name = text("hosted"), .flag = true}};
     portal_text target = {0}, error = {0};
-    if (!portal_views_open(text("web"), options, hosted ? 2 : 1, &target, &error))
+    if (!portal_views_open(text("web"), options, hosted ? 1 : 0, &target, &error))
         abort();
     return target.data;
-}
-
-/* The user clicks Open in Emacs in TARGET's toolbar. */
-static void edit(const char *target)
-{
-    portal_toolbar_clicked(text(target), PORTAL_BUTTON_EDIT);
 }
 
 static bool load(const char *target, const char *url, portal_text *error)
@@ -264,7 +255,7 @@ static void test_only_the_apps_main_frame_may_post(void)
     post(web, true, "http://127.0.0.1:8080/0123/app?context=%31", "encoded",
          "{\"type\":\"encoded\"}");
     /* The core's own types are reserved. */
-    const char *const reserved[] = {"page", "follow", "edit"};
+    const char *const reserved[] = {"page", "follow"};
     for (size_t i = 0; i < sizeof reserved / sizeof *reserved; i++)
         post(web, true, app, reserved[i], "{\"type\":\"page\",\"url\":\"file:///etc/passwd\"}");
     CHECK(sent(web, ""));
@@ -315,7 +306,6 @@ static void test_ordinary_pages_have_no_bridge(void)
     portal_web_committed(text(web), text("https://example.com/"));
     post(web, true, "https://example.com/", "hello", "{\"type\":\"hello\"}");
     portal_web_failed(text(web), 0, text("Failed"));
-    edit(web);
     CHECK(portal_web_navigating(text(web), text("file:///etc/passwd"), true)
           == PORTAL_NAVIGATION_ALLOW);
     CHECK(portal_web_navigating(text(web), text("https://elsewhere.example/"), true)
@@ -378,40 +368,45 @@ static void test_navigation_decisions(void)
 }
 
 /* Emacs gets the keyboard, ending any prefix it is reading, before the
-   bridge record that hands it a local link or an edit. */
-static void test_local_links_and_edits_go_to_emacs(void)
+   bridge record that hands it a local link. */
+static void test_local_links_go_to_emacs(void)
 {
     portal_text error = {0};
     bool focused = false;
     char *web = open_app();
-    /* With a mode line, where its toolbar shows Open in Emacs. */
-    CHECK(portal_views_place(text(web), (portal_edges) {0, 0, 100, 100},
-                             &(portal_edges) {0, 100, 100, 120}, text("frame"), &error));
+    CHECK(portal_views_place(text(web), (portal_edges) {0, 0, 100, 100}, text("frame"), &error));
     CHECK(portal_input_perform(text(web), text("focus"), 0, &focused, &error) && focused);
+    CHECK(sent(web, "focus %s 1\n"));
     /* Longer than a record could hold. */
     char url[PIPE_BUF + 64] = "file:///tmp/";
     while (strlen(url) < PIPE_BUF)
         strcat(url, "r%C3%A9sum%C3%A9%20");
     strcat(url, "notes.ts#L4");
-    /* Emacs gets the keyboard with the link. */
+    /* Emacs gets the keyboard with the link, and its mode line hears first. */
     CHECK(portal_web_navigating(text(web), text(url), true) == PORTAL_NAVIGATION_EMACS);
-    CHECK(sent(web, "bridge %s\n"));
+    CHECK(sent(web, "focus %s 0\nbridge %s\n"));
     CHECK(portal_input_owner(text(web)) == PORTAL_OWNER_EMACS);
     /* During a handoff, Emacs stops reading its key sequence first. */
     CHECK(portal_input_perform(text(web), text("focus"), 0, &focused, &error) && focused);
     portal_fake_press((portal_chord) {'x', PORTAL_CONTROL}, false);
     portal_fake_answer(false);
+    const char *got = drain();
+    char prefix[64], tail[64];
+    snprintf(prefix, sizeof prefix, "focus %s 1\nkey %s ", web, web);
+    snprintf(tail, sizeof tail, " 120 2\nfocus %s 0\n", web);
     int64_t serial = 0;
-    char key[64];
-    snprintf(key, sizeof key, "key %s %%" SCNd64 " 120 2\n", web);
-    CHECK(sscanf(drain(), key, &serial) == 1 && serial > 0);
-    edit(web);
+    CHECK(!strncmp(got, prefix, strlen(prefix)));
+    CHECK(sscanf(got + strlen(prefix), "%" SCNd64, &serial) == 1 && serial > 0);
+    CHECK(strlen(got) > strlen(tail) && !strcmp(got + strlen(got) - strlen(tail), tail));
+    CHECK(portal_web_navigating(text(web), text("file:///tmp/other.md"), true)
+          == PORTAL_NAVIGATION_EMACS);
     char escape[64];
     snprintf(escape, sizeof escape, "escape %%s %" PRId64 " 0\n", serial);
-    CHECK(sent(web, escape));
+    CHECK(sent(web, escape)); /* The first bridge record still waits. */
     CHECK(portal_input_owner(text(web)) == PORTAL_OWNER_EMACS);
     char expected[PIPE_BUF + 128];
-    snprintf(expected, sizeof expected, "[{\"type\":\"follow\",\"url\":\"%s\"},{\"type\":\"edit\"}]",
+    snprintf(expected, sizeof expected,
+             "[{\"type\":\"follow\",\"url\":\"%s\"},{\"type\":\"follow\",\"url\":\"file:///tmp/other.md\"}]",
              url);
     CHECK(receives(web, expected));
     /* A local file loaded as the app itself stays. */
@@ -421,6 +416,24 @@ static void test_local_links_and_edits_go_to_emacs(void)
           == PORTAL_NAVIGATION_ALLOW);
     CHECK(sent(local, ""));
     close_view(local);
+    close_view(web);
+}
+
+/* Emacs moves a page through its history by name; the platform steps. */
+static void test_history_steps(void)
+{
+    portal_text error = {0};
+    char *web = open_web(false);
+    struct portal_fake_calls before = portal_fake_calls();
+    CHECK(portal_web_views_go(text(web), text("back"), &error));
+    CHECK(portal_web_views_go(text(web), text("forward"), &error));
+    CHECK(portal_fake_calls().went == before.went + 2);
+    CHECK(shows(web, "\"history\":\"back forward\"", NULL));
+    CHECK(!portal_web_views_go(text(web), text("reload"), &error));
+    CHECK(says(&error, "Web history step must be \"back\" or \"forward\", not reload"));
+    CHECK(!portal_web_views_go(text("web:0"), text("back"), &error));
+    CHECK(says(&error, "No Portal view web:0"));
+    CHECK(portal_fake_calls().went == before.went + 2);
     close_view(web);
 }
 
@@ -471,7 +484,6 @@ static void test_a_closed_view_hears_nothing(void)
     portal_web_committed(text(target), text(app));
     portal_web_failed(text(target), 0, text("Late"));
     portal_web_failed(text(target), 2, text("Late"));
-    edit(target);
     CHECK(portal_web_navigating(text(target), text("file:///etc/passwd"), true)
           == PORTAL_NAVIGATION_ALLOW);
     CHECK(sent(target, ""));
@@ -580,17 +592,13 @@ static void test_an_appearance_reaches_every_web_view(void)
     close_view(terminal);
 }
 
-static void test_the_shared_scripts(void)
+static void test_the_shared_links_script(void)
 {
-    portal_script scripts[] = {PORTAL_SCRIPT_LINKS, PORTAL_SCRIPT_CONTENTS};
-    for (size_t i = 0; i < 2; i++) {
-        portal_string source = portal_web_script(scripts[i]);
-        CHECK(source.length > 100 && strlen(source.data) == source.length);
-        CHECK(!strncmp(source.data, "// SPDX-License-Identifier", 26));
-        CHECK(strstr(source.data, "\n(report) => {\n") && !strstr(source.data, "webkit"));
-    }
-    CHECK(strstr(portal_web_script(PORTAL_SCRIPT_LINKS).data, "file:"));
-    CHECK(strstr(portal_web_script(PORTAL_SCRIPT_CONTENTS).data, "globalThis.portalToolbar"));
+    portal_string source = portal_web_links_script();
+    CHECK(source.length > 100 && strlen(source.data) == source.length);
+    CHECK(!strncmp(source.data, "// SPDX-License-Identifier", 26));
+    CHECK(strstr(source.data, "\n(report) => {\n") && !strstr(source.data, "webkit"));
+    CHECK(strstr(source.data, "file:"));
 }
 
 int main(void)
@@ -608,11 +616,12 @@ int main(void)
     test_the_core_reports_pages_and_failures();
     test_ordinary_pages_have_no_bridge();
     test_navigation_decisions();
-    test_local_links_and_edits_go_to_emacs();
+    test_local_links_go_to_emacs();
+    test_history_steps();
     test_messages_to_the_app_and_stale_completions();
     test_a_closed_view_hears_nothing();
     test_an_echoing_app();
-    test_the_shared_scripts();
+    test_the_shared_links_script();
     test_appearance_at_open();
     test_an_appearance_reaches_every_web_view();
     CHECK(!portal_fake_calls().misused);

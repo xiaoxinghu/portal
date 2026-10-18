@@ -44,7 +44,6 @@ final class NativeHost: NSObject {
 
     weak var view: NSView?
     private weak var editor: NSResponder?
-    private var containers: [ObjectIdentifier: NativeContainer] = [:]
     private var surfaces: [ObjectIdentifier: WeakSurface] = [:]
 
     private init(view: NSView) {
@@ -80,32 +79,14 @@ final class NativeHost: NSObject {
 
     @objc private func windowUpdated() { refreshOwnership() }
 
-    /// Tell the core which views gained or lost the keyboard; it redraws
-    /// their toolbars.
+    /// Tell the core which views gained or lost the keyboard; it tells Emacs.
     func refreshOwnership() {
         for surface in surfaces.values.compactMap(\.value) { surface.input?.observe() }
     }
 
-    /// Show TOOLBAR above SURFACE, if it is in this frame.
-    func draw(_ toolbar: ToolbarState, for surface: any NativeSurface) {
-        containers[ObjectIdentifier(surface)]?.apply(toolbar)
-    }
-
-    /// Give SURFACE's find field the keyboard, and tell the core.
-    func focusFind(_ surface: any NativeSurface) {
-        containers[ObjectIdentifier(surface)]?.toolbar?.focusSearch()
-        refreshOwnership()
-    }
-
-    /// Whether SURFACE's toolbar shows its find field.
-    private func finding(_ surface: any NativeSurface) -> Bool {
-        containers[ObjectIdentifier(surface)]?.state.finding == true
-    }
-
     func ownsFocus(_ surface: NSView) -> Bool {
         guard let responder = view?.window?.firstResponder as? NSView else { return false }
-        let root = surface.superview as? NativeContainer ?? surface
-        return responder === root || responder.isDescendant(of: root)
+        return responder === surface || responder.isDescendant(of: surface)
     }
 
     func returnFocus(from surface: NSView) {
@@ -113,30 +94,20 @@ final class NativeHost: NSObject {
         refreshOwnership()
     }
 
-    /// Show SURFACE at RECTANGLE, in Emacs's frame pixels from the top left,
-    /// with TOOLBAR, which a surface new to this frame starts with, over BAR,
-    /// its pane's mode line, if it has one. Callers check that the frame
-    /// still has its `view` first.
-    func place(_ surface: any NativeSurface, rectangle: CGRect, bar: CGRect?, toolbar: ToolbarState) {
+    /// Show SURFACE at RECTANGLE, in Emacs's frame pixels from the top left.
+    /// Callers check that the frame still has its `view` first.
+    func place(_ surface: any NativeSurface, rectangle: CGRect) {
         guard let view else { return }
         _ = surface.input // Register shared input before the first focus or key event.
-        let key = ObjectIdentifier(surface)
-        let child = containers[key] ?? NativeContainer(content: surface.nativeView,
-                                                       target: surface.input?.target ?? "", state: toolbar)
-        containers[key] = child
-        // The container spans the content and the mode line; each keeps its own place.
-        let area = bar.map { rectangle.union($0) } ?? rectangle
-        child.arrange(content: rectangle.offsetBy(dx: -area.minX, dy: -area.minY),
-                      bar: bar?.offsetBy(dx: -area.minX, dy: -area.minY))
-        var frame = area
+        let child = surface.nativeView
+        var frame = rectangle
         frame.origin.x += view.bounds.minX
         frame.origin.y = view.isFlipped
-            ? view.bounds.minY + area.minY : view.bounds.maxY - area.maxY
+            ? view.bounds.minY + rectangle.minY : view.bounds.maxY - rectangle.maxY
         if child.frame != frame { child.frame = frame }
         surfaces[ObjectIdentifier(surface)] = WeakSurface(surface)
         if child.superview !== view { view.addSubview(child) }
         child.isHidden = false
-        surface.nativeView.isHidden = false
         child.layoutSubtreeIfNeeded()
         refreshOwnership()
         Self.startMonitoring()
@@ -146,14 +117,12 @@ final class NativeHost: NSObject {
     func hide(_ surface: any NativeSurface) {
         returnFocus(from: surface.nativeView)
         surface.nativeView.isHidden = true
-        containers[ObjectIdentifier(surface)]?.isHidden = true
     }
 
     func remove(_ surface: any NativeSurface) {
         returnFocus(from: surface.nativeView)
         surfaces[ObjectIdentifier(surface)] = nil
         surface.nativeView.removeFromSuperview()
-        containers.removeValue(forKey: ObjectIdentifier(surface))?.removeFromSuperview()
         let hosts = Self.frames.objectEnumerator()?.allObjects as? [NativeHost] ?? []
         if hosts.allSatisfy({ $0.surfaces.values.allSatisfy { $0.value == nil } }) {
             if let monitor = Self.keyMonitor { NSEvent.removeMonitor(monitor) }
@@ -212,16 +181,7 @@ final class NativeHost: NSObject {
             return true
         }
         if event.type == .keyDown { pressedKeys[event.keyCode] = owner }
-        // Search fields belong to the surface for ownership, but keep AppKit text editing.
-        let finding = host?.focusedSurface.map { host?.finding($0) == true } ?? false
-        let inContent = host?.focusedSurface.map { surface in
-            guard let responder = window.firstResponder as? NSView else { return false }
-            return responder === surface.nativeView || responder.isDescendant(of: surface.nativeView)
-        } ?? false
-        let handled: Bool
-        if finding && !inContent && host?.inputCapture == nil {
-            handled = host?.focusedSurface?.input?.handleKeyEvent(event, content: false) ?? false
-        } else { handled = handler?.handleKeyEvent(event) ?? false }
+        let handled = handler?.handleKeyEvent(event) ?? false
         host?.refreshOwnership()
         if !handled, handler is any NativeSurface, event.type == .keyDown { deliveredKeys.add(event) }
         return handled

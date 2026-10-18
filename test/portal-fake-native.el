@@ -76,7 +76,7 @@ The selected frame is kept."
              portal-fake-native--views)
     target))
 
-(defun portal--place (target edges title &optional bar)
+(defun portal--place (target edges title)
   (portal-fake-native--call 'portal--place target edges title)
   (let ((view (portal-fake-native--view target))
         (frame (cl-find title (frame-list)
@@ -84,14 +84,14 @@ The selected frame is kept."
     (unless frame (error "Cannot find the requested native Emacs frame"))
     (setq view (plist-put view :frame frame))
     (setq view (plist-put view :edges (append edges nil)))
-    (setq view (plist-put view :bar (append bar nil)))
     (puthash target (plist-put view :visible t) portal-fake-native--views)
     t))
 
 (defun portal--hide (target)
   (portal-fake-native--call 'portal--hide target)
   (let ((view (portal-fake-native--view target)))
-    (puthash target (plist-put (plist-put (plist-put view :edges nil) :visible nil) :focused nil)
+    (portal-fake-native--focus target nil)
+    (puthash target (plist-put (plist-put view :edges nil) :visible nil)
              portal-fake-native--views)
     t))
 
@@ -106,6 +106,13 @@ The selected frame is kept."
   (unless (string-prefix-p "web:" target) (error "No Portal view %s" target))
   (puthash target (plist-put (portal-fake-native--view target) :url url)
            portal-fake-native--views)
+  t)
+
+(defun portal--web-go (target step)
+  (portal-fake-native--call 'portal--web-go target step)
+  (unless (string-prefix-p "web:" target) (error "No Portal view %s" target))
+  (unless (member step '("back" "forward"))
+    (error "Web history step must be \"back\" or \"forward\", not %s" step))
   t)
 
 (defun portal-fake-native--hosted (target)
@@ -156,19 +163,27 @@ Then send its `terminal' record, as the native module does for a change."
     (funcall (process-filter portal-fake-native-channel) portal-fake-native-channel text)))
 
 ;; Input exports, so terminal commands run unchanged.  Focus needs a shown
-;; view, and only one view has it at a time.
+;; view, and only one view has it at a time.  Each change sends the focus
+;; record, as the native module does, where a pipe is connected.
+(defun portal-fake-native--focus (target focused)
+  "Note whether TARGET's view has the keyboard, sending its record on a change."
+  (let ((view (gethash target portal-fake-native--views)))
+    (unless (eq (and (plist-get view :focused) t) focused)
+      (puthash target (plist-put view :focused focused) portal-fake-native--views)
+      (when (process-live-p portal-fake-native-channel)
+        (portal-fake-native-send (format "focus %s %d\n" target (if focused 1 0)))))))
+
 (defun portal--input (target action &optional _serial)
   (let ((view (gethash target portal-fake-native--views)))
     (pcase action
       ("focus"
        (when (plist-get view :visible)
          (dolist (other (portal-fake-native-targets))
-           (puthash other (plist-put (gethash other portal-fake-native--views) :focused nil)
-                    portal-fake-native--views))
-         (puthash target (plist-put view :focused t) portal-fake-native--views)
+           (unless (equal other target) (portal-fake-native--focus other nil)))
+         (portal-fake-native--focus target t)
          t))
       ("unfocus"
-       (when view (puthash target (plist-put view :focused nil) portal-fake-native--views))
+       (when view (portal-fake-native--focus target nil))
        t))))
 (defun portal--input-escape-key (character modifiers)
   (portal-fake-native--call 'portal--input-escape-key character modifiers)

@@ -25,7 +25,7 @@
 static bool place(const char *target, portal_edges edges, const char *frame,
                   portal_text *error)
 {
-    return portal_views_place(text(target), edges, NULL, text(frame), error);
+    return portal_views_place(text(target), edges, text(frame), error);
 }
 
 /* A view's ID, from its target. */

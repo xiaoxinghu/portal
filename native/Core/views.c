@@ -4,7 +4,7 @@
    until close, and the platform view it holds is never used outside that
    span.  The platform renders views; Lisp chooses where (portal-view.el).
    Each view keeps its input here too, which input.c manages, and what
-   web.c and toolbar.c keep for it.
+   web.c keeps for it.
 
    The registry is a list in creation order.  Emacs has few views at once,
    so finding a target walks the list. */
@@ -16,7 +16,6 @@
 #include "channel.h"
 #include "core.h"
 #include "terminals.h"
-#include "toolbar.h"
 #include "views.h"
 #include "web.h"
 
@@ -25,12 +24,10 @@ struct view {
     portal_view *native;
     portal_kind kind;
     struct portal_web_state *web; /* A web view's pages and bridge (web.c). */
-    struct portal_toolbar_state *toolbar; /* Its toolbar (toolbar.c). */
     uint64_t id;
     bool attached;
     bool announced; /* Its portal_views_announce record waits for an inspection. */
     portal_edges edges; /* Where it is attached, while ATTACHED. */
-    bool bar;           /* Whether its pane has a mode line for its toolbar. */
     struct portal_input input;
     size_t length;
     char target[]; /* LENGTH bytes, NUL-terminated, such as "web:3". */
@@ -64,18 +61,6 @@ struct portal_input *portal_views_input(portal_string target)
 {
     struct view *view = find(target, PORTAL_ANY_KIND, NULL);
     return view ? &view->input : NULL;
-}
-
-struct portal_toolbar_state *portal_views_toolbar(portal_string target)
-{
-    struct view *view = find(target, PORTAL_ANY_KIND, NULL);
-    return view ? view->toolbar : NULL;
-}
-
-void portal_views_each_toolbar(void (*visit)(struct portal_toolbar_state *toolbar))
-{
-    for (struct view *view = views.first; view; view = view->next)
-        visit(view->toolbar);
 }
 
 portal_view *portal_views_find_web(portal_string target, struct portal_web_state **web,
@@ -118,17 +103,7 @@ bool portal_views_open(portal_string kind_name, const portal_option *options, si
         portal_web_state_free(web);
         return fail_with(error, "Portal is out of memory");
     }
-    /* This checks the options that choose the toolbar. */
-    struct portal_toolbar_state *toolbar =
-        portal_toolbar_state_new(kind, options, count, web && portal_web_state_hosted(web), error);
-    if (!toolbar) {
-        free(view);
-        free(copy);
-        portal_web_state_free(web);
-        return false;
-    }
-    *view = (struct view) {.kind = kind, .web = web, .toolbar = toolbar, .id = id,
-                           .length = length};
+    *view = (struct view) {.kind = kind, .web = web, .id = id, .length = length};
     memcpy(view->target, name, length + 1);
     memcpy(copy, name, length + 1);
     if (!portal_view_create(kind, (portal_string) {view->target, length}, options, count,
@@ -136,7 +111,6 @@ bool portal_views_open(portal_string kind_name, const portal_option *options, si
         free(view);
         free(copy);
         portal_web_state_free(web);
-        portal_toolbar_state_free(toolbar);
         return false;
     }
     portal_input_open(&view->input, view->native, (portal_string) {view->target, length},
@@ -146,7 +120,6 @@ bool portal_views_open(portal_string kind_name, const portal_option *options, si
     else
         views.first = view;
     views.last = view;
-    portal_toolbar_open(toolbar, view->native, (portal_string) {view->target, length});
     *target = (portal_text) {copy, length};
     return true;
 }
@@ -165,29 +138,19 @@ static bool rectangle(portal_edges edges, portal_rect *rect, portal_text *error)
     return true;
 }
 
-bool portal_views_place(portal_string target, portal_edges edges, const portal_edges *bar,
-                        portal_string title, portal_text *error)
+bool portal_views_place(portal_string target, portal_edges edges, portal_string title,
+                        portal_text *error)
 {
-    portal_rect rect, mode_line;
+    portal_rect rect;
     struct view *view = find(target, PORTAL_ANY_KIND, error);
-    if (!view || !rectangle(edges, &rect, error) || (bar && !rectangle(*bar, &mode_line, error)))
+    if (!view || !rectangle(edges, &rect, error))
         return false;
     /* The frame may differ even when EDGES do not, so every place attaches. */
-    if (!portal_view_attach(view->native, title, rect, bar ? &mode_line : NULL, error))
+    if (!portal_view_attach(view->native, title, rect, error))
         return false;
     view->attached = true;
     view->edges = edges;
-    view->bar = bar;
-    /* It shows only in an attached pane with a mode line, which may be new:
-       the core draws again only if that changes what it shows. */
-    portal_toolbar_refresh(target);
     return true;
-}
-
-bool portal_views_mode_line(portal_string target)
-{
-    struct view *view = find(target, PORTAL_ANY_KIND, NULL);
-    return view && view->attached && view->bar;
 }
 
 bool portal_views_hide(portal_string target, portal_text *error)
@@ -198,7 +161,6 @@ bool portal_views_hide(portal_string target, portal_text *error)
     if (view->attached && !portal_view_detach(view->native, error))
         return false;
     view->attached = false;
-    portal_toolbar_refresh(target);
     return true;
 }
 
@@ -221,7 +183,6 @@ bool portal_views_close(portal_string target, portal_text *error)
         return false;
     }
     portal_web_state_free(view->web);
-    portal_toolbar_state_free(view->toolbar);
     free(view);
     return true;
 }

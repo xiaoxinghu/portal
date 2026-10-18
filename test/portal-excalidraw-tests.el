@@ -144,7 +144,7 @@
             (target (portal-view-target)))
         (unwind-protect
             (let ((state (portal--inspect target)))
-              (should (equal (plist-get state :options) '(:toolbar "none" :hosted t)))
+              (should (equal (plist-get state :options) '(:hosted t)))
               (should (equal (plist-get state :url) "http://127.0.0.1:1/token/excalidraw/"))
               (portal-fake-native-post target "{\"type\":\"ready\"}")
               (portal-fake-native-send (format "bridge %s\n" target))

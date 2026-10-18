@@ -68,23 +68,6 @@ Return the view's target."
         (should-not (equal second target))
         (should (equal (portal-view-buffers) (list (get-buffer "view") (current-buffer))))))))
 
-(ert-deftest portal-view-placement-names-the-mode-line ()
-  (portal-view-test--environment
-    (let ((target (portal-view-test--open "view")))
-      ;; The toolbar covers the mode line, exactly: between the window's
-      ;; body and its bottom edge.
-      (pcase-let ((`(,left ,top ,right ,bottom) (plist-get (portal--inspect target) :bar))
-                  (`(,window-left ,_ ,window-right ,window-bottom) (window-pixel-edges)))
-        (should (= left window-left))
-        (should (= right window-right))
-        (should (= bottom window-bottom))
-        (should (= (- bottom top) (window-mode-line-height))))
-      ;; Without a mode line there is nothing to cover.
-      (setq mode-line-format nil)
-      (portal-view-sync)
-      (should-not (plist-get (portal--inspect target) :bar))
-      (should (portal-view-test--shown target)))))
-
 (ert-deftest portal-view-split-keeps-one-view-in-the-selected-pane ()
   (portal-view-test--environment
     (let* ((target (portal-view-test--open "view"))

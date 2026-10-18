@@ -9,9 +9,7 @@
    them (portal_web_parse_url), so it compares URLs byte for byte with those
    the platform reports.  Loading the page on screen again, ignoring
    fragments, reloads it without a new history entry, and a view
-   that has shown nothing yet is at about:blank already.  Whether the page
-   can go back and forward, as the platform reports it, is here too, for the
-   toolbar (toolbar.c), which also shows its pages.  A hosted app's main
+   that has shown nothing yet is at about:blank already.  A hosted app's main
    frame stays at its address's origin: other pages open in the default
    browser, and local files, which WebKit would not load there, go to Emacs.
 
@@ -22,9 +20,8 @@
    yet; every other message keeps its order.  Only the app's main frame, at
    its address, may post, as the platform observed it.  The core adds its
    own messages, whose types an app cannot post: "page" for each page the
-   view commits, "follow" for each local link handed to Emacs, and "edit"
-   for the toolbar's Open in Emacs.  It also adds "error" for failures the
-   app cannot report, a type apps use too.
+   view commits, and "follow" for each local link handed to Emacs.  It also
+   adds "error" for failures the app cannot report, a type apps use too.
 
    Appearance.  A web view's pages see the system's appearance, following
    its changes, unless Lisp forces light or dark, at open or later for every
@@ -41,7 +38,6 @@
 #include "channel.h"
 #include "core.h"
 #include "input.h"
-#include "toolbar.h"
 #include "views.h"
 #include "web.h"
 
@@ -60,7 +56,6 @@ struct portal_web_state {
     uint64_t generation;         /* 1 + pages committed: the token of posts now. */
     struct message *first, *last; /* Waiting messages, oldest first. */
     bool announced;              /* Whether a bridge record went out for them. */
-    bool back, forward;          /* Whether the page can go back and forward. */
 };
 
 /* The shared scripts, embedded with C23's #embed, which Clang and GCC 15
@@ -71,9 +66,6 @@ struct portal_web_state {
 #endif
 static const char links_script[] = {
 #embed "scripts/links.js"
-    , 0};
-static const char contents_script[] = {
-#embed "scripts/contents.js"
     , 0};
 #ifdef __clang__
 #pragma clang diagnostic pop
@@ -228,7 +220,7 @@ static bool loadable(portal_string url)
 /* Types only the core sends. */
 static bool reserved(portal_string type)
 {
-    return is(type, "page") || is(type, "follow") || is(type, "edit");
+    return is(type, "page") || is(type, "follow");
 }
 
 /* Send TARGET's bridge record, unless one went out for messages Emacs has
@@ -476,29 +468,17 @@ bool portal_web_views_receive(portal_string target, portal_text *json, portal_te
     return true;
 }
 
-/* For toolbar.c. */
-
-void portal_web_views_history(portal_string target, bool *back, bool *forward)
+bool portal_web_views_go(portal_string target, portal_string step, portal_text *error)
 {
     struct portal_web_state *web;
-    bool found = find(target, &web);
-    *back = found && web->back;
-    *forward = found && web->forward;
-}
-
-portal_string portal_web_views_page(portal_string target)
-{
-    struct portal_web_state *web;
-    if (!find(target, &web) || web->hosted || !web->page.data)
-        return literal("");
-    return (portal_string) {web->page.data, web->page.length};
-}
-
-void portal_web_views_edit(portal_string target)
-{
-    struct portal_web_state *web;
-    if (find(target, &web) && web->hosted)
-        hand_off(target, "edit", literal(""));
+    portal_view *native = portal_views_find_web(target, &web, error);
+    if (!native)
+        return false;
+    if (is(step, "back"))
+        return portal_web_go(native, PORTAL_BACK, error);
+    if (is(step, "forward"))
+        return portal_web_go(native, PORTAL_FORWARD, error);
+    return fail(error, "Web history step must be \"back\" or \"forward\", not ", step);
 }
 
 /* The platform's calls, from portal.h. */
@@ -537,7 +517,6 @@ void portal_web_committed(portal_string target, portal_string url)
     web->generation++;
     if (web->hosted)
         queue_own(web, target, "page", "url", url);
-    portal_toolbar_committed(target);
 }
 
 void portal_web_failed(portal_string target, uint64_t token, portal_string message)
@@ -547,19 +526,7 @@ void portal_web_failed(portal_string target, uint64_t token, portal_string messa
         queue_own(web, target, "error", "message", message);
 }
 
-void portal_web_history(portal_string target, bool back, bool forward)
+portal_string portal_web_links_script(void)
 {
-    struct portal_web_state *web;
-    if (!find(target, &web))
-        return;
-    web->back = back;
-    web->forward = forward;
-    portal_toolbar_refresh(target);
-}
-
-portal_string portal_web_script(portal_script script)
-{
-    if (script == PORTAL_SCRIPT_LINKS)
-        return (portal_string) {links_script, sizeof links_script - 1};
-    return (portal_string) {contents_script, sizeof contents_script - 1};
+    return (portal_string) {links_script, sizeof links_script - 1};
 }

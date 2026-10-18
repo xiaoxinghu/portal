@@ -29,22 +29,12 @@ enum Views {
         return take(&target)
     }
 
-    /// Place TARGET at EDGES in the window titled TITLE, as `portal--place`
-    /// does, with its pane's mode line at BAR, if it has one.
-    static func place(_ target: String, edges: [Int], title: String, bar: [Int]? = nil) throws {
-        func convert(_ edges: [Int]) -> portal_edges {
-            portal_edges(left: Int64(edges[0]), top: Int64(edges[1]),
-                         right: Int64(edges[2]), bottom: Int64(edges[3]))
-        }
-        let edges = convert(edges)
-        var bar = bar.map(convert)
+    /// Place TARGET at EDGES in the window titled TITLE, as `portal--place` does.
+    static func place(_ target: String, edges: [Int], title: String) throws {
+        let edges = portal_edges(left: Int64(edges[0]), top: Int64(edges[1]),
+                                 right: Int64(edges[2]), bottom: Int64(edges[3]))
         try with(target) { target in
-            try with(title) { title in
-                try call { error in
-                    if bar == nil { return portal_views_place(target, edges, nil, title, error) }
-                    return portal_views_place(target, edges, &bar!, title, error)
-                }
-            }
+            try with(title) { title in try call { portal_views_place(target, edges, title, $0) } }
         }
     }
 
@@ -73,34 +63,7 @@ enum Views {
         return take(&json)
     }
 
-    /// Perform ACTION on TARGET's toolbar, as `portal--toolbar-action` does;
-    /// return its state as JSON.
-    static func toolbar(_ target: String, _ action: String) throws -> [String: Any] {
-        var json = portal_text()
-        try with(target) { target in
-            try with(action) { action in try call { portal_toolbar_perform(target, action, &json, $0) } }
-        }
-        return require(try JSONSerialization.jsonObject(with: Data(take(&json).utf8)) as? [String: Any])
-    }
-
-    /// Show LABEL on TARGET's toolbar, as `portal--toolbar-label` does.
-    static func label(_ target: String, _ label: String) throws {
-        try with(target) { target in
-            try with(label) { label in try call { portal_toolbar_label(target, label, $0) } }
-        }
-    }
-
-    /// Show every toolbar, or none, as `portal--toolbar` does.
-    static func showToolbars(_ shown: Bool) { portal_toolbar_show(shown) }
-
-    /// Draw every toolbar in COLORS and the font FAMILY at POINTS, as
-    /// `portal--toolbar-theme` does.
-    static func paintToolbars(_ colors: portal_colors, family: String = "", points: Double = 0) {
-        var colors = colors
-        with(family) { portal_toolbar_paint(&colors, portal_font(family: $0, points: points)) }
-    }
-
-    /// Who has TARGET's keyboard, as its toolbar's dot shows.
+    /// Who has TARGET's keyboard.
     static func owner(_ target: String) -> portal_owner {
         with(target) { portal_input_owner($0) }
     }

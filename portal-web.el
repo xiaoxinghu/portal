@@ -22,6 +22,7 @@
 (declare-function portal--web-load "portal-web" (target url))
 (declare-function portal--web-send "portal-web" (target json))
 (declare-function portal--web-receive "portal-web" (target))
+(declare-function portal--web-go "portal-web" (target step))
 (declare-function portal--web-appearance "portal-web" (appearance))
 
 (defun portal-web--appearance-changed (_symbol value operation _where)
@@ -71,16 +72,16 @@ queues commands through `unread-command-events'.")
   "Major mode for a buffer presenting a web view.
 RET or a click enters the page; `portal-input-escape-key' returns to Emacs.
 A chord the page does not use reaches Emacs, which runs it in this buffer.
-g or Command-R loads the page again, l and r go back and forward, and
-Command-F finds text in the page, whether Emacs or the page owns the
-keyboard, unless the page uses those chords itself.  q hides the view
-while the page keeps running, and killing the buffer closes it."
+g or Command-R loads the page again, and l and r go back and forward,
+whether Emacs or the page owns the keyboard, unless the page uses
+Command-R itself.  The mode line shows [app] while the page has the
+keyboard and [emacs] while Emacs does.  q hides the view while the page
+keeps running, and killing the buffer closes it."
   (setq-local cursor-type nil)
   (portal-input-mode 1))
 (keymap-set portal-web-mode-map "g" #'portal-web-reload)
 (keymap-set portal-web-mode-map "l" #'portal-web-back)
 (keymap-set portal-web-mode-map "r" #'portal-web-forward)
-(keymap-set portal-web-mode-map "s-f" #'portal-find)
 (keymap-set portal-web-mode-map "s-r" #'portal-web-reload)
 
 (defun portal-web--check-url (url)
@@ -89,26 +90,23 @@ while the page keeps running, and killing the buffer closes it."
                (string-match-p "\\`\\(?:https?://[^/[:space:]]+\\|file:///\\|data:\\|about:\\)" url))
     (user-error "Enter an absolute http, https, file, data or about URL")))
 
-(defun portal-web-open (url toolbar)
+(defun portal-web-open (url)
   "Open a web view for the current buffer, load URL in it and return its target.
-URL is an absolute http, https, file, data or about URL.  TOOLBAR is
-\"navigation\" for back, forward, find, zoom and reload, \"contents\" for
-those and a table of contents, \"markdown\" for those, a table of contents
-and, in a hosted app, Open in Emacs, or \"none\".
+URL is an absolute http, https, file, data or about URL.
 Once URL starts loading, this turns on `portal-input-mode', keeping the
 buffer's major mode.  If the view cannot open or load URL, it is closed."
   (portal-web--check-url url)
-  (portal-web--open url (list :toolbar toolbar)))
+  (portal-web--open url nil))
 
-(defun portal-web-open-hosted (path toolbar)
+(defun portal-web-open-hosted (path)
   "Open a hosted web view for the current buffer and return its target.
 The view opens at once, at about:blank, and loads PATH from the app host,
 such as \"/hello\", as soon as the host is ready.  This starts the host if
 needed; if it cannot start, the view stays at about:blank and
-`portal-web-reload' tries again.  TOOLBAR is as for `portal-web-open'.
+`portal-web-reload' tries again.
 The view keeps no cookies or storage between Emacs sessions, and a page
 outside the app host opens in the default browser instead."
-  (prog1 (portal-web--open "about:blank" (list :toolbar toolbar :hosted t))
+  (prog1 (portal-web--open "about:blank" (list :hosted t))
     (setq portal-web--hosted-path path)
     (portal-web--load-hosted)))
 
@@ -140,15 +138,23 @@ A hosted app loads from the app host, which starts first if needed."
       (portal-web--load-hosted)
     (portal--web-load portal-web--target portal-web--url)))
 
+(defun portal-web--go (step)
+  "Move the selected pane's web view through its history by STEP.
+STEP is \"back\" or \"forward\"; with no page to go to, nothing changes."
+  (let ((target (portal-view-target)))
+    (unless (and target (string-prefix-p "web:" target))
+      (user-error "Select a Portal web view"))
+    (portal--web-go target step)))
+
 (defun portal-web-back ()
   "Go back to the previous page in this web view's history."
   (interactive)
-  (portal-toolbar--action "back"))
+  (portal-web--go "back"))
 
 (defun portal-web-forward ()
   "Go forward to the next page in this web view's history."
   (interactive)
-  (portal-toolbar--action "forward"))
+  (portal-web--go "forward"))
 
 (defun portal-web--find (variable value)
   "Return the web buffer whose buffer-local VARIABLE is VALUE, or nil."
@@ -201,7 +207,7 @@ URLs are supported."
   (interactive (list (read-string "Open URL: " "https://")))
   (portal-web--check-url url)
   (portal-web--visit nil (portal-web--page-name url)
-                     (lambda () (portal-web-open url "navigation"))))
+                     (lambda () (portal-web-open url))))
 
 ;;;###autoload
 (defun portal-render-html (file-or-url)
@@ -232,14 +238,14 @@ Previewing the same file or URL again reuses its buffer and reloads it."
     (portal-web--check-url url)
     (portal-web--visit (portal-web--find 'portal-web--preview url)
                        (portal-web--page-name url)
-                       (lambda () (portal-web-open url "contents")))
+                       (lambda () (portal-web-open url)))
     (setq portal-web--preview url)))
 
 ;;;###autoload
 (defun portal-hello ()
   "Open Hello World, starting the bundled app host on first use."
   (interactive)
-  (portal-web--visit-hosted "/hello" "hello" "navigation"))
+  (portal-web--visit-hosted "/hello" "hello"))
 
 ;;;###autoload
 (defun portal-about ()
@@ -249,7 +255,7 @@ Previewing the same file or URL again reuses its buffer and reloads it."
    (format "/about?portal=%s&emacs=%s"
            (url-hexify-string (or (portal-build-version) "unknown"))
            (url-hexify-string emacs-version))
-   "about" "none"))
+   "about"))
 
 ;;;###autoload
 (defun portal-render-markdown (file)
@@ -277,7 +283,7 @@ pane, as does `portal-render-open-in-emacs' for the file on screen;
     (unless (and (file-regular-p path) (file-readable-p path))
       (user-error "Choose a readable regular file: %s" path))
     (portal-web--visit-hosted (portal-web--markdown-path path)
-                              (file-name-nondirectory path) "markdown")
+                              (file-name-nondirectory path))
     (setq portal-web--markdown path)))
 
 (defun portal-web--markdown-path (file)
@@ -368,13 +374,7 @@ A fragment such as #L42 or #L42-L50 moves to line 42."
           (and (string-match "\\`L\\([0-9]+\\)\\(?:-L[0-9]+\\)?\\'" fragment)
                (string-to-number (match-string 1 fragment)))))))))
 
-(defun portal-web--edit (event)
-  "Open the Markdown file on screen in EVENT's preview, from its toolbar."
-  (interactive "e")
-  (portal-web--from-view (car (cadr event)) #'portal-render-open-in-emacs))
-
 (define-key global-map [portal-web-follow] #'portal-web--follow)
-(define-key global-map [portal-web-edit] #'portal-web--edit)
 
 ;;;###autoload
 (defun portal-render-open-in-emacs ()
@@ -409,24 +409,21 @@ The app receives it through `window.portalBridge.receive'."
 (defun portal-web--bridge (target)
   "Pass each message waiting on TARGET's bridge to `portal-web-bridge-function'.
 The view's own messages are handled here instead: \"page\" reports each
-page it commits, \"follow\" each click on a link to a local file, and
-\"edit\" Open in Emacs in a Markdown preview's toolbar.
+page it commits, and \"follow\" each click on a link to a local file.
 Receiving the messages lets the next ones send a new record."
   (mapc (lambda (message)
           (pcase (plist-get message :type)
             ("page" (portal-web--page (plist-get message :url)))
             ("follow" (portal-web--queue 'portal-web-follow target (plist-get message :url)))
-            ("edit" (portal-web--queue 'portal-web-edit target))
             (_ (when portal-web-bridge-function (funcall portal-web-bridge-function message)))))
         (json-parse-string (portal--web-receive target) :object-type 'plist)))
 
 (setf (alist-get "bridge" portal-view-record-handlers nil nil #'equal) #'portal-web--bridge)
 
-(defun portal-web--visit-hosted (path name toolbar)
-  "Show the buffer for hosted app PATH, opening one called *portal: NAME*.
-A new buffer's view has TOOLBAR."
+(defun portal-web--visit-hosted (path name)
+  "Show the buffer for hosted app PATH, opening one called *portal: NAME*."
   (portal-web--visit (portal-web--find 'portal-web--hosted-path path) name
-                     (lambda () (portal-web-open-hosted path toolbar))))
+                     (lambda () (portal-web-open-hosted path))))
 
 (defun portal-web--load-hosted ()
   "Load this buffer's hosted app from the app host, starting the host if needed.

@@ -6,7 +6,7 @@
    results, and signals errors.  views.c owns every Portal view's identity
    and lifecycle, input.c decides who gets each key press, terminals.c keeps
    the rules of terminal views, web.c those of web views and the bridge,
-   toolbar.c each view's toolbar, shortcuts.c the system-wide shortcuts,
+   shortcuts.c the system-wide shortcuts,
    status.c where the status panel goes, and channel.c owns the pipe that
    carries records to Emacs.
    The platform implements the operations below: the production module links
@@ -141,12 +141,10 @@ bool portal_view_destroy(portal_view *view, portal_text *error);
    temporary and unique (docs/adr/0002), so a platform finds the frame again on
    every call and keeps nothing that could go stale.  VIEW may be detached or
    attached to this or another frame; it moves in one step, keeping its page
-   or session.  BAR, unless NULL, is the pane's mode line, where VIEW's
-   toolbar shows when the core draws one; without it the view has no
-   toolbar.  A failed attach, such as for a frame that is gone, leaves VIEW
+   or session.  A failed attach, such as for a frame that is gone, leaves VIEW
    where it was. */
 bool portal_view_attach(portal_view *view, portal_string frame, portal_rect rect,
-                        const portal_rect *bar, portal_text *error);
+                        portal_text *error);
 /* Detach an attached VIEW, keeping its page or session and its last size.
    Where a detached view lives is the platform's business: macOS parks it in
    an offscreen window. */
@@ -165,12 +163,10 @@ bool portal_view_describe(portal_view *view, portal_text *state, portal_text *er
 
    A web view's options, passed to portal_view_create, are :hosted, a flag
    or a string, for a hosted app, whose view keeps no data between sessions
-   and runs the bridge and the links script; and :toolbar, which the core has
-   checked is "navigation", "contents", "markdown", "none" or false.  A view
-   with a toolbar, one that is neither "none" nor false, runs the contents
-   script.  :appearance, which the core has checked is "light", "dark" or
-   false, starts the view in that portal_appearance, below: false for the
-   system's.  The platform ignores any other option.
+   and runs the bridge and the links script; and :appearance, which the core
+   has checked is "light", "dark" or false, starting the view in that
+   portal_appearance, below: false for the system's.  The platform ignores
+   any other option.
 
    Load URL in WEB as a new document, adding it to WEB's history.  The core
    has checked that URL is an absolute http, https, file, data or about URL,
@@ -187,9 +183,6 @@ bool portal_web_load(portal_view *web, portal_string url, portal_text *error);
 bool portal_web_parse_url(portal_string url, portal_text *parsed, portal_text *error);
 /* A step through a web view's history. */
 typedef enum portal_history { PORTAL_BACK, PORTAL_FORWARD, PORTAL_RELOAD } portal_history;
-/* A browser script that every platform's web views share (portal_web_script,
-   below). */
-typedef enum portal_script { PORTAL_SCRIPT_LINKS, PORTAL_SCRIPT_CONTENTS } portal_script;
 /* Go back or forward in WEB's history, doing nothing where there is no page
    to go to, or load its page again without a new history entry. */
 bool portal_web_go(portal_view *web, portal_history step, portal_text *error);
@@ -200,23 +193,6 @@ bool portal_web_go(portal_view *web, portal_history step, portal_text *error);
    portal_web_failed with TOKEN.  Fails at once, changing nothing, for JSON
    that is not an object. */
 bool portal_web_post(portal_view *web, portal_string json, uint64_t token, portal_text *error);
-/* Scale WEB's page by SCALE, which is positive: 1 shows it at its natural
-   size.  The scale stays through loads, reloads and history steps. */
-bool portal_web_zoom(portal_view *web, double scale, portal_text *error);
-/* Find QUERY in WEB's page, ignoring case: select and show the match after
-   the selection, or before it if BACKWARDS, wrapping around the page.  An
-   empty QUERY finds nothing.  The search finishes after this call returns:
-   then call portal_web_found with TOKEN. */
-bool portal_web_find(portal_view *web, portal_string query, bool backwards, uint64_t token,
-                     portal_text *error);
-/* Call FUNCTION, a function that the shared script SCRIPT defines, such as
-   "portalToolbar.count", with ARGUMENT, any JSON value, in WEB's main frame
-   and in the isolated world where SCRIPT runs.  FUNCTION is the core's own
-   text; ARGUMENT crosses as data, never as script text.  The call finishes
-   after this returns: then call portal_web_returned with TOKEN and its
-   result. */
-bool portal_web_call(portal_view *web, portal_script script, portal_string function,
-                     portal_string argument, uint64_t token, portal_text *error);
 /* The appearance a web view's pages see, as CSS's prefers-color-scheme and
    the colors of their controls: the system's, following its changes, or
    always light or dark.  The system's is the user's own setting, whatever the
@@ -243,7 +219,7 @@ bool portal_web_set_appearance(portal_view *web, portal_appearance appearance,
    :command; :theme, a name the platform lists, or false for the default;
    and :quick, a flag. The shell loads startup files and resolves the program;
    no Lisp environment snapshot is passed to the platform.  A terminal starts
-   at PORTAL_TERMINAL_POINTS, the font size the core resets it to.
+   at PORTAL_TERMINAL_POINTS.
 
    A terminal describes itself with "ready", whether its engine can draw and
    take input; "title", which the running program may set, "" until it does;
@@ -271,8 +247,7 @@ bool portal_terminal_press_enter(portal_view *terminal, portal_text *error);
 /* Read all of TERMINAL's text, its scrollback and screen.  macOS reads it by
    selecting everything, and leaves that selection active. */
 bool portal_terminal_read_text(portal_view *terminal, portal_text *text, portal_text *error);
-/* Set TERMINAL's font size to POINTS, which is positive. */
-bool portal_terminal_set_font_size(portal_view *terminal, double points, portal_text *error);
+/* The font size a terminal starts at, in points. */
 enum { PORTAL_TERMINAL_POINTS = 14 };
 
 /* Input, for a view of any kind.  The core decides what each key press in a
@@ -304,110 +279,6 @@ bool portal_view_literal(portal_view *view, portal_text *error);
    command does: a terminal pastes text, bracketed if its program asked. */
 bool portal_view_copy(portal_view *view, portal_text *error);
 bool portal_view_paste(portal_view *view, portal_text *error);
-
-/* Toolbars, for a view of any kind.  The core owns each view's toolbar
-   (native/Core/toolbar.c): whether it shows, which buttons it has and
-   which of them work, the value it shows, its find field's text and
-   matches, and its colors.  The platform draws what the core gives it, and
-   reports what the user does with portal_toolbar_clicked and
-   portal_toolbar_typed.  A toolbar shows only while its view has the
-   keyboard, or its find field is open, and only over the BAR its view was
-   attached with: the pane's mode line, which it covers exactly, so the
-   content never resizes.  How a toolbar looks is the platform's: on macOS,
-   a strip with tooltips and accessibility labels.
-
-   A color for a toolbar, in sRGB with components from 0 to 1, if SET;
-   otherwise the platform's own default for the color's role. */
-typedef struct portal_color {
-    bool set;
-    double red, green, blue;
-} portal_color;
-
-/* A toolbar's colors, which follow Emacs's faces (portal-toolbar.el). */
-typedef struct portal_colors {
-    portal_color background; /* The toolbar. */
-    portal_color border;     /* Its edge, and rules between groups of buttons. */
-    portal_color shadow;     /* Buttons at rest, a value at its standard, Emacs's dot. */
-    portal_color foreground; /* A button under the pointer, a changed value. */
-    portal_color success;    /* The tint's default. */
-    portal_color accent;     /* The tint during a handoff, and a button toggled on. */
-    portal_color tint;       /* The dot, the label and the hairline while the view has
-                                the keyboard; SUCCESS when unset. */
-    portal_color strip;      /* The toolbar's background while the view has the keyboard;
-                                when unset, BACKGROUND tinted toward TINT. */
-} portal_colors;
-
-/* A toolbar's font, which follows Emacs's default face (portal-toolbar.el):
-   a family, "" for the platform's monospace font, and a size in points, 0
-   for the platform's. */
-typedef struct portal_font {
-    portal_string family;
-    double points;
-} portal_font;
-
-/* Who has a view's keyboard, which the toolbar's first button shows:
-   Emacs, the view, or Emacs handling the view's handoff. */
-typedef enum portal_owner {
-    PORTAL_OWNER_EMACS,
-    PORTAL_OWNER_VIEW,
-    PORTAL_OWNER_PENDING,
-} portal_owner;
-
-/* A toolbar's buttons.  A click on OWNER moves the keyboard between Emacs
-   and the view.  DECREASE, RESET and INCREASE change the value the toolbar
-   shows, which RESET shows as its label.  PREVIOUS, NEXT and CLOSE belong to
-   the find field. */
-typedef enum portal_button {
-    PORTAL_BUTTON_OWNER,
-    PORTAL_BUTTON_BACK,
-    PORTAL_BUTTON_FORWARD,
-    PORTAL_BUTTON_FIND,
-    PORTAL_BUTTON_CONTENTS, /* A table of contents, shown or hidden. */
-    PORTAL_BUTTON_EDIT,     /* Open in Emacs. */
-    PORTAL_BUTTON_DECREASE,
-    PORTAL_BUTTON_RESET,
-    PORTAL_BUTTON_INCREASE,
-    PORTAL_BUTTON_RELOAD,
-    PORTAL_BUTTON_PREVIOUS,
-    PORTAL_BUTTON_NEXT,
-    PORTAL_BUTTON_CLOSE,
-} portal_button;
-
-/* What a toolbar's value measures: a page's zoom in percent, or a font size
-   in points. */
-typedef enum portal_unit { PORTAL_PERCENT, PORTAL_POINTS } portal_unit;
-
-/* One view's toolbar, as the platform draws it.  The masks have the bit
-   1 << BUTTON for each portal_button. */
-typedef struct portal_toolbar {
-    bool visible; /* Without it, draw no toolbar: the pane's mode line shows. */
-    portal_colors colors;
-    portal_font font;
-    portal_owner owner;
-    uint32_t buttons;  /* The buttons the toolbar has now. */
-    uint32_t enabled;  /* Of those, the ones a click can act on. */
-    uint32_t selected; /* Of those, the ones toggled on. */
-    double value;      /* In UNIT, which RESET returns it to STANDARD. */
-    double standard;
-    portal_unit unit;
-    portal_string label;  /* What the view shows: a web page's URL without its
-                             scheme, or what Lisp named instead, such as a buffer
-                             name or a file; "" when neither is known. */
-    bool finding;         /* Show the find field and its matches, not the value. */
-    portal_string query;  /* The find field's text. */
-    int64_t match;        /* The selected match, from 1, or 0 for none, */
-    int64_t matches;      /* of this many. */
-} portal_toolbar;
-
-/* Draw VIEW's toolbar as STATE says, replacing what it showed.  A view
-   shows no toolbar until the core first draws one.  A detached view keeps
-   its toolbar, to show wherever it is attached next.  The core draws only
-   what changed, so the platform needs no comparison of its own. */
-bool portal_toolbar_draw(portal_view *view, const portal_toolbar *state, portal_text *error);
-/* Give the find field of VIEW's toolbar, which the core has drawn, the
-   keyboard, if VIEW is attached, and report the change with
-   portal_input_focus before returning: the field is part of the view. */
-bool portal_toolbar_focus(portal_view *view, portal_text *error);
 
 /* Timers, implemented by the platform.  Call portal_timer_fired(TOKEN) once,
    from the platform's event loop on the module thread, no sooner than
@@ -624,7 +495,7 @@ typedef enum portal_navigation {
    as the main frame.  Call it for each navigation the platform can refuse,
    and for each click on a link that the platform cannot follow at all, such
    as a hosted app's links to local files, which the shared links script
-   reports (portal_web_script); for those, allow means load URL. */
+   reports (portal_web_links_script); for those, allow means load URL. */
 portal_navigation portal_web_navigating(portal_string target, portal_string url,
                                         bool main_frame);
 /* The page in TARGET committed URL: a new document, or one from its history. */
@@ -634,50 +505,18 @@ void portal_web_committed(portal_string target, portal_string url);
    portal_web_post sent with TOKEN.  MESSAGE says what, for the app's buffer;
    a delivery to a page that has since gone is ignored. */
 void portal_web_failed(portal_string target, uint64_t token, portal_string message);
-/* The page in TARGET finished loading its document: the scripts that run
-   at a document's end have run. */
-void portal_web_loaded(portal_string target);
-/* Whether TARGET's page can now go BACK, and FORWARD, in its history.
-   Report each change, from any cause. */
-void portal_web_history(portal_string target, bool back, bool forward);
-/* The search that portal_web_find started with TOKEN FOUND a match, or not. */
-void portal_web_found(portal_string target, uint64_t token, bool found);
-/* The call that portal_web_call started with TOKEN returned VALUE, an
-   integer; or, if it failed or returned anything else, OK is false. */
-void portal_web_returned(portal_string target, uint64_t token, bool ok, int64_t value);
-/* The contents script in TARGET's main frame reports COUNT headings. */
-void portal_web_headings(portal_string target, int64_t count);
-
-/* Toolbars call these for what the user does.  TARGET names the view, as
-   for web views, and the core ignores a call for a closed view, or for a
-   button its toolbar does not have now.  The core may draw the toolbar again,
-   or call other primitives, before either returns.
-
-   The user clicked BUTTON, which must be enabled, or pressed one of the find
-   field's own keys, enabled or not: on macOS, Return for NEXT, Shift-Return
-   for PREVIOUS, and Escape for CLOSE.  So Return searches again even when
-   nothing matched. */
-void portal_toolbar_clicked(portal_string target, portal_button button);
-/* The user changed the text of TARGET's find field to QUERY. */
-void portal_toolbar_typed(portal_string target, portal_string query);
-
-/* Browser scripts that every platform's web views share.  The core owns
-   their source, embedded when it is compiled from native/Core/scripts, so
-   a platform needs no files at run time and no app host.  Each is one
-   JavaScript function expression taking REPORT, a function it calls with a
-   value for the platform.  The platform starts it in its own isolated world,
-   out of the page's reach, as "(SOURCE)(REPORT)" with REPORT its transport to
-   a native handler.  The core calls a script's functions with
-   portal_web_call, whose argument crosses as data, as portal_web_post's
-   does.
+/* The browser script that every platform's hosted web views share.  The
+   core owns its source, embedded when it is compiled from
+   native/Core/scripts, so a platform needs no files at run time and no app
+   host.  It is one JavaScript function expression taking REPORT, a function
+   it calls with a value for the platform.  The platform starts it in its own
+   isolated world, out of the page's reach, as "(SOURCE)(REPORT)" with REPORT
+   its transport to a native handler.
 
    Links: in a hosted app's main frame from the start of each document,
    reports the URL of each link to a local file the user clicks, which a page
    from the app host could not follow.  Treat each as portal_web_navigating
-   asks.  Contents: in the main frame of a view with a toolbar, from the end
-   of each document, defines functions for the core, and reports the number
-   of headings, an integer, when it starts and whenever that number changes:
-   pass each report to portal_web_headings. */
-portal_string portal_web_script(portal_script script);
+   asks. */
+portal_string portal_web_links_script(void);
 
 #endif

@@ -313,7 +313,8 @@
             (portal-terminal-focus)
             (portal-terminal-test--paste "exit" t)
             (portal-terminal-test--wait (lambda () (funcall metadata :exited)))
-            (should (equal (buffer-local-value 'mode-line-process buffer) ":exited"))
+            (should (string-suffix-p ":exited" (with-current-buffer buffer
+                                                 (format-mode-line mode-line-process))))
             (should (string-match-p "sleep 3" (portal-terminal-test--text)))
             (should (plist-get (portal-terminal-test--state) :focused))
             (when (fboundp 'portal-test-native-key)

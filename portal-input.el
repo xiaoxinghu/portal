@@ -8,12 +8,13 @@
 ;; the view the keyboard back, unless Emacs still waits for keys: a prefix
 ;; argument, a transient keymap, or keys typed meanwhile.
 ;; The configured escape (Command-period by default) returns to Emacs;
-;; RET in the buffer re-enters the view.
+;; RET in the buffer re-enters the view.  The buffer's mode line says who
+;; has the keyboard, after the major mode's name: [app] while the view has
+;; it, [emacs] while Emacs does.
 ;; The native core decides who gets each key (native/Core/input.c).
 
 (require 'cl-lib)
 (require 'portal-view)
-(require 'portal-toolbar)
 
 (defgroup portal-input nil "Input for Portal native views." :group 'applications)
 (declare-function portal--input "portal" (target action &optional serial))
@@ -124,9 +125,39 @@ modifier only on space, as in S-SPC."
                    collect modifier)
           (list character))))
 
+(defvar-local portal-input--focused nil
+  "Whether this buffer's view has the keyboard, as the native module last said.
+Its focus record sets it on every change, whatever made it: RET or a click
+into the view, the escape key, a handoff to Emacs, or a click elsewhere.")
+
+(defun portal-input--mode-line-process ()
+  "Return who has the keyboard, for `mode-line-process': [app] or [emacs]."
+  (propertize (if portal-input--focused "[app]" "[emacs]")
+              'help-echo (if portal-input--focused
+                             (format "The app has the keyboard; %s returns it to Emacs"
+                                     portal-input-escape-key)
+                           "Emacs has the keyboard; RET enters the app")))
+
+(defconst portal-input-mode-line-process '(:eval (portal-input--mode-line-process))
+  "Mode line construct naming who has the keyboard, after the major mode's name.
+`portal-input-mode' puts it in `mode-line-process', the place Emacs keeps
+for a buffer's state beside its mode name, as comint and eat use it, so the
+default mode line and the packages that read `mode-line-process' all show
+Ghostty[app] while the view has the keyboard and Ghostty[emacs] while Emacs
+does.  A major mode may add its own state after it, as the terminal adds
+:exited.")
+(put 'portal-input-mode-line-process 'risky-local-variable t)
+
 (define-minor-mode portal-input-mode
-  "Enter a Portal view with RET; `portal-input-escape-key' returns to Emacs."
-  :lighter nil :keymap portal-input-mode-map)
+  "Enter a Portal view with RET; `portal-input-escape-key' returns to Emacs.
+The mode line shows who has the keyboard, after the major mode's name:
+[app] while the view has it, [emacs] while Emacs does."
+  :lighter nil :keymap portal-input-mode-map
+  (let ((process (ensure-list mode-line-process)))
+    (if portal-input-mode
+        (unless (memq 'portal-input-mode-line-process process)
+          (setq mode-line-process (cons 'portal-input-mode-line-process process)))
+      (setq mode-line-process (delq 'portal-input-mode-line-process (copy-sequence process))))))
 
 (defun portal-input--target (&optional window)
   "Return the native target for WINDOW, defaulting to the selected window."
@@ -194,6 +225,12 @@ The click already gave the view the keyboard; this makes Emacs agree."
       (lambda (target)
         (setq unread-command-events
               (nconc unread-command-events (list (list 'portal-input-select (list target)))))))
+
+;; The view gained or lost the keyboard: its mode line shows which.
+(setf (alist-get "focus" portal-view-record-handlers nil nil #'equal)
+      (lambda (_target focused)
+        (setq portal-input--focused (equal focused "1"))
+        (force-mode-line-update)))
 
 (defun portal-input--connect ()
   "Load the module, which has the input bridge."

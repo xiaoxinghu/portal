@@ -22,12 +22,11 @@ typedef struct portal_edges {
    failure nothing is registered, and the platform has released what it made. */
 bool portal_views_open(portal_string kind, const portal_option *options, size_t count,
                        portal_text *target, portal_text *error);
-/* Attach TARGET's view at EDGES in the frame titled TITLE, with its pane's
-   mode line at BAR, or NULL for a pane without one.  Placing an attached
-   view again moves the same platform view.  On failure the view stays where
-   it was, attached or not, and still open. */
-bool portal_views_place(portal_string target, portal_edges edges, const portal_edges *bar,
-                        portal_string title, portal_text *error);
+/* Attach TARGET's view at EDGES in the frame titled TITLE.  Placing an
+   attached view again moves the same platform view.  On failure the view
+   stays where it was, attached or not, and still open. */
+bool portal_views_place(portal_string target, portal_edges edges, portal_string title,
+                        portal_text *error);
 /* Detach TARGET's view if it is attached, keeping its page or session, and
    end its handoff.  If the platform refuses, the view stays
    attached. */
