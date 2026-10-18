@@ -126,17 +126,25 @@ modifier only on space, as in S-SPC."
           (list character))))
 
 (defvar-local portal-input--focused nil
-  "Whether this buffer's view has the keyboard, as the native module last said.
-Its focus record sets it on every change, whatever made it: RET or a click
-into the view, the escape key, a handoff to Emacs, or a click elsewhere.")
+  "The target of this buffer's view while it has the keyboard, else nil.
+The view's focus record sets it on every change, whatever made it: RET or
+a click into the view, the escape key, a handoff to Emacs, or a click
+elsewhere.  It names the view so that a view closed while it had the
+keyboard, which sends no record once its target is gone, and a new view in
+the same buffer, which has a new target, both count as Emacs's.")
+
+(defun portal-input--focused-p ()
+  "Whether this buffer's view has the keyboard."
+  (and portal-view--target (equal portal-input--focused portal-view--target)))
 
 (defun portal-input--mode-line-process ()
   "Return who has the keyboard, for `mode-line-process': [app] or [emacs]."
-  (propertize (if portal-input--focused "[app]" "[emacs]")
-              'help-echo (if portal-input--focused
-                             (format "The app has the keyboard; %s returns it to Emacs"
-                                     portal-input-escape-key)
-                           "Emacs has the keyboard; RET enters the app")))
+  (let ((focused (portal-input--focused-p)))
+    (propertize (if focused "[app]" "[emacs]")
+                'help-echo (if focused
+                               (format "The app has the keyboard; %s returns it to Emacs"
+                                       portal-input-escape-key)
+                             "Emacs has the keyboard; RET enters the app"))))
 
 (defconst portal-input-mode-line-process '(:eval (portal-input--mode-line-process))
   "Mode line construct naming who has the keyboard, after the major mode's name.
@@ -228,8 +236,8 @@ The click already gave the view the keyboard; this makes Emacs agree."
 
 ;; The view gained or lost the keyboard: its mode line shows which.
 (setf (alist-get "focus" portal-view-record-handlers nil nil #'equal)
-      (lambda (_target focused)
-        (setq portal-input--focused (equal focused "1"))
+      (lambda (target focused)
+        (setq portal-input--focused (and (equal focused "1") target))
         (force-mode-line-update)))
 
 (defun portal-input--connect ()

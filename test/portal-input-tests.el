@@ -22,12 +22,22 @@
       (should (get 'portal-input-mode-line-process 'risky-local-variable))
       (should (equal (portal-input--mode-line-process) "[emacs]"))
       (portal-view--dispatch "focus web:7 1")
-      (should portal-input--focused)
+      (should (portal-input--focused-p))
       (should (equal (portal-input--mode-line-process) "[app]"))
       (should (string-match-p (regexp-quote portal-input-escape-key)
                               (get-text-property 0 'help-echo (portal-input--mode-line-process))))
       (portal-view--dispatch "focus web:7 0")
       (should (equal (portal-input--mode-line-process) "[emacs]"))
+      ;; A view closed while it had the keyboard sends no record its buffer
+      ;; can take: without a view, Emacs has the keyboard, and so it does
+      ;; with the next view in the buffer until that one says otherwise.
+      (portal-view--dispatch "focus web:7 1")
+      (setq portal-view--target nil)
+      (should (equal (portal-input--mode-line-process) "[emacs]"))
+      (setq portal-view--target "web:8")
+      (should (equal (portal-input--mode-line-process) "[emacs]"))
+      (portal-view--dispatch "focus web:8 1")
+      (should (equal (portal-input--mode-line-process) "[app]"))
       ;; Turning the mode off takes the construct out; on puts it back once.
       (portal-input-mode -1)
       (should-not mode-line-process)
