@@ -122,12 +122,19 @@ from that thread."
 
 (ert-deftest portal-input-gui-web-command-period-returns-to-emacs ()
   (portal-input-gui--page
+    ;; The mode line renders who has the keyboard, and follows each change.
+    (portal-terminal-test--wait
+     (lambda () (equal (format-mode-line mode-line-process) "[app]")))
     (portal-test-native-key 47 portal-input-gui--command ".")
     (should-not (portal-input--action "focused"))
     (should-not (portal-input--action "pending"))
+    (portal-terminal-test--wait
+     (lambda () (equal (format-mode-line mode-line-process) "[emacs]")))
     (portal-integration-test--emacs-input)
     (portal-input-focus)
-    (should (portal-input--action "focused"))))
+    (should (portal-input--action "focused"))
+    (portal-terminal-test--wait
+     (lambda () (equal (format-mode-line mode-line-process) "[app]")))))
 
 (ert-deftest portal-input-gui-web-configured-escape-preempts-the-page ()
   (portal-input-gui--page

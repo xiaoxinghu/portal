@@ -153,7 +153,8 @@ for a buffer's state beside its mode name, as comint and eat use it, so the
 default mode line and the packages that read `mode-line-process' all show
 Ghostty[app] while the view has the keyboard and Ghostty[emacs] while Emacs
 does.  A major mode may add its own state after it, as the terminal adds
-:exited.")
+:exited.  The list it goes in starts with \"\": a list that starts with a
+symbol is the conditional construct (SYMBOL THEN ELSE), not a sequence.")
 (put 'portal-input-mode-line-process 'risky-local-variable t)
 
 (define-minor-mode portal-input-mode
@@ -161,11 +162,11 @@ does.  A major mode may add its own state after it, as the terminal adds
 The mode line shows who has the keyboard, after the major mode's name:
 [app] while the view has it, [emacs] while Emacs does."
   :lighter nil :keymap portal-input-mode-map
-  (let ((process (ensure-list mode-line-process)))
-    (if portal-input-mode
-        (unless (memq 'portal-input-mode-line-process process)
-          (setq mode-line-process (cons 'portal-input-mode-line-process process)))
-      (setq mode-line-process (delq 'portal-input-mode-line-process (copy-sequence process))))))
+  (let ((process (delq 'portal-input-mode-line-process
+                       (delete "" (copy-sequence (ensure-list mode-line-process))))))
+    (setq mode-line-process
+          (cond (portal-input-mode (append '("" portal-input-mode-line-process) process))
+                (process (cons "" process))))))
 
 (defun portal-input--target (&optional window)
   "Return the native target for WINDOW, defaulting to the selected window."
