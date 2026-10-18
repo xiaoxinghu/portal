@@ -45,14 +45,24 @@
       (should-not mode-line-process)
       (portal-input-mode 1)
       (portal-input-mode 1)
-      (should (equal mode-line-process '("" portal-input-mode-line-process))))))
+      (should (equal mode-line-process '("" portal-input-mode-line-process)))))
+  ;; A buffer's own construct keeps its shape as one element, and comes back.
+  (dolist (own '((busy ":on" ":off") ":%s" (busy ":on")))
+    (with-temp-buffer
+      (setq mode-line-process own)
+      (portal-input-mode 1)
+      (should (equal mode-line-process (list "" 'portal-input-mode-line-process own)))
+      (portal-input-mode -1)
+      (should (equal mode-line-process own)))))
 
 (ert-deftest portal-input-terminal-mode-line-adds-the-exit ()
   (with-temp-buffer
     (portal-terminal-mode)
     (should (equal mode-line-process
                    '("" portal-input-mode-line-process (portal-terminal--exited ":exited"))))
-    (should (equal (portal-input--mode-line-process) "[emacs]"))))
+    (should (equal (portal-input--mode-line-process) "[emacs]"))
+    (portal-input-mode -1)
+    (should (equal mode-line-process '(portal-terminal--exited ":exited")))))
 
 (defvar portal-input-test--called nil)
 (defun portal-input-test--save () (interactive) (setq portal-input-test--called t))

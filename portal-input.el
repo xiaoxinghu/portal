@@ -152,9 +152,11 @@ the same buffer, which has a new target, both count as Emacs's.")
 for a buffer's state beside its mode name, as comint and eat use it, so the
 default mode line and the packages that read `mode-line-process' all show
 Ghostty[app] while the view has the keyboard and Ghostty[emacs] while Emacs
-does.  A major mode may add its own state after it, as the terminal adds
-:exited.  The list it goes in starts with \"\": a list that starts with a
-symbol is the conditional construct (SYMBOL THEN ELSE), not a sequence.")
+does.  The list it goes in starts with \"\": a list that starts with a
+symbol is the conditional construct (SYMBOL THEN ELSE), not a sequence.
+The buffer's own `mode-line-process', if it had one, follows as one
+element, so a conditional or a string keeps its shape, and turning the
+mode off restores it; the terminal puts its :exited there.")
 (put 'portal-input-mode-line-process 'risky-local-variable t)
 
 (define-minor-mode portal-input-mode
@@ -162,11 +164,13 @@ symbol is the conditional construct (SYMBOL THEN ELSE), not a sequence.")
 The mode line shows who has the keyboard, after the major mode's name:
 [app] while the view has it, [emacs] while Emacs does."
   :lighter nil :keymap portal-input-mode-map
-  (let ((process (delq 'portal-input-mode-line-process
-                       (delete "" (copy-sequence (ensure-list mode-line-process))))))
-    (setq mode-line-process
-          (cond (portal-input-mode (append '("" portal-input-mode-line-process) process))
-                (process (cons "" process))))))
+  (let ((wrapped (and (consp mode-line-process) (equal (car mode-line-process) "")
+                      (eq (cadr mode-line-process) 'portal-input-mode-line-process))))
+    (cond ((and portal-input-mode (not wrapped))
+           (setq mode-line-process (append '("" portal-input-mode-line-process)
+                                           (and mode-line-process (list mode-line-process)))))
+          ((and (not portal-input-mode) wrapped)
+           (setq mode-line-process (nth 2 mode-line-process))))))
 
 (defun portal-input--target (&optional window)
   "Return the native target for WINDOW, defaulting to the selected window."
