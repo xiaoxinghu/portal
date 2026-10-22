@@ -45,6 +45,10 @@ struct portal_input {
     bool binding;         /* It started with a native binding's chord. */
     bool first;           /* Reading: no key of the sequence yet. */
     bool focused;         /* As the platform last reported. */
+    /* The app's last press was a plain Escape, at ESCAPED_AT, while the view
+       had the keyboard. */
+    bool escaped;
+    uint64_t escaped_at;
 };
 
 /* Set up the input of a new view of KIND, created with OPTIONS. */
@@ -73,6 +77,11 @@ bool portal_input_bindings(const portal_binding *regular, size_t regular_count,
    printable ASCII character or Escape (27), with Control, Meta or Super.
    Invalid chords leave the previous choice intact. */
 bool portal_input_set_escape(portal_chord chord, portal_text *error);
+
+/* Return to Emacs on a second plain Escape typed within MILLISECONDS of
+   the first, which the app gets, with no key between; 0, initially, turns
+   this off.  A negative interval fails and changes nothing. */
+bool portal_input_set_double_escape(int64_t milliseconds, portal_text *error);
 
 /* Perform ACTION on TARGET's input, as portal--input does, and set *RESULT.
    A nonzero SERIAL must name TARGET's handoff, still going, or nothing

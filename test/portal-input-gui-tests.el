@@ -155,6 +155,25 @@ from that thread."
     (portal-test-native-key 47 portal-input-gui--command ".")
     (should-not (portal-input--action "focused"))))
 
+(ert-deftest portal-input-gui-web-double-escape-returns-to-emacs ()
+  (portal-input-gui--page
+    (let ((portal-input-double-escape 0.5))
+      ;; Escape typed slowly twice is the page's both times.
+      (portal-test-native-key 53 0 "\e")
+      (portal-input-gui--settled 1)
+      (sleep-for 0.6)
+      (portal-test-native-key 53 0 "\e")
+      (portal-input-gui--settled 2)
+      (should (portal-input--action "focused"))
+      ;; Typed quickly, the page gets the first, and the second returns to Emacs.
+      (sleep-for 0.6)
+      (portal-test-native-key 53 0 "\e")
+      (portal-test-native-key 53 0 "\e")
+      (portal-input-gui--settled 3)
+      (should-not (portal-input--action "focused"))
+      (should-not unread-command-events)
+      (should (portal-excalidraw-gui--js "return keys.every(k=>k[0]==='Escape')")))))
+
 (ert-deftest portal-input-gui-web-command-c-and-v-copy-and-paste ()
   (portal-input-gui--page
     (let ((saved (gui-get-selection 'CLIPBOARD)))

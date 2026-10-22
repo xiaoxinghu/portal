@@ -47,6 +47,7 @@ enum { MAX_PROPERTIES = 32, MAX_TIMERS = 64, MAX_VIEWS = 4096, MAX_KEYS = 64 };
 struct press {
     portal_chord chord;
     bool repeat;
+    uint64_t time; /* On the fake clock, when the user pressed it. */
 };
 
 /* One property that portal--inspect reports. */
@@ -85,6 +86,7 @@ static struct portal_view *all[MAX_VIEWS]; /* Every view created, destroyed or n
 static size_t view_count;
 static struct press posted[MAX_KEYS]; /* Replayed presses the event loop has not run. */
 static size_t posted_count;
+static uint64_t now; /* The fake clock, in milliseconds; see portal_fake_wait. */
 static char key_log[4096];            /* Where presses went, since the last portal_fake_keys. */
 
 static portal_text copy(const char *data, size_t length)
@@ -634,8 +636,11 @@ static void log_key(const char *where, struct press press)
     for (size_t i = 0; i < 4; i++)
         if (press.chord.modifiers & bits[i])
             length += (size_t) snprintf(name + length, sizeof name - length, "%s", prefixes[i]);
-    snprintf(name + length, sizeof name - length, "%c%s", (char) press.chord.character,
-             press.repeat ? " repeat" : "");
+    if (press.chord.character == 27)
+        snprintf(name + length, sizeof name - length, "ESC%s", press.repeat ? " repeat" : "");
+    else
+        snprintf(name + length, sizeof name - length, "%c%s", (char) press.chord.character,
+                 press.repeat ? " repeat" : "");
     size_t used = strlen(key_log);
     snprintf(key_log + used, sizeof key_log - used, "%s%s %s", used ? ", " : "", where, name);
 }
@@ -717,9 +722,11 @@ static struct portal_view *focused(void)
     return NULL;
 }
 
-void portal_fake_press(portal_chord chord, bool repeat)
+/* Route PRESS as the platform routes a key event, now or replayed. */
+static void route(struct press press)
 {
-    struct press press = {chord, repeat};
+    portal_chord chord = press.chord;
+    bool repeat = press.repeat;
     struct portal_view *view = capturing();
     if ((view || focused()) && portal_input_is_escape(chord)) {
         portal_fake_escape();
@@ -738,7 +745,7 @@ void portal_fake_press(portal_chord chord, bool repeat)
         log_key("emacs", press);
         return;
     }
-    switch (portal_input_key(target_of(view), chord, repeat)) {
+    switch (portal_input_key(target_of(view), chord, repeat, press.time)) {
     case PORTAL_KEY_PASS:
         /* Where it would go without Portal: the keyboard may have moved. */
         view = focused();
@@ -762,6 +769,16 @@ void portal_fake_press(portal_chord chord, bool repeat)
         log_key("offered", press);
         break;
     }
+}
+
+void portal_fake_press(portal_chord chord, bool repeat)
+{
+    route((struct press) {chord, repeat, now});
+}
+
+void portal_fake_wait(uint64_t milliseconds)
+{
+    now += milliseconds;
 }
 
 void portal_fake_answer(bool used)
@@ -798,7 +815,7 @@ void portal_fake_run(void)
     while (posted_count) {
         struct press press = posted[0];
         memmove(posted, posted + 1, --posted_count * sizeof *posted);
-        portal_fake_press(press.chord, press.repeat);
+        route(press);
     }
 }
 

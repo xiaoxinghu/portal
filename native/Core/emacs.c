@@ -658,6 +658,15 @@ LISP_FUNCTION(Finput_escape_key)
     return done(env, portal_input_set_escape(chord, &error), &error);
 }
 
+LISP_FUNCTION(Finput_double_escape)
+{
+    int64_t milliseconds = env->extract_integer(env, args[0]);
+    portal_text error = {0};
+    if (!returning(env))
+        return NULL;
+    return done(env, portal_input_set_double_escape(milliseconds, &error), &error);
+}
+
 LISP_FUNCTION(Finput)
 {
     portal_text target = {0}, action = {0}, error = {0};
@@ -725,6 +734,8 @@ static const struct export {
      "Atomically replace runtime binding profiles from JSON."},
     {"portal--input-escape-key", 2, 2, Finput_escape_key, NULL,
      "Reserve CHARACTER with MODIFIERS for returning to Emacs in every view."},
+    {"portal--input-double-escape", 1, 1, Finput_double_escape, NULL,
+     "Return to Emacs on a second Escape within MILLISECONDS of the first; 0 never does."},
     {"portal--input", 2, 3, Finput, NULL,
      "Perform ACTION on native TARGET, optionally validating its handoff SERIAL."},
     {"portal--launcher-attach", 1, 1, Flauncher_attach, NULL,

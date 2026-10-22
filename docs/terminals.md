@@ -87,7 +87,8 @@ other TUIs use the real protocol engine, not Emacs text, WebKit or Bun.
 - The shell gets typing and every Control/Option chord, including Escape,
   `C-g`, `C-c` and tmux's `C-b`. Emacs runs Command chords in the terminal buffer,
   then returns focus.
-- `Command-period` (`⌘.`, configurable via `portal-input-escape-key`) or
+- `Command-period` (`⌘.`, configurable via `portal-input-escape-key`),
+  Escape twice [once turned on](keyboard.md#escape-twice), or
   **Return to Emacs** leaves Emacs in control. Use normal
   bindings, then `RET` to re-enter Ghostty.
 - Mouse-select and use `Command-C` / `Command-V` for the macOS clipboard;

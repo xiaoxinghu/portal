@@ -446,8 +446,12 @@ typedef enum portal_key {
 /* CHORD was pressed, or REPEAT-ed, in TARGET's view: the view has the
    keyboard, or holds a trigger in the window where the key was pressed.
    Press and repeat only: a release or a modifier change never needs the
-   core. */
-portal_key portal_input_key(portal_string target, portal_chord chord, bool repeat);
+   core.  TIME is when the key was pressed, in milliseconds on a clock that
+   never goes back, such as the time since the system started: the event's
+   own time, not when the platform got to it.  The core may return the
+   keyboard to Emacs before answering TAKE, as for a second Escape typed
+   quickly (portal-input-double-escape). */
+portal_key portal_input_key(portal_string target, portal_chord chord, bool repeat, uint64_t time);
 /* The app of TARGET's view did not use CHORD, a press or REPEAT the core
    answered PORTAL_KEY_OFFER.  The answer is TAKE: drop the press, and
    deliver what was held after it as for a press the app used; or HOLD: the

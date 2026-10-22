@@ -7,7 +7,8 @@
 ;; sequence with the view's buffer's keymaps and runs the command, then gives
 ;; the view the keyboard back, unless Emacs still waits for keys: a prefix
 ;; argument, a transient keymap, or keys typed meanwhile.
-;; The configured escape (Command-period by default) returns to Emacs;
+;; The configured escape (Command-period by default) returns to Emacs, as
+;; can Escape typed twice, with `portal-input-double-escape';
 ;; RET in the buffer re-enters the view.  The buffer's mode line says who
 ;; has the keyboard, after the major mode's name: [app] while the view has
 ;; it, [emacs] while Emacs does.
@@ -20,6 +21,7 @@
 (defgroup portal-input nil "Input for Portal native views." :group 'applications)
 (declare-function portal--input "portal" (target action &optional serial))
 (declare-function portal--input-escape-key "portal" (character modifiers))
+(declare-function portal--input-double-escape "portal" (milliseconds))
 (declare-function evil-make-overriding-map "evil-core" (keymap &optional state copy))
 (defvar portal-terminal--native-maps)
 (defvaralias 'portal-terminal--resume 'portal-input--resume)
@@ -76,7 +78,8 @@ reads it: a character and a sum of `portal-input--modifiers' values."
 
 (defun portal-input--check-module ()
   "Reject a native module that cannot implement the current input contract."
-  (unless (and (fboundp 'portal--input) (fboundp 'portal--input-escape-key))
+  (unless (and (fboundp 'portal--input) (fboundp 'portal--input-escape-key)
+               (fboundp 'portal--input-double-escape))
     (user-error "Restart Emacs to load the rebuilt Portal input bridge")))
 
 (defun portal-input--configure-escape (value)
@@ -109,9 +112,39 @@ System-wide macOS shortcuts still take precedence.  Changes apply live."
     (portal-input--configure-escape value)))
 (add-variable-watcher 'portal-input-escape-key #'portal-input--escape-changed)
 
+(defun portal-input--configure-double-escape (value)
+  "Apply double escape VALUE, seconds or nil, to the module."
+  (unless (or (null value) (and (numberp value) (> value 0)))
+    (error "Portal's double escape needs a positive number of seconds, or nil"))
+  (when (featurep 'portal-native-module)
+    (portal-input--check-module))
+  (when (fboundp 'portal--input-double-escape)
+    (portal--input-double-escape (if value (max 1 (round (* value 1000))) 0))))
+
+(defcustom portal-input-double-escape nil
+  "Seconds within which a second Escape returns from a native view to Emacs.
+With a number, Escape typed twice that quickly, with no key between,
+does what `portal-input-escape-key' does, as Escape leaves Evil's insert
+state; the app still gets the first Escape.  A single Escape, or two
+typed more slowly, stay the app's.  Nil, the default, leaves every
+Escape to the app, so Escape typed twice out of habit in a terminal's
+vim stays in vim.  Changes apply live."
+  :type '(choice (const :tag "Off" nil) (number :tag "Seconds"))
+  :group 'portal-input
+  :set (lambda (symbol value)
+         (portal-input--configure-double-escape value)
+         (set-default symbol value)))
+
+(defun portal-input--double-escape-changed (_symbol value operation _where)
+  "Apply double escape VALUE on variable OPERATION."
+  (when (memq operation '(set let unlet))
+    (portal-input--configure-double-escape value)))
+(add-variable-watcher 'portal-input-double-escape #'portal-input--double-escape-changed)
+
 (defun portal-input--initialize ()
   "Send input settings after loading the native module."
-  (portal-input--configure-escape portal-input-escape-key))
+  (portal-input--configure-escape portal-input-escape-key)
+  (portal-input--configure-double-escape portal-input-double-escape))
 (add-hook 'portal-view-load-hook #'portal-input--initialize)
 (portal-input--initialize)
 
@@ -193,8 +226,9 @@ Each in its face, `portal-mode-line-app' or `portal-mode-line-emacs'."
     (propertize (if focused "[app]" "[emacs]")
                 'face (if focused 'portal-mode-line-app 'portal-mode-line-emacs)
                 'help-echo (if focused
-                               (format "The app has the keyboard; %s returns it to Emacs"
-                                       portal-input-escape-key)
+                               (format "The app has the keyboard; %s%s returns it to Emacs"
+                                       portal-input-escape-key
+                                       (if portal-input-double-escape " or Escape twice" ""))
                              "Emacs has the keyboard; RET enters the app"))))
 
 (defconst portal-input-mode-line-process '(:eval (portal-input--mode-line-process))

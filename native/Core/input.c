@@ -6,7 +6,9 @@
    1. With the configured escape (Super-period by default), back to Emacs,
       which keeps the keyboard. The platform checks portal_input_is_escape
       before holding events and returns focus itself (portal_input_focus),
-      without waiting for Lisp or the app.
+      without waiting for Lisp or the app.  When double escape is on, a
+      plain Escape typed soon after another, with no key between, does the
+      same; the app gets the first.
    2. To Emacs, when it is the first chord of a native binding: a key the
       user claimed for Emacs in a terminal.
    3. To the view's app.  Only a chord can go further: a key that types a
@@ -50,6 +52,8 @@ static struct {
     struct profile regular, quick;
     int64_t serials;   /* The last serial given out. */
     unsigned requests; /* How many calls for Emacs or the core are running. */
+    /* How soon a second Escape returns to Emacs, in milliseconds; 0 never. */
+    uint64_t double_escape;
 } input;
 
 /* C-g, which cancels the key sequence Emacs is reading. */
@@ -97,6 +101,27 @@ bool portal_input_set_escape(portal_chord chord, portal_text *error)
 bool portal_input_is_escape(portal_chord chord)
 {
     return same(normalize(chord), escape);
+}
+
+bool portal_input_set_double_escape(int64_t milliseconds, portal_text *error)
+{
+    if (milliseconds < 0)
+        return fail_with(error, "The double escape interval must not be negative");
+    input.double_escape = (uint64_t) milliseconds;
+    return true;
+}
+
+/* Whether KEY, a normalized press at TIME in VIEW, which has the keyboard,
+   is a plain Escape soon after another that VIEW's app got, with no press
+   between.  Every other press starts again. */
+static bool second_escape(struct portal_input *view, portal_chord key, uint64_t time)
+{
+    bool plain = key.character == 27 && !key.modifiers;
+    bool second = plain && view->escaped && input.double_escape && time >= view->escaped_at
+               && time - view->escaped_at <= input.double_escape;
+    view->escaped = plain && !second;
+    view->escaped_at = time;
+    return second;
 }
 
 /* Whether KEY, normalized, is a chord, which can leave the view's app: a key
@@ -299,12 +324,22 @@ static portal_key decide(struct portal_input *view, portal_chord key, portal_cho
     return unused(view, key, chord, repeat);
 }
 
-portal_key portal_input_key(portal_string target, portal_chord chord, bool repeat)
+portal_key portal_input_key(portal_string target, portal_chord chord, bool repeat, uint64_t time)
 {
     struct portal_input *view = portal_views_input(target);
     if (!view)
         return PORTAL_KEY_PASS;
-    return decide(view, normalize(chord), chord, repeat);
+    portal_chord key = normalize(chord);
+    if (view->focused && view->handoff == PORTAL_IDLE) {
+        /* A repeat, as of a held Escape, is no tap, and starts again. */
+        if (repeat) {
+            view->escaped = false;
+        } else if (second_escape(view, key, time)) {
+            portal_input_escape(target);
+            return PORTAL_KEY_TAKE;
+        }
+    }
+    return decide(view, key, chord, repeat);
 }
 
 portal_key portal_input_unused(portal_string target, portal_chord chord, bool repeat)
@@ -322,6 +357,8 @@ void portal_input_focus(portal_string target, bool focused)
         return;
     bool changed = view->focused != focused;
     view->focused = focused;
+    if (changed)
+        view->escaped = false;
     if (!input.requests)
         abandon(view);
     if (changed)

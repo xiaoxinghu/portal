@@ -23,7 +23,8 @@
     (portal--terminal-paste 2 . 3) (portal--terminal-text 1 . 1)
     (portal--terminal-theme 1 . 1) (portal--terminal-themes 0 . 0)
     (portal--terminal-bindings 1 . 1)
-    (portal--input 2 . 3) (portal--input-escape-key 2 . 2))
+    (portal--input 2 . 3) (portal--input-escape-key 2 . 2)
+    (portal--input-double-escape 1 . 1))
   "The module exports and their arities.")
 
 (ert-deftest portal-module-escape-key-binding ()
@@ -35,6 +36,14 @@
                         ("a" 16) ("a" 4294967296) ("é" 8) (nil 8) ("a" nil)))
           (should-error (apply #'portal--input-escape-key args))))
     (portal--input-escape-key "." 8)))
+
+(ert-deftest portal-module-double-escape-binding ()
+  (unwind-protect
+      (progn
+        (should (portal--input-double-escape 300))
+        (dolist (bad '(-1 nil 0.3 "300"))
+          (should-error (portal--input-double-escape bad))))
+    (portal--input-double-escape 0)))
 
 (ert-deftest portal-module-launcher-bindings ()
   (dolist (entry '((portal--launcher-attach 1 . 1) (portal--launcher-show 7 . 7)

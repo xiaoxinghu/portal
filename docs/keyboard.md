@@ -15,15 +15,16 @@ reach Emacs:
 | Command-C, Command-V | Copy and paste, in every view |
 | Any other chord | Emacs, as if typed in the view's buffer; Emacs reads the rest of its key sequence |
 | Command-period (`⌘.`, configurable) | Return to Emacs and stay there |
+| Escape twice, quickly, once [turned on](#escape-twice) | Return to Emacs; the app gets the first |
 | `RET`, or a click, while Emacs owns a Portal buffer | Enter the app |
 
 `s-x` and other Emacs Command bindings work inside terminals; `C-x b` works
 on pages that leave Control-X unused. Terminal programs get every Control and
 Option chord: tmux keeps `C-b`. Pages get first claim on chords, as in a browser.
-Plain keys never reach Emacs, which also binds single keys. Give an Evil Space
-leader a chord too, such as `(evil-set-leader 'normal
-(kbd "s-'"))`. Emacs handles splits, buffers and switching; views have no tab
-or split keys.
+Plain keys never reach Emacs while the app has the keyboard. Emacs, which
+also binds single keys, gets them once you return to it; see
+[Evil](#evil). Emacs handles splits, buffers and switching; views have no
+tab or split keys.
 
 Commands finish minibuffer interaction before returning to the selected native
 view. Explicit unfocus, errors or selecting an ordinary buffer leave Emacs in
@@ -84,6 +85,39 @@ keys are not supported. Write shifted punctuation as `"s-!"`, not `"s-S-1"`.
 The previous chord stops being reserved when the setting changes. The escape
 works during pending handoffs too, without waiting for Lisp or the app. macOS
 and system-wide shortcut utilities can still intercept keys before Portal.
+
+## Escape twice
+
+`portal-input-double-escape` makes Escape typed twice within that many
+seconds, with no key between, return to Emacs, as the escape key does. The
+app gets the first Escape, as vim or a page dialog would without Portal; the
+second never reaches it. A single Escape, or two typed more slowly, stay the
+app's. It is off by default: Escape typed twice out of habit in a terminal's
+vim would leave the terminal.
+
+```elisp
+(setq portal-input-double-escape 0.3)   ; nil turns it off
+```
+
+Changes apply live. The interval counts from when each key was pressed, so
+a busy Emacs does not stretch it.
+
+## Evil
+
+A view's buffer works like Evil's states. While Emacs has the keyboard, as
+it does for a new view until you enter it, every key reaches the buffer in
+normal state: a Space leader and other single-key bindings work. Entering the view is
+insert state: keys type into the app, and its chords that the app does not
+use reach Emacs. To move between them with Vim's keys, bind `i` and turn on
+Escape twice:
+
+```elisp
+(evil-define-key 'normal portal-input-mode-map "i" #'portal-input-focus)
+(setq portal-input-double-escape 0.3)
+```
+
+To reach a Space leader without leaving the app, give it a chord too, such
+as `(evil-set-leader 'normal (kbd "s-'"))`.
 
 ## Web page commands
 

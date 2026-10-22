@@ -12,7 +12,9 @@ The core (`native/Core/input.c`) routes keys pressed in a view to the first take
 1. **The configured escape**, Command-period (`⌘.`) by default, returns and
    leaves the keyboard with Emacs. `RET` in the view's buffer or a view click
    returns it to the view. Set `portal-input-escape-key` to change this reserved
-   chord live; it is the last resort when an app uses needed keys.
+   chord live; it is the last resort when an app uses needed keys. With
+   `portal-input-double-escape`, a plain Escape typed soon after another
+   that the app got, with no press between, returns too.
 2. **A native binding** (below): a chord claimed for Emacs in terminals.
 3. **The view's app.** Only chords can continue: character-typing keys with
    Control, Meta (Option) or Super (Command). Plain and Shift keys, and
@@ -27,8 +29,8 @@ The core (`native/Core/input.c`) routes keys pressed in a view to the first take
 
 Plain keys never reach Emacs: single-key bindings such as Evil's `i` would make
 view buffers act strangely. Views resemble Evil's insert state: plain keys type,
-chords reach Emacs, the configured escape leaves native input. Give a Space leader a chord
-binding too, like Doom's `M-SPC`:
+chords reach Emacs, the configured escape, or Escape twice, leaves native input
+([Evil](keyboard.md#evil)). Give a Space leader a chord binding too, like Doom's `M-SPC`:
 
 ```elisp
 (evil-set-leader 'normal (kbd "s-'"))
@@ -112,7 +114,10 @@ an element, as autofocus does, makes WebKit ask the window for it, and the
 platform refuses unless the view has the keyboard or Emacs, the core or a click
 is giving it. The platform checks `portal_input_is_escape` before holding
 or offering a key, then returns focus immediately without Lisp or JavaScript
-round trips. `portal--input-escape-key` validates and replaces the core's reserved
+round trips. The core times Escape twice by each key's press time, which
+the platform passes with every key, so an Escape held behind an offer and
+replayed later counts from when it was typed. On the second, the core
+returns focus itself and answers TAKE. `portal--input-escape-key` validates and replaces the core's reserved
 chord; the same setting updates the Portal buffer's Emacs keymap.
 
 While Emacs reads a sequence, `C-g` cancels it and trigger repeats are dropped.
