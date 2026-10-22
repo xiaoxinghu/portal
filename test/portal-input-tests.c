@@ -778,6 +778,68 @@ static void test_configurable_escape(void)
     close_view(web);
 }
 
+/* With double escape on, a plain Escape soon after another that the app got,
+   with no press between, returns to Emacs; the app still gets the first. */
+static void test_double_escape(void)
+{
+    portal_text error = {0};
+    char *terminal = open_view("terminal", false);
+    /* Off at first: every Escape is the program's, as vim needs. */
+    press(27, 0);
+    press(27, 0);
+    CHECK(went("%s ESC, %s ESC", terminal, terminal));
+    CHECK(!portal_input_set_double_escape(-1, &error));
+    free(error.data);
+    error = (portal_text) {0};
+    CHECK(portal_input_set_double_escape(300, &error));
+    portal_fake_wait(1000);
+
+    press(27, 0);
+    portal_fake_wait(300);
+    press(27, 0);
+    CHECK(went("%s ESC, taken ESC", terminal));
+    CHECK(!act(terminal, "focused", 0));
+    CHECK(sent("")); /* No handoff to end. */
+    press(27, 0);
+    CHECK(went("emacs ESC"));
+
+    /* Too slow, another key between, or the keyboard moving between: the
+       second is a first again. */
+    CHECK(act(terminal, "focus", 0));
+    press(27, 0);
+    portal_fake_wait(301);
+    press(27, 0);
+    press('x', 0);
+    press(27, 0);
+    CHECK(act(terminal, "unfocus", 0));
+    CHECK(act(terminal, "focus", 0));
+    press(27, 0);
+    CHECK(went("%s ESC, %s ESC, %s x, %s ESC, %s ESC", terminal, terminal, terminal, terminal,
+               terminal));
+    CHECK(act(terminal, "focused", 0));
+    /* A held Escape's repeats are the program's, and no second tap. */
+    repeat(27, 0);
+    press(27, M);
+    CHECK(went("%s ESC repeat, %s M-ESC", terminal, terminal));
+    CHECK(act(terminal, "focused", 0));
+    close_view(terminal);
+
+    /* A page gets the first Escape too.  Presses held while the page
+       answers keep the time they were typed. */
+    char *web = open_view("web", false);
+    press('k', C);
+    press(27, 0);
+    press(27, 0);
+    portal_fake_wait(1000);
+    portal_fake_answer(true);
+    portal_fake_run();
+    CHECK(went("offered C-k, held ESC, held ESC, used C-k, %s ESC, taken ESC", web));
+    CHECK(!act(web, "focused", 0));
+    CHECK(sent(""));
+    close_view(web);
+    CHECK(portal_input_set_double_escape(0, &error));
+}
+
 /* Each change of whether a view has the keyboard reaches Emacs as a focus
    record, whatever made it, for the view's mode line; nothing else does. */
 static void test_focus_changes_reach_emacs(void)
@@ -847,6 +909,7 @@ int main(void)
     test_a_held_chord_takes_one_handoff();
     test_keys_after_a_whole_command_stay_with_emacs();
     test_configurable_escape();
+    test_double_escape();
     test_focus_changes_reach_emacs();
     CHECK(!portal_fake_calls().misused);
     if (failures) {

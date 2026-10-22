@@ -64,10 +64,12 @@ enum Core {
         }
     }
 
-    /// What to do with EVENT, a key press in TARGET's view or its window.
+    /// What to do with EVENT, a key press in TARGET's view or its window, at
+    /// the time it was pressed: a replayed event keeps its own.
     static func key(_ target: String, _ event: NSEvent) -> portal_key {
         let chord = portal_chord(event)
-        return borrow(target) { portal_input_key($0, chord, event.isARepeat) }
+        let time = UInt64(max(event.timestamp, 0) * 1000)
+        return borrow(target) { portal_input_key($0, chord, event.isARepeat, time) }
     }
 
     /// The app of TARGET's view did not use EVENT, a press the core offered it.

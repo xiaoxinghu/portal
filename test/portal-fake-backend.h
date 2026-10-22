@@ -53,6 +53,9 @@ void portal_fake_fire_timers(void);
    the view holding a trigger or offering a press, if any, else the view with
    the keyboard, else Emacs, and the fake logs where it went. */
 void portal_fake_press(portal_chord chord, bool repeat);
+/* Let MILLISECONDS pass on the fake clock that times presses.  A replayed
+   press keeps the time the user pressed it. */
+void portal_fake_wait(uint64_t milliseconds);
 /* The page of the view offering a press to it has handled the press: it
    USED it, or reports it unused to the core. */
 void portal_fake_answer(bool used);

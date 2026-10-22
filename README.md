@@ -82,7 +82,8 @@ Either way, Emacs should then show **Hello World in a native web view**; its app
 starts automatically. Click the page or press `RET` to enter it, and press
 Command-period (`⌘.`) to return to Emacs. The mode line says who has the
 keyboard: `Portal Web[app]` while the page does, `Portal Web[emacs]` after;
-`RET` re-enters it. Customize `portal-input-escape-key` to change the escape chord.
+`RET` re-enters it. Customize `portal-input-escape-key` to change the escape chord,
+or `portal-input-double-escape` to leave with Escape typed twice.
 `q` hides the view; killing its buffer closes it.
 
 Try `M-x portal-terminal` for a shell, `M-x portal-render-markdown` for a saved

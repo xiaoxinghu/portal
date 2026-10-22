@@ -288,6 +288,27 @@
       (should (equal (car sent) '("." 8)))
       (should (eq (keymap-lookup portal-input-mode-map "s-.") #'portal-input-unfocus)))))
 
+(ert-deftest portal-input-double-escape-updates-live-and-on-module-load ()
+  (let (sent)
+    (cl-letf (((symbol-function 'portal--input-double-escape)
+               (lambda (milliseconds) (push milliseconds sent))))
+      (let ((portal-input-double-escape 0.3))
+        (should (equal (car sent) 300))
+        (setq sent nil)
+        (portal-input--initialize)
+        (should (equal sent '(300)))
+        (setq portal-input-double-escape 0.0001)
+        (should (equal (car sent) 1))
+        (dolist (bad '(0 -1 "0.3" t))
+          (should-error (customize-set-variable 'portal-input-double-escape bad)))
+        (should (equal portal-input-double-escape 0.0001))
+        (with-temp-buffer
+          (setq-local portal-view--target "web:7" portal-input--focused "web:7")
+          (should (string-match-p "Escape twice"
+                                  (get-text-property 0 'help-echo
+                                                     (portal-input--mode-line-process))))))
+      (should (equal (car sent) 0)))))
+
 (ert-deftest portal-input-stale-module-refuses-escape-remapping-and-connection ()
   ;; Updated Lisp in an Emacs still running the old module must not replace
   ;; its working wrapper escape with a key the native side cannot reserve.
@@ -317,13 +338,15 @@
   (let (sent)
     (cl-letf (((symbol-value 'features) (remq 'portal-native-module features))
               ((symbol-function 'portal--input) nil)
-              ((symbol-function 'portal--input-escape-key) nil))
+              ((symbol-function 'portal--input-escape-key) nil)
+              ((symbol-function 'portal--input-double-escape) nil))
       (let ((portal-input-escape-key "C-s-g"))
         (should (eq (keymap-lookup portal-input-mode-map "C-s-g") #'portal-input-unfocus))
         (cl-letf (((symbol-value 'features) (cons 'portal-native-module features))
                   ((symbol-function 'portal--input) #'ignore)
                   ((symbol-function 'portal--input-escape-key)
                    (lambda (&rest chord) (push chord sent)))
+                  ((symbol-function 'portal--input-double-escape) #'ignore)
                   ((symbol-function 'portal-view--load) #'ignore))
           (portal-input--initialize)
           (portal-input--connect)
