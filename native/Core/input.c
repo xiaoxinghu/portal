@@ -330,11 +330,14 @@ portal_key portal_input_key(portal_string target, portal_chord chord, bool repea
     if (!view)
         return PORTAL_KEY_PASS;
     portal_chord key = normalize(chord);
-    /* A held Escape repeats for neither tap. */
-    if (!repeat && view->focused && view->handoff == PORTAL_IDLE
-        && second_escape(view, key, time)) {
-        portal_input_escape(target);
-        return PORTAL_KEY_TAKE;
+    if (view->focused && view->handoff == PORTAL_IDLE) {
+        /* A repeat, as of a held Escape, is no tap, and starts again. */
+        if (repeat) {
+            view->escaped = false;
+        } else if (second_escape(view, key, time)) {
+            portal_input_escape(target);
+            return PORTAL_KEY_TAKE;
+        }
     }
     return decide(view, key, chord, repeat);
 }

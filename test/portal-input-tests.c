@@ -817,10 +817,15 @@ static void test_double_escape(void)
     CHECK(went("%s ESC, %s ESC, %s x, %s ESC, %s ESC", terminal, terminal, terminal, terminal,
                terminal));
     CHECK(act(terminal, "focused", 0));
-    /* A held Escape's repeats are the program's, and no second tap. */
+    /* A held Escape's repeats are the program's, and no tap: the Escape
+       after them is a first again. */
+    portal_fake_wait(1000);
+    press(27, 0);
     repeat(27, 0);
+    press(27, 0);
     press(27, M);
-    CHECK(went("%s ESC repeat, %s M-ESC", terminal, terminal));
+    CHECK(went("%s ESC, %s ESC repeat, %s ESC, %s M-ESC", terminal, terminal, terminal,
+               terminal));
     CHECK(act(terminal, "focused", 0));
     close_view(terminal);
 
