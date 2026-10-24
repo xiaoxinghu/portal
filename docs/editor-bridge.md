@@ -8,8 +8,9 @@ synchronizes a drawing buffer with its Excalidraw page.
 
 The C core owns the bridge (`native/Core/web.c`); the platform (WebKit on macOS)
 only delivers messages and reports observations. Views opened with `:hosted`
-receive a bridge. For other views, `portal--web-send` and `portal--web-receive`
-signal errors, pages have no `window.portalBridge`, and the core drops all posts.
+receive a bridge. For other views, `portal--web-send` signals an error, pages
+have no `window.portalBridge`, and the core drops all posts; their queue holds
+only the core's `download` messages, below.
 
 - **The app's interface.** On every load and reload, before hosted-page scripts
   run, Portal defines `window.portalBridge` in the main frame. Apps post JSON
@@ -46,9 +47,12 @@ Core-only messages include `page` with each committed hosted page's URL
 Local `file:` clicks send `follow` with the URL, after first returning the
 keyboard to Emacs, ending any key sequence it is reading, so `escape` precedes
 `bridge`.
-`portal-web.el` handles `page` and `follow` for all hosted apps, tracking
-the displayed page and visiting linked files without calling the buffer's bridge
-function. URLs use messages because long paths would not fit in records.
+Every web view, hosted or not, queues `download` messages: the `state` of a
+download (`started`, `finished` or `failed`, with a `message`), its `url` and
+the `file` it saves to, empty when the core refused it a file.
+`portal-web.el` handles `page` and `follow` for all hosted apps, and `download`
+for every web view, tracking the displayed page, visiting linked files and
+saying how downloads go, without calling the buffer's bridge function. URLs use messages because long paths would not fit in records.
 Asynchronous AppKit/WebKit callbacks never retain an `emacs_env` or call Lisp;
 post-close callbacks find no core target and do nothing.
 

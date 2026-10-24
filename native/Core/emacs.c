@@ -305,6 +305,7 @@ STRINGS(web_load, portal_web_views_load(a[0], a[1], error))
 STRINGS(web_send, portal_web_views_send(a[0], a[1], error))
 STRINGS(web_receive, portal_web_views_receive(a[0], result, error))
 STRINGS(web_go, portal_web_views_go(a[0], a[1], error))
+STRINGS(web_download_directory, portal_web_views_download_directory(a[0], error))
 STRINGS(terminal_themes, portal_terminals_themes(result, error))
 STRINGS(terminal_text, portal_terminals_text(a[0], result, error))
 STRINGS(launcher_detach, portal_launcher_detach(error))
@@ -716,9 +717,12 @@ static const struct export {
     {"portal--web-send", 2, 2, STRINGS_FUNCTION(web_send, RESULT_T),
      "Send the JSON object JSON to hosted web view TARGET's app over its bridge."},
     {"portal--web-receive", 1, 1, STRINGS_FUNCTION(web_receive, RESULT_STRING),
-     "Return the messages hosted web view TARGET's app sent over its bridge, as a JSON array."},
+     "Return the messages waiting for Emacs on web view TARGET, as a JSON array."},
     {"portal--web-go", 2, 2, STRINGS_FUNCTION(web_go, RESULT_T),
      "Move web view TARGET through its history by STEP, \"back\" or \"forward\"."},
+    {"portal--web-download-directory", 1, 1,
+     STRINGS_FUNCTION(web_download_directory, RESULT_T),
+     "Save web views' downloads in DIRECTORY, an absolute path, from now on."},
     {"portal--web-appearance", 1, 1, Fweb_appearance, NULL,
      "Show every web view in APPEARANCE, \"light\" or \"dark\"; nil follows the system's."},
     {"portal--terminal-theme", 1, 1, Fterminal_theme, NULL,

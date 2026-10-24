@@ -49,5 +49,5 @@ Portal's own local server for hosted apps.
 _Avoid_: UI host, Bun host, server, host (unqualified)
 
 **Bridge**:
-The message channel between a hosted app and the buffer that presents it. Only hosted apps get a bridge; other web content never does.
+The message channel between a hosted app and the buffer that presents it. Only hosted apps get a bridge; other web content never does. The core's own messages to any web buffer, such as how a download went, wait in the same queue, but no page can post them.
 _Avoid_: editor channel, event pipe

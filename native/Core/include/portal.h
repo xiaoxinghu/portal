@@ -502,15 +502,41 @@ typedef enum portal_navigation {
     PORTAL_NAVIGATION_ALLOW,    /* Load URL in the view. */
     PORTAL_NAVIGATION_EXTERNAL, /* Cancel, and open URL in the default browser. */
     PORTAL_NAVIGATION_EMACS,    /* Cancel: the core has handed URL to Emacs. */
+    PORTAL_NAVIGATION_DOWNLOAD, /* Download URL, leaving the page as it is. */
 } portal_navigation;
 /* The page in TARGET asks to navigate to URL, in its main frame or, when
-   MAIN_FRAME is false, in another frame.  A request for a new window counts
-   as the main frame.  Call it for each navigation the platform can refuse,
-   and for each click on a link that the platform cannot follow at all, such
-   as a hosted app's links to local files, which the shared links script
-   reports (portal_web_links_script); for those, allow means load URL. */
+   MAIN_FRAME is false, in another frame, or, with DOWNLOAD, to download it,
+   as a link with a download attribute does.  A request for a new window
+   counts as the main frame.  Call it for each navigation the platform can
+   refuse, and for each click on a link that the platform cannot follow at
+   all, such as a hosted app's links to local files, which the shared links
+   script reports (portal_web_links_script); for those, allow means load
+   URL. */
 portal_navigation portal_web_navigating(portal_string target, portal_string url,
-                                        bool main_frame);
+                                        bool main_frame, bool download);
+/* The response to a navigation in TARGET has arrived, before the platform
+   shows it: SHOWABLE when the platform can show its type, and ATTACHMENT
+   when the server asks for it to be saved, as Content-Disposition:
+   attachment does.  The answer is PORTAL_NAVIGATION_ALLOW to show it or
+   PORTAL_NAVIGATION_DOWNLOAD to download it instead. */
+portal_navigation portal_web_responding(portal_string target, bool showable, bool attachment);
+/* Downloads.  The platform runs each download the core answered
+   PORTAL_NAVIGATION_DOWNLOAD, and asks the core where to save it once it
+   knows the file's name; the core tells Emacs how each one goes.
+
+   TARGET's page started downloading URL, which the server or page suggests
+   naming NAME, possibly empty.  Return the absolute path of the file to
+   write, a new name in the directory Lisp chose that no file and no other
+   download has, and set *DOWNLOAD to the core's number for it, never 0 and
+   never reused.  The path is valid until the platform reports that download
+   finished, which it does exactly once.  Or return an empty path, setting
+   *DOWNLOAD to 0, to cancel it: the core has told Emacs why. */
+portal_string portal_web_download_started(portal_string target, portal_string url,
+                                          portal_string name, uint64_t *download);
+/* DOWNLOAD has finished: its file is complete, for a null ERROR, or it
+   failed or was cancelled, and ERROR says why.  Closing a web view cancels
+   its downloads; the core then tells Emacs nothing more about them. */
+void portal_web_download_finished(uint64_t download, const portal_string *error);
 /* The page in TARGET asks for a new window, as window.open and links to
    target=_blank do, once portal_web_navigating has allowed its URL.  The
    core opens a web view for it with portal_web_create_window, passing

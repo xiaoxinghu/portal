@@ -53,8 +53,9 @@ enum Core {
         portal_launcher_blurred(session)
     }
 
-    /// What the core answers when a page asks to navigate.
-    enum Navigation { case allow, external, emacs }
+    /// What the core answers when a page asks to navigate, or a response
+    /// arrives.
+    enum Navigation { case allow, external, emacs, download }
 
     /// The page in TARGET posted JSON, a JSON object whose "type" is TYPE,
     /// from its main frame or another, showing URL, as WebKit reports them.
@@ -87,10 +88,42 @@ enum Core {
         text.withCString { body(portal_string(data: $0, length: text.utf8.count)) }
     }
 
-    static func navigating(_ target: String, url: String, mainFrame: Bool) -> Navigation {
-        let decision = borrowing([target, url]) { portal_web_navigating($0[0], $0[1], mainFrame) }
-        return decision == PORTAL_NAVIGATION_EXTERNAL ? .external
-            : decision == PORTAL_NAVIGATION_EMACS ? .emacs : .allow
+    static func navigating(_ target: String, url: String, mainFrame: Bool, download: Bool = false) -> Navigation {
+        navigation(borrowing([target, url]) { portal_web_navigating($0[0], $0[1], mainFrame, download) })
+    }
+
+    /// A response to a navigation in TARGET arrived, which WebKit can SHOW
+    /// or not, and which the server may mark as an ATTACHMENT.
+    static func responding(_ target: String, show: Bool, attachment: Bool) -> Navigation {
+        navigation(borrow(target) { portal_web_responding($0, show, attachment) })
+    }
+
+    private static func navigation(_ decision: portal_navigation) -> Navigation {
+        switch decision {
+        case PORTAL_NAVIGATION_EXTERNAL: .external
+        case PORTAL_NAVIGATION_EMACS: .emacs
+        case PORTAL_NAVIGATION_DOWNLOAD: .download
+        default: .allow
+        }
+    }
+
+    /// TARGET's page started downloading URL, suggested to be called NAME:
+    /// the core's number for the download and the file to save it to, or
+    /// nil to cancel it.
+    static func downloadStarted(_ target: String, url: String, name: String) -> (UInt64, URL)? {
+        var download: UInt64 = 0
+        let path = borrowing([target, url, name]) {
+            String(copying: portal_web_download_started($0[0], $0[1], $0[2], &download))
+        }
+        return download == 0 ? nil : (download, URL(fileURLWithPath: path))
+    }
+
+    /// DOWNLOAD ended: complete without an ERROR, or failed or cancelled.
+    static func downloadFinished(_ download: UInt64, error: String?) {
+        guard let error else { return portal_web_download_finished(download, nil) }
+        borrow(error) { message in
+            withUnsafePointer(to: message) { portal_web_download_finished(download, $0) }
+        }
     }
 
     /// The page in TARGET asks for a new window: whether the core opened a

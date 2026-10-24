@@ -330,4 +330,107 @@ on the page meanwhile."
       (portal-test--sheet "Leave Page")
       (portal-test--wait-for-page "Hello, world!" target))))
 
+(defun portal-test--serve (routes)
+  "Serve ROUTES on a local port, and return the server process.
+ROUTES is an alist of each path to the HTTP response, headers and body,
+sent before the connection closes."
+  (make-network-process
+   :name "portal-test-http" :server t :host 'local :service t :family 'ipv4
+   :noquery t :coding 'binary
+   :filter (lambda (connection request)
+             (when (string-match "\\`GET \\([^ ]+\\)" request)
+               (process-send-string
+                connection
+                (or (cdr (assoc (match-string 1 request) routes))
+                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"))
+               (delete-process connection)))))
+
+(defun portal-test--response (headers body)
+  "An HTTP response with HEADERS, a list of header lines, and BODY."
+  (concat "HTTP/1.1 200 OK\r\n" (mapconcat (lambda (header) (concat header "\r\n")) headers)
+          (format "Content-Length: %d\r\nConnection: close\r\n\r\n" (length body)) body))
+
+(defun portal-test--wait-for-message (pattern start)
+  "Wait for a message matching PATTERN in *Messages*, after position START."
+  (let ((deadline (+ (float-time) 15)) found)
+    (while (and (not (setq found (with-current-buffer (messages-buffer)
+                                   (save-excursion
+                                     (goto-char start)
+                                     (re-search-forward pattern nil t)))))
+                (< (float-time) deadline))
+      (redisplay t)
+      (sleep-for 0.05))
+    (should found)))
+
+(ert-deftest portal-web-downloads-instead-of-failing-and-says-so ()
+  (portal-test--with-web
+    (let* ((directory (file-name-as-directory (make-temp-file "portal-downloads-" t)))
+           (original portal-web-download-directory)
+           (server (portal-test--serve
+                    `(("/attribute" . ,(portal-test--response
+                                        '("Content-Type: text/html")
+                                        (concat "<title>Attribute</title>"
+                                                "<a id='save' download='hello.txt' href='data:text/plain,hello'>Save</a>"
+                                                "<script>document.getElementById('save').click()</script>")))
+                      ("/report" . ,(portal-test--response
+                                     '("Content-Type: text/plain"
+                                       "Content-Disposition: attachment; filename=\"report.txt\"")
+                                     "report"))
+                      ("/archive.zip" . ,(portal-test--response '("Content-Type: application/zip") "PK"))
+                      ("/broken" . ,(concat "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n"
+                                            "Content-Disposition: attachment; filename=\"broken.bin\"\r\n"
+                                            "Content-Length: 100000\r\n\r\nonly a little")))))
+           (base (format "http://127.0.0.1:%d" (process-contact server :service)))
+           (file (lambda (name) (expand-file-name name directory))))
+      (unwind-protect
+          (let ((start (with-current-buffer (messages-buffer) (point-max))))
+            (setopt portal-web-download-directory directory)
+            ;; A link with a download attribute.
+            (portal-open-url (concat base "/attribute"))
+            (portal-test--wait-for-page "Attribute")
+            (portal-test--wait-for-message
+             (concat "^Downloaded " (regexp-quote (abbreviate-file-name (funcall file "hello.txt"))) "$")
+             start)
+            (should (equal (with-temp-buffer
+                             (insert-file-contents-literally (funcall file "hello.txt"))
+                             (buffer-string))
+                           "hello"))
+            ;; A response marked as an attachment, and one WebKit cannot
+            ;; show, leave the page as it was.
+            (let ((target (portal-view-target)))
+              (dolist (download '(("/report" . "report.txt") ("/archive.zip" . "archive.zip")
+                                  ("/report" . "report (1).txt")))
+                (portal--web-load target (concat base (car download)))
+                (portal-test--wait-for-message
+                 (concat "^Downloaded "
+                         (regexp-quote (abbreviate-file-name (funcall file (cdr download)))) "$")
+                 start))
+              (should (equal (with-temp-buffer
+                               (insert-file-contents-literally (funcall file "report (1).txt"))
+                               (buffer-string))
+                             "report"))
+              (let ((state (portal--inspect target)))
+                (should (equal (plist-get state :title) "Attribute"))
+                (should-not (plist-get state :error)))
+              ;; Failures reach Emacs as messages, not as a dead page.
+              (portal--web-load target (concat base "/broken"))
+              (portal-test--wait-for-message
+               (concat "^Could not download "
+                       (regexp-quote (abbreviate-file-name (funcall file "broken.bin"))) ": .")
+               start)
+              (setopt portal-web-download-directory (funcall file "missing/"))
+              (portal--web-load target (concat base "/report"))
+              (portal-test--wait-for-message
+               (concat "^Could not download "
+                       (regexp-quote (abbreviate-file-name (funcall file "missing/report.txt")))
+                       ": .")
+               start)
+              (let ((state (portal--inspect target)))
+                (should (equal (plist-get state :title) "Attribute"))
+                (should-not (plist-get state :error)))
+              (message "Downloaded files: %S" (directory-files directory nil "\\`[^.]"))))
+        (setopt portal-web-download-directory original)
+        (delete-process server)
+        (delete-directory directory t)))))
+
 (provide 'portal-tests)

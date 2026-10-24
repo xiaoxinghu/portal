@@ -19,7 +19,7 @@
   '((portal--open 2 . 2) (portal--place 3 . 3) (portal--hide 1 . 1) (portal--close 1 . 1)
     (portal--inspect 1 . 1) (portal--channel 1 . 1)
     (portal--web-load 2 . 2) (portal--web-send 2 . 2) (portal--web-receive 1 . 1)
-    (portal--web-appearance 1 . 1) (portal--web-go 2 . 2)
+    (portal--web-appearance 1 . 1) (portal--web-go 2 . 2) (portal--web-download-directory 1 . 1)
     (portal--terminal-paste 2 . 3) (portal--terminal-text 1 . 1)
     (portal--terminal-theme 1 . 1) (portal--terminal-themes 0 . 0)
     (portal--terminal-bindings 1 . 1)
@@ -284,6 +284,14 @@
     (should-error (portal--terminal-theme 'Alpha) :type 'wrong-type-argument)
     (portal--close terminal)))
 
+(ert-deftest portal-module-sets-the-download-directory ()
+  (should (eq (portal--web-download-directory "/tmp/downloads/") t))
+  (should-error (portal--web-download-directory nil) :type 'wrong-type-argument)
+  (dolist (directory '("" "downloads/" "~/Downloads"))
+    (should (equal (should-error (portal--web-download-directory directory))
+                   `(error ,(concat "The download directory must be an absolute path, not "
+                                    directory))))))
+
 (ert-deftest portal-module-sets-web-appearance ()
   (let ((web (portal--open "web" '(:appearance "dark"))))
     (should (equal (plist-get (portal--inspect web) :appearance) "dark"))
@@ -351,8 +359,7 @@
                     ((portal--web-load ,terminal "about:blank") . ,(format "No Portal view %s" terminal))
                     ((portal--web-send ,web "{}")
                      . ,(format "Web view %s is not a hosted app, so it has no bridge" web))
-                    ((portal--web-receive ,web)
-                     . ,(format "Web view %s is not a hosted app, so it has no bridge" web))
+                    ((portal--web-receive ,terminal) . ,(format "No Portal view %s" terminal))
                     ((portal--terminal-paste ,web "x") . ,(format "No Portal view %s" web))
                     ((portal--terminal-text ,web) . ,(format "No Portal view %s" web))
                     ((portal--terminal-theme "Gamma") . "Unknown terminal theme: Gamma")
