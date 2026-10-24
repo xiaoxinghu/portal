@@ -158,6 +158,15 @@ window commits sends `web TARGET`, one record until Lisp inspects the view,
 and Lisp renames the buffer after it. A window's page closing itself sends
 `closed TARGET`, and Lisp kills its buffer, closing the view.
 
+The core also owns zoom per site and finding's results. Lisp gives a host a
+level with `portal--web-zoom HOST PERCENT`; the core keeps the levels, shows
+every open page from that host at its level, and on each page commit applies
+the new page's host's level, so navigation and new views follow the site.
+Pages without a host share `""`. `portal--web-find` asks the platform to find
+text its own way, with a token; only the latest find's result reaches Emacs,
+as a `found TARGET 1` or `found TARGET 0` record. The platform supplies two
+primitives for these: find text, and set a view's zoom factor.
+
 The shared JavaScript for local links lives in `native/Core/scripts`, compiled
 into the core with `#embed`; platforms need neither script files nor the app
 host at runtime. The script is a function started in an isolated world with

@@ -127,6 +127,11 @@ run `portal-web-back` and `portal-web-forward`, with Emacs focus. Command-R
 reaches Emacs from inside the page too, unless the page claims the chord. A
 page's history survives hiding and redisplay; killing the buffer releases it.
 
+`C-s` and `s-f` find text in the page, and `s-g` and `s-G` find it again;
+`+`, `-` and `0`, or `s-=`, `s--` and `s-0`, zoom its site
+([find and zoom](web-views.md#find-and-zoom)). The Command chords reach Emacs
+from inside the page too, as Command-R does.
+
 A terminal's native bindings can claim a chord its program would otherwise
 get, such as a Control chord (see [the input bridge](terminal-input-bridge.md)).
 macOS's own shortcuts, such as Command-Space, still come first.
