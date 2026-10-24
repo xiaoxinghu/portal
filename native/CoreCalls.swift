@@ -93,6 +93,16 @@ enum Core {
             : decision == PORTAL_NAVIGATION_EMACS ? .emacs : .allow
     }
 
+    /// The page in TARGET asks for a new window: whether the core opened a
+    /// view for it, from REQUEST, which the core passes back to the platform.
+    static func window(_ target: String, request: AnyObject) -> Bool {
+        borrow(target) { portal_web_window($0, Unmanaged.passUnretained(request).toOpaque()) }
+    }
+
+    static func closed(_ target: String) {
+        borrow(target) { portal_web_closed($0) }
+    }
+
     static func committed(_ target: String, url: String) {
         borrowing([target, url]) { portal_web_committed($0[0], $0[1]) }
     }

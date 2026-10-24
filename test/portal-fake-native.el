@@ -152,6 +152,17 @@ Then send its `terminal' record, as the native module does for a change."
     (puthash target view portal-fake-native--views))
   (portal-fake-native-send (format "terminal %s\n" target)))
 
+(defun portal-fake-native-open-window (opener url)
+  "Open a web view for the window web view OPENER's page asked for, at URL.
+Send its `opened' record, as the native module does, and return its target."
+  (portal-fake-native--view opener)
+  (let ((target (format "web:%d" (cl-incf portal-fake-native--next-id))))
+    (puthash target (list :options (list :opener opener) :frame nil :edges nil :visible nil
+                          :url url)
+             portal-fake-native--views)
+    (portal-fake-native-send (format "opened %s %s\n" target opener))
+    target))
+
 (defun portal--channel (process)
   (setq portal-fake-native-channel process)
   t)

@@ -91,10 +91,10 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, Nati
         return "Version/\(version ?? "26.0") Safari/605.1.15"
     }()
 
-    /// An inspectable page lets Safari's Web Inspector attach to it.
-    init(target: String, hosted: Bool, inspectable: Bool) {
+    /// The page is made from CONFIGURATION. An inspectable page lets Safari's
+    /// Web Inspector attach to it.
+    init(target: String, configuration: WKWebViewConfiguration, hosted: Bool, inspectable: Bool) {
         self.target = target
-        let configuration = WKWebViewConfiguration()
         if hosted {
             configuration.websiteDataStore = .nonPersistent()
         } else {
@@ -110,12 +110,15 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, Nati
 
     /// Follows the system's appearance while the page shows it.
     private var system: NSKeyValueObservation?
+    /// The appearance the page shows, which windows it opens start in.
+    private(set) var choice = PORTAL_APPEARANCE_SYSTEM
 
     /// Show the page in APPEARANCE, which WebKit gives it as
     /// prefers-color-scheme. The view's own appearance overrides its
     /// window's, which an Emacs frame may force, so even the system's is set
     /// here, and again whenever it changes.
     func show(_ choice: portal_appearance) {
+        self.choice = choice
         system = nil
         switch choice {
         case PORTAL_APPEARANCE_LIGHT: appearance = NSAppearance(named: .aqua)
@@ -186,6 +189,19 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, Nati
         guard let url = action.request.url else { return decisionHandler(.allow) }
         // A request for a new window counts as the main frame.
         decisionHandler(mayNavigate(to: url, mainFrame: action.targetFrame?.isMainFrame ?? true) ? .allow : .cancel)
+    }
+
+    /// The page asks for a new window, once `decidePolicyFor` has allowed
+    /// its URL. The core decides whether it gets one, which WebKit then loads.
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                 for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        let request = WindowRequest(configuration: configuration)
+        return Core.window(target, request: request) ? request.page : nil
+    }
+
+    /// The page closed its window, as window.close does in a window a script opened.
+    func webViewDidClose(_ webView: WKWebView) {
+        Core.closed(target)
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
@@ -392,6 +408,18 @@ private final class PageDialog {
     }
 }
 
+/// A page's request for a new window: WebKit's configuration for it, and the
+/// page made from it once the core opens the window (`portal_web_create_window`).
+@MainActor
+final class WindowRequest {
+    let configuration: WKWebViewConfiguration
+    fileprivate var page: WebPage?
+
+    init(configuration: WKWebViewConfiguration) {
+        self.configuration = configuration
+    }
+}
+
 extension NSAppearance {
     var isDark: Bool { bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
 }
@@ -489,17 +517,35 @@ final class WebSession: PortalView {
     /// bridge's scripts. With `:inspectable`, Safari's Web Inspector may
     /// attach to it. It starts in its `:appearance`, which the core has
     /// checked.
-    init(target: String, options: ViewOptions) throws {
-        let hosted = options.flag("hosted")
-        let page = WebPage(target: target, hosted: hosted, inspectable: options.flag("inspectable"))
+    convenience init(target: String, options: ViewOptions) throws {
         let appearance = switch try options.string("appearance") {
         case "light": PORTAL_APPEARANCE_LIGHT
         case "dark": PORTAL_APPEARANCE_DARK
         default: PORTAL_APPEARANCE_SYSTEM
         }
+        self.init(page: WebPage(target: target, configuration: WKWebViewConfiguration(),
+                                hosted: options.flag("hosted"), inspectable: options.flag("inspectable")),
+                  appearance: appearance)
+    }
+
+    /// The window the page in OPENER asked for. WebKit requires the page be
+    /// made from its configuration, which keeps the opener's data store and
+    /// makes the opener the new page's. The new page gets its own scripts,
+    /// and Web Inspector attaches to it when it does to the opener.
+    convenience init(target: String, opener: WebSession, request: WindowRequest) {
+        request.configuration.userContentController = WKUserContentController()
+        var inspectable = false
+        if #available(macOS 13.3, *) { inspectable = opener.page.isInspectable }
+        let page = WebPage(target: target, configuration: request.configuration, hosted: false,
+                           inspectable: inspectable)
+        self.init(page: page, appearance: opener.page.choice)
+        request.page = page
+    }
+
+    private init(page: WebPage, appearance: portal_appearance) {
         page.show(appearance)
         self.page = page
-        input = NativeInput(target: target, view: page, host: NativeView.parking) { [weak page] in
+        input = NativeInput(target: page.target, view: page, host: NativeView.parking) { [weak page] in
             guard let page, !page.isHidden else { return false }
             return page.window?.makeFirstResponder(page) ?? false
         }

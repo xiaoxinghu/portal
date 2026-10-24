@@ -24,6 +24,8 @@
 (declare-function portal--web-receive "portal-web" (target))
 (declare-function portal--web-go "portal-web" (target step))
 (declare-function portal--web-appearance "portal-web" (appearance))
+(declare-function portal--inspect "portal-view" (target))
+(declare-function portal--close "portal-view" (target))
 
 (defun portal-web--appearance-changed (_symbol value operation _where)
   "Check appearance VALUE and show every web view in it, on OPERATION `set'."
@@ -143,12 +145,16 @@ The view starts in `portal-web-appearance', inspectable when
 
 (defun portal-web-reload ()
   "Load this buffer's page again.
-A hosted app loads from the app host, which starts first if needed."
+A hosted app loads from the app host, which starts first if needed.
+A window that a page opened loads the page it shows."
   (interactive)
   (unless portal-web--target (user-error "No web view in this buffer"))
   (if portal-web--hosted-path
       (portal-web--load-hosted)
-    (portal--web-load portal-web--target portal-web--url)))
+    (portal--web-load portal-web--target
+                      (or portal-web--url
+                          (plist-get (portal--inspect portal-web--target) :url)
+                          (user-error "This window shows no page yet")))))
 
 (defun portal-web--go (step)
   "Move the selected pane's web view through its history by STEP.
@@ -186,6 +192,16 @@ STEP is \"back\" or \"forward\"; with no page to go to, nothing changes."
       ("data" "data")
       (_ url))))
 
+(defun portal-web--start-buffer ()
+  "Put the current buffer, new, in `portal-web-mode', with its help text."
+  (portal-web-mode)
+  (let ((inhibit-read-only t))
+    (insert "Web view\n\n"
+            "RET or a click enters the page. The configured escape returns to Emacs.\n"
+            "See M-x customize-option RET portal-input-escape-key for that key.\n"
+            "g loads the page again. q hides it; killing the buffer closes it.\n"
+            "This buffer has one live view, which follows its selected pane.\n")))
+
 (defun portal-web--visit (buffer name open)
   "Select web BUFFER and reload it, or, when BUFFER is nil, open a new one.
 The new buffer is called *portal: NAME*, and OPEN opens its view.  If the
@@ -196,13 +212,7 @@ view cannot open, the new buffer is killed."
       (unwind-protect
           (progn
             (switch-to-buffer buffer)
-            (portal-web-mode)
-            (let ((inhibit-read-only t))
-              (insert "Web view\n\n"
-                      "RET or a click enters the page. The configured escape returns to Emacs.\n"
-                      "See M-x customize-option RET portal-input-escape-key for that key.\n"
-                      "g loads the page again. q hides it; killing the buffer closes it.\n"
-                      "This buffer has one live view, which follows its selected pane.\n"))
+            (portal-web--start-buffer)
             (redisplay t)
             (funcall open)
             (message "Web view opened. RET enters; %s returns to Emacs; q hides the view."
@@ -387,6 +397,52 @@ A fragment such as #L42 or #L42-L50 moves to line 42."
                (string-to-number (match-string 1 fragment)))))))))
 
 (define-key global-map [portal-web-follow] #'portal-web--follow)
+
+;; Windows that pages open, as window.open and links to target=_blank do.
+(defun portal-web--opened (event)
+  "Give the window that EVENT's page opened, a new web view, a buffer.
+The buffer is named after the window's page and shown in a pane other than
+the opener's, as a Markdown preview shows files, and its view gets the
+keyboard.  A buffer that cannot take the view closes it."
+  (interactive "e")
+  (pcase-let* ((`(,target ,opener) (cadr event))
+               (state (portal--inspect target)))
+    (when state ; Closed already, as when Emacs could not keep up.
+      (let ((buffer (generate-new-buffer
+                     (format "*portal: %s*"
+                             (portal-web--page-name (or (plist-get state :url) "about:blank")))))
+            (show (lambda (buffer) (pop-to-buffer buffer '(portal-web--display-elsewhere))))
+            ready)
+        (unwind-protect
+            (progn
+              (with-current-buffer buffer
+                (portal-web--start-buffer)
+                (setq portal-web--target (portal-view-adopt target)))
+              (if (portal-view--target-buffer opener)
+                  (portal-web--from-view opener (lambda () (funcall show buffer)))
+                (funcall show buffer))
+              (setq ready t))
+          (unless ready
+            (when (buffer-live-p buffer) (kill-buffer buffer))
+            (when (portal--inspect target) (portal--close target))))
+        (with-current-buffer buffer
+          (ignore-error user-error (portal-view-focus)))))))
+
+(defun portal-web--closed (event)
+  "Kill the buffer of the window whose page closed it, as EVENT reports.
+Each pane showing it goes back to what it showed before, as `quit-window'
+does."
+  (interactive "e")
+  (when-let* ((buffer (portal-view--target-buffer (car (cadr event)))))
+    (quit-windows-on buffer t)
+    (when (buffer-live-p buffer) (kill-buffer buffer))))
+
+(setf (alist-get "opened" portal-view-feature-record-handlers nil nil #'equal)
+      (lambda (target opener) (portal-web--queue 'portal-web-opened target opener)))
+(setf (alist-get "closed" portal-view-record-handlers nil nil #'equal)
+      (lambda (target) (portal-web--queue 'portal-web-closed target)))
+(define-key global-map [portal-web-opened] #'portal-web--opened)
+(define-key global-map [portal-web-closed] #'portal-web--closed)
 
 ;;;###autoload
 (defun portal-render-open-in-emacs ()
