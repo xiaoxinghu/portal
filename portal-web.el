@@ -29,6 +29,8 @@
 (declare-function portal--inspect "portal-view" (target))
 (declare-function portal--close "portal-view" (target))
 (declare-function portal--web-download-directory "portal-web" (directory))
+(declare-function portal--web-find "portal-web" (target text backward case-sensitive))
+(declare-function portal--web-zoom "portal-web" (host percent))
 
 (defun portal-web--appearance-changed (_symbol value operation _where)
   "Check appearance VALUE and show every web view in it, on OPERATION `set'."
@@ -106,7 +108,10 @@ RET or a click enters the page; `portal-input-escape-key' returns to Emacs.
 A chord the page does not use reaches Emacs, which runs it in this buffer.
 g or Command-R loads the page again, and l and r go back and forward,
 whether Emacs or the page owns the keyboard, unless the page uses
-Command-R itself.  The mode line shows [app] while the page has the
+Command-R itself.  C-s or Command-F finds text in the page, and
+Command-G and Command-Shift-G find it again; + or Command-= zooms in,
+- or Command-- zooms out and 0 or Command-0 resets, for every page from
+the same site.  The mode line shows [app] while the page has the
 keyboard and [emacs] while Emacs does.  q hides the view while the page
 keeps running, and killing the buffer closes it."
   (setq-local cursor-type nil)
@@ -115,6 +120,17 @@ keeps running, and killing the buffer closes it."
 (keymap-set portal-web-mode-map "l" #'portal-web-back)
 (keymap-set portal-web-mode-map "r" #'portal-web-forward)
 (keymap-set portal-web-mode-map "s-r" #'portal-web-reload)
+(keymap-set portal-web-mode-map "C-s" #'portal-web-find)
+(keymap-set portal-web-mode-map "C-r" #'portal-web-find-backward)
+(keymap-set portal-web-mode-map "s-f" #'portal-web-find)
+(keymap-set portal-web-mode-map "s-g" #'portal-web-find-next)
+(keymap-set portal-web-mode-map "s-G" #'portal-web-find-previous)
+(dolist (key '("+" "=" "s-+" "s-="))
+  (keymap-set portal-web-mode-map key #'portal-web-zoom-in))
+(dolist (key '("-" "s--"))
+  (keymap-set portal-web-mode-map key #'portal-web-zoom-out))
+(dolist (key '("0" "s-0"))
+  (keymap-set portal-web-mode-map key #'portal-web-zoom-reset))
 
 (defun portal-web--check-url (url)
   "Signal a user error unless URL is a URL a web view can load."
@@ -178,13 +194,17 @@ A window that a page opened loads the page it shows."
                           (plist-get (portal--inspect portal-web--target) :url)
                           (user-error "This window shows no page yet")))))
 
-(defun portal-web--go (step)
-  "Move the selected pane's web view through its history by STEP.
-STEP is \"back\" or \"forward\"; with no page to go to, nothing changes."
+(defun portal-web--selected ()
+  "Return the target of the selected pane's web view, or signal a user error."
   (let ((target (portal-view-target)))
     (unless (and target (string-prefix-p "web:" target))
       (user-error "Select a Portal web view"))
-    (portal--web-go target step)))
+    target))
+
+(defun portal-web--go (step)
+  "Move the selected pane's web view through its history by STEP.
+STEP is \"back\" or \"forward\"; with no page to go to, nothing changes."
+  (portal--web-go (portal-web--selected) step))
 
 (defun portal-web-back ()
   "Go back to the previous page in this web view's history."
@@ -195,6 +215,157 @@ STEP is \"back\" or \"forward\"; with no page to go to, nothing changes."
   "Go forward to the next page in this web view's history."
   (interactive)
   (portal-web--go "forward"))
+
+;; Finding text in the page.  WebKit finds and highlights; Emacs keeps the
+;; keyboard, and the minibuffer reads the text.
+
+(defvar portal-web-find-history nil "Texts found in web views, newest first.")
+(defvar-local portal-web--finding nil "The text this buffer's view looked for last.")
+(defvar portal-web--find-window nil
+  "The pane whose web view `portal-web-find' reads text for, while it reads.")
+(defvar portal-web--found nil
+  "The text `portal-web-find''s minibuffer last found, while it reads.")
+
+(defvar portal-web-find-minibuffer-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map minibuffer-local-map)
+    (keymap-set map "C-s" #'portal-web-find-next)
+    (keymap-set map "C-r" #'portal-web-find-previous)
+    map)
+  "Keys of the minibuffer that `portal-web-find' reads text in.")
+
+(defun portal-web--case-sensitive (text)
+  "Whether finding TEXT minds case, as isearch decides.
+It does while `case-fold-search' is off, or when TEXT has an upper-case
+letter and `search-upper-case' is on."
+  (not (and case-fold-search
+            (or (not search-upper-case) (isearch-no-upper-case-p text nil)))))
+
+(defun portal-web--search (text backward)
+  "Find TEXT in the selected pane's web view, BACKWARD or forward."
+  (portal--web-find (portal-web--selected) text backward (portal-web--case-sensitive text))
+  (with-current-buffer (window-buffer)
+    (setq portal-web--finding text)))
+
+(defun portal-web-find (&optional backward)
+  "Find text in this buffer's page, reading it in the minibuffer.
+RET finds the text after the page's selection, or before it with
+BACKWARD, wrapping around, and the page highlights the match.  While
+reading, \\<portal-web-find-minibuffer-map>\\[portal-web-find-next] and \\[portal-web-find-previous] move to the next and previous match,
+and RET then stays on the match shown.  Empty input finds the last text
+again.  Case matters as in isearch: while `case-fold-search' is off, or
+when the text has an upper-case letter.  The page never takes the
+keyboard, so Emacs keeps it once the text is found."
+  (interactive)
+  (portal-web--selected)
+  (let* ((last (car portal-web-find-history))
+         (portal-web--find-window (selected-window))
+         (portal-web--found nil)
+         (text (read-from-minibuffer (format-prompt (if backward "Find backward" "Find") last)
+                                     nil portal-web-find-minibuffer-map nil
+                                     'portal-web-find-history last)))
+    (when (string-empty-p text)
+      (setq text (or last (user-error "Nothing to find"))))
+    (unless (equal text portal-web--found)
+      (portal-web--search text backward))))
+
+(defun portal-web-find-backward ()
+  "Find text before the selection in this buffer's page, as `portal-web-find' does."
+  (interactive)
+  (portal-web-find t))
+
+(defun portal-web-find-next (&optional backward)
+  "Move to the next match of the last text found in this buffer's page.
+With BACKWARD, move to the previous one.  In `portal-web-find''s
+minibuffer, find the text being read, or the last text if it is empty.
+With no text found yet, read one as `portal-web-find' does."
+  (interactive)
+  (if (and portal-web--find-window (minibufferp))
+      (let ((text (minibuffer-contents)))
+        (when (string-empty-p text)
+          (insert (setq text (or (car portal-web-find-history) (user-error "Nothing to find")))))
+        (with-selected-window portal-web--find-window
+          (portal-web--search text backward))
+        (setq portal-web--found text))
+    (if-let* ((text (car portal-web-find-history)))
+        (portal-web--search text backward)
+      (portal-web-find backward))))
+
+(defun portal-web-find-previous ()
+  "Move to the previous match of the last text found.
+This is `portal-web-find-next' going backward."
+  (interactive)
+  (portal-web-find-next t))
+
+;; The view's latest find ended without a match.
+(setf (alist-get "found" portal-view-record-handlers nil nil #'equal)
+      (lambda (_target found)
+        (unless (equal found "1")
+          (message "No match for %S" portal-web--finding))))
+
+;; Zoom, remembered per site.
+
+(defcustom portal-web-zoom-steps '(50 75 85 100 115 125 150 175 200 250 300)
+  "The zoom levels, in percent, that the zoom commands step through.
+`portal-web-zoom-in' and `portal-web-zoom-out' move to the next one.
+Each is from 25 to 500, in increasing order."
+  :type '(repeat integer) :group 'portal)
+
+(defvar portal-web-zoom-levels nil
+  "The zoom level of each site not at 100%, as (HOST . PERCENT).
+Every page from HOST shows at PERCENT, in every web view, and each page
+a view goes to shows at its own host's level.  HOST is in lower case, as
+`url-host' has it, and \"\" stands for pages without a host, such as
+local files.  The zoom commands set this.  With `savehist-mode' on, it is
+kept from one Emacs session to the next.")
+(defvar savehist-additional-variables)
+(with-eval-after-load 'savehist
+  (add-to-list 'savehist-additional-variables 'portal-web-zoom-levels))
+
+(defun portal-web--send-zoom-levels ()
+  "Give the native module every site's zoom level."
+  (when (fboundp 'portal--web-zoom)
+    (pcase-dolist (`(,host . ,percent) portal-web-zoom-levels)
+      (with-demoted-errors "Portal web zoom: %S"
+        (portal--web-zoom host percent)))))
+(add-hook 'portal-view-load-hook #'portal-web--send-zoom-levels)
+
+(defun portal-web--host (target)
+  "Return the host of web view TARGET's page, as `portal-web-zoom-levels' has it."
+  (let ((url (plist-get (portal--inspect target) :url)))
+    (or (and url (url-host (url-generic-parse-url url))) "")))
+
+(defun portal-web--zoom (choose)
+  "Zoom the selected pane's site to the level CHOOSE returns.
+CHOOSE gets the site's level now, in percent."
+  (let* ((target (portal-web--selected))
+         (host (portal-web--host target))
+         (others (seq-remove (lambda (entry) (equal (car entry) host)) portal-web-zoom-levels))
+         (percent (funcall choose (alist-get host portal-web-zoom-levels 100 nil #'equal))))
+    (portal--web-zoom host percent)
+    (setq portal-web-zoom-levels (if (= percent 100) others (cons (cons host percent) others)))
+    (message "Zoom %d%% for %s" percent (if (string-empty-p host) "local pages" host))))
+
+(defun portal-web-zoom-in ()
+  "Show every page from this page's site larger.
+It moves to the next level in `portal-web-zoom-steps'."
+  (interactive)
+  (portal-web--zoom (lambda (current)
+                      (or (seq-find (lambda (step) (> step current)) portal-web-zoom-steps)
+                          current))))
+
+(defun portal-web-zoom-out ()
+  "Show every page from this page's site smaller.
+It moves to the previous level in `portal-web-zoom-steps'."
+  (interactive)
+  (portal-web--zoom (lambda (current)
+                      (or (seq-find (lambda (step) (< step current)) (reverse portal-web-zoom-steps))
+                          current))))
+
+(defun portal-web-zoom-reset ()
+  "Show every page from this page's site at its own size again."
+  (interactive)
+  (portal-web--zoom (lambda (_current) 100)))
 
 (defun portal-web--find (variable value)
   "Return the web buffer whose buffer-local VARIABLE is VALUE, or nil."
@@ -222,6 +393,7 @@ STEP is \"back\" or \"forward\"; with no page to go to, nothing changes."
             "RET or a click enters the page. The configured escape returns to Emacs.\n"
             "See M-x customize-option RET portal-input-escape-key for that key.\n"
             "g loads the page again. q hides it; killing the buffer closes it.\n"
+            "C-s finds text in the page; + and - zoom, and 0 resets.\n"
             "This buffer has one live view, which follows its selected pane.\n")))
 
 (defun portal-web--visit (buffer name open)
@@ -558,6 +730,7 @@ Hosted apps that have already loaded keep their page."
         (portal--web-load portal-web--target portal-web--url)))))
 
 (add-hook 'portal-server-ready-hook #'portal-web--host-ready)
+(portal-web--send-zoom-levels)
 
 (provide 'portal-web)
 ;;; portal-web.el ends here

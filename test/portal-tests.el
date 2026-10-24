@@ -14,6 +14,8 @@
 (declare-function portal-test-native-target-frame "test-terminal-input" (title))
 (declare-function portal-test-responder "test-terminal-input" ())
 (declare-function portal-test-sheet "test-terminal-input" (&optional button text))
+(declare-function portal-terminal-test--wait "portal-terminal-tests" (predicate))
+(declare-function portal-integration-test--emacs-input "portal-integration-tests" ())
 
 (defmacro portal-test--with-web (&rest body)
   "Run BODY in one window, then kill the web buffers it opened."
@@ -433,5 +435,87 @@ sent before the connection closes."
         (setopt portal-web-download-directory original)
         (delete-process server)
         (delete-directory directory t)))))
+
+(defmacro portal-test--with-page-scripts (&rest body)
+  "Run BODY with page scripts reaching this frame's visible web view."
+  (declare (indent 0))
+  `(progn
+     (select-frame-set-input-focus (selected-frame))
+     (sit-for 0.1)
+     (should (portal-view--with-frame-title (selected-frame)
+                                            #'portal-test-native-target-frame))
+     (unwind-protect (progn ,@body)
+       (portal-test-native-target-frame nil))))
+
+(defun portal-test--wait-for-selection (expected)
+  "Wait until the page's selection is EXPECTED, its text @ its start offset."
+  (portal-terminal-test--wait
+   (lambda ()
+     (equal (portal-excalidraw-gui--js
+             "const s = getSelection();
+              return s.rangeCount ? s.toString() + '@' + s.getRangeAt(0).startOffset : '';")
+            expected))))
+
+(defun portal-test--about (value expected)
+  "Whether VALUE, a number of CSS pixels, is EXPECTED to the nearest pixel."
+  (<= (abs (- value expected)) 1))
+
+(defun portal-test--find (keys)
+  "Run `portal-web-find', typing KEYS in its minibuffer."
+  (let ((unread-command-events (listify-key-sequence (kbd keys))))
+    (portal-web-find)))
+
+(ert-deftest portal-web-finds-text-from-the-minibuffer-and-emacs-keeps-the-keyboard ()
+  (portal-test--with-web
+    (portal-test--with-page-scripts
+      (let ((portal-web-find-history nil)
+            (case-fold-search t)
+            (search-upper-case t))
+        (portal-open-url "data:text/html,<title>Find</title><p>apple banana apple Apple</p>")
+        (portal-test--wait-for-page "Find")
+        ;; C-s twice moves to the second match; RET stays on it.
+        (portal-test--find "apple C-s C-s RET")
+        (portal-test--wait-for-selection "apple@13")
+        (portal-web-find-previous)
+        (portal-test--wait-for-selection "apple@0")
+        ;; An upper-case letter makes case matter.
+        (portal-test--find "Apple RET")
+        (portal-test--wait-for-selection "Apple@19")
+        (portal-test--find "zzz RET")
+        (portal-terminal-test--wait
+         (lambda () (equal (current-message) "No match for \"zzz\"")))
+        ;; The page never took the keyboard.
+        (should-not (portal-input--action "focused"))
+        (portal-integration-test--emacs-input)))))
+
+(ert-deftest portal-web-zoom-lays-the-page-out-again-and-stays-with-its-site ()
+  (portal-test--with-web
+    (portal-test--with-page-scripts
+      (let ((portal-web-zoom-levels nil)
+            (url "data:text/html,<title>Zoom</title>"))
+        (unwind-protect
+            (progn
+              (portal-open-url url)
+              (portal-test--wait-for-page "Zoom")
+              (let ((width (portal-excalidraw-gui--js "return innerWidth;")))
+                (portal-web-zoom-in)
+                (portal-web-zoom-in)
+                (should (equal (plist-get (portal--inspect (portal-view-target)) :zoom) 125))
+                ;; At 125%, the page lays out a viewport 4/5 as wide.
+                (portal-terminal-test--wait
+                 (lambda () (portal-test--about (portal-excalidraw-gui--js "return innerWidth;")
+                                                (* width 0.8))))
+                ;; A new view of the same site opens at its level.
+                (kill-buffer)
+                (portal-open-url url)
+                (portal-test--wait-for-page "Zoom")
+                (should (equal (plist-get (portal--inspect (portal-view-target)) :zoom) 125))
+                (portal-terminal-test--wait
+                 (lambda () (portal-test--about (portal-excalidraw-gui--js "return innerWidth;")
+                                                (* width 0.8))))
+                (portal-web-zoom-reset)
+                (portal-terminal-test--wait
+                 (lambda () (= (portal-excalidraw-gui--js "return innerWidth;") width)))))
+          (portal--web-zoom "" 100))))))
 
 (provide 'portal-tests)

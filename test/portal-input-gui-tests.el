@@ -99,6 +99,32 @@ from that thread."
       (should (portal-input--action "focused"))
       (should (= (portal-excalidraw-gui--js "return keys.length") 1)))))
 
+(ert-deftest portal-input-gui-web-command-f-finds-while-emacs-has-the-keyboard ()
+  (portal-test--with-web
+    (select-frame-set-input-focus (selected-frame))
+    (portal-open-url "data:text/html,<title>Find ready</title><p>apple pie</p><input autofocus spellcheck=false>")
+    (portal-test--wait-for-page "Find ready")
+    (let ((target (portal-view-target))
+          (portal-web-find-history nil)
+          (reading 'never))
+      (portal-integration-test--focus-web (selected-window) target)
+      (portal-test-native-key 3 portal-input-gui--command "f")
+      (let ((event (aref (with-timeout (5 (ert-fail "Command-F did not reach Emacs"))
+                           (read-key-sequence-vector nil))
+                         0)))
+        (should (eq (car-safe event) 'portal-input-key))
+        ;; The minibuffer reads with Emacs holding the keyboard.
+        (minibuffer-with-setup-hook
+            (lambda () (setq reading (portal-input--action "focused" target)))
+          (setq unread-command-events (listify-key-sequence (kbd "pie RET")))
+          (with-timeout (5 (ert-fail "Finding stalled"))
+            (portal-input--dispatch event))))
+      (should-not reading)
+      (portal-terminal-test--wait
+       (lambda () (equal (portal-excalidraw-gui--js "return getSelection().toString();") "pie")))
+      ;; Once the text is found, the page has the keyboard back.
+      (should (portal-input--action "focused" target)))))
+
 (ert-deftest portal-input-gui-web-page-focusing-a-field-leaves-emacs-the-keyboard ()
   (portal-test--with-web
     (select-frame-set-input-focus (selected-frame))

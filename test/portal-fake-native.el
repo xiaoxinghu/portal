@@ -115,6 +115,19 @@ The selected frame is kept."
     (error "Web history step must be \"back\" or \"forward\", not %s" step))
   t)
 
+(defun portal--web-find (target text backward case-sensitive)
+  (portal-fake-native--call 'portal--web-find target text backward case-sensitive)
+  (unless (string-prefix-p "web:" target) (error "No Portal view %s" target))
+  (portal-fake-native--view target)
+  (when (equal text "") (error "Nothing to find"))
+  t)
+
+(defun portal--web-zoom (host percent)
+  (portal-fake-native--call 'portal--web-zoom host percent)
+  (unless (and (stringp host) (integerp percent)) (signal 'wrong-type-argument (list host percent)))
+  (unless (<= 25 percent 500) (error "Web zoom must be from 25 to 500 percent"))
+  t)
+
 (defun portal-fake-native--hosted (target)
   "Return hosted web view TARGET's state, or signal as the native module does."
   (let ((view (portal-fake-native--view target)))

@@ -20,6 +20,7 @@
     (portal--inspect 1 . 1) (portal--channel 1 . 1)
     (portal--web-load 2 . 2) (portal--web-send 2 . 2) (portal--web-receive 1 . 1)
     (portal--web-appearance 1 . 1) (portal--web-go 2 . 2) (portal--web-download-directory 1 . 1)
+    (portal--web-find 4 . 4) (portal--web-zoom 2 . 2)
     (portal--terminal-paste 2 . 3) (portal--terminal-text 1 . 1)
     (portal--terminal-theme 1 . 1) (portal--terminal-themes 0 . 0)
     (portal--terminal-bindings 1 . 1)
@@ -306,6 +307,28 @@
                    '(error "Unknown web appearance: sepia")))
     (should (equal (should-error (portal--open "web" '(:appearance t)))
                    '(error "Option :appearance must be \"light\", \"dark\" or nil")))
+    (portal--close web)))
+
+(ert-deftest portal-module-finds-and-zooms-web-pages ()
+  (let ((web (portal--open "web" nil)))
+    (should (eq (portal--web-find web "Apple pie" nil t) t))
+    (should (eq (portal--web-find web "é" t nil) t))
+    (should (equal (plist-get (portal--inspect web) :finds)
+                   "Apple pie forward case,é backward nocase"))
+    (should-error (portal--web-find web 'apple nil nil) :type 'wrong-type-argument)
+    (should (equal (should-error (portal--web-find web "" nil nil))
+                   '(error "Nothing to find")))
+    ;; A page with no host yet shows at the level of "".
+    (unwind-protect
+        (progn
+          (should (eq (portal--web-zoom "" 150) t))
+          (should (equal (plist-get (portal--inspect web) :zoom) 150)))
+      (portal--web-zoom "" 100))
+    (should (equal (plist-get (portal--inspect web) :zoom) 100))
+    (should-error (portal--web-zoom "" 1.5) :type 'wrong-type-argument)
+    (should-error (portal--web-zoom 'example.com 150) :type 'wrong-type-argument)
+    (should (equal (should-error (portal--web-zoom "example.com" 0))
+                   '(error "Web zoom must be from 25 to 500 percent")))
     (portal--close web)))
 
 (ert-deftest portal-module-returns-backend-results ()

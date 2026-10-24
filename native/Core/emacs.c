@@ -530,6 +530,34 @@ LISP_FUNCTION(Fweb_appearance)
     return result;
 }
 
+LISP_FUNCTION(Fweb_find)
+{
+    portal_text target = {0}, text = {0}, error = {0};
+    emacs_value result = NULL;
+    if (read_text(env, args[0], &target) && read_text(env, args[1], &text))
+        result = done(env,
+                      portal_web_views_find(borrow(target), borrow(text),
+                                            env->is_not_nil(env, args[2]),
+                                            env->is_not_nil(env, args[3]), &error),
+                      &error);
+    free(target.data);
+    free(text.data);
+    return result;
+}
+
+LISP_FUNCTION(Fweb_zoom)
+{
+    portal_text host = {0}, error = {0};
+    emacs_value result = NULL;
+    if (read_text(env, args[0], &host)) {
+        int64_t percent = env->extract_integer(env, args[1]);
+        if (returning(env))
+            result = done(env, portal_web_views_zoom(borrow(host), percent, &error), &error);
+    }
+    free(host.data);
+    return result;
+}
+
 LISP_FUNCTION(Fterminal_paste)
 {
     portal_text target = {0}, text = {0}, error = {0};
@@ -723,6 +751,10 @@ static const struct export {
     {"portal--web-download-directory", 1, 1,
      STRINGS_FUNCTION(web_download_directory, RESULT_T),
      "Save web views' downloads in DIRECTORY, an absolute path, from now on."},
+    {"portal--web-find", 4, 4, Fweb_find, NULL,
+     "Find TEXT in web view TARGET's page, BACKWARD or forward, CASE-SENSITIVE or not."},
+    {"portal--web-zoom", 2, 2, Fweb_zoom, NULL,
+     "Show every web view's pages from HOST, or \"\" for pages without one, at PERCENT."},
     {"portal--web-appearance", 1, 1, Fweb_appearance, NULL,
      "Show every web view in APPEARANCE, \"light\" or \"dark\"; nil follows the system's."},
     {"portal--terminal-theme", 1, 1, Fterminal_theme, NULL,

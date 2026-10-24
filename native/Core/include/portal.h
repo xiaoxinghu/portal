@@ -156,9 +156,10 @@ bool portal_view_detach(portal_view *view, portal_text *error);
 bool portal_view_describe(portal_view *view, portal_text *state, portal_text *error);
 
 /* Web views.  The core decides what a web view loads and how, where its page
-   may navigate, and which messages cross the bridge (native/Core/web.c); the
-   platform loads pages, delivers messages, and reports what pages do through
-   the calls into the core below.  A page's URL, title, loading state and
+   may navigate, which messages cross the bridge, and how large each site's
+   pages show (native/Core/web.c); the platform loads pages, delivers
+   messages, finds text, and reports what pages do through the calls into
+   the core below.  A page's URL, title, loading state and
    errors come from portal_view_describe.
 
    A web view's options, passed to portal_view_create, are :hosted, a flag
@@ -215,6 +216,19 @@ bool portal_web_set_appearance(portal_view *web, portal_appearance appearance,
    portal_view_create, and it is the core's to destroy in the same way. */
 bool portal_web_create_window(portal_view *opener, portal_string target, void *request,
                               portal_view **view, portal_text *error);
+/* Find TEXT, which is not empty, in WEB's page as the platform's own find
+   in page does, and highlight the match its way: the next match after the
+   page's selection, or the previous one when BACKWARD, wrapping around the
+   page's ends, and ignoring case unless CASE_SENSITIVE.  Leave the keyboard
+   where it is.  Finding finishes after this call returns: report whether it
+   matched with portal_web_found and TOKEN. */
+bool portal_web_find(portal_view *web, portal_string text, bool backward, bool case_sensitive,
+                     uint64_t token, portal_text *error);
+/* Show WEB's pages at FACTOR times their size, such as 1.5, from now on,
+   including the page on screen, without loading it again.  The page lays
+   itself out again for its smaller or larger viewport, as a browser's zoom
+   does.  A new view starts at 1. */
+bool portal_web_set_zoom(portal_view *web, double factor, portal_text *error);
 
 /* Terminal views.  The core implements the terminal Lisp functions with
    these primitives, each on one terminal, and keeps Portal's rules: it checks
@@ -562,6 +576,9 @@ void portal_web_committed(portal_string target, portal_string url);
    portal_web_post sent with TOKEN.  MESSAGE says what, for the app's buffer;
    a delivery to a page that has since gone is ignored. */
 void portal_web_failed(portal_string target, uint64_t token, portal_string message);
+/* The find that portal_web_find started in TARGET with TOKEN finished:
+   FOUND says whether the page had a match. */
+void portal_web_found(portal_string target, uint64_t token, bool found);
 /* The browser script that every platform's hosted web views share.  The
    core owns its source, embedded when it is compiled from
    native/Core/scripts, so a platform needs no files at run time and no app

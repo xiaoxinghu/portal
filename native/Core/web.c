@@ -45,6 +45,15 @@
    its changes, unless Lisp forces light or dark, at open or later for every
    web view at once.  The core checks the name; the platform shows it.
 
+   Zoom.  Lisp gives hosts a level, and every page from a host shows at its
+   level, in every view, as a browser remembers zoom per site: the pages on
+   screen when Lisp sets it, and each page a view commits, whatever loaded
+   it.  Pages without a host, such as files, share the host "".
+
+   Finding.  The platform finds text its own way and reports when it is
+   done.  Only the latest find in a view reports to Emacs, so a result that
+   arrives after the user has typed on never answers the newer find.
+
    Generations.  Each commit starts a new generation.  A message the core
    posts to a page carries the generation it went to as its token, so a
    failed delivery that the platform reports after the page has gone is
@@ -76,6 +85,8 @@ struct portal_web_state {
     portal_text address;         /* The URL Emacs loaded last, or no data. */
     portal_text page;            /* The URL committed last, or no data. */
     uint64_t generation;         /* 1 + pages committed: the token of posts now. */
+    uint64_t finds;              /* The token of the latest find, or 0. */
+    int64_t zoom;                /* The level its pages show at now, in percent. */
     struct message *first, *last; /* Waiting messages, oldest first. */
     bool announced;              /* Whether a bridge record went out for them. */
     bool window;                 /* Whether a page opened it, as a new window. */
@@ -315,6 +326,73 @@ static void free_messages(struct portal_web_state *web)
         web->first = next;
     }
     web->last = NULL;
+}
+
+/* Zoom. */
+
+/* A host's level, in percent: any other than 100. */
+struct zoom {
+    struct zoom *next;
+    int64_t percent;
+    size_t length;
+    char host[]; /* LENGTH bytes. */
+};
+
+static struct zoom *zooms; /* Newest first. */
+
+/* The host of the page WEB committed last, or "" without one. */
+static portal_string page_host(const struct portal_web_state *web)
+{
+    return web->page.data ? origin(borrow(web->page)).host : literal("");
+}
+
+static struct zoom **zoom_link(portal_string host)
+{
+    struct zoom **link = &zooms;
+    while (*link && !same_ignoring_case((portal_string) {(*link)->host, (*link)->length}, host))
+        link = &(*link)->next;
+    return link;
+}
+
+/* HOST's level, in percent. */
+static int64_t level(portal_string host)
+{
+    struct zoom *zoom = *zoom_link(host);
+    return zoom ? zoom->percent : 100;
+}
+
+/* Show WEB's pages at PERCENT, unless they do already. */
+static bool zoom_to(portal_view *native, struct portal_web_state *web, int64_t percent,
+                    portal_text *error)
+{
+    if (web->zoom == percent)
+        return true;
+    if (!portal_web_set_zoom(native, (double) percent / 100, error))
+        return false;
+    web->zoom = percent;
+    return true;
+}
+
+/* Give HOST the level PERCENT; 100 forgets it. */
+static bool remember(portal_string host, int64_t percent, portal_text *error)
+{
+    struct zoom **link = zoom_link(host);
+    if (*link && percent != 100) {
+        (*link)->percent = percent;
+    } else if (*link) {
+        struct zoom *forgotten = *link;
+        *link = forgotten->next;
+        free(forgotten);
+    } else if (percent != 100) {
+        struct zoom *zoom = malloc(sizeof *zoom + host.length);
+        if (!zoom)
+            return out_of_memory(error);
+        *zoom = (struct zoom) {.next = zooms, .percent = percent, .length = host.length};
+        if (host.length)
+            memcpy(zoom->host, host.data, host.length);
+        zooms = zoom;
+    }
+    return true;
 }
 
 /* The open web view TARGET, for the platform's calls: NULL when it is gone. */
@@ -567,6 +645,7 @@ struct portal_web_state *portal_web_state_new(const portal_option *options, size
     if (!web)
         return NULL;
     web->generation = 1;
+    web->zoom = 100;
     for (size_t i = 0; i < count; i++)
         if (is(options[i].name, "hosted"))
             web->hosted = options[i].is_string || options[i].flag;
@@ -636,6 +715,46 @@ bool portal_web_views_appearance(const portal_string *name, portal_text *error)
     struct appear context = {.error = error};
     return appearance(name, &context.appearance, error)
         && portal_views_each(PORTAL_WEB, appear, &context);
+}
+
+struct rezoom {
+    portal_string host;
+    int64_t percent;
+    portal_text *error;
+};
+
+static bool rezoom(portal_view *native, struct portal_web_state *web, void *context)
+{
+    struct rezoom *rezoom = context;
+    return !same_ignoring_case(page_host(web), rezoom->host)
+        || zoom_to(native, web, rezoom->percent, rezoom->error);
+}
+
+bool portal_web_views_zoom(portal_string host, int64_t percent, portal_text *error)
+{
+    if (percent < 25 || percent > 500)
+        return fail_with(error, "Web zoom must be from 25 to 500 percent");
+    struct rezoom context = {host, percent, error};
+    return remember(host, percent, error) && portal_views_each_web(rezoom, &context);
+}
+
+bool portal_web_views_find(portal_string target, portal_string text, bool backward,
+                           bool case_sensitive, portal_text *error)
+{
+    struct portal_web_state *web;
+    portal_view *native = portal_views_find_web(target, &web, error);
+    if (!native)
+        return false;
+    if (!text.length)
+        return fail_with(error, "Nothing to find");
+    /* The latest find from now, so that its result counts even if the
+       platform reports it at once. */
+    uint64_t token = ++web->finds;
+    if (!portal_web_find(native, text, backward, case_sensitive, token, error)) {
+        web->finds--;
+        return false;
+    }
+    return true;
 }
 
 bool portal_web_views_load(portal_string target, portal_string url, portal_text *error)
@@ -789,7 +908,8 @@ portal_navigation portal_web_responding(portal_string target, bool showable, boo
 void portal_web_committed(portal_string target, portal_string url)
 {
     struct portal_web_state *web;
-    if (!find(target, &web))
+    portal_view *native = find(target, &web);
+    if (!native)
         return;
     free(web->page.data);
     if (!copy(url, &web->page)) /* Unknown: the next load loads. */
@@ -797,6 +917,10 @@ void portal_web_committed(portal_string target, portal_string url)
     web->generation++;
     if (web->window)
         portal_views_announce(target, PORTAL_WEB, "web");
+    /* No one to report a failure to: the page keeps its size. */
+    portal_text error = {0};
+    if (!zoom_to(native, web, level(page_host(web)), &error))
+        free(error.data);
     if (web->hosted)
         queue_own(web, target, "page", "url", url);
 }
@@ -806,6 +930,15 @@ void portal_web_failed(portal_string target, uint64_t token, portal_string messa
     struct portal_web_state *web;
     if (find(target, &web) && web->hosted && (!token || token == web->generation))
         queue_own(web, target, "error", "message", message);
+}
+
+void portal_web_found(portal_string target, uint64_t token, bool found)
+{
+    struct portal_web_state *web;
+    if (find(target, &web) && token == web->finds) {
+        portal_string matched = literal(found ? "1" : "0");
+        portal_channel_send(literal("found"), target, &matched, 1);
+    }
 }
 
 portal_string portal_web_links_script(void)

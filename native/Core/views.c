@@ -295,6 +295,16 @@ bool portal_views_each(portal_kind kind, bool (*visit)(portal_view *view, void *
     return true;
 }
 
+bool portal_views_each_web(bool (*visit)(portal_view *native, struct portal_web_state *state,
+                                         void *context),
+                           void *context)
+{
+    for (struct view *view = views.first; view; view = view->next)
+        if (view->kind == PORTAL_WEB && !visit(view->native, view->web, context))
+            return false;
+    return true;
+}
+
 void portal_views_announce(portal_string target, portal_kind kind, const char *type)
 {
     struct view *view = find(target, (int) kind, NULL);
