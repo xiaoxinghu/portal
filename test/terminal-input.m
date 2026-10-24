@@ -327,6 +327,54 @@ static emacs_value responder(emacs_env *env, ptrdiff_t nargs, emacs_value *args,
     return env->make_string(env, text.UTF8String, (ptrdiff_t)strlen(text.UTF8String));
 }
 
+/* Describe the sheet on the targeted window as JSON, or return nil without
+   one: its labels' texts, its text field's text or null, its buttons' titles,
+   and whether it has the keyboard. With BUTTON, first put TEXT, if given, in
+   its text field, then press the button titled BUTTON; nil if none is. */
+static emacs_value sheet(emacs_env *env, ptrdiff_t nargs, emacs_value *args, void *data)
+{
+    (void)data;
+    emacs_value nilValue = env->intern(env, "nil");
+    NSString *strings[2] = {nil, nil};
+    for (ptrdiff_t i = 0; i < nargs && i < 2; i++) {
+        if (!env->is_not_nil(env, args[i])) continue;
+        ptrdiff_t size = 0;
+        if (!env->copy_string_contents(env, args[i], NULL, &size)) return nilValue;
+        char *bytes = malloc((size_t)size);
+        if (!bytes) return nilValue;
+        if (!env->copy_string_contents(env, args[i], bytes, &size)) { free(bytes); return nilValue; }
+        strings[i] = [NSString stringWithUTF8String:bytes];
+        free(bytes);
+    }
+    NSWindow *panel = activeWindow().attachedSheet;
+    if (!panel) return nilValue;
+    NSMutableArray<NSString *> *texts = [NSMutableArray array], *titles = [NSMutableArray array];
+    NSTextField *field = nil;
+    NSButton *chosen = nil;
+    for (NSView *view in descendants(panel.contentView)) {
+        if (view.isHiddenOrHasHiddenAncestor) continue;
+        if ([view isKindOfClass:NSTextField.class]) {
+            NSTextField *text = (NSTextField *)view;
+            if (text.isEditable) field = text;
+            else if (text.stringValue.length) [texts addObject:text.stringValue];
+        } else if ([view isKindOfClass:NSButton.class] && ((NSButton *)view).title.length) {
+            [titles addObject:((NSButton *)view).title];
+            if ([((NSButton *)view).title isEqualToString:strings[0]]) chosen = (NSButton *)view;
+        }
+    }
+    if (strings[0]) {
+        if (!chosen) return nilValue;
+        if (strings[1]) field.stringValue = strings[1];
+        [chosen performClick:nil];
+        return env->intern(env, "t");
+    }
+    NSDictionary *result = @{ @"texts": texts, @"field": field ? field.stringValue : NSNull.null,
+                              @"buttons": titles, @"key": @(panel.isKeyWindow) };
+    NSData *json = [NSJSONSerialization dataWithJSONObject:result options:0 error:nil];
+    NSString *text = [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
+    return env->make_string(env, text.UTF8String, (ptrdiff_t)strlen(text.UTF8String));
+}
+
 int emacs_module_init(struct emacs_runtime *runtime)
 {
     emacs_env *env = runtime->get_environment(runtime);
@@ -382,6 +430,10 @@ int emacs_module_init(struct emacs_runtime *runtime)
     args[0] = env->intern(env, "portal-test-marked-text");
     args[1] = env->make_function(env, 0, 0, marked,
         "Whether the targeted frame's first responder has marked text.", NULL);
+    env->funcall(env, env->intern(env, "fset"), 2, args);
+    args[0] = env->intern(env, "portal-test-sheet");
+    args[1] = env->make_function(env, 0, 2, sheet,
+        "Describe the targeted frame's sheet as JSON; BUTTON presses it, after typing TEXT if given.", NULL);
     env->funcall(env, env->intern(env, "fset"), 2, args);
     return 0;
 }

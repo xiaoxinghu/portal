@@ -197,6 +197,80 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, Nati
         Core.failed(target, token: 0, message: "The page's web process stopped.")
     }
 
+    /// The JavaScript dialog the page waits on: WebKit asks for one at a time.
+    private var dialog: PageDialog?
+    /// The frame's window the page is shown in, while it is.
+    private weak var shownIn: NSWindow?
+    /// Whether the view has closed, so no dialog can show.
+    private var closed = false
+
+    /// The page is shown in WINDOW, or, with nil, about to be parked: its
+    /// dialog follows it, and waits while it is hidden.
+    func shown(in window: NSWindow?) {
+        shownIn = window
+        if let window { dialog?.show(on: window) } else { dialog?.hide() }
+    }
+
+    /// Show NEXT, the page's dialog, as a sheet on the page's frame, now or
+    /// once the page is shown.
+    private func ask(_ next: PageDialog) {
+        guard !closed else { return next.answer(false) }
+        dialog?.answer(false)
+        dialog = next
+        next.done = { [weak self, weak next] in
+            if let self, self.dialog === next { self.dialog = nil }
+        }
+        if let shownIn { next.show(on: shownIn) }
+    }
+
+    /// The view is closing: answer its dialogs as if dismissed, from now on.
+    /// WebKit requires an answer to every one.
+    func dismissDialogs() {
+        closed = true
+        dialog?.answer(false)
+    }
+
+    /// Who is speaking in FRAME's dialog: its host, as browsers name it.
+    private func speaker(_ frame: WKFrameInfo) -> String {
+        frame.securityOrigin.host.isEmpty ? "This page says" : "\(frame.securityOrigin.host) says"
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping @MainActor () -> Void) {
+        ask(PageDialog(title: speaker(frame), message: message, buttons: ["OK"]) { _, _ in
+            completionHandler()
+        })
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping @MainActor (Bool) -> Void) {
+        ask(PageDialog(title: speaker(frame), message: message, buttons: ["OK", "Cancel"]) { ok, _ in
+            completionHandler(ok)
+        })
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
+                 defaultText: String?, initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping @MainActor (String?) -> Void) {
+        ask(PageDialog(title: speaker(frame), message: prompt, buttons: ["OK", "Cancel"],
+                       text: defaultText ?? "") { ok, text in
+            completionHandler(ok ? text : nil)
+        })
+    }
+
+    /// A page with a `beforeunload` handler asks before it is left, by any
+    /// navigation or reload. WebKit offers this only to the private delegate
+    /// method; without it, every page is left without asking. Pages no longer
+    /// choose the question, so its message goes unused, as in Safari.
+    @objc(_webView:runBeforeUnloadConfirmPanelWithMessage:initiatedByFrame:completionHandler:)
+    func webView(_ webView: WKWebView, runBeforeUnloadConfirmPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+        ask(PageDialog(title: "Leave this page?", message: "Changes you made may not be saved.",
+                       buttons: ["Leave Page", "Stay on Page"]) { leave, _ in
+            completionHandler(leave)
+        })
+    }
+
     // File inputs, such as inserting an image, use the native file picker.
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
                  initiatedByFrame frame: WKFrameInfo) async -> [URL]? {
@@ -212,6 +286,80 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, Nati
             loadError = error.localizedDescription
             Core.failed(target, token: 0, message: error.localizedDescription)
         }
+    }
+}
+
+/// A JavaScript dialog, which the page waits on until it has an answer: its
+/// first button, or any other, and the text in its field if it has one. It is
+/// a sheet on the frame the page is shown in. Hiding the page takes the sheet
+/// down and showing it again puts it back, as a background tab's dialog
+/// waits, so a parked page's dialog is never lost offscreen.
+@MainActor
+private final class PageDialog {
+    private let title: String
+    private let message: String
+    private let buttons: [String]
+    /// A prompt's text, as last shown.
+    private var text: String?
+    private var reply: (@MainActor (Bool, String?) -> Void)?
+    /// Called once, after the answer.
+    var done: (() -> Void)?
+    private var sheet: NSAlert?
+    private weak var window: NSWindow?
+
+    init(title: String, message: String, buttons: [String], text: String? = nil,
+         reply: @escaping @MainActor (Bool, String?) -> Void) {
+        self.title = title
+        self.message = message
+        self.buttons = buttons
+        self.text = text
+        self.reply = reply
+    }
+
+    /// Show the dialog as a sheet on WINDOW, moving it there if it is on another.
+    func show(on window: NSWindow) {
+        guard sheet == nil || self.window !== window else { return }
+        hide()
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        for button in buttons { alert.addButton(withTitle: button) }
+        if let text {
+            let field = NSTextField(string: text)
+            field.frame = CGRect(x: 0, y: 0, width: 300, height: 24)
+            alert.accessoryView = field
+            alert.window.initialFirstResponder = field
+        }
+        sheet = alert
+        self.window = window
+        alert.beginSheetModal(for: window) { [weak self] response in
+            MainActor.assumeIsolated {
+                // A sheet taken down by `hide` has no answer.
+                guard let self, self.sheet === alert else { return }
+                self.text = (alert.accessoryView as? NSTextField)?.stringValue ?? self.text
+                self.sheet = nil
+                self.window = nil
+                self.answer(response == .alertFirstButtonReturn)
+            }
+        }
+    }
+
+    /// Take the sheet down, keeping the dialog unanswered.
+    func hide() {
+        guard let alert = sheet else { return }
+        text = (alert.accessoryView as? NSTextField)?.stringValue ?? text
+        sheet = nil
+        window?.endSheet(alert.window)
+        window = nil
+    }
+
+    /// Answer the page, once: with the first button when CHOSEN.
+    func answer(_ chosen: Bool) {
+        hide()
+        guard let reply else { return }
+        self.reply = nil
+        reply(chosen, text)
+        done?()
     }
 }
 
@@ -330,7 +478,12 @@ final class WebSession: PortalView {
         input.offer = { [weak page] event in page?.offer(event) }
     }
 
+    func attached() { page.shown(in: page.window) }
+
+    func detaching() { page.shown(in: nil) }
+
     func close() {
+        page.dismissDialogs()
         page.configuration.userContentController.removeAllScriptMessageHandlers()
         page.stopLoading()
     }

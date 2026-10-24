@@ -2,6 +2,7 @@
 
 import { assets } from "./.generated/assets";
 import { about } from "./about";
+import dialogs from "./dialogs.html" with { type: "text" };
 import editor from "./excalidraw.html" with { type: "text" };
 import hello from "./hello.html" with { type: "text" };
 import { image, markdown } from "./markdown";
@@ -29,6 +30,7 @@ async function respond(request: Request): Promise<Response> {
 	if (
 		route !== "/hello" &&
 		route !== "/about" &&
+		route !== "/dialogs" &&
 		route !== "/markdown" &&
 		route !== "/image" &&
 		route !== "/excalidraw/" &&
@@ -45,6 +47,10 @@ async function respond(request: Request): Promise<Response> {
 	if (route === "/markdown") return markdown(url.searchParams.get("path"));
 	if (route === "/image") return image(url.searchParams.get("path"));
 	if (route === "/about") return about(url.searchParams);
+	if (route === "/dialogs")
+		return new Response(dialogs, {
+			headers: { "Content-Type": "text/html; charset=utf-8" },
+		});
 	if (asset)
 		return new Response(Bun.file(asset.file), {
 			headers: { "Content-Type": asset.type },

@@ -59,6 +59,8 @@
                   (should (string-match-p "HTTP/1.1 200" page))
                   (should (string-match-p "text/html; charset=utf-8" page))
                   (should (string-match-p "<h1>Hello, world!</h1>" page)))
+                (should (string-match-p "<title>Dialogs</title>"
+                                        (portal-server-test--get "/dialogs")))
                 (let ((file (expand-file-name "note.md" directory)))
                   (with-temp-file file (insert "# Standalone Markdown\n"))
                   (let ((page (portal-server-test--get

@@ -115,7 +115,15 @@ scripts, styles and images. JavaScript is enabled by default.
 - With page focus, unused chords reach Emacs and the configured escape
   (Command-period by default) returns control to Emacs. Clicking
   to enter sends `select TARGET`; Emacs selects the view's pane.
-- This URL viewer has no address bar, downloads, popups or JavaScript dialog UI.
+- A page's `alert`, `confirm` and `prompt`, and the question a page with a
+  `beforeunload` handler asks before it is left or reloaded, show as a sheet
+  on the view's frame; the page waits for the answer. The sheet holds that
+  frame until answered, as in any Mac app. Hiding the page takes its sheet
+  down and showing it again puts it back, still waiting; closing the view
+  dismisses it. WebKit asks before leaving only a page the user has
+  interacted with, and closing the view never asks.
+  `(portal-web-open-hosted "/dialogs")` opens a page that tries each one.
+- This URL viewer has no address bar, downloads or popups.
   Inspect failed loads through `:error` in
   `(portal--inspect (portal-view-target))`, or the page itself with
   [Web Inspector](#web-inspector).
