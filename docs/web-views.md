@@ -150,7 +150,11 @@ the default browser.
 WebKit has a known bug in which a popup's `window.opener` is null on some
 macOS versions ([759487](https://developer.apple.com/forums/thread/759487),
 [810417](https://developer.apple.com/forums/thread/810417)), which breaks
-sign-in flows that report back to the opener.
+sign-in flows that report back to the opener. On macOS 27.0.1 (26A434), on
+2026-10-25, a popup from `window.open` had its opener and could post to it,
+as `test/portal-web-gui-tests.el` checks; macOS 26 was not checked. Links to
+`target=_blank` get no opener, as browsers give them `rel=noopener` by
+default.
 
 Lisp can give any buffer a web view: `(portal-web-open URL)` opens and loads
 URL in the current buffer. Loading the current page, ignoring its fragment,

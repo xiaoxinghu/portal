@@ -77,6 +77,7 @@ if (window.opener) window.opener.postMessage('hello', '*');
                 (portal-test--wait-for-page "Tab")
                 (portal-web-gui--close tab))
               (switch-to-buffer opener)
+              (redisplay t)
               (portal-test--wait-for-page "Opener")
               ;; A popup's page has its opener, which hears from it.
               (let ((popup (portal-web-gui--open "Popup")))
