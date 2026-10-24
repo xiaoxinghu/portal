@@ -421,14 +421,15 @@ sent before the connection closes."
               (setopt portal-web-download-directory (funcall file "missing/"))
               (portal--web-load target (concat base "/report"))
               (portal-test--wait-for-message
-               (concat "^Could not download "
-                       (regexp-quote (abbreviate-file-name (funcall file "missing/report.txt")))
-                       ": .")
+               (concat "^Could not download " (regexp-quote base) "/report: No download directory "
+                       (regexp-quote (funcall file "missing/")) "$")
                start)
               (let ((state (portal--inspect target)))
                 (should (equal (plist-get state :title) "Attribute"))
                 (should-not (plist-get state :error)))
-              (message "Downloaded files: %S" (directory-files directory nil "\\`[^.]"))))
+              ;; Only complete files remain.
+              (should (equal (directory-files directory nil "\\`[^.]")
+                             '("archive.zip" "hello.txt" "report (1).txt" "report.txt")))))
         (setopt portal-web-download-directory original)
         (delete-process server)
         (delete-directory directory t)))))

@@ -757,7 +757,14 @@ static void test_downloads(void)
     }
     char directory[] = "/tmp/portal-downloads-XXXXXX";
     CHECK(mkdtemp(directory));
-    char slashed[sizeof directory + 1];
+    char slashed[sizeof directory + 16];
+    snprintf(slashed, sizeof slashed, "%s/missing/", directory);
+    CHECK(portal_web_views_download_directory(text(slashed), &error));
+    CHECK(start(web, "f.txt", &download).length == 0 && !download);
+    char missing[256];
+    snprintf(missing, sizeof missing, "failed||No download directory %s", slashed);
+    CHECK(downloads_said(web, "", missing));
+    drain();
     snprintf(slashed, sizeof slashed, "%s/", directory);
     CHECK(portal_web_views_download_directory(text(slashed), &error));
     /* A file or a running download keeps its name taken. */

@@ -430,24 +430,31 @@ static bool taken(const char *path)
 
 /* A new file's path, to free, for a download suggested to be called NAME:
    NULL with *PROBLEM set when there is none. */
-static char *destination(portal_string name, const char **problem)
+static char *destination(portal_string name, portal_text *problem)
 {
-    if (!downloads.directory.data) {
-        *problem = "Portal has no download directory";
+    portal_string directory = borrow(downloads.directory);
+    struct stat status;
+    if (!directory.data) {
+        fail_with(problem, "Portal has no download directory");
+        return NULL;
+    }
+    if (stat(directory.data, &status) || !S_ISDIR(status.st_mode)) {
+        fail(problem, "No download directory ", directory);
         return NULL;
     }
     portal_text stem;
     portal_string extension;
     if (!file_name(name, &stem, &extension)) {
-        *problem = "Portal is out of memory";
+        out_of_memory(problem);
         return NULL;
     }
-    portal_string directory = borrow(downloads.directory);
     bool slash = directory.data[directory.length - 1] == '/';
     size_t size = directory.length + 1 + stem.length + sizeof " (999)" + extension.length;
     char *path = malloc(size);
-    *problem = path ? "No free name for the file in the download directory"
-                    : "Portal is out of memory";
+    if (path)
+        fail(problem, "No free name for the file in ", directory);
+    else
+        out_of_memory(problem);
     for (unsigned number = 0; path && number < 1000; number++) {
         char suffix[sizeof " (999)"] = "";
         if (number)
@@ -457,6 +464,8 @@ static char *destination(portal_string name, const char **problem)
                  (int) extension.length, extension.data);
         if (!taken(path)) {
             free(stem.data);
+            free(problem->data);
+            *problem = (portal_text) {0};
             return path;
         }
     }
@@ -494,12 +503,14 @@ portal_string portal_web_download_started(portal_string target, portal_string ur
     *download = 0;
     if (!find(target, &web))
         return none;
-    const char *problem = "Portal is out of memory";
+    portal_text problem = {0};
     struct download *started = calloc(1, sizeof *started);
     char *path = started ? destination(name, &problem) : NULL;
     if (!path || !copy(target, &started->target) || !copy(url, &started->url)) {
-        portal_string why = literal(path ? "Portal is out of memory" : problem);
+        portal_string why = problem.data && !path ? borrow(problem)
+                                                  : literal("Portal is out of memory");
         report(target, "failed", url, none, &why);
+        free(problem.data);
         free(path);
         if (started)
             free_download(started);

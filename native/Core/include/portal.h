@@ -534,7 +534,8 @@ portal_navigation portal_web_responding(portal_string target, bool showable, boo
 portal_string portal_web_download_started(portal_string target, portal_string url,
                                           portal_string name, uint64_t *download);
 /* DOWNLOAD has finished: its file is complete, for a null ERROR, or it
-   failed or was cancelled, and ERROR says why.  Closing a web view cancels
+   failed or was cancelled, and ERROR says why, and the platform has removed
+   what it wrote of the file.  Closing a web view cancels
    its downloads; the core then tells Emacs nothing more about them. */
 void portal_web_download_finished(uint64_t download, const portal_string *error);
 /* The page in TARGET asks for a new window, as window.open and links to

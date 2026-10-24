@@ -220,8 +220,8 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
         download.delegate = self
     }
 
-    /// The running downloads that have a file, and the core's number for each.
-    private var downloads: [ObjectIdentifier: (download: WKDownload, number: UInt64)] = [:]
+    /// The running downloads that have a file, with the core's number for each.
+    private var downloads: [ObjectIdentifier: (download: WKDownload, number: UInt64, file: URL)] = [:]
 
     /// The file the core chose, or nil, which cancels the download.
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse,
@@ -229,7 +229,7 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
         let url = download.originalRequest?.url ?? response.url
         guard let (number, file) = Core.downloadStarted(target, url: url?.absoluteString ?? "",
                                                         name: suggestedFilename) else { return nil }
-        downloads[ObjectIdentifier(download)] = (download, number)
+        downloads[ObjectIdentifier(download)] = (download, number, file)
         return file
     }
 
@@ -239,15 +239,20 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
         end(download, error: error.localizedDescription)
     }
 
+    /// A failed download leaves no partial file behind: WebKit wrote it once
+    /// it received data, as the file was new, and leaves it in place.
     private func end(_ download: WKDownload, error: String?) {
         guard let running = downloads.removeValue(forKey: ObjectIdentifier(download)) else { return }
+        if error != nil && download.progress.completedUnitCount > 0 {
+            try? FileManager.default.removeItem(at: running.file)
+        }
         Core.downloadFinished(running.number, error: error)
     }
 
     /// Cancel every download, telling the core now: the page may be gone
     /// before WebKit reports them.
     func cancelDownloads() {
-        for (download, _) in downloads.values {
+        for (download, _, _) in downloads.values {
             end(download, error: "The download was cancelled.")
             download.cancel()
         }
