@@ -73,6 +73,20 @@
                            '(("light") (nil)))))
         (setq portal-web-appearance original)))))
 
+(ert-deftest portal-web-inspectable-marks-new-views ()
+  (portal-web-test--environment
+    (let ((original portal-web-inspectable))
+      (unwind-protect
+          (progn
+            (should (eq original t))
+            (portal-open-url "https://example.com/")
+            (should (eq (plist-get (plist-get (portal-web-test--state) :options) :inspectable) t))
+            (setq portal-web-inspectable nil)
+            (portal-open-url "https://example.com/")
+            (should-not (plist-member (plist-get (portal-web-test--state) :options)
+                                      :inspectable)))
+        (setq portal-web-inspectable original)))))
+
 (ert-deftest portal-web-open-url-opens-a-new-buffer-each-time ()
   (portal-web-test--environment
     (portal-open-url "https://example.com/page")

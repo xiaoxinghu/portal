@@ -81,11 +81,13 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, Nati
     /// The view's target, which names it in every call to the core.
     let target: String
 
-    init(target: String, hosted: Bool) {
+    /// An inspectable page lets Safari's Web Inspector attach to it.
+    init(target: String, hosted: Bool, inspectable: Bool) {
         self.target = target
         let configuration = WKWebViewConfiguration()
         if hosted { configuration.websiteDataStore = .nonPersistent() }
         super.init(frame: .zero, configuration: configuration)
+        if #available(macOS 13.3, *) { isInspectable = inspectable }
         if hosted { PageMessages.install(in: self) }
         KeyReports.install(in: self)
         navigationDelegate = self
@@ -307,11 +309,12 @@ final class WebSession: PortalView {
     let input: NativeInput
 
     /// With `:hosted`, the page keeps no data between sessions and gets the
-    /// bridge's scripts. It starts in its `:appearance`, which the core has
+    /// bridge's scripts. With `:inspectable`, Safari's Web Inspector may
+    /// attach to it. It starts in its `:appearance`, which the core has
     /// checked.
     init(target: String, options: ViewOptions) throws {
         let hosted = options.flag("hosted")
-        let page = WebPage(target: target, hosted: hosted)
+        let page = WebPage(target: target, hosted: hosted, inspectable: options.flag("inspectable"))
         let appearance = switch try options.string("appearance") {
         case "light": PORTAL_APPEARANCE_LIGHT
         case "dark": PORTAL_APPEARANCE_DARK
@@ -358,6 +361,7 @@ final class WebSession: PortalView {
         if let url = page.url { state.append(("url", .string(url.absoluteString))) }
         if let title = page.title { state.append(("title", .string(title))) }
         if let error = page.loadError { state.append(("error", .string(error))) }
+        if #available(macOS 13.3, *) { state.append(("inspectable", .flag(page.isInspectable))) }
         return state
     }
 }

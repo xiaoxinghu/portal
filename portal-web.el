@@ -55,6 +55,16 @@ This sets `portal-web-appearance'."
                      '(("light" . light) ("dark" . dark))))))
   (setq portal-web-appearance appearance))
 
+(defcustom portal-web-inspectable t
+  "Whether Safari's Web Inspector may attach to web views.
+Non-nil lists each web view opened afterwards, hosted apps and previews
+included, under Safari's Develop menu, in this Mac's Emacs entry, once
+\"Show features for web developers\" is on in Safari's Advanced settings.
+It only allows attaching: nothing opens until Safari's menu is used.
+It needs macOS 13.3 or later; earlier versions ignore it."
+  :type 'boolean
+  :group 'portal)
+
 (defvar-local portal-web--target nil "This buffer's web view target, or nil.")
 (defvar-local portal-web--url nil
   "The URL this buffer's web view loaded last.
@@ -112,12 +122,14 @@ outside the app host opens in the default browser instead."
 
 (defun portal-web--open (url options)
   "Open a web view with OPTIONS for the current buffer, and load URL in it.
-The view starts in `portal-web-appearance'."
+The view starts in `portal-web-appearance', inspectable when
+`portal-web-inspectable' says so."
   (portal-input--connect)
   (let ((target (portal-view-open
-                 'web (if portal-web-appearance
-                          (append (list :appearance (symbol-name portal-web-appearance)) options)
-                        options)))
+                 'web (append (and portal-web-appearance
+                                   (list :appearance (symbol-name portal-web-appearance)))
+                              (and portal-web-inspectable (list :inspectable t))
+                              options)))
         ready)
     (unwind-protect
         (progn

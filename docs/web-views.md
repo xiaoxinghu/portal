@@ -117,7 +117,8 @@ scripts, styles and images. JavaScript is enabled by default.
   to enter sends `select TARGET`; Emacs selects the view's pane.
 - This URL viewer has no address bar, downloads, popups or JavaScript dialog UI.
   Inspect failed loads through `:error` in
-  `(portal--inspect (portal-view-target))`.
+  `(portal--inspect (portal-view-target))`, or the page itself with
+  [Web Inspector](#web-inspector).
 
 Lisp can give any buffer a web view: `(portal-web-open URL)` opens and loads
 URL in the current buffer. Loading the current page, ignoring its fragment,
@@ -128,3 +129,23 @@ if needed. Hosted apps exchange JSON objects with their buffers over the
 [bridge](editor-bridge.md): `(portal-web-send PLIST)` sends to the app;
 buffer-local `portal-web-bridge-function` receives app messages in order.
 Other web views have no bridge.
+
+## Web Inspector
+
+Safari's Web Inspector can attach to any web view, hosted apps and Markdown
+previews included, on macOS 13.3 or later. Turn on "Show features for web
+developers" in Safari's Advanced settings once; then Safari's Develop menu
+lists each open page under this Mac, in its Emacs entry, by title or URL.
+Choosing one opens Web Inspector for that page: its elements, console,
+network requests and storage.
+
+`portal-web-inspectable`, on by default, only allows attaching; nothing opens
+until the menu is used. It applies to web views opened afterwards:
+
+```elisp
+(setopt portal-web-inspectable nil) ; keep new pages out of the Develop menu
+```
+
+`(plist-get (portal--inspect (portal-view-target)) :inspectable)` tells whether
+a page is listed. Emacs has no command to open Web Inspector itself: WebKit
+offers that only through private interfaces.

@@ -155,4 +155,21 @@ TARGET defaults to the selected pane's view.  Return its state."
       (portal--web-load target "data:text/html,<title>Second</title>")
       (portal-test--wait-for-page "Second"))))
 
+;; Safari's Develop menu lists exactly the pages WebKit marks inspectable.
+(ert-deftest portal-web-inspectable-follows-the-option ()
+  (portal-test--with-web
+    (skip-unless (version<= "13.3" (car (process-lines "sw_vers" "-productVersion"))))
+    (let ((original portal-web-inspectable))
+      (unwind-protect
+          (progn
+            (setq portal-web-inspectable t)
+            (portal-open-url "data:text/html,<title>Inspectable</title>")
+            (should (plist-get (portal-test--wait-for-page "Inspectable") :inspectable))
+            (setq portal-web-inspectable nil)
+            (portal-open-url "data:text/html,<title>Closed</title>")
+            (let ((state (portal-test--wait-for-page "Closed")))
+              (should (plist-member state :inspectable))
+              (should-not (plist-get state :inspectable))))
+        (setq portal-web-inspectable original)))))
+
 (provide 'portal-tests)
