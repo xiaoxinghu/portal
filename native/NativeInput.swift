@@ -46,10 +46,10 @@ final class NativeInput: NativeInputHandler {
     private var reported = false
     /// Whether `focus` is giving the view the keyboard.
     private var focusing = false
-    /// Whether the view is out of its host's window, in a window of its own,
-    /// as a web page is while fullscreen (`moved`).
+    /// Whether the view left its host's window for a window of its own, as a
+    /// web page does for fullscreen, and is not back yet (`moved`, `back`).
     private(set) var away = false
-    /// Runs once the view is back in its host's window.
+    /// Runs once the view is back.
     var returned: (() -> Void)?
 
     /// Whether the view may take the keyboard: it has it, as far as the core
@@ -57,7 +57,9 @@ final class NativeInput: NativeInputHandler {
     /// moves it (`portal_input_focus`), so a view refuses other requests,
     /// such as a page's, except in a window of its own, where it is all
     /// there is to type into.
-    var mayTakeKeyboard: Bool { focusing || reported || away }
+    var mayTakeKeyboard: Bool {
+        focusing || reported || (away && view?.window !== host.view?.window)
+    }
 
     init(target: String, view: NSView, host: NativeHost, focus: @escaping () -> Bool) {
         self.target = target
@@ -79,22 +81,25 @@ final class NativeInput: NativeInputHandler {
     /// The view is in a new window. Its host moves it only within the
     /// host's window and the parking window, so another window is one of
     /// its own, such as WebKit's for a fullscreen page, which takes the
-    /// view out of its pane and puts it back. Meanwhile, every key in that
-    /// window is the view's, the host's window gives its keyboard to Emacs,
-    /// and the core keeps who had the keyboard before; the view gets it back
-    /// on its return if it had it. A view whose host's frame was deleted
-    /// meanwhile is back wherever it lands, for Emacs to park.
+    /// view out of its pane and puts it back. Until the view's app says it
+    /// is done (`back`), every key in that window is the view's, the host's
+    /// window gives its keyboard to Emacs, and the core keeps who had the
+    /// keyboard before.
     func moved() {
-        guard let window = view?.window else { return }
-        if let home = host.view?.window, window !== home {
-            away = true
-            host.reclaimKeyboard()
-        } else if away {
-            away = false
-            if reported { _ = focusView() }
-            returned?()
-            host.refreshOwnership()
-        }
+        guard let window = view?.window, let home = host.view?.window, window !== home else { return }
+        away = true
+        host.reclaimKeyboard()
+    }
+
+    /// The view's app is done with the window of its own, and has put the
+    /// view back: the view gets the keyboard back if it had it, and Emacs
+    /// keeps it otherwise.
+    func back() {
+        guard away else { return }
+        away = false
+        if reported { _ = focusView() } else if let view { host.returnFocus(from: view) }
+        returned?()
+        host.refreshOwnership()
     }
 
     /// Tell the core whether the view has the keyboard, when that changed.

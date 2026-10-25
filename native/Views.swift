@@ -92,7 +92,7 @@ final class NativeView {
     private var rectangle: CGRect
     /// Where Emacs put the view while it was away in a window of its own
     /// (`NativeInput.moved`): a frame's host, or the parking window's. Only
-    /// the view's own window may move it then; it goes here once back.
+    /// the view's app may move it then; it goes here once back.
     private var wanted: NativeHost?
 
     /// Make a view of TYPE, in the parking window with its session running.
@@ -130,12 +130,19 @@ final class NativeView {
         host.hide(kind.surface)
     }
 
+    /// A view away in a window of its own, which closing asks to end, leaves
+    /// once back: its app's window would outlive it otherwise. Until then,
+    /// the view keeps itself.
     func close() {
         kind.close()
-        host.remove(kind.surface)
+        guard kind.input.away else { return host.remove(kind.surface) }
+        kind.input.returned = { [self] in
+            host.remove(kind.surface)
+            kind.input.returned = nil
+        }
     }
 
-    /// Back from its own window, in its host's: go where Emacs put it meanwhile.
+    /// Back from its own window: go where Emacs put it meanwhile.
     private func returned() {
         guard let next = wanted else { return }
         wanted = nil
