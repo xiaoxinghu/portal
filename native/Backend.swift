@@ -300,6 +300,24 @@ public func portalWebCreateWindow(_ opener: OpaquePointer, _ target: portal_stri
     return true
 }
 
+@_cdecl("portal_web_find")
+public func portalWebFind(_ web: OpaquePointer, _ text: portal_string, _ backward: Bool,
+                          _ caseSensitive: Bool, _ token: UInt64,
+                          _ error: UnsafeMutablePointer<portal_text>) -> Bool {
+    let web = native(web), text = String(copying: text)
+    return perform(error) {
+        try session(web, as: WebSession.self).find(text, backward: backward, caseSensitive: caseSensitive,
+                                                   token: token)
+    } != nil
+}
+
+@_cdecl("portal_web_set_zoom")
+public func portalWebSetZoom(_ web: OpaquePointer, _ factor: Double,
+                             _ error: UnsafeMutablePointer<portal_text>) -> Bool {
+    let web = native(web)
+    return perform(error) { try session(web, as: WebSession.self).zoom(factor) } != nil
+}
+
 @_cdecl("portal_terminal_list_themes")
 public func portalTerminalListThemes(_ names: UnsafeMutablePointer<UnsafeMutablePointer<portal_text>?>,
                                      _ count: UnsafeMutablePointer<Int>,

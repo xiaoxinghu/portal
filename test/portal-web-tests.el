@@ -456,6 +456,144 @@
       (should-error (portal-web-back) :type 'user-error)
       (should (= (length (portal-fake-native-calls 'portal--web-go)) 3)))))
 
+;; Finding text and zooming.
+
+(defmacro portal-web-test--reading (input &rest body)
+  "Run BODY with the minibuffer reading INPUT, a function.
+INPUT runs in a minibuffer, where it may type and run commands, and its
+value is what the minibuffer returns.  Batch Emacs reads the minibuffer
+from standard input, so this stands in for it."
+  (declare (indent 1))
+  `(cl-letf (((symbol-function 'read-from-minibuffer)
+              (lambda (_prompt _initial _map _read history &rest _)
+                (let ((text (with-current-buffer (window-buffer (minibuffer-window))
+                              (let ((inhibit-read-only t))
+                                (unwind-protect (funcall ,input)
+                                  (erase-buffer))))))
+                  (unless (string-empty-p text) (add-to-history history text))
+                  text))))
+     ,@body))
+
+(defvar portal-web-test--messages nil
+  "The messages shown in `portal-web-test--messages', newest first.")
+
+(defmacro portal-web-test--messages (&rest body)
+  "Run BODY, keeping the messages it shows in `portal-web-test--messages'.
+They go there newest first: batch Emacs has no echo area to read."
+  (declare (indent 0))
+  `(let ((portal-web-test--messages nil))
+     (cl-letf (((symbol-function 'message)
+                (lambda (format &rest arguments)
+                  (push (and format (apply #'format-message format arguments))
+                        portal-web-test--messages))))
+       ,@body)))
+
+(ert-deftest portal-web-find-reads-text-and-moves-between-matches ()
+  (portal-web-test--environment
+    (portal-open-url "https://example.com")
+    (let ((target (portal-view-target))
+          (portal-web-find-history nil)
+          (case-fold-search t)
+          (search-upper-case t))
+      (setq portal-fake-native-log nil)
+      ;; RET finds what was typed; C-s and C-r in the minibuffer move from
+      ;; match to match, and RET then stays.
+      (portal-web-test--reading (lambda ()
+                                  (insert "apple")
+                                  (portal-web-find-next)
+                                  (portal-web-find-next)
+                                  (portal-web-find-previous)
+                                  (minibuffer-contents))
+        (call-interactively (key-binding (kbd "C-s"))))
+      (should (equal (portal-fake-native-calls 'portal--web-find)
+                     `((,target "apple" nil nil) (,target "apple" nil nil) (,target "apple" t nil))))
+      ;; Text changed after moving is found on RET, backward from C-r.
+      (setq portal-fake-native-log nil)
+      (portal-web-test--reading (lambda ()
+                                  (insert "pear")
+                                  (portal-web-find-next)
+                                  (insert "s")
+                                  (minibuffer-contents))
+        (call-interactively (key-binding (kbd "C-r"))))
+      (should (equal (portal-fake-native-calls 'portal--web-find)
+                     `((,target "pear" nil nil) (,target "pears" t nil))))
+      ;; Empty input finds the last text; C-s in an empty minibuffer brings it back.
+      (setq portal-fake-native-log nil)
+      (portal-web-test--reading (lambda () "")
+        (call-interactively (key-binding (kbd "s-f"))))
+      (portal-web-test--reading (lambda () (portal-web-find-next) (minibuffer-contents))
+        (portal-web-find))
+      ;; Command-G and Command-Shift-G move without the minibuffer.
+      (call-interactively (key-binding (kbd "s-g")))
+      (call-interactively (key-binding (kbd "s-G")))
+      (should (equal (portal-fake-native-calls 'portal--web-find)
+                     `((,target "pears" nil nil) (,target "pears" nil nil)
+                       (,target "pears" nil nil) (,target "pears" t nil))))
+      ;; Case matters for an upper-case letter, or without case folding.
+      (setq portal-fake-native-log nil)
+      (portal-web-test--reading (lambda () "Apple") (portal-web-find))
+      (let ((search-upper-case nil))
+        (portal-web-test--reading (lambda () "Apple") (portal-web-find)))
+      (let ((case-fold-search nil))
+        (portal-web-test--reading (lambda () "apple") (portal-web-find)))
+      (should (equal (mapcar #'cadddr (portal-fake-native-calls 'portal--web-find)) '(t nil t)))
+      ;; With nothing found yet, Command-G reads the text first.
+      (setq portal-web-find-history nil portal-fake-native-log nil)
+      (should-error (portal-web-test--reading (lambda () "") (portal-web-find))
+                    :type 'user-error)
+      (portal-web-test--reading (lambda () "kiwi")
+        (call-interactively (key-binding (kbd "s-g"))))
+      (should (equal (portal-fake-native-calls 'portal--web-find) `((,target "kiwi" nil nil)))))))
+
+(ert-deftest portal-web-find-says-when-the-page-has-no-match ()
+  (portal-web-test--environment
+    (portal-open-url "https://example.com")
+    (let ((target (portal-view-target))
+          (portal-web-find-history nil))
+      (portal-web-test--reading (lambda () "kiwi") (portal-web-find))
+      (portal-web-test--messages
+        (portal-fake-native-send (format "found %s 1\n" target))
+        (should-not portal-web-test--messages)
+        (portal-fake-native-send (format "found %s 0\n" target))
+        (should (equal portal-web-test--messages '("No match for \"kiwi\""))))
+      ;; Another pane with no view has nothing to find in.
+      (select-window (split-window-right))
+      (switch-to-buffer "*scratch*")
+      (portal-view-sync)
+      (should-error (portal-web-find-next) :type 'user-error))))
+
+(ert-deftest portal-web-zoom-steps-and-remembers-each-site ()
+  (portal-web-test--environment
+    (let ((portal-web-zoom-levels '(("other.org" . 50))))
+      (portal-open-url "https://Example.com/page")
+      (setq portal-fake-native-log nil)
+      (call-interactively (key-binding "+"))
+      (call-interactively (key-binding (kbd "s-=")))
+      (should (equal portal-web-zoom-levels '(("example.com" . 125) ("other.org" . 50))))
+      (portal-web-test--messages
+        (call-interactively (key-binding "-"))
+        (should (equal portal-web-test--messages '("Zoom 115% for example.com"))))
+      (call-interactively (key-binding "0"))
+      (should (equal portal-web-zoom-levels '(("other.org" . 50))))
+      (should (equal (portal-fake-native-calls 'portal--web-zoom)
+                     '(("example.com" 115) ("example.com" 125) ("example.com" 115)
+                       ("example.com" 100))))
+      ;; The steps end; local pages share one level.
+      (let ((portal-web-zoom-steps '(90 100 110)))
+        (portal-open-url "data:text/html,hi")
+        (setq portal-fake-native-log nil)
+        (portal-web-test--messages
+          (dotimes (_ 3) (portal-web-zoom-out))
+          (should (equal (car portal-web-test--messages) "Zoom 90% for local pages")))
+        (should (equal (portal-fake-native-calls 'portal--web-zoom) '(("" 90) ("" 90) ("" 90)))))
+      (should (equal portal-web-zoom-levels '(("" . 90) ("other.org" . 50))))
+      ;; The module learns every level when it loads.
+      (setq portal-fake-native-log nil)
+      (run-hooks 'portal-view-load-hook)
+      (should (equal (portal-fake-native-calls 'portal--web-zoom) '(("" 90) ("other.org" 50))))
+      (require 'savehist)
+      (should (memq 'portal-web-zoom-levels savehist-additional-variables)))))
+
 ;; Markdown previews: navigation, handoff to Emacs, and return.
 
 (defconst portal-web-test--host "http://127.0.0.1:1/0123abcd"

@@ -611,6 +611,36 @@ bool portal_web_set_appearance(portal_view *web, portal_appearance appearance,
     return true;
 }
 
+/* A page records each find in "finds", such as "apple forward case",
+   and its token in "find"; tests report the result as a platform does. */
+bool portal_web_find(portal_view *web, portal_string text, bool backward, bool case_sensitive,
+                     uint64_t token, portal_text *error)
+{
+    if (!usable(web, PORTAL_WEB, error) || refused(error))
+        return false;
+    calls.found++;
+    char find[256];
+    snprintf(find, sizeof find, "%.*s %s %s", (int) text.length, text.data,
+             backward ? "backward" : "forward", case_sensitive ? "case" : "nocase");
+    append(web, "finds", ",", find, strlen(find)); /* Tests find short texts. */
+    set_integer(web, "find", (int64_t) token);
+    return true;
+}
+
+/* A web view describes its "zoom" in percent once the core has set one.  A
+   web view created with :broken refuses, as for appearances. */
+bool portal_web_set_zoom(portal_view *web, double factor, portal_text *error)
+{
+    if (!usable(web, PORTAL_WEB, error) || refused(error))
+        return false;
+    const struct property *broken = get(web, "broken");
+    if (broken && broken->kind == STRING)
+        return fail(error, "%.*s", (int) broken->string.length, broken->string.data);
+    calls.zoomed++;
+    set_integer(web, "zoom", (int64_t) (factor * 100 + 0.5));
+    return true;
+}
+
 /* Input.  Reports of the focus changes the fake makes reach the core at
    once, as the contract in portal.h asks. */
 

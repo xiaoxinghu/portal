@@ -23,6 +23,31 @@ To open a local HTML file programmatically:
 In a web buffer, `g` reloads and `q` (`quit-window`) hides the still-running
 page. Killing the buffer closes it.
 
+## Find and zoom
+
+`C-s` or Command-F (`portal-web-find`) reads text in the minibuffer and finds
+it in the page, after the page's selection; `C-r` (`portal-web-find-backward`)
+finds it before. WebKit selects and highlights the match, wrapping around the
+page's ends. While the minibuffer reads, `C-s` and `C-r` move to the next and
+previous match without leaving it, and `RET` stays on the match shown; empty
+input finds the last text again. Afterwards Command-G and Command-Shift-G
+(`portal-web-find-next` and `portal-web-find-previous`) move between matches.
+Case matters as in isearch: when `case-fold-search` is off, or the text has an
+upper-case letter. The page never takes the keyboard while finding; a page
+without a match says so in the echo area.
+
+`+` or Command-= (`portal-web-zoom-in`) and `-` or Command-- (`portal-web-zoom-out`)
+step through `portal-web-zoom-steps`, and `0` or Command-0
+(`portal-web-zoom-reset`) returns to 100%. The page lays itself out again at the
+new size. A level belongs to the page's site, its host: every page from it
+shows at that level, in every web view, including pages a view goes to later,
+so the site reopens at its level. Local files and other pages without a host
+share one level. `portal-web-zoom-levels` holds them; with `savehist-mode` on,
+Emacs keeps them between sessions.
+
+The Command keys work while the page has the keyboard too, unless the page
+uses them itself.
+
 ## Markdown previews
 
 Run `M-x portal-render-markdown` in a Markdown file buffer to preview it;
@@ -131,7 +156,8 @@ scripts, styles and images. JavaScript is enabled by default.
 - A page can go fullscreen, as a video player's button does, and Escape
   leaves fullscreen; [fullscreen pages](keyboard.md#fullscreen-pages) says
   where the keyboard goes.
-- This URL viewer has no address bar.
+- This URL viewer has no address bar. Inspecting a view reports its `:zoom`
+  in percent.
   Inspect failed loads through `:error` in
   `(portal--inspect (portal-view-target))`, or the page itself with
   [Web Inspector](#web-inspector).

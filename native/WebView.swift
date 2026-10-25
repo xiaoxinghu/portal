@@ -729,9 +729,24 @@ final class WebSession: PortalView {
 
     func show(_ appearance: portal_appearance) { page.show(appearance) }
 
+    /// WebKit's own find in page selects the match and shows its find
+    /// indicator, and leaves the keyboard where it is.
+    func find(_ text: String, backward: Bool, caseSensitive: Bool, token: UInt64) {
+        let configuration = WKFindConfiguration()
+        configuration.backwards = backward
+        configuration.caseSensitive = caseSensitive
+        configuration.wraps = true
+        page.find(text, configuration: configuration) { [target = page.target] result in
+            Core.found(target, token: token, found: result.matchFound)
+        }
+    }
+
+    func zoom(_ factor: Double) { page.pageZoom = factor }
+
     func describe() -> [(String, ViewValue)] {
         var state: [(String, ViewValue)] = [("loading", .flag(page.isLoading)),
-                                            ("dark", .flag(page.effectiveAppearance.isDark))]
+                                            ("dark", .flag(page.effectiveAppearance.isDark)),
+                                            ("zoom", .integer(Int((page.pageZoom * 100).rounded())))]
         // Out of its pane, the page is entering, in or exiting fullscreen.
         switch page.fullscreenState {
         case .enteringFullscreen: state.append(("fullscreen", .string("entering")))

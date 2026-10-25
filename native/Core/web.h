@@ -31,6 +31,23 @@ bool portal_web_views_check(const portal_option *options, size_t count, portal_t
 bool portal_web_views_appearance(const portal_string *appearance, portal_text *error);
 /* Save web views' downloads in DIRECTORY, an absolute path, from now on. */
 bool portal_web_views_download_directory(portal_string directory, portal_text *error);
+/* Find TEXT, which must not be empty, in web view TARGET's page: the next
+   match, or the previous one if BACKWARD, wrapping around, and ignoring
+   case unless CASE_SENSITIVE.  The page highlights it.  When finding ends,
+   Emacs gets the record "found TARGET 1", or "found TARGET 0" for no match,
+   unless TARGET has started another find since: only the latest one
+   reports. */
+bool portal_web_views_find(portal_string target, portal_string text, bool backward,
+                           bool case_sensitive, portal_text *error);
+/* Show the pages from HOST at PERCENT of their size, from 25 to 500, in
+   every web view from now on, oldest first: the pages on screen now and
+   each page a view commits later.  HOST is spelled as the platform spells a
+   page's URL, compared ignoring ASCII case; "" stands for every page without
+   a host, such as a file.  A page whose host has no level shows at 100,
+   and setting 100 forgets HOST's level.  If a view fails, the error is its
+   own, and it and the views after it keep their size until their next
+   page; the level stays set either way. */
+bool portal_web_views_zoom(portal_string host, int64_t percent, portal_text *error);
 /* Pass the JSON object JSON to hosted web view TARGET's app over its bridge. */
 bool portal_web_views_send(portal_string target, portal_string json, portal_text *error);
 /* Return, as a JSON array, the messages waiting for Emacs on web view
@@ -50,6 +67,13 @@ bool portal_web_state_hosted(const struct portal_web_state *state);
 /* Free STATE and any messages still waiting in it. */
 void portal_web_state_free(struct portal_web_state *state);
 
+/* For web.c, from views.c: call VISIT with each open web view and its
+   state, oldest first, until it returns false; return whether every call
+   returned true.  VISIT may call platform primitives but must not open or
+   close views. */
+bool portal_views_each_web(bool (*visit)(portal_view *native, struct portal_web_state *state,
+                                         void *context),
+                           void *context);
 /* For web.c, from views.c: TARGET's platform view, and its state in *STATE,
    if TARGET names an open web view.  Otherwise return NULL and, unless ERROR
    is NULL, set it to "No Portal view TARGET".  Both are valid until the next

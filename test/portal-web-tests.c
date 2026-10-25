@@ -859,6 +859,124 @@ static void test_downloads(void)
     free(target);
 }
 
+/* Emacs finds text in a page; only the latest find's result reaches it. */
+static void test_finding(void)
+{
+    portal_text error = {0};
+    char *web = open_web(false);
+    struct portal_fake_calls before = portal_fake_calls();
+    CHECK(!portal_web_views_find(text(web), text(""), false, false, &error));
+    CHECK(says(&error, "Nothing to find"));
+    CHECK(!portal_web_views_find(text("web:0"), text("apple"), false, false, &error));
+    CHECK(says(&error, "No Portal view web:0"));
+    CHECK(same_calls(portal_fake_calls(), before));
+
+    CHECK(portal_web_views_find(text(web), text("apple"), false, false, &error));
+    CHECK(shows(web, "\"finds\":\"apple forward nocase\"", "\"find\":1", NULL));
+    CHECK(sent(web, ""));
+    portal_web_found(text(web), 1, true);
+    CHECK(sent(web, "found %s 1\n"));
+
+    /* The user typed on before the first find finished. */
+    CHECK(portal_web_views_find(text(web), text("Apple"), true, true, &error));
+    CHECK(portal_web_views_find(text(web), text("Apples"), false, true, &error));
+    CHECK(shows(web, "\"finds\":\"apple forward nocase,Apple backward case,Apples forward case\"",
+                "\"find\":3", NULL));
+    portal_web_found(text(web), 2, true);
+    CHECK(sent(web, ""));
+    portal_web_found(text(web), 3, false);
+    CHECK(sent(web, "found %s 0\n"));
+
+    /* A find the platform refuses is no find: the one before stays latest. */
+    portal_fake_refuse(true);
+    CHECK(!portal_web_views_find(text(web), text("pear"), false, false, &error));
+    CHECK(says(&error, "The fake refuses to run view primitives"));
+    portal_fake_refuse(false);
+    portal_web_found(text(web), 3, true);
+    CHECK(sent(web, "found %s 1\n"));
+
+    char *closed = strdup(web);
+    close_view(web);
+    portal_web_found(text(closed), 3, true);
+    CHECK(sent(closed, ""));
+    free(closed);
+}
+
+/* Each host's pages show at its level, in every view, whatever loads them. */
+static void test_zoom_per_host(void)
+{
+    portal_text error = {0};
+    char *first = open_web(false), *second = open_web(true);
+    portal_web_committed(text(first), text("https://Example.com/page"));
+    portal_web_committed(text(second), text("https://other.org/"));
+    drain();
+    free(receive(second));
+    struct portal_fake_calls before = portal_fake_calls();
+    CHECK(!portal_web_views_zoom(text("example.com"), 24, &error));
+    CHECK(says(&error, "Web zoom must be from 25 to 500 percent"));
+    CHECK(!portal_web_views_zoom(text("example.com"), 501, &error));
+    CHECK(says(&error, "Web zoom must be from 25 to 500 percent"));
+    CHECK(same_calls(portal_fake_calls(), before));
+
+    /* Only the page on screen from that host changes, ignoring case. */
+    CHECK(portal_web_views_zoom(text("example.COM"), 150, &error));
+    CHECK(portal_fake_calls().zoomed == before.zoomed + 1);
+    CHECK(shows(first, "\"zoom\":150", NULL));
+    char *state = inspect(second);
+    CHECK(state && !strstr(state, "\"zoom\""));
+    free(state);
+    /* Setting it again changes nothing. */
+    CHECK(portal_web_views_zoom(text("example.com"), 150, &error));
+    CHECK(portal_fake_calls().zoomed == before.zoomed + 1);
+
+    /* A page commits at its host's level, with any port or user. */
+    portal_web_committed(text(second), text("http://user@EXAMPLE.com:8080/other"));
+    CHECK(shows(second, "\"zoom\":150", NULL));
+    portal_web_committed(text(first), text("https://other.org/"));
+    CHECK(shows(first, "\"zoom\":100", NULL));
+    portal_web_committed(text(first), text("https://other.org/next"));
+    CHECK(portal_fake_calls().zoomed == before.zoomed + 3);
+
+    /* 100 forgets the level: a new view from that host keeps its size. */
+    CHECK(portal_web_views_zoom(text("example.com"), 100, &error));
+    CHECK(shows(second, "\"zoom\":100", NULL));
+    char *third = open_web(false);
+    portal_web_committed(text(third), text("https://example.com/"));
+    state = inspect(third);
+    CHECK(state && !strstr(state, "\"zoom\""));
+    free(state);
+
+    /* Pages without a host share "". */
+    CHECK(portal_web_views_zoom(text(""), 200, &error));
+    portal_web_committed(text(third), text("file:///tmp/page.html"));
+    CHECK(shows(third, "\"zoom\":200", NULL));
+    portal_web_committed(text(first), text("data:text/html,<p>"));
+    CHECK(shows(first, "\"zoom\":200", NULL));
+
+    /* A view that fails stops the rest, and the level stays set. */
+    char *broken = open_view("web", &error, "broken", "WebKit is gone", NULL);
+    char *fourth = open_web(false);
+    portal_web_committed(text(broken), text("https://example.org/"));
+    portal_web_committed(text(fourth), text("https://example.org/"));
+    portal_web_committed(text(first), text("https://example.org/"));
+    CHECK(!portal_web_views_zoom(text("example.org"), 50, &error));
+    CHECK(says(&error, "WebKit is gone"));
+    CHECK(shows(first, "\"zoom\":50", NULL));
+    state = inspect(fourth);
+    CHECK(state && !strstr(state, "\"zoom\""));
+    free(state);
+    portal_web_committed(text(fourth), text("https://example.org/next"));
+    CHECK(shows(fourth, "\"zoom\":50", NULL));
+    close_view(broken);
+
+    CHECK(portal_web_views_zoom(text(""), 100, &error));
+    CHECK(portal_web_views_zoom(text("example.org"), 100, &error));
+    close_view(first);
+    close_view(second);
+    close_view(third);
+    close_view(fourth);
+}
+
 static void test_the_shared_links_script(void)
 {
     portal_string source = portal_web_links_script();
@@ -894,6 +1012,8 @@ int main(void)
     test_pages_open_windows();
     test_windows_that_do_not_open();
     test_downloads();
+    test_finding();
+    test_zoom_per_host();
     CHECK(!portal_fake_calls().misused);
     portal_channel_connect(-1);
     close(records);
