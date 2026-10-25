@@ -130,6 +130,34 @@ TARGET defaults to the selected pane's view.  Return its state."
           (should (portal-excalidraw-gui--js "return window.hiddenSeen;")))
       (portal-test-native-target-frame nil))))
 
+(defun portal-test--user-agent (options)
+  "Open a web view with OPTIONS in a new buffer and return its page's user agent."
+  (portal-web--visit nil "user agent"
+                     (lambda ()
+                       (portal-web--open
+                        "data:text/html,<script>document.title='UA '+navigator.userAgent</script>"
+                        options)))
+  (let ((deadline (+ (float-time) 15))
+        state)
+    (while (progn
+             (redisplay t)
+             (setq state (portal--inspect (portal-view-target)))
+             (and (< (float-time) deadline)
+                  (not (and (string-prefix-p "UA " (or (plist-get state :title) ""))
+                            (not (plist-get state :loading))))))
+      (sleep-for 0.05))
+    (should (string-prefix-p "UA " (or (plist-get state :title) "")))
+    (substring (plist-get state :title) 3)))
+
+(ert-deftest portal-web-ordinary-pages-claim-safari-and-hosted-apps-do-not ()
+  ;; Google refuses to sign in to a page whose user agent does not claim Safari.
+  (portal-test--with-web
+    (let ((ordinary (portal-test--user-agent nil))
+          (hosted (portal-test--user-agent '(:hosted t))))
+      (should (string-match-p " Version/[0-9.]+ Safari/[0-9.]+\\'" ordinary))
+      (should (string-prefix-p hosted ordinary))
+      (should-not (string-match-p "Safari" hosted)))))
+
 (ert-deftest portal-web-loads-local-file-with-relative-javascript ()
   (portal-test--with-web
     (let* ((directory (make-temp-file "portal-web-" t))

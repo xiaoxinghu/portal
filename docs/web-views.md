@@ -102,6 +102,11 @@ scripts, styles and images. JavaScript is enabled by default.
 - Hiding with `q` or another buffer preserves the page's navigation, DOM, scroll
   position and form state. Cookies use WebKit's default store, except hosted
   apps keep no cookies or storage between Emacs sessions.
+- Pages other than hosted apps send WebKit's user agent with Safari's suffix,
+  such as `Version/26.0 Safari/605.1.15`, naming the installed Safari's
+  version, because Google refuses to sign in to embedded web views without
+  it. Google does not sanction this, so it may stop working. Hosted apps keep
+  WebKit's plain user agent.
 - Hosted pages never leave the app host: other navigation is cancelled and
   opened in the default browser. Local `file:` links instead give Emacs focus
   and send the URL in a `follow` message over the [bridge](editor-bridge.md).

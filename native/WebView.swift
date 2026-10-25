@@ -81,11 +81,25 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, Nati
     /// The view's target, which names it in every call to the core.
     let target: String
 
+    /// What an ordinary page adds to WebKit's user agent: Safari's own
+    /// suffix, as the installed Safari, which ships with the system's
+    /// WebKit, names its version. Google refuses to sign in to a page whose
+    /// user agent lacks it. Without Safari, it claims Safari 26.0.
+    private static let safari: String = {
+        let version = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Safari")
+            .flatMap { Bundle(url: $0)?.infoDictionary?["CFBundleShortVersionString"] as? String }
+        return "Version/\(version ?? "26.0") Safari/605.1.15"
+    }()
+
     /// An inspectable page lets Safari's Web Inspector attach to it.
     init(target: String, hosted: Bool, inspectable: Bool) {
         self.target = target
         let configuration = WKWebViewConfiguration()
-        if hosted { configuration.websiteDataStore = .nonPersistent() }
+        if hosted {
+            configuration.websiteDataStore = .nonPersistent()
+        } else {
+            configuration.applicationNameForUserAgent = Self.safari
+        }
         super.init(frame: .zero, configuration: configuration)
         if #available(macOS 13.3, *) { isInspectable = inspectable }
         if hosted { PageMessages.install(in: self) }
