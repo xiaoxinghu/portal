@@ -452,8 +452,8 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
     /// A page asks to use the camera or microphone, and the core decides
     /// whether it may. When the core leaves it to the user, a sheet asks, as
     /// the page's own dialogs do, and the core keeps a grant. One the user
-    /// granted while this one waited needs no asking. macOS then asks
-    /// whether Emacs may use the device, once, unless the user has said.
+    /// granted while this one waited needs no asking. macOS asks for itself,
+    /// once, whether Emacs may use the device.
     func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
                  initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,
                  decisionHandler: @escaping @MainActor (WKPermissionDecision) -> Void) {
