@@ -336,7 +336,8 @@ struct CheckFocus {
         check(bridgeType == "undefined", "A page that is not a hosted app has portalBridge")
         do { try Views.send(plain, "{}"); fail("A page that is not a hosted app has a bridge") } catch {}
         // Only the core's own messages, such as downloads, wait for Emacs.
-        check(try Views.receive(plain) == "[]", "A page that is not a hosted app posted a message")
+        let waiting = try Views.receive(plain)
+        check(waiting == "[]", "A page that is not a hosted app posted a message")
         try Views.close(plain)
         print("Only a hosted app's main frame uses the bridge, which announces its messages once until received")
     }
