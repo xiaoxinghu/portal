@@ -419,11 +419,13 @@ static bool file_name(portal_string name, portal_text *stem, portal_string *exte
     return true;
 }
 
-/* Whether a file or a running download has PATH. */
+/* Whether a file or a running download has PATH.  A running download's
+   file may not exist yet, so its name is compared ignoring case, as the
+   default file systems of macOS and Windows do. */
 static bool taken(const char *path)
 {
     for (struct download *download = downloads.first; download; download = download->next)
-        if (download->path.data && !strcmp(download->path.data, path))
+        if (download->path.data && same_ignoring_case(borrow(download->path), literal(path)))
             return true;
     struct stat status;
     return !lstat(path, &status);

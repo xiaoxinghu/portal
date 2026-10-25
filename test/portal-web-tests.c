@@ -779,6 +779,8 @@ static void test_downloads(void)
     CHECK(saves(start(web, "report.pdf", &report), report, directory, "report.pdf"));
     CHECK(saves(start(web, "report.pdf", &again), again, directory, "report (1).pdf"));
     CHECK(again != report);
+    uint64_t shouted;
+    CHECK(saves(start(web, "REPORT.pdf", &shouted), shouted, directory, "REPORT (2).pdf"));
     CHECK(saves(start(web, "notes.txt", &notes), notes, directory, "notes (1).txt"));
     /* Names are made safe. */
     CHECK(saves(start(web, "", &unnamed), unnamed, directory, "download"));
@@ -786,7 +788,8 @@ static void test_downloads(void)
     CHECK(saves(start(web, "a\nb/c.tar.gz", &odd), odd, directory, "a_b_c.tar.gz"));
     CHECK(sent(web, "bridge %s\n"));
     CHECK(downloads_said(web, directory,
-                         "started|report.pdf\nstarted|report (1).pdf\nstarted|notes (1).txt\n"
+                         "started|report.pdf\nstarted|report (1).pdf\nstarted|REPORT (2).pdf\n"
+                         "started|notes (1).txt\n"
                          "started|download\nstarted|_.hidden\nstarted|a_b_c.tar.gz"));
     /* Long names keep their extension and whole characters. */
     char name[512] = "a", expected[512] = "a";
@@ -839,7 +842,7 @@ static void test_downloads(void)
     CHECK(downloads_said(hosted, directory, "started|drawing.png"));
     drain();
     close_view(hosted);
-    const uint64_t rest[] = {unnamed, hidden, odd, long_name, own};
+    const uint64_t rest[] = {shouted, unnamed, hidden, odd, long_name, own};
     for (size_t i = 0; i < sizeof rest / sizeof *rest; i++)
         portal_web_download_finished(rest[i], NULL);
     CHECK(!unlink(existing) && !rmdir(directory));

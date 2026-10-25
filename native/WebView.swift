@@ -260,11 +260,9 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
 
     /// Tell the core DOWNLOAD ended, once WebKit has stopped writing. A
     /// failed download leaves no partial file: its file was new, so it is
-    /// WebKit's once WebKit wrote to it, and an empty one is no loss.
+    /// WebKit's once WebKit has written to it.
     private static func ended(_ download: WKDownload, number: UInt64, file: URL?, error: String?) {
-        if error != nil, let file,
-           let size = (try? FileManager.default.attributesOfItem(atPath: file.path))?[.size] as? Int,
-           size == 0 || download.progress.completedUnitCount > 0 {
+        if error != nil, let file, download.progress.completedUnitCount > 0 {
             try? FileManager.default.removeItem(at: file)
         }
         Core.downloadFinished(number, error: error)
