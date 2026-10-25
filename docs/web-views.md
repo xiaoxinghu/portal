@@ -234,3 +234,24 @@ starts, where it finished, or why it failed:
 A change applies to downloads that start afterwards. Killing a web buffer
 cancels its unfinished downloads. There is no download list or progress
 display; `M-x dired` the directory to find files.
+
+## Camera and microphone
+
+A page that asks to use the camera or microphone, as a video call does,
+asks with a sheet on its frame, such as "Allow “meet.google.com” to use your
+camera and microphone?". The sheet follows the page as its JavaScript
+dialogs do: hiding the page takes it down, showing the page puts it back,
+and closing the view refuses. A frame from another site names both, as in
+"Allow “widget.example” in “example.com”".
+
+Allowing lets that site, and that frame's site, use the devices again
+without asking, in every web view, until Emacs quits; a request for a device
+not yet allowed asks again. Refusing lasts for that one request: the page
+may ask again. Hosted apps may not use either device, and are never asked.
+
+macOS also asks, once, whether Emacs may use the camera and the microphone;
+Emacs.app names them in its `NSCameraUsageDescription` and
+`NSMicrophoneUsageDescription`. Change that answer in System Settings,
+Privacy & Security, Camera or Microphone, then restart Emacs. Refused
+there, the page gets an error. As in browsers, only secure pages can ask:
+HTTPS, and `http://localhost` or `127.0.0.1`.

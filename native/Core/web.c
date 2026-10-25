@@ -50,6 +50,13 @@
    screen when Lisp sets it, and each page a view commits, whatever loaded
    it.  Pages without a host, such as files, share the host "".
 
+   Camera and microphone.  A page asks to use them, and the core decides:
+   a hosted app never may, and a page may use what the user has let its
+   origin, and the origin of the frame that asks, use together since Emacs
+   started, in any view.  The platform asks the user about anything else and
+   reports each grant, which the core keeps until Emacs quits.  Refusals are
+   not kept: the page may ask again.
+
    Finding.  The platform finds text its own way and reports when it is
    done.  Only the latest find in a view reports to Emacs, so a result that
    arrives after the user has typed on never answers the newer find.
@@ -393,6 +400,26 @@ static bool remember(portal_string host, int64_t percent, portal_text *error)
         zooms = zoom;
     }
     return true;
+}
+
+/* Camera and microphone. */
+
+/* Devices the user let FRAME, in a page from ORIGIN, use. */
+struct grant {
+    struct grant *next;
+    unsigned devices;
+    portal_text origin, frame;
+};
+
+static struct grant *grants;
+
+static struct grant *granted(portal_string origin, portal_string frame)
+{
+    struct grant *grant = grants;
+    while (grant && !(same_origin(borrow(grant->origin), origin)
+                      && same_origin(borrow(grant->frame), frame)))
+        grant = grant->next;
+    return grant;
 }
 
 /* The open web view TARGET, for the platform's calls: NULL when it is gone. */
@@ -939,6 +966,41 @@ void portal_web_found(portal_string target, uint64_t token, bool found)
         portal_string matched = literal(found ? "1" : "0");
         portal_channel_send(literal("found"), target, &matched, 1);
     }
+}
+
+portal_permission portal_web_media(portal_string target, portal_string origin,
+                                   portal_string frame, unsigned devices)
+{
+    struct portal_web_state *web;
+    if (!find(target, &web) || web->hosted)
+        return PORTAL_PERMISSION_DENY;
+    struct grant *grant = granted(origin, frame);
+    return grant && (grant->devices & devices) == devices ? PORTAL_PERMISSION_GRANT
+                                                          : PORTAL_PERMISSION_ASK;
+}
+
+void portal_web_media_granted(portal_string target, portal_string origin, portal_string frame,
+                              unsigned devices)
+{
+    struct portal_web_state *web;
+    if (!find(target, &web) || web->hosted)
+        return;
+    struct grant *grant = granted(origin, frame);
+    if (grant) {
+        grant->devices |= devices;
+        return;
+    }
+    /* Out of memory, the user is asked again. */
+    if (!(grant = calloc(1, sizeof *grant)) || !copy(origin, &grant->origin)
+        || !copy(frame, &grant->frame)) {
+        if (grant)
+            free(grant->origin.data);
+        free(grant);
+        return;
+    }
+    grant->devices = devices;
+    grant->next = grants;
+    grants = grant;
 }
 
 portal_string portal_web_links_script(void)

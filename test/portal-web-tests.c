@@ -87,6 +87,7 @@ static void post(const char *target, bool main_frame, const char *url, const cha
 }
 
 static const char *const app = "http://127.0.0.1:8080/0123/app?context=1";
+static const char *const app_origin = "http://127.0.0.1:8080";
 
 /* A hosted app that Emacs loaded at APP and that committed it; its page
    message is received. */
@@ -977,6 +978,68 @@ static void test_zoom_per_host(void)
     close_view(fourth);
 }
 
+/* What the page in TARGET may do when it asks to use DEVICES from FRAME, in
+   a page from ORIGIN. */
+static portal_permission media(const char *target, const char *origin, const char *frame,
+                               unsigned devices)
+{
+    return portal_web_media(text(target), text(origin), text(frame), devices);
+}
+
+/* The user's grants to a page's origin and frame last until Emacs quits,
+   in every view; a hosted app may use no device. */
+static void test_camera_and_microphone(void)
+{
+    const unsigned both = PORTAL_MEDIA_CAMERA | PORTAL_MEDIA_MICROPHONE;
+    const char *meet = "https://meet.example.com";
+    char *web = open_web(false), *other = open_web(false), *hosted = open_app();
+    struct portal_fake_calls before = portal_fake_calls();
+    CHECK(media(web, meet, meet, PORTAL_MEDIA_CAMERA) == PORTAL_PERMISSION_ASK);
+    CHECK(media(hosted, app_origin, app_origin, PORTAL_MEDIA_MICROPHONE) == PORTAL_PERMISSION_DENY);
+    portal_web_media_granted(text(hosted), text(app_origin), text(app_origin),
+                             PORTAL_MEDIA_MICROPHONE);
+    CHECK(media(hosted, app_origin, app_origin, PORTAL_MEDIA_MICROPHONE) == PORTAL_PERMISSION_DENY);
+    CHECK(media("web:0", meet, meet, PORTAL_MEDIA_CAMERA) == PORTAL_PERMISSION_DENY);
+
+    /* A grant covers what it granted, ignoring case, and grows. */
+    portal_web_media_granted(text(web), text(meet), text(meet), PORTAL_MEDIA_CAMERA);
+    CHECK(media(web, "https://MEET.example.com", meet, PORTAL_MEDIA_CAMERA)
+          == PORTAL_PERMISSION_GRANT);
+    CHECK(media(web, meet, meet, both) == PORTAL_PERMISSION_ASK);
+    CHECK(media(web, meet, meet, PORTAL_MEDIA_MICROPHONE) == PORTAL_PERMISSION_ASK);
+    portal_web_media_granted(text(web), text(meet), text(meet), PORTAL_MEDIA_MICROPHONE);
+    CHECK(media(web, meet, meet, both) == PORTAL_PERMISSION_GRANT);
+
+    /* Another origin, port or scheme, or another frame's, is asked. */
+    CHECK(media(web, "https://meet.example.org", "https://meet.example.org", PORTAL_MEDIA_CAMERA)
+          == PORTAL_PERMISSION_ASK);
+    CHECK(media(web, "https://meet.example.com:8443", "https://meet.example.com:8443",
+                PORTAL_MEDIA_CAMERA) == PORTAL_PERMISSION_ASK);
+    CHECK(media(web, "http://meet.example.com", "http://meet.example.com", PORTAL_MEDIA_CAMERA)
+          == PORTAL_PERMISSION_ASK);
+    CHECK(media(web, meet, "https://ads.example.net", PORTAL_MEDIA_CAMERA) == PORTAL_PERMISSION_ASK);
+    portal_web_media_granted(text(web), text(meet), text("https://ads.example.net"),
+                             PORTAL_MEDIA_CAMERA);
+    CHECK(media(web, meet, "https://ads.example.net", PORTAL_MEDIA_CAMERA)
+          == PORTAL_PERMISSION_GRANT);
+    CHECK(media(web, "https://ads.example.net", "https://ads.example.net", PORTAL_MEDIA_CAMERA)
+          == PORTAL_PERMISSION_ASK);
+
+    CHECK(same_calls(portal_fake_calls(), before));
+    CHECK(sent(web, ""));
+
+    /* Every view shares the grants, and they outlive the view granted in. */
+    close_view(web);
+    CHECK(media(other, meet, meet, both) == PORTAL_PERMISSION_GRANT);
+    /* A view that is gone grants nothing. */
+    portal_web_media_granted(text("web:0"), text("https://gone.example.com"),
+                             text("https://gone.example.com"), PORTAL_MEDIA_CAMERA);
+    CHECK(media(other, "https://gone.example.com", "https://gone.example.com", PORTAL_MEDIA_CAMERA)
+          == PORTAL_PERMISSION_ASK);
+    close_view(other);
+    close_view(hosted);
+}
+
 static void test_the_shared_links_script(void)
 {
     portal_string source = portal_web_links_script();
@@ -1014,6 +1077,7 @@ int main(void)
     test_downloads();
     test_finding();
     test_zoom_per_host();
+    test_camera_and_microphone();
     CHECK(!portal_fake_calls().misused);
     portal_channel_connect(-1);
     close(records);

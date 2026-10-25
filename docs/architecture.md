@@ -167,6 +167,16 @@ text its own way, with a token; only the latest find's result reaches Emacs,
 as a `found TARGET 1` or `found TARGET 0` record. The platform supplies two
 primitives for these: find text, and set a view's zoom factor.
 
+The core decides whether a page may use the camera or microphone. The
+platform reports each request with `portal_web_media`: the origins of the
+page and of the frame asking, and the devices. The core denies hosted apps,
+grants what the user has granted that pair of origins since Emacs started,
+and otherwise has the platform ask, which reports each grant with
+`portal_web_media_granted`. Grants live in the core, shared by every view,
+and are never written down. On macOS the question is a sheet that waits
+with the page's JavaScript dialogs, in the order the page asked, and
+follows the page as they do.
+
 The shared JavaScript for local links lives in `native/Core/scripts`, compiled
 into the core with `#embed`; platforms need neither script files nor the app
 host at runtime. The script is a function started in an isolated world with

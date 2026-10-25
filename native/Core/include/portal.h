@@ -579,6 +579,33 @@ void portal_web_failed(portal_string target, uint64_t token, portal_string messa
 /* The find that portal_web_find started in TARGET with TOKEN finished:
    FOUND says whether the page had a match. */
 void portal_web_found(portal_string target, uint64_t token, bool found);
+/* Capture devices a page may ask to use, as flags. */
+enum {
+    PORTAL_MEDIA_CAMERA = 1,
+    PORTAL_MEDIA_MICROPHONE = 2,
+};
+/* What the platform does with a page's request to use capture devices. */
+typedef enum portal_permission {
+    PORTAL_PERMISSION_DENY,  /* Refuse, without asking. */
+    PORTAL_PERMISSION_GRANT, /* Allow, without asking. */
+    PORTAL_PERMISSION_ASK,   /* Ask the user, and report a grant with portal_web_media_granted. */
+} portal_permission;
+/* The page in TARGET asks to use DEVICES, PORTAL_MEDIA_ flags, from a frame
+   whose document comes from FRAME, in a page whose main frame's comes from
+   ORIGIN.  Each is an origin as a URL, scheme://host or scheme://host:port,
+   spelled as portal_web_parse_url spells it.  The core denies a hosted app
+   and a view that is gone, grants what the user has granted ORIGIN and
+   FRAME together since Emacs started, and asks about anything else.  The
+   platform's system may still refuse, as macOS does when the user has not
+   let the application itself use the device. */
+portal_permission portal_web_media(portal_string target, portal_string origin,
+                                   portal_string frame, unsigned devices);
+/* The user let FRAME, in a page from ORIGIN, use DEVICES, when
+   portal_web_media asked.  The core grants them to ORIGIN and FRAME together
+   from now on, in every web view, until Emacs quits; a hosted app's grant
+   counts for nothing. */
+void portal_web_media_granted(portal_string target, portal_string origin, portal_string frame,
+                              unsigned devices);
 /* The browser script that every platform's hosted web views share.  The
    core owns its source, embedded when it is compiled from
    native/Core/scripts, so a platform needs no files at run time and no app

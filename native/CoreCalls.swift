@@ -154,6 +154,24 @@ enum Core {
         borrow(target) { portal_web_found($0, token, found) }
     }
 
+    enum Permission { case deny, grant, ask }
+
+    /// What the page in TARGET may do when a frame from FRAME, in a page
+    /// from ORIGIN, asks to use DEVICES, `PORTAL_MEDIA_` flags.
+    static func media(_ target: String, origin: String, frame: String, devices: UInt32) -> Permission {
+        let permission = borrowing([target, origin, frame]) { portal_web_media($0[0], $0[1], $0[2], devices) }
+        return switch permission {
+        case PORTAL_PERMISSION_GRANT: .grant
+        case PORTAL_PERMISSION_ASK: .ask
+        default: .deny
+        }
+    }
+
+    /// The user let FRAME, in a page from ORIGIN, use DEVICES.
+    static func mediaGranted(_ target: String, origin: String, frame: String, devices: UInt32) {
+        borrowing([target, origin, frame]) { portal_web_media_granted($0[0], $0[1], $0[2], devices) }
+    }
+
     /// What TARGET's terminal describes changed.
     static func terminalChanged(_ target: String) {
         borrow(target) { portal_terminal_changed($0) }

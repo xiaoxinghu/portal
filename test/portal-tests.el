@@ -11,9 +11,11 @@
 (declare-function portal-excalidraw-gui--js "portal-excalidraw-gui-tests" (script))
 (declare-function portal-terminal-test--wait "portal-terminal-tests" (predicate))
 (declare-function portal-test-native-click "test-terminal-input" (x y))
+(declare-function portal-test-native-key "test-terminal-input" (code flags text &optional windowless))
 (declare-function portal-test-native-target-frame "test-terminal-input" (title))
 (declare-function portal-test-responder "test-terminal-input" ())
 (declare-function portal-test-sheet "test-terminal-input" (&optional button text))
+(declare-function portal-test-web-mock-capture "test-terminal-input" (on))
 (declare-function portal-terminal-test--wait "portal-terminal-tests" (predicate))
 (declare-function portal-integration-test--emacs-input "portal-integration-tests" ())
 
@@ -363,6 +365,120 @@ sent before the connection closes."
       (redisplay t)
       (sleep-for 0.05))
     (should found)))
+
+;;; Camera and microphone
+
+(defun portal-test--frame (url)
+  "Have the visible page embed a frame at URL, which may use any device.
+The page's title then says what the frame reported."
+  (should (portal-test-web-mock-capture t))
+  (portal-excalidraw-gui--js
+   (format "addEventListener('message', (event) => { document.title = event.data; });
+const frame = document.createElement('iframe');
+frame.allow = 'camera *; microphone *';
+frame.src = %S;
+document.body.append(frame);
+return true;" url)))
+
+(defun portal-test--capture (constraints)
+  "Have the visible page ask for CONSTRAINTS, getUserMedia's, with mock devices.
+The page's title then says what it got, or the error's name."
+  (should (portal-test-web-mock-capture t))
+  (portal-excalidraw-gui--js
+   (format "document.title = 'Asking';
+navigator.mediaDevices.getUserMedia(%s).then(
+  (stream) => {
+    document.title = 'Got ' + stream.getTracks().map((track) => track.kind).sort().join(' ');
+    stream.getTracks().forEach((track) => track.stop());
+  },
+  (error) => { document.title = error.name; });
+return true;" constraints)))
+
+(ert-deftest portal-web-pages-ask-for-the-camera-and-microphone ()
+  (portal-test--with-dialogs
+    (let* ((server (portal-test--serve
+                    `(("/" . ,(portal-test--response '("Content-Type: text/html")
+                                                     "<title>Media</title><p>Media"))
+                      ;; A frame that asks for the microphone, and tells its parent.
+                      ("/frame" . ,(portal-test--response
+                                    '("Content-Type: text/html")
+                                    "<script>navigator.mediaDevices.getUserMedia({audio: true}).then(
+  () => parent.postMessage('Framed got audio', '*'),
+  (error) => parent.postMessage('Framed ' + error.name, '*'));</script>")))))
+           (port (process-contact server :service))
+           (camera "Allow “127.0.0.1” to use your camera?")
+           (both "Allow “127.0.0.1” to use your camera and microphone?"))
+      (unwind-protect
+          (progn
+            ;; A hosted app may not, and is never asked.
+            (portal-test--capture "{audio: true}")
+            (portal-test--wait-for-page "NotAllowedError")
+            (should-not (portal-test--sheet))
+            ;; Another page asks, and a refusal lasts for that request only.
+            (portal-open-url (format "http://127.0.0.1:%d/" port))
+            (portal-test--wait-for-page "Media")
+            (portal-test--capture "{video: true}")
+            (let ((sheet (portal-test--wait-for-sheet camera)))
+              (should (member "It may use it again until Emacs quits." (plist-get sheet :texts)))
+              (should (equal (sort (plist-get sheet :buttons) #'string<) '("Allow" "Don’t Allow"))))
+            ;; Escape refuses, as the sheet has the keyboard.
+            (should (portal-test-native-key 53 0 "\e" t))
+            (portal-test--wait-for-page "NotAllowedError")
+            (portal-test--no-sheet)
+            (portal-test--capture "{video: true}")
+            (portal-test--wait-for-sheet camera)
+            (portal-test--sheet "Allow")
+            (portal-test--wait-for-page "Got video")
+            ;; The grant outlives the page; the microphone needs one too.
+            (portal-web-reload)
+            (portal-test--wait-for-page "Media")
+            (portal-test--capture "{video: true}")
+            (portal-test--wait-for-page "Got video")
+            (should-not (portal-test--sheet))
+            ;; Hidden, the page's question waits for it.
+            (let ((buffer (current-buffer)))
+              (portal-test--capture "{audio: true, video: true}")
+              (portal-test--wait-for-sheet both)
+              (quit-window)
+              (redisplay t)
+              (portal-test--no-sheet)
+              (switch-to-buffer buffer)
+              (portal-test--wait-for-sheet both)
+              (portal-test--sheet "Allow")
+              (portal-test--wait-for-page "Got audio video"))
+            ;; Another view of the site needs no asking; another site does.
+            (portal-open-url (format "http://127.0.0.1:%d/" port))
+            (portal-test--wait-for-page "Media")
+            (portal-test--capture "{audio: true}")
+            (portal-test--wait-for-page "Got audio")
+            (should-not (portal-test--sheet))
+            (portal-open-url (format "http://localhost:%d/" port))
+            (portal-test--wait-for-page "Media")
+            (portal-test--capture "{audio: true}")
+            (portal-test--wait-for-sheet "Allow “localhost” to use your microphone?")
+            (portal-test--sheet "Don’t Allow")
+            (portal-test--wait-for-page "NotAllowedError")
+            ;; A frame from another site names both, and its grant is for
+            ;; it in that site only.
+            (portal--web-load (portal-view-target) (format "http://127.0.0.1:%d/" port))
+            (portal-test--wait-for-page "Media")
+            (portal-test--frame (format "http://localhost:%d/frame" port))
+            (portal-test--wait-for-sheet "Allow “localhost” in “127.0.0.1” to use your microphone?")
+            (portal-test--sheet "Allow")
+            (portal-test--wait-for-page "Framed got audio")
+            (portal--web-load (portal-view-target) (format "http://127.0.0.1:%d/" port))
+            (portal-test--wait-for-page "Media")
+            (portal-test--frame (format "http://localhost:%d/frame" port))
+            (portal-test--wait-for-page "Framed got audio")
+            (should-not (portal-test--sheet))
+            (portal--web-load (portal-view-target) (format "http://localhost:%d/" port))
+            (portal-test--wait-for-page "Media")
+            (portal-test--capture "{audio: true}")
+            (portal-test--wait-for-sheet "Allow “localhost” to use your microphone?")
+            ;; Closing the view refuses, and takes the sheet down.
+            (kill-buffer (current-buffer))
+            (portal-test--no-sheet))
+        (delete-process server)))))
 
 (ert-deftest portal-web-downloads-instead-of-failing-and-says-so ()
   (portal-test--with-web

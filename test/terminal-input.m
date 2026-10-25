@@ -375,6 +375,24 @@ static emacs_value sheet(emacs_env *env, ptrdiff_t nargs, emacs_value *args, voi
     return env->make_string(env, text.UTF8String, (ptrdiff_t)strlen(text.UTF8String));
 }
 
+/* Give the visible webview WebKit's mock camera and microphone, which need
+   no system permission, or its real devices again with nil. */
+static emacs_value mockCapture(emacs_env *env, ptrdiff_t nargs, emacs_value *args, void *data)
+{
+    (void)nargs; (void)data;
+    SEL selector = NSSelectorFromString(@"_setMockCaptureDevicesEnabled:");
+    for (NSView *view in descendants(activeWindow().contentView)) {
+        if ([view isKindOfClass:WKWebView.class] && !view.isHiddenOrHasHiddenAncestor) {
+            WKPreferences *preferences = ((WKWebView *)view).configuration.preferences;
+            if (![preferences respondsToSelector:selector]) return env->intern(env, "nil");
+            void (*set)(id, SEL, BOOL) = (void (*)(id, SEL, BOOL))[preferences methodForSelector:selector];
+            set(preferences, selector, env->is_not_nil(env, args[0]));
+            return env->intern(env, "t");
+        }
+    }
+    return env->intern(env, "nil");
+}
+
 int emacs_module_init(struct emacs_runtime *runtime)
 {
     emacs_env *env = runtime->get_environment(runtime);
@@ -434,6 +452,10 @@ int emacs_module_init(struct emacs_runtime *runtime)
     args[0] = env->intern(env, "portal-test-sheet");
     args[1] = env->make_function(env, 0, 2, sheet,
         "Describe the targeted frame's sheet as JSON; BUTTON presses it, after typing TEXT if given.", NULL);
+    env->funcall(env, env->intern(env, "fset"), 2, args);
+    args[0] = env->intern(env, "portal-test-web-mock-capture");
+    args[1] = env->make_function(env, 1, 1, mockCapture,
+        "Give the visible webview WebKit's mock capture devices if ON, else its real ones.", NULL);
     env->funcall(env, env->intern(env, "fset"), 2, args);
     return 0;
 }
