@@ -370,6 +370,46 @@ in it; otherwise the page is back in its pane in the key window."
         (redisplay t))
       (should (portal-input-gui--fills-pane)))))
 
+(ert-deftest portal-input-gui-web-fullscreen-page-keeps-the-keyboard-in-another-frame ()
+  (portal-input-gui--fullscreen-page
+    (let* ((buffer (current-buffer))
+           (target (portal-view-target))
+           (home (selected-frame))
+           (frame (make-frame)))
+      (unwind-protect
+          (progn
+            (select-frame-set-input-focus home)
+            (sit-for 0.1)
+            (should (portal-test-native-click 50 50))
+            (portal-input-gui--fullscreen t)
+            (setq unread-command-events nil)
+            ;; Emacs shows the page in another frame meanwhile, and gives it
+            ;; the keyboard there.
+            (select-frame frame)
+            (switch-to-buffer buffer)
+            (redisplay t)
+            (should (equal (portal-view-target) target))
+            (portal-input-focus)
+            (should (portal-input--action "focused"))
+            (let* ((owners nil)
+                   (watch (lambda (_symbol value operation _where)
+                            (when (eq operation 'set) (push value owners)))))
+              (add-variable-watcher 'portal-input--focused watch)
+              (unwind-protect
+                  (progn
+                    (portal-test-native-key 53 0 "\e")
+                    ;; Back, the page has the keyboard in that frame, and
+                    ;; never lost it on the way.
+                    (portal-terminal-test--wait
+                     (lambda () (and (not (plist-get (portal--inspect target) :fullscreen))
+                                     (plist-get (portal--inspect target) :focused))))
+                    (accept-process-output nil 0.3)
+                    (should-not (memq nil owners)))
+                (remove-variable-watcher 'portal-input--focused watch)))
+            (should (portal-test--shown target (selected-window)))
+            (should (portal-input--action "focused")))
+        (delete-frame frame)))))
+
 (ert-deftest portal-input-gui-web-fullscreen-page-closes-with-its-buffer ()
   (portal-input-gui--fullscreen-page
     (let ((target (portal-view-target)))

@@ -49,6 +49,8 @@ final class NativeInput: NativeInputHandler {
     /// Whether the view left its host's window for a window of its own, as a
     /// web page does for fullscreen, and is not back yet (`moved`, `back`).
     private(set) var away = false
+    /// Whether `back` is moving the view, which changes nothing the core knows.
+    private var returning = false
     /// Runs once the view is back.
     var returned: (() -> Void)?
 
@@ -92,20 +94,22 @@ final class NativeInput: NativeInputHandler {
     }
 
     /// The view's app is done with the window of its own, and has put the
-    /// view back: the view gets the keyboard back if it had it, and Emacs
+    /// view back. It goes where Emacs put it meanwhile (`returned`), then
+    /// has the keyboard there if it had it, or was given it meanwhile; Emacs
     /// keeps it otherwise.
     func back() {
         guard away else { return }
         away = false
-        if reported { _ = focusView() } else if let view { host.returnFocus(from: view) }
+        returning = true
         returned?()
-        host.refreshOwnership()
+        returning = false
+        if reported { focus() } else if let view { host.returnFocus(from: view) }
     }
 
     /// Tell the core whether the view has the keyboard, when that changed.
     /// Away, the view keeps what it had (`moved`).
     func observe() {
-        guard !away else { return }
+        guard !away, !returning else { return }
         let focused = view.map { host.ownsFocus($0) } ?? false
         if focused != reported { report(focused) }
     }
