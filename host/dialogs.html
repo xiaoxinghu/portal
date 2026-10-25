@@ -1,0 +1,72 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>Dialogs</title>
+		<style>
+		:root {
+			color-scheme: light dark;
+			font-family: system-ui, sans-serif;
+		}
+		main {
+			max-width: 32rem;
+			margin: 2rem auto;
+			padding: 0 1rem;
+			line-height: 1.6;
+		}
+		button {
+			font: inherit;
+			margin-right: 0.5rem;
+		}
+		output {
+			display: block;
+			margin: 1rem 0;
+			font-family: ui-monospace, monospace;
+		}
+		</style>
+	</head>
+	<body>
+		<main>
+			<h1>Dialogs</h1>
+			<p>Each button opens a JavaScript dialog; its answer shows below.</p>
+			<p>
+				<button id="alert" type="button">Alert</button>
+				<button id="confirm" type="button">Confirm</button>
+				<button id="prompt" type="button">Prompt</button>
+			</p>
+			<output id="answer">No answer yet</output>
+			<p>
+				<label><input id="guard" type="checkbox"> Ask before leaving</label>
+			</p>
+			<p><a id="leave" href="hello">Leave for Hello</a></p>
+		</main>
+		<script>
+		const answer = document.getElementById("answer");
+		// The title shows each answer too, which Emacs can read without the page.
+		const show = (text) => {
+			answer.textContent = text;
+			document.title = text;
+		};
+		document.getElementById("alert").onclick = () => {
+			alert("Hello from the page");
+			show("alert: closed");
+		};
+		document.getElementById("confirm").onclick = () => {
+			show(`confirm: ${confirm("Keep going?")}`);
+		};
+		document.getElementById("prompt").onclick = () => {
+			show(`prompt: ${JSON.stringify(prompt("Your name?", "Ada"))}`);
+		};
+		const ask = (event) => {
+			event.preventDefault();
+			event.returnValue = "";
+		};
+		document.getElementById("guard").onchange = (event) => {
+			if (event.target.checked) addEventListener("beforeunload", ask);
+			else removeEventListener("beforeunload", ask);
+		};
+		</script>
+	</body>
+</html>

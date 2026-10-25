@@ -9,7 +9,11 @@
 (declare-function portal--inspect "portal-view" (target))
 (declare-function portal--web-load "portal-web" (target url))
 (declare-function portal-excalidraw-gui--js "portal-excalidraw-gui-tests" (script))
+(declare-function portal-terminal-test--wait "portal-terminal-tests" (predicate))
+(declare-function portal-test-native-click "test-terminal-input" (x y))
 (declare-function portal-test-native-target-frame "test-terminal-input" (title))
+(declare-function portal-test-responder "test-terminal-input" ())
+(declare-function portal-test-sheet "test-terminal-input" (&optional button text))
 
 (defmacro portal-test--with-web (&rest body)
   "Run BODY in one window, then kill the web buffers it opened."
@@ -171,5 +175,131 @@ TARGET defaults to the selected pane's view.  Return its state."
               (should (plist-member state :inspectable))
               (should-not (plist-get state :inspectable))))
         (setq portal-web-inspectable original)))))
+
+;;; JavaScript dialogs
+
+(defmacro portal-test--with-dialogs (&rest body)
+  "Run BODY with the app host's dialogs page in the selected pane.
+The test-only injector targets its frame, where the page's sheets show."
+  (declare (indent 0))
+  `(portal-test--with-web
+     (skip-unless (file-executable-p (portal-server-program-file)))
+     (select-frame-set-input-focus (selected-frame))
+     (sit-for 0.1)
+     (should (portal-view--with-frame-title (selected-frame)
+                                            #'portal-test-native-target-frame))
+     (unwind-protect
+         (progn
+           (portal-web--visit-hosted "/dialogs" "dialogs")
+           (portal-test--wait-for-page "Dialogs")
+           ,@body)
+       (portal-test-native-target-frame nil)
+       ;; A click into the page asks Emacs to select its pane.
+       (setq unread-command-events nil))))
+
+(defun portal-test--sheet (&optional button text)
+  "The sheet on the targeted frame, as a plist, or nil without one.
+With BUTTON, press its button so titled instead, after putting TEXT, if
+given, in its text field."
+  (if button
+      (should (portal-test-sheet button text))
+    (let ((json (portal-test-sheet)))
+      (and json (json-parse-string json :object-type 'plist :array-type 'list
+                                   :false-object nil :null-object nil)))))
+
+(defun portal-test--wait-for-sheet (text)
+  "Wait for a sheet on the targeted frame saying TEXT, and return it."
+  (let (sheet)
+    (portal-terminal-test--wait
+     (lambda () (member text (plist-get (setq sheet (portal-test--sheet)) :texts))))
+    sheet))
+
+(defun portal-test--no-sheet ()
+  "Wait for the targeted frame to have no sheet."
+  (portal-terminal-test--wait (lambda () (not (portal-test--sheet)))))
+
+(defun portal-test--click (id)
+  "Click the dialogs page's element ID with the real mouse.
+A dialog it opens holds the page until answered, so no script may wait
+on the page meanwhile."
+  (let ((point (portal-excalidraw-gui--js
+                (format "const r = document.getElementById(%S).getBoundingClientRect();
+                         return [Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2)];"
+                        id))))
+    (should (portal-test-native-click (aref point 0) (aref point 1)))))
+
+(ert-deftest portal-web-dialogs-give-the-page-its-answers ()
+  (portal-test--with-dialogs
+    (portal-test--click "alert")
+    (let ((sheet (portal-test--wait-for-sheet "Hello from the page")))
+      (should (member "127.0.0.1 says" (plist-get sheet :texts)))
+      (should (equal (plist-get sheet :buttons) '("OK")))
+      (should-not (plist-get sheet :field))
+      ;; The keyboard is the sheet's, for Return and Escape.
+      (should (plist-get sheet :key)))
+    (portal-test--sheet "OK")
+    (portal-test--wait-for-page "alert: closed")
+    (portal-test--no-sheet)
+    ;; The page has the keyboard back, and its next click is its own.
+    (portal-terminal-test--wait
+     (lambda () (string-match-p "WebPage in \\*portal: dialogs\\*" (portal-test-responder))))
+    (dolist (case '(("Cancel" "confirm: false") ("OK" "confirm: true")))
+      (portal-test--click "confirm")
+      (should (member "Cancel" (plist-get (portal-test--wait-for-sheet "Keep going?") :buttons)))
+      (portal-test--sheet (car case))
+      (portal-test--wait-for-page (cadr case)))
+    (portal-test--click "prompt")
+    (should (equal (plist-get (portal-test--wait-for-sheet "Your name?") :field) "Ada"))
+    (portal-test--sheet "OK" "Grace Hopper")
+    (portal-test--wait-for-page "prompt: \"Grace Hopper\"")
+    (portal-test--click "prompt")
+    (portal-test--wait-for-sheet "Your name?")
+    (portal-test--sheet "Cancel")
+    (portal-test--wait-for-page "prompt: null")))
+
+(ert-deftest portal-web-dialog-waits-while-its-page-is-hidden ()
+  (portal-test--with-dialogs
+    (let ((buffer (current-buffer))
+          (target (portal-view-target)))
+      (portal-test--click "prompt")
+      (portal-test--wait-for-sheet "Your name?")
+      (quit-window)
+      (redisplay t)
+      (should-not (plist-get (portal--inspect target) :visible))
+      (portal-test--no-sheet)
+      ;; Shown again, the page still waits on the same question.
+      (switch-to-buffer buffer)
+      (should (equal (plist-get (portal-test--wait-for-sheet "Your name?") :field) "Ada"))
+      (portal-test--sheet "OK")
+      (portal-test--wait-for-page "prompt: \"Ada\"" target)
+      ;; Closing the view answers its dialog and takes the sheet down.
+      (portal-test--click "confirm")
+      (portal-test--wait-for-sheet "Keep going?")
+      (kill-buffer buffer)
+      (should-not (portal--inspect target))
+      (portal-test--no-sheet))))
+
+(ert-deftest portal-web-asks-before-leaving-a-page-that-guards-it ()
+  (portal-test--with-dialogs
+    (let ((target (portal-view-target)))
+      ;; WebKit asks only for a page the user has used, as a click does.
+      (portal-test--click "guard")
+      (portal-terminal-test--wait
+       (lambda () (portal-excalidraw-gui--js "return document.getElementById('guard').checked;")))
+      ;; Following a link and reloading both ask; staying keeps the page.
+      (dolist (leave (list (lambda () (portal-test--click "leave"))
+                           (lambda () (portal-web-reload))))
+        (funcall leave)
+        (let ((sheet (portal-test--wait-for-sheet "Leave this page?")))
+          (should (member "Stay on Page" (plist-get sheet :buttons))))
+        (portal-test--sheet "Stay on Page")
+        (portal-test--no-sheet)
+        (should (portal-excalidraw-gui--js
+                 "return location.pathname.endsWith('/dialogs')
+                   && document.getElementById('guard').checked;")))
+      (portal-test--click "leave")
+      (portal-test--wait-for-sheet "Leave this page?")
+      (portal-test--sheet "Leave Page")
+      (portal-test--wait-for-page "Hello, world!" target))))
 
 (provide 'portal-tests)

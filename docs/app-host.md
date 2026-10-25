@@ -14,6 +14,8 @@ and load when the host sends its readiness message. External URLs need no server
   `127.0.0.1` on an OS-assigned port.
 - Each host generates a fresh access token and sends it through the readiness
   pipe. URLs have the form `http://127.0.0.1:PORT/TOKEN/hello`,
+  `http://127.0.0.1:PORT/TOKEN/dialogs`, a page that tries the
+  [JavaScript dialogs](web-views.md#web-view-behaviour),
   `http://127.0.0.1:PORT/TOKEN/about?portal=VERSION&emacs=VERSION` or
   `http://127.0.0.1:PORT/TOKEN/markdown?path=ENCODED_ABSOLUTE_PATH`. Previews
   load local images from `image?path=ENCODED_ABSOLUTE_PATH`, which serves
