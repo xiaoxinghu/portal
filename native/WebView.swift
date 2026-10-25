@@ -26,6 +26,11 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
         return super.becomeFirstResponder()
     }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        input?.moved()
+    }
+
     /// The press offered to the page, until it answers, and whether the key
     /// script has seen it reach the page.
     private var offered: NSEvent?
@@ -101,6 +106,9 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
         } else {
             configuration.applicationNameForUserAgent = Self.safari
         }
+        // A page may go fullscreen, as a video player's button does: WebKit
+        // moves the page to a window of its own until it leaves (NativeInput.moved).
+        configuration.preferences.isElementFullscreenEnabled = true
         super.init(frame: .zero, configuration: configuration)
         if #available(macOS 13.3, *) { isInspectable = inspectable }
         if hosted { PageMessages.install(in: self) }
@@ -680,7 +688,8 @@ final class WebSession: PortalView {
 
     func describe() -> [(String, ViewValue)] {
         var state: [(String, ViewValue)] = [("loading", .flag(page.isLoading)),
-                                            ("dark", .flag(page.effectiveAppearance.isDark))]
+                                            ("dark", .flag(page.effectiveAppearance.isDark)),
+                                            ("fullscreen", .flag(page.fullscreenState != .notInFullscreen))]
         if let url = page.url { state.append(("url", .string(url.absoluteString))) }
         if let title = page.title { state.append(("title", .string(title))) }
         if let error = page.loadError { state.append(("error", .string(error))) }

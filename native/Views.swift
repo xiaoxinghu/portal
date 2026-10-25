@@ -90,6 +90,10 @@ final class NativeView {
     /// Where the view is in its window. Parking keeps it, so hiding never
     /// resizes the page or the shell's grid.
     private var rectangle: CGRect
+    /// Where Emacs put the view while it was away in a window of its own
+    /// (`NativeInput.moved`): a frame's host, or the parking window's. Only
+    /// the view's own window may move it then; it goes here once back.
+    private var wanted: NativeHost?
 
     /// Make a view of TYPE, in the parking window with its session running.
     convenience init(_ type: any PortalView.Type, target: String, options: ViewOptions) throws {
@@ -100,6 +104,7 @@ final class NativeView {
     init(_ kind: any PortalView) throws {
         self.kind = kind
         rectangle = host.view?.bounds ?? .zero
+        kind.input.returned = { [weak self] in self?.returned() }
         move(to: host)
         do { try kind.opened() } catch {
             close()
@@ -113,11 +118,13 @@ final class NativeView {
     func attach(to next: NativeHost, rectangle: CGRect) throws {
         guard next.view != nil else { throw NativeError.message("The view's frame was deleted") }
         self.rectangle = rectangle
+        guard !kind.input.away else { return wanted = next }
         move(to: next)
         kind.attached()
     }
 
     func detach() {
+        guard !kind.input.away else { return wanted = Self.parking }
         kind.detaching()
         move(to: Self.parking)
         host.hide(kind.surface)
@@ -126,6 +133,13 @@ final class NativeView {
     func close() {
         kind.close()
         host.remove(kind.surface)
+    }
+
+    /// Back from its own window, in its host's: go where Emacs put it meanwhile.
+    private func returned() {
+        guard let next = wanted else { return }
+        wanted = nil
+        if next === Self.parking || (try? attach(to: next, rectangle: rectangle)) == nil { detach() }
     }
 
     func describe() -> [(String, ViewValue)] {

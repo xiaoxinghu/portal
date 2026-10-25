@@ -94,6 +94,13 @@ final class NativeHost: NSObject {
         refreshOwnership()
     }
 
+    /// A view took this window's keyboard with it to a window of its own,
+    /// leaving none: give it to Emacs.
+    func reclaimKeyboard() {
+        guard let window = view?.window, window.firstResponder === window, let editor else { return }
+        window.makeFirstResponder(editor)
+    }
+
     /// Show SURFACE at RECTANGLE, in Emacs's frame pixels from the top left.
     /// Callers check that the frame still has its `view` first.
     func place(_ surface: any NativeSurface, rectangle: CGRect) {

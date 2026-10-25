@@ -93,7 +93,8 @@ seconds, with no key between, return to Emacs, as the escape key does. The
 app gets the first Escape, as vim or a page dialog would without Portal; the
 second never reaches it. A single Escape, or two typed more slowly, stay the
 app's. It is off by default: Escape typed twice out of habit in a terminal's
-vim would leave the terminal.
+vim would leave the terminal. An Escape that leaves a page's
+[fullscreen](#fullscreen-pages) does not count.
 
 ```elisp
 (setq portal-input-double-escape 0.3)   ; nil turns it off
@@ -133,5 +134,15 @@ macOS's own shortcuts, such as Command-Space, still come first.
 Click a page or press `RET` to interact. Entering by click also selects its
 Emacs pane, keeping selection and keyboard focus aligned. Back in Emacs, `q`
 hides the web view and `g` reloads. The mode line and minibuffer remain available.
+
+### Fullscreen pages
+
+A page can go fullscreen, as a video player does from its fullscreen button.
+It then fills the screen in a window of its own, where every key is the
+page's: Portal's escape key, chords for Emacs and Escape twice do not apply.
+Escape leaves fullscreen, as in Safari, and the page returns to its pane, or
+wherever Emacs has put its buffer meanwhile. It has the keyboard again if it
+had it before, as it does after a click on that button; otherwise Emacs keeps
+the keyboard.
 
 Restart Emacs after rebuilding the native module to try these controls.
