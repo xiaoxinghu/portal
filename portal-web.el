@@ -439,7 +439,9 @@ does."
 
 (setf (alist-get "opened" portal-view-feature-record-handlers nil nil #'equal)
       (lambda (target opener) (portal-web--queue 'portal-web-opened target opener)))
-(setf (alist-get "closed" portal-view-record-handlers nil nil #'equal)
+;; A page may close its window before Emacs has given it a buffer, so this
+;; queues, after the window's opening, whether or not the target has one.
+(setf (alist-get "closed" portal-view-feature-record-handlers nil nil #'equal)
       (lambda (target) (portal-web--queue 'portal-web-closed target)))
 (define-key global-map [portal-web-opened] #'portal-web--opened)
 (define-key global-map [portal-web-closed] #'portal-web--closed)
