@@ -12,6 +12,7 @@
 (declare-function portal-terminal-test--wait "portal-terminal-tests" (predicate))
 (declare-function portal-test-native-click "test-terminal-input" (x y))
 (declare-function portal-test-native-target-frame "test-terminal-input" (title))
+(declare-function portal-test-responder "test-terminal-input" ())
 (declare-function portal-test-sheet "test-terminal-input" (&optional button text))
 
 (defmacro portal-test--with-web (&rest body)
@@ -239,6 +240,9 @@ on the page meanwhile."
     (portal-test--sheet "OK")
     (portal-test--wait-for-page "alert: closed")
     (portal-test--no-sheet)
+    ;; The page has the keyboard back, and its next click is its own.
+    (portal-terminal-test--wait
+     (lambda () (string-match-p "WebPage in \\*portal: dialogs\\*" (portal-test-responder))))
     (dolist (case '(("Cancel" "confirm: false") ("OK" "confirm: true")))
       (portal-test--click "confirm")
       (should (member "Cancel" (plist-get (portal-test--wait-for-sheet "Keep going?") :buttons)))

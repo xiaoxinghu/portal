@@ -339,6 +339,7 @@ private final class PageDialog {
                 self.text = (alert.accessoryView as? NSTextField)?.stringValue ?? self.text
                 self.sheet = nil
                 self.window = nil
+                Self.returnKeyboard(to: window)
                 self.answer(response == .alertFirstButtonReturn)
             }
         }
@@ -349,8 +350,22 @@ private final class PageDialog {
         guard let alert = sheet else { return }
         text = (alert.accessoryView as? NSTextField)?.stringValue ?? text
         sheet = nil
-        window?.endSheet(alert.window)
+        if let window {
+            window.endSheet(alert.window)
+            Self.returnKeyboard(to: window)
+        }
         window = nil
+    }
+
+    /// AppKit leaves no window key once a sheet on an Emacs frame ends, so
+    /// the next key would reach nothing and the next click only make the
+    /// frame key. Give WINDOW the keyboard back, unless another window took it.
+    private static func returnKeyboard(to window: NSWindow) {
+        Task { @MainActor in
+            guard NSApp.isActive, NSApp.keyWindow == nil, window.attachedSheet == nil,
+                  window.isVisible else { return }
+            window.makeKey()
+        }
     }
 
     /// Answer the page, once: with the first button when CHOSEN.
