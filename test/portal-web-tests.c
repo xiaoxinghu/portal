@@ -776,16 +776,24 @@ static void test_downloads(void)
     FILE *file = fopen(existing, "w");
     CHECK(file && !fclose(file));
     uint64_t report, again, notes, unnamed, hidden, odd;
-    CHECK(saves(start(web, "report.pdf", &report), report, directory, "report.pdf"));
-    CHECK(saves(start(web, "report.pdf", &again), again, directory, "report (1).pdf"));
+    portal_string path;
+    path = start(web, "report.pdf", &report);
+    CHECK(saves(path, report, directory, "report.pdf"));
+    path = start(web, "report.pdf", &again);
+    CHECK(saves(path, again, directory, "report (1).pdf"));
     CHECK(again != report);
     uint64_t shouted;
-    CHECK(saves(start(web, "REPORT.pdf", &shouted), shouted, directory, "REPORT (2).pdf"));
-    CHECK(saves(start(web, "notes.txt", &notes), notes, directory, "notes (1).txt"));
+    path = start(web, "REPORT.pdf", &shouted);
+    CHECK(saves(path, shouted, directory, "REPORT (2).pdf"));
+    path = start(web, "notes.txt", &notes);
+    CHECK(saves(path, notes, directory, "notes (1).txt"));
     /* Names are made safe. */
-    CHECK(saves(start(web, "", &unnamed), unnamed, directory, "download"));
-    CHECK(saves(start(web, "../.hidden", &hidden), hidden, directory, "_.hidden"));
-    CHECK(saves(start(web, "a\nb/c.tar.gz", &odd), odd, directory, "a_b_c.tar.gz"));
+    path = start(web, "", &unnamed);
+    CHECK(saves(path, unnamed, directory, "download"));
+    path = start(web, "../.hidden", &hidden);
+    CHECK(saves(path, hidden, directory, "_.hidden"));
+    path = start(web, "a\nb/c.tar.gz", &odd);
+    CHECK(saves(path, odd, directory, "a_b_c.tar.gz"));
     CHECK(sent(web, "bridge %s\n"));
     CHECK(downloads_said(web, directory,
                          "started|report.pdf\nstarted|report (1).pdf\nstarted|REPORT (2).pdf\n"
@@ -800,7 +808,7 @@ static void test_downloads(void)
         strcat(expected, "\xc3\xa9");
     strcat(expected, ".txt");
     uint64_t long_name;
-    portal_string path = start(web, name, &long_name);
+    path = start(web, name, &long_name);
     CHECK(saves(path, long_name, directory, expected));
     CHECK(path.length - strlen(directory) - 1 <= 200);
     free(receive(web));
@@ -815,7 +823,8 @@ static void test_downloads(void)
     CHECK(downloads_said(web, directory,
                          "finished|report.pdf\nfailed|report (1).pdf|The disk is full."));
     uint64_t later;
-    CHECK(saves(start(web, "report.pdf", &later), later, directory, "report.pdf"));
+    path = start(web, "report.pdf", &later);
+    CHECK(saves(path, later, directory, "report.pdf"));
     CHECK(later > long_name);
     CHECK(portal_web_download_destination(later, text("again.pdf")).length == 0);
     free(receive(web));
@@ -838,7 +847,8 @@ static void test_downloads(void)
     char *hosted = open_app();
     post(hosted, true, app, "download", "{\"type\":\"download\",\"state\":\"finished\"}");
     uint64_t own;
-    CHECK(saves(start(hosted, "drawing.png", &own), own, directory, "drawing.png"));
+    path = start(hosted, "drawing.png", &own);
+    CHECK(saves(path, own, directory, "drawing.png"));
     CHECK(downloads_said(hosted, directory, "started|drawing.png"));
     drain();
     close_view(hosted);
