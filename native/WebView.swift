@@ -212,24 +212,38 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
     }
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
-        download.delegate = self
+        begin(download, url: navigationAction.request.url)
     }
 
     func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse,
                  didBecome download: WKDownload) {
-        download.delegate = self
+        begin(download, url: navigationResponse.response.url)
     }
 
-    /// The running downloads that have a file, with the core's number for each.
-    private var downloads: [ObjectIdentifier: (download: WKDownload, number: UInt64, file: URL)] = [:]
+    /// The running downloads, with the core's number for each and its file
+    /// once the core has chosen it.
+    private var downloads: [ObjectIdentifier: (download: WKDownload, number: UInt64, file: URL?)] = [:]
+
+    /// Tell the core about DOWNLOAD, of URL, from its start, so that even a
+    /// failure before its response reaches Emacs.
+    private func begin(_ download: WKDownload, url: URL?) {
+        guard let number = Core.downloadStarted(target, url: url?.absoluteString ?? "") else {
+            return download.cancel()
+        }
+        download.delegate = self
+        downloads[ObjectIdentifier(download)] = (download, number, nil)
+    }
 
     /// The file the core chose, or nil, which cancels the download.
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse,
                   suggestedFilename: String) async -> URL? {
-        let url = download.originalRequest?.url ?? response.url
-        guard let (number, file) = Core.downloadStarted(target, url: url?.absoluteString ?? "",
-                                                        name: suggestedFilename) else { return nil }
-        downloads[ObjectIdentifier(download)] = (download, number, file)
+        let key = ObjectIdentifier(download)
+        guard let running = downloads[key] else { return nil }
+        guard let file = Core.downloadDestination(running.number, name: suggestedFilename) else {
+            downloads[key] = nil
+            return nil
+        }
+        downloads[key]?.file = file
         return file
     }
 
@@ -239,22 +253,34 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
         end(download, error: error.localizedDescription)
     }
 
-    /// A failed download leaves no partial file behind: WebKit wrote it once
-    /// it received data, as the file was new, and leaves it in place.
     private func end(_ download: WKDownload, error: String?) {
         guard let running = downloads.removeValue(forKey: ObjectIdentifier(download)) else { return }
-        if error != nil && download.progress.completedUnitCount > 0 {
-            try? FileManager.default.removeItem(at: running.file)
-        }
-        Core.downloadFinished(running.number, error: error)
+        Self.ended(download, number: running.number, file: running.file, error: error)
     }
 
-    /// Cancel every download, telling the core now: the page may be gone
-    /// before WebKit reports them.
+    /// Tell the core DOWNLOAD ended, once WebKit has stopped writing. A
+    /// failed download leaves no partial file: its file was new, so it is
+    /// WebKit's once WebKit wrote to it, and an empty one is no loss.
+    private static func ended(_ download: WKDownload, number: UInt64, file: URL?, error: String?) {
+        if error != nil, let file,
+           let size = (try? FileManager.default.attributesOfItem(atPath: file.path))?[.size] as? Int,
+           size == 0 || download.progress.completedUnitCount > 0 {
+            try? FileManager.default.removeItem(at: file)
+        }
+        Core.downloadFinished(number, error: error)
+    }
+
+    /// Cancel every download. Each ends once WebKit has stopped it, even
+    /// after the page is gone.
     func cancelDownloads() {
-        for (download, _, _) in downloads.values {
-            end(download, error: "The download was cancelled.")
-            download.cancel()
+        let running = downloads.values
+        downloads = [:]
+        for (download, number, file) in running {
+            download.cancel { _ in
+                MainActor.assumeIsolated {
+                    Self.ended(download, number: number, file: file, error: "The download was cancelled.")
+                }
+            }
         }
     }
 

@@ -524,19 +524,22 @@ portal_navigation portal_web_responding(portal_string target, bool showable, boo
    PORTAL_NAVIGATION_DOWNLOAD, and asks the core where to save it once it
    knows the file's name; the core tells Emacs how each one goes.
 
-   TARGET's page started downloading URL, which the server or page suggests
-   naming NAME, possibly empty.  Return the absolute path of the file to
-   write, a new name in the directory Lisp chose that no file and no other
-   download has, and set *DOWNLOAD to the core's number for it, never 0 and
-   never reused.  The path is valid until the platform reports that download
-   finished, which it does exactly once.  Or return an empty path, setting
-   *DOWNLOAD to 0, to cancel it: the core has told Emacs why. */
-portal_string portal_web_download_started(portal_string target, portal_string url,
-                                          portal_string name, uint64_t *download);
-/* DOWNLOAD has finished: its file is complete, for a null ERROR, or it
-   failed or was cancelled, and ERROR says why, and the platform has removed
-   what it wrote of the file.  Closing a web view cancels
-   its downloads; the core then tells Emacs nothing more about them. */
+   TARGET's page started downloading URL.  Return the core's number for the
+   download, never 0 and never reused, which names it below; or 0 for a
+   view that is gone, and the platform cancels the download. */
+uint64_t portal_web_download_started(portal_string target, portal_string url);
+/* DOWNLOAD's server or page suggests naming its file NAME, possibly empty.
+   Return the absolute path of the file to write, a new name in the
+   directory Lisp chose that no file and no other download has, valid until
+   the platform reports DOWNLOAD finished.  Or return an empty path, and the
+   platform cancels the download: the core has told Emacs why, if it could. */
+portal_string portal_web_download_destination(uint64_t download, portal_string name);
+/* DOWNLOAD has ended: its file is complete, for a null ERROR, or it failed
+   or was cancelled, before or after it had a file, and ERROR says why.
+   Report it once the platform has stopped writing and has removed what it
+   wrote of a failed download's file.  The core ignores downloads it refused
+   a file.  Closing a web view cancels its downloads, which tell Emacs
+   nothing more. */
 void portal_web_download_finished(uint64_t download, const portal_string *error);
 /* The page in TARGET asks for a new window, as window.open and links to
    target=_blank do, once portal_web_navigating has allowed its URL.  The

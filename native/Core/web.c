@@ -337,7 +337,8 @@ static void hand_off(portal_string target, const char *type, portal_string url)
 
 /* Downloads. */
 
-/* A download the platform runs, from its start until it reports the end. */
+/* A download the platform runs, from its start until it reports the end,
+   with its file's path from when the core chose it. */
 struct download {
     struct download *next;
     uint64_t id;
@@ -422,7 +423,7 @@ static bool file_name(portal_string name, portal_text *stem, portal_string *exte
 static bool taken(const char *path)
 {
     for (struct download *download = downloads.first; download; download = download->next)
-        if (!strcmp(download->path.data, path))
+        if (download->path.data && !strcmp(download->path.data, path))
             return true;
     struct stat status;
     return !lstat(path, &status);
@@ -495,48 +496,65 @@ bool portal_web_views_download_directory(portal_string directory, portal_text *e
     return true;
 }
 
-portal_string portal_web_download_started(portal_string target, portal_string url,
-                                          portal_string name, uint64_t *download)
+uint64_t portal_web_download_started(portal_string target, portal_string url)
 {
-    portal_string none = literal("");
     struct portal_web_state *web;
-    *download = 0;
-    if (!find(target, &web))
-        return none;
-    portal_text problem = {0};
-    struct download *started = calloc(1, sizeof *started);
-    char *path = started ? destination(name, &problem) : NULL;
-    if (!path || !copy(target, &started->target) || !copy(url, &started->url)) {
-        portal_string why = problem.data && !path ? borrow(problem)
-                                                  : literal("Portal is out of memory");
-        report(target, "failed", url, none, &why);
-        free(problem.data);
-        free(path);
-        if (started)
-            free_download(started);
-        return none;
+    struct download *started = find(target, &web) ? calloc(1, sizeof *started) : NULL;
+    if (!started)
+        return 0;
+    if (!copy(target, &started->target) || !copy(url, &started->url)) {
+        free_download(started);
+        return 0;
     }
-    started->path = (portal_text) {path, strlen(path)};
     started->id = ++downloads.ids;
     started->next = downloads.first;
     downloads.first = started;
-    report(target, "started", url, borrow(started->path), NULL);
-    *download = started->id;
-    return borrow(started->path);
+    return started->id;
 }
 
-void portal_web_download_finished(uint64_t download, const portal_string *error)
+/* DOWNLOAD's entry, and the link to it in the list; NULL when there is none. */
+static struct download **running(uint64_t download)
 {
     struct download **link = &downloads.first;
     while (*link && (*link)->id != download)
         link = &(*link)->next;
-    struct download *finished = *link;
-    if (!finished)
-        return;
-    *link = finished->next;
-    report(borrow(finished->target), error ? "failed" : "finished", borrow(finished->url),
-           borrow(finished->path), error);
-    free_download(finished);
+    return *link ? link : NULL;
+}
+
+/* Remove DOWNLOAD from the running downloads, telling Emacs it is now in
+   STATE, because of PROBLEM unless it is NULL. */
+static void end(struct download **link, const char *state, const portal_string *problem)
+{
+    struct download *ended = *link;
+    *link = ended->next;
+    report(borrow(ended->target), state, borrow(ended->url),
+           ended->path.data ? borrow(ended->path) : literal(""), problem);
+    free_download(ended);
+}
+
+portal_string portal_web_download_destination(uint64_t download, portal_string name)
+{
+    struct download **link = running(download), *named = link ? *link : NULL;
+    if (!named || named->path.data)
+        return literal("");
+    portal_text problem = {0};
+    char *path = destination(name, &problem);
+    if (!path) {
+        portal_string why = problem.data ? borrow(problem) : literal("Portal is out of memory");
+        end(link, "failed", &why);
+        free(problem.data);
+        return literal("");
+    }
+    named->path = (portal_text) {path, strlen(path)};
+    report(borrow(named->target), "started", borrow(named->url), borrow(named->path), NULL);
+    return borrow(named->path);
+}
+
+void portal_web_download_finished(uint64_t download, const portal_string *error)
+{
+    struct download **link = running(download);
+    if (link)
+        end(link, error ? "failed" : "finished", error);
 }
 
 /* Lifetime, for views.c. */

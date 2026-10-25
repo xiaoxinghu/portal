@@ -107,18 +107,22 @@ enum Core {
         }
     }
 
-    /// TARGET's page started downloading URL, suggested to be called NAME:
-    /// the core's number for the download and the file to save it to, or
-    /// nil to cancel it.
-    static func downloadStarted(_ target: String, url: String, name: String) -> (UInt64, URL)? {
-        var download: UInt64 = 0
-        let path = borrowing([target, url, name]) {
-            String(copying: portal_web_download_started($0[0], $0[1], $0[2], &download))
-        }
-        return download == 0 ? nil : (download, URL(fileURLWithPath: path))
+    /// TARGET's page started downloading URL: the core's number for the
+    /// download, or nil to cancel it.
+    static func downloadStarted(_ target: String, url: String) -> UInt64? {
+        let download = borrowing([target, url]) { portal_web_download_started($0[0], $0[1]) }
+        return download == 0 ? nil : download
+    }
+
+    /// The file to save DOWNLOAD to, suggested to be called NAME, or nil to
+    /// cancel it.
+    static func downloadDestination(_ download: UInt64, name: String) -> URL? {
+        let path = borrow(name) { String(copying: portal_web_download_destination(download, $0)) }
+        return path.isEmpty ? nil : URL(fileURLWithPath: path)
     }
 
     /// DOWNLOAD ended: complete without an ERROR, or failed or cancelled.
+    /// The platform has stopped writing its file.
     static func downloadFinished(_ download: UInt64, error: String?) {
         guard let error else { return portal_web_download_finished(download, nil) }
         borrow(error) { message in

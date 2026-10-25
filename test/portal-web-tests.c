@@ -725,10 +725,11 @@ static bool downloads_said(const char *target, const char *directory, const char
     return receives(target, expected);
 }
 
+/* Start a download in TARGET, and name its file NAME; return its path. */
 static portal_string start(const char *target, const char *name, uint64_t *download)
 {
-    return portal_web_download_started(text(target), text("https://example.com/f"), text(name),
-                                       download);
+    *download = portal_web_download_started(text(target), text("https://example.com/f"));
+    return *download ? portal_web_download_destination(*download, text(name)) : text("");
 }
 
 static void test_downloads(void)
@@ -743,8 +744,10 @@ static void test_downloads(void)
     CHECK(portal_web_responding(text(web), false, false) == PORTAL_NAVIGATION_DOWNLOAD);
     CHECK(portal_web_responding(text(web), true, true) == PORTAL_NAVIGATION_DOWNLOAD);
     CHECK(portal_web_responding(text("web:0"), false, true) == PORTAL_NAVIGATION_ALLOW);
-    /* Until Lisp names a directory, a download has nowhere to go. */
-    CHECK(start(web, "f.txt", &download).length == 0 && !download);
+    /* Until Lisp names a directory, a download has nowhere to go, and its
+       end is no news. */
+    CHECK(start(web, "f.txt", &download).length == 0 && download);
+    portal_web_download_finished(download, NULL);
     CHECK(sent(web, "bridge %s\n"));
     CHECK(downloads_said(web, "", "failed||Portal has no download directory"));
     const char *const relative[] = {"", "downloads", "~/Downloads"};
@@ -760,7 +763,7 @@ static void test_downloads(void)
     char slashed[sizeof directory + 16];
     snprintf(slashed, sizeof slashed, "%s/missing/", directory);
     CHECK(portal_web_views_download_directory(text(slashed), &error));
-    CHECK(start(web, "f.txt", &download).length == 0 && !download);
+    CHECK(start(web, "f.txt", &download).length == 0 && download);
     char missing[256];
     snprintf(missing, sizeof missing, "failed||No download directory %s", slashed);
     CHECK(downloads_said(web, "", missing));
@@ -811,14 +814,22 @@ static void test_downloads(void)
     uint64_t later;
     CHECK(saves(start(web, "report.pdf", &later), later, directory, "report.pdf"));
     CHECK(later > long_name);
+    CHECK(portal_web_download_destination(later, text("again.pdf")).length == 0);
     free(receive(web));
     drain();
+    /* A download can fail before it has a file. */
+    uint64_t early = portal_web_download_started(text(web), text("https://example.com/f"));
+    portal_string refused = text("Could not connect to the server.");
+    portal_web_download_finished(early, &refused);
+    CHECK(sent(web, "bridge %s\n"));
+    CHECK(downloads_said(web, "", "failed||Could not connect to the server."));
     /* A closed view's downloads end without a word, and it starts none. */
     char *target = strdup(web);
     close_view(web);
     portal_web_download_finished(later, NULL);
     portal_web_download_finished(notes, &full);
     CHECK(start(target, "late.txt", &download).length == 0 && !download);
+    CHECK(!portal_web_download_started(text(target), text("https://example.com/f")));
     CHECK(sent(target, ""));
     /* A hosted app's page cannot pass for the core. */
     char *hosted = open_app();
