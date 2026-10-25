@@ -184,5 +184,6 @@ until the menu is used. It applies to web views opened afterwards:
 ```
 
 `(plist-get (portal--inspect (portal-view-target)) :inspectable)` tells whether
-a page is listed. Emacs has no command to open Web Inspector itself: WebKit
-offers that only through private interfaces.
+a page is listed; a window a page opens is listed when its opener is. Emacs
+has no command to open Web Inspector itself: WebKit offers that only through
+private interfaces.
