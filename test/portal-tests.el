@@ -368,6 +368,18 @@ sent before the connection closes."
 
 ;;; Camera and microphone
 
+(defun portal-test--frame (url)
+  "Have the visible page embed a frame at URL, which may use any device.
+The page's title then says what the frame reported."
+  (should (portal-test-web-mock-capture t))
+  (portal-excalidraw-gui--js
+   (format "addEventListener('message', (event) => { document.title = event.data; });
+const frame = document.createElement('iframe');
+frame.allow = 'camera *; microphone *';
+frame.src = %S;
+document.body.append(frame);
+return true;" url)))
+
 (defun portal-test--capture (constraints)
   "Have the visible page ask for CONSTRAINTS, getUserMedia's, with mock devices.
 The page's title then says what it got, or the error's name."
@@ -386,7 +398,13 @@ return true;" constraints)))
   (portal-test--with-dialogs
     (let* ((server (portal-test--serve
                     `(("/" . ,(portal-test--response '("Content-Type: text/html")
-                                                     "<title>Media</title><p>Media")))))
+                                                     "<title>Media</title><p>Media"))
+                      ;; A frame that asks for the microphone, and tells its parent.
+                      ("/frame" . ,(portal-test--response
+                                    '("Content-Type: text/html")
+                                    "<script>navigator.mediaDevices.getUserMedia({audio: true}).then(
+  () => parent.postMessage('Framed got audio', '*'),
+  (error) => parent.postMessage('Framed ' + error.name, '*'));</script>")))))
            (port (process-contact server :service))
            (camera "Allow “127.0.0.1” to use your camera?")
            (both "Allow “127.0.0.1” to use your camera and microphone?"))
@@ -435,6 +453,25 @@ return true;" constraints)))
             (portal-test--wait-for-page "Got audio")
             (should-not (portal-test--sheet))
             (portal-open-url (format "http://localhost:%d/" port))
+            (portal-test--wait-for-page "Media")
+            (portal-test--capture "{audio: true}")
+            (portal-test--wait-for-sheet "Allow “localhost” to use your microphone?")
+            (portal-test--sheet "Don’t Allow")
+            (portal-test--wait-for-page "NotAllowedError")
+            ;; A frame from another site names both, and its grant is for
+            ;; it in that site only.
+            (portal--web-load (portal-view-target) (format "http://127.0.0.1:%d/" port))
+            (portal-test--wait-for-page "Media")
+            (portal-test--frame (format "http://localhost:%d/frame" port))
+            (portal-test--wait-for-sheet "Allow “localhost” in “127.0.0.1” to use your microphone?")
+            (portal-test--sheet "Allow")
+            (portal-test--wait-for-page "Framed got audio")
+            (portal--web-load (portal-view-target) (format "http://127.0.0.1:%d/" port))
+            (portal-test--wait-for-page "Media")
+            (portal-test--frame (format "http://localhost:%d/frame" port))
+            (portal-test--wait-for-page "Framed got audio")
+            (should-not (portal-test--sheet))
+            (portal--web-load (portal-view-target) (format "http://localhost:%d/" port))
             (portal-test--wait-for-page "Media")
             (portal-test--capture "{audio: true}")
             (portal-test--wait-for-sheet "Allow “localhost” to use your microphone?")
