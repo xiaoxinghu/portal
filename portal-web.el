@@ -401,9 +401,10 @@ A fragment such as #L42 or #L42-L50 moves to line 42."
 ;; Windows that pages open, as window.open and links to target=_blank do.
 (defun portal-web--opened (event)
   "Give the window that EVENT's page opened, a new web view, a buffer.
-The buffer is named after the window's page and shown in a pane other than
-the opener's, as a Markdown preview shows files, and its view gets the
-keyboard.  A buffer that cannot take the view closes it."
+The buffer is named after the window's page, and renamed as the window
+goes to other pages.  It is shown in a pane other than the opener's, as a
+Markdown preview shows files, and its view gets the keyboard.  A buffer
+that cannot take the view closes it."
   (interactive "e")
   (pcase-let* ((`(,target ,opener) (cadr event))
                (state (portal--inspect target)))
@@ -439,6 +440,15 @@ does."
 
 (setf (alist-get "opened" portal-view-feature-record-handlers nil nil #'equal)
       (lambda (target opener) (portal-web--queue 'portal-web-opened target opener)))
+(defun portal-web--renamed (target)
+  "Name window TARGET's buffer, current, after the page it shows now.
+Inspecting the view lets its next page send a new record."
+  (when-let* ((url (plist-get (portal--inspect target) :url))
+              (name (format "*portal: %s*" (portal-web--page-name url))))
+    (unless (string-prefix-p name (buffer-name))
+      (rename-buffer name t))))
+
+(setf (alist-get "web" portal-view-record-handlers nil nil #'equal) #'portal-web--renamed)
 ;; A page may close its window before Emacs has given it a buffer, so this
 ;; queues, after the window's opening, whether or not the target has one.
 (setf (alist-get "closed" portal-view-feature-record-handlers nil nil #'equal)

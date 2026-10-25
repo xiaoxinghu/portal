@@ -710,6 +710,9 @@ Markdown FILE gets its preview URL, and any other a file: URL."
           (portal-web-test--run-events)
           (should (equal (buffer-name) "*portal: about:blank*"))
           (should (equal (portal-view-target) orphan))
+          ;; It takes the name of each page it goes to.
+          (portal-fake-native-commit orphan "https://accounts.example.com/signin")
+          (should (equal (buffer-name) "*portal: accounts.example.com*"))
           (should-not (get-buffer "*portal: example.com*"))
           (should (equal (portal-fake-native-targets) (list orphan)))
           ;; A window that closes itself before Emacs gives it a buffer goes all the same.

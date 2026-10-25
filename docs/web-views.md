@@ -136,7 +136,8 @@ scripts, styles and images. JavaScript is enabled by default.
 ## Windows pages open
 
 A link to `target=_blank`, `window.open` and sign-in popups open a new web
-buffer named after the page, such as `*portal: accounts.google.com*`. It
+buffer named after the page, such as `*portal: accounts.google.com*`, and
+renamed as it goes to other pages, as sign-in popups that start blank do. It
 appears in a pane beside the page that opened it, with the keyboard, as files
 a Markdown preview opens do; `display-buffer-alist` still decides. The new
 page shares the opener's cookies and storage, so signing in there signs the

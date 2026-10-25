@@ -27,7 +27,9 @@
    window.open and links to target=_blank do: each is a new web view, which
    Emacs hears of with an "opened NEW OPENER" record and gives a buffer.  A
    window may close itself, as window.close does, which Emacs hears of with
-   a "closed TARGET" record; no other view can.
+   a "closed TARGET" record; no other view can.  Each page a window commits
+   sends a "web TARGET" record, and no other until Emacs has inspected the
+   view, so Emacs can name the window's buffer after the page it shows.
 
    Appearance.  A web view's pages see the system's appearance, following
    its changes, unless Lisp forces light or dark, at open or later for every
@@ -546,6 +548,8 @@ void portal_web_committed(portal_string target, portal_string url)
     if (!copy(url, &web->page)) /* Unknown: the next load loads. */
         web->page = (portal_text) {0};
     web->generation++;
+    if (web->window)
+        portal_views_announce(target, PORTAL_WEB, "web");
     if (web->hosted)
         queue_own(web, target, "page", "url", url);
 }

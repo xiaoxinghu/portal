@@ -523,7 +523,9 @@ bool portal_web_window(portal_string target, void *request);
    is a window a page opened, the core tells Emacs with a "closed TARGET"
    record, and Emacs closes the view; it ignores any other view. */
 void portal_web_closed(portal_string target);
-/* The page in TARGET committed URL: a new document, or one from its history. */
+/* The page in TARGET committed URL: a new document, or one from its history.
+   For a window a page opened, the core tells Emacs with a "web TARGET"
+   record, and sends no other for that view until Emacs has inspected it. */
 void portal_web_committed(portal_string target, portal_string url);
 /* Something failed that the page cannot report: a load of TARGET's page, its
    web process, or, when TOKEN is not 0, the delivery of the message that

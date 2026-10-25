@@ -628,6 +628,17 @@ static void test_pages_open_windows(void)
           == PORTAL_NAVIGATION_ALLOW);
     CHECK(load(window, "https://example.com/next", &error));
     CHECK(shows(window, "\"url\":\"https://example.com/next\"", NULL));
+    /* Its pages are announced, one record until Emacs inspects it; the
+       opener's are not. */
+    portal_web_committed(text(window), text("https://example.com/next"));
+    portal_web_committed(text(window), text("https://example.com/last"));
+    CHECK(sent(window, "web %s\n"));
+    CHECK(shows(window, "\"kind\":\"web\"", NULL));
+    portal_web_committed(text(window), text("https://example.com/next"));
+    CHECK(sent(window, "web %s\n"));
+    free(inspect(window));
+    portal_web_committed(text(page), text("https://example.com/"));
+    CHECK(sent(page, ""));
     /* Windows open windows too. */
     char blank[] = "about:blank";
     CHECK(portal_web_window(text(window), blank));

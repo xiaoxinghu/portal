@@ -143,9 +143,10 @@ from inside WebKit's callback. The core decides (hosted apps open none),
 gives the view a target, and has the platform make it with
 `portal_web_create_window`, before sending `opened NEW OPENER`. This is the
 one view Lisp does not open: `portal-web.el` gives the target a buffer with
-`portal-view-adopt`, after which it is like any other view. A window's page
-closing itself sends `closed TARGET`, and Lisp kills its buffer, closing the
-view.
+`portal-view-adopt`, after which it is like any other view. Each page a
+window commits sends `web TARGET`, one record until Lisp inspects the view,
+and Lisp renames the buffer after it. A window's page closing itself sends
+`closed TARGET`, and Lisp kills its buffer, closing the view.
 
 The shared JavaScript for local links lives in `native/Core/scripts`, compiled
 into the core with `#embed`; platforms need neither script files nor the app

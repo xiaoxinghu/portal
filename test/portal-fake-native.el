@@ -163,6 +163,12 @@ Send its `opened' record, as the native module does, and return its target."
     (portal-fake-native-send (format "opened %s %s\n" target opener))
     target))
 
+(defun portal-fake-native-commit (target url)
+  "Have window TARGET's page go to URL, and send its `web' record."
+  (puthash target (plist-put (portal-fake-native--view target) :url url)
+           portal-fake-native--views)
+  (portal-fake-native-send (format "web %s\n" target)))
+
 (defun portal--channel (process)
   (setq portal-fake-native-channel process)
   t)
