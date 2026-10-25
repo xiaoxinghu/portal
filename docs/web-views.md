@@ -128,10 +128,34 @@ scripts, styles and images. JavaScript is enabled by default.
   dismisses it. WebKit asks before leaving only a page the user has
   interacted with, and closing the view never asks.
   `(portal-web-open-hosted "/dialogs")` opens a page that tries each one.
-- This URL viewer has no address bar, downloads or popups.
+- This URL viewer has no address bar or downloads.
   Inspect failed loads through `:error` in
   `(portal--inspect (portal-view-target))`, or the page itself with
   [Web Inspector](#web-inspector).
+
+## Windows pages open
+
+A link to `target=_blank`, `window.open` and sign-in popups open a new web
+buffer named after the page, such as `*portal: accounts.google.com*`, and
+renamed as it goes to other pages, as sign-in popups that start blank do. It
+appears in a pane beside the page that opened it, with the keyboard, as files
+a Markdown preview opens do; `display-buffer-alist` still decides. The new
+page shares the opener's cookies and storage, so signing in there signs the
+opener in. `g` reloads the page it shows. When the page closes itself with
+`window.close()`, as sign-in popups do once done, its buffer is killed and its
+pane goes back to what it showed before. Killing the buffer closes the page,
+and the opener's buffer is independent of it. Window sizes the page asks for
+are ignored. Hosted apps open no windows: links to other sites still open in
+the default browser.
+
+WebKit has a known bug in which a popup's `window.opener` is null on some
+macOS versions ([759487](https://developer.apple.com/forums/thread/759487),
+[810417](https://developer.apple.com/forums/thread/810417)), which breaks
+sign-in flows that report back to the opener. On macOS 27.0.1 (26A434), on
+2026-10-25, a popup from `window.open` had its opener and could post to it,
+as `test/portal-web-gui-tests.el` checks; macOS 26 was not checked. Links to
+`target=_blank` get no opener, as browsers give them `rel=noopener` by
+default.
 
 Lisp can give any buffer a web view: `(portal-web-open URL)` opens and loads
 URL in the current buffer. Loading the current page, ignoring its fragment,
@@ -160,5 +184,6 @@ until the menu is used. It applies to web views opened afterwards:
 ```
 
 `(plist-get (portal--inspect (portal-view-target)) :inspectable)` tells whether
-a page is listed. Emacs has no command to open Web Inspector itself: WebKit
-offers that only through private interfaces.
+a page is listed; a window a page opens is listed when its opener is. Emacs
+has no command to open Web Inspector itself: WebKit offers that only through
+private interfaces.

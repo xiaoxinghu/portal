@@ -59,8 +59,9 @@ never reaching Emacs.
 Terminal and web views run on the shared Portal view lifecycle
 ([ADR 0002](adr/0002-portal-view-native-seam.md)). `portal-view.el` makes
 every native lifecycle call: `portal--open KIND OPTIONS` returns a target such as
-`terminal:3` or `web:4`, and `portal--place`, `portal--hide`, `portal--close` and
-`portal--inspect` take that target.
+`terminal:3` or `web:4`, and a window a page opens arrives with one
+([below](#web-navigation-and-bridge)). `portal--place`, `portal--hide`,
+`portal--close` and `portal--inspect` take that target.
 
 The C core owns view identity in `native/Core/views.c`. Target IDs are global
 across kinds and never reused, even after failed opens: stale targets cannot
@@ -133,6 +134,19 @@ URLs in platform/WebKit spelling: percent-encoded spaces and punycode Unicode
 hosts. Byte-for-byte comparisons leave equivalence to one parser. Platform
 callbacks report posted messages, navigation requests, page commits and
 failures. They identify views by target, so post-close completions reach nothing.
+
+A page may open a window, as `window.open` and links to `target=_blank` do.
+WebKit asks for the new view at once and requires it to be made from the
+configuration it passes, which carries the opener's data store and opener
+relationship, so the platform reports the request with `portal_web_window`
+from inside WebKit's callback. The core decides (hosted apps open none),
+gives the view a target, and has the platform make it with
+`portal_web_create_window`, before sending `opened NEW OPENER`. This is the
+one view Lisp does not open: `portal-web.el` gives the target a buffer with
+`portal-view-adopt`, after which it is like any other view. Each page a
+window commits sends `web TARGET`, one record until Lisp inspects the view,
+and Lisp renames the buffer after it. A window's page closing itself sends
+`closed TARGET`, and Lisp kills its buffer, closing the view.
 
 The shared JavaScript for local links lives in `native/Core/scripts`, compiled
 into the core with `#embed`; platforms need neither script files nor the app

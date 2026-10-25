@@ -186,8 +186,17 @@ hidden while no pane shows it, and ends when the buffer is killed or
 changes major mode."
   (when portal-view--target (error "This buffer already has a Portal view"))
   (portal-view--load)
-  (let ((target (portal--open (symbol-name kind) options))
-        ready)
+  (portal-view-adopt (portal--open (symbol-name kind) options)))
+
+(defun portal-view-adopt (target)
+  "Make the current buffer present the open Portal view TARGET, and return it.
+TARGET is a view no buffer has yet, such as a window a web page opened.
+From then on the view behaves as if `portal-view-open' had opened it.  If
+the buffer cannot take it, as when it has a view already, it is closed."
+  (when portal-view--target
+    (portal--close target)
+    (error "This buffer already has a Portal view"))
+  (let (ready)
     (unwind-protect
         (progn
           (setq portal-view--target target)

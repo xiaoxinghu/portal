@@ -479,6 +479,36 @@ bool portal_web_post(portal_view *web, portal_string json, uint64_t token, porta
     return true;
 }
 
+static portal_string target_of(const struct portal_view *view);
+
+/* A window is a web view created as portal_view_create creates one, which
+   describes the "opener" whose page asked for it, the "request", a
+   NUL-terminated string such as the URL the page asked for, and the
+   opener's "appearance".  A request of "fail" fails. */
+bool portal_web_create_window(portal_view *opener, portal_string target, void *request,
+                              portal_view **view, portal_text *error)
+{
+    if (!usable(opener, PORTAL_WEB, error) || refused(error))
+        return false;
+    const char *asked = request;
+    if (!strcmp(asked, "fail"))
+        return fail(error, "The fake could not open the window");
+    portal_option options[3] = {
+        {.name = {"opener", 6}, .is_string = true, .string = target_of(opener)},
+        {.name = {"request", 7}, .is_string = true, .string = {asked, strlen(asked)}},
+    };
+    size_t count = 2;
+    const struct property *appearance = get(opener, "appearance");
+    if (appearance)
+        options[count++] = (portal_option) {
+            .name = {"appearance", 10},
+            .is_string = appearance->kind == STRING,
+            .string = {appearance->string.data, appearance->string.length},
+            .flag = appearance->kind == FLAG && appearance->flag,
+        };
+    return portal_view_create(PORTAL_WEB, target, options, count, view, error);
+}
+
 void portal_fake_exit(portal_view *terminal)
 {
     set_flag(terminal, "exited", true);

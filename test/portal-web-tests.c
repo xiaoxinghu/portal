@@ -592,6 +592,95 @@ static void test_an_appearance_reaches_every_web_view(void)
     close_view(terminal);
 }
 
+/* The record a window's opening sent: its target, to free, after checking
+   that it names OPENER. */
+static char *opened(const char *opener)
+{
+    char window[32], named[32], expected[80];
+    const char *got = drain();
+    if (sscanf(got, "opened %31s %31s", window, named) != 2 || strcmp(named, opener)) {
+        fprintf(stderr, "Expected a window of %s, got \"%s\"\n", opener, got);
+        return NULL;
+    }
+    snprintf(expected, sizeof expected, "opened %s %s\n", window, opener);
+    return strcmp(got, expected) ? NULL : strdup(window);
+}
+
+/* A page opens a window as a new web view in its own appearance, which
+   Emacs hears of and which may close itself; no other view can. */
+static void test_pages_open_windows(void)
+{
+    portal_text error = {0};
+    char *page = open_view("web", &error, "appearance", "dark", NULL);
+    CHECK(load(page, "https://example.com/", &error));
+    char asked[] = "https://example.com/popup";
+    struct portal_fake_calls before = portal_fake_calls();
+    CHECK(portal_web_window(text(page), asked));
+    CHECK(portal_fake_calls().created == before.created + 1);
+    char *window = opened(page);
+    CHECK(window);
+    char opener[64];
+    snprintf(opener, sizeof opener, "\"opener\":\"%s\"", page);
+    CHECK(shows(window, "\"kind\":\"web\"", "\"visible\":false", opener,
+                "\"request\":\"https://example.com/popup\"", "\"appearance\":\"dark\"", NULL));
+    /* It is an ordinary web view, which Lisp drives as any other. */
+    CHECK(portal_web_navigating(text(window), text("file:///etc/passwd"), true)
+          == PORTAL_NAVIGATION_ALLOW);
+    CHECK(load(window, "https://example.com/next", &error));
+    CHECK(shows(window, "\"url\":\"https://example.com/next\"", NULL));
+    /* Its pages are announced, one record until Emacs inspects it; the
+       opener's are not. */
+    portal_web_committed(text(window), text("https://example.com/next"));
+    portal_web_committed(text(window), text("https://example.com/last"));
+    CHECK(sent(window, "web %s\n"));
+    CHECK(shows(window, "\"kind\":\"web\"", NULL));
+    portal_web_committed(text(window), text("https://example.com/next"));
+    CHECK(sent(window, "web %s\n"));
+    free(inspect(window));
+    portal_web_committed(text(page), text("https://example.com/"));
+    CHECK(sent(page, ""));
+    /* Windows open windows too. */
+    char blank[] = "about:blank";
+    CHECK(portal_web_window(text(window), blank));
+    char *nested = opened(window);
+    CHECK(nested);
+    /* Only a window closes itself. */
+    portal_web_closed(text(page));
+    CHECK(sent(page, ""));
+    portal_web_closed(text(window));
+    CHECK(sent(window, "closed %s\n"));
+    close_view(window);
+    portal_web_closed(text(nested));
+    CHECK(sent(nested, "closed %s\n"));
+    close_view(nested);
+    close_view(page);
+}
+
+/* A window opens only for a page that may have one, and only when the
+   platform makes it: otherwise nothing opens and Emacs hears nothing. */
+static void test_windows_that_do_not_open(void)
+{
+    char *app_view = open_app();
+    char asked[] = "http://127.0.0.1:8080/0123/other";
+    struct portal_fake_calls before = portal_fake_calls();
+    CHECK(!portal_web_window(text(app_view), asked));
+    CHECK(!portal_web_window(text("web:0"), asked));
+    char *page = open_web(false);
+    before = portal_fake_calls();
+    char failing[] = "fail";
+    CHECK(!portal_web_window(text(page), failing));
+    portal_fake_refuse(true);
+    CHECK(!portal_web_window(text(page), asked));
+    portal_fake_refuse(false);
+    CHECK(same_calls(before, portal_fake_calls()));
+    CHECK(sent(page, ""));
+    /* Closing a window that is gone, or that never opened, says nothing. */
+    portal_web_closed(text("web:0"));
+    CHECK(sent(page, ""));
+    close_view(page);
+    close_view(app_view);
+}
+
 static void test_the_shared_links_script(void)
 {
     portal_string source = portal_web_links_script();
@@ -624,6 +713,8 @@ int main(void)
     test_the_shared_links_script();
     test_appearance_at_open();
     test_an_appearance_reaches_every_web_view();
+    test_pages_open_windows();
+    test_windows_that_do_not_open();
     CHECK(!portal_fake_calls().misused);
     portal_channel_connect(-1);
     close(records);

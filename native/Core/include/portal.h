@@ -206,6 +206,15 @@ typedef enum portal_appearance {
    without loading it again. */
 bool portal_web_set_appearance(portal_view *web, portal_appearance appearance,
                                portal_text *error);
+/* Create a web view, detached, for the window the page in OPENER asked for
+   with portal_web_window, below, passing REQUEST through.  The platform
+   makes it from REQUEST, as its toolkit may require: on macOS, WebKit's
+   configuration for the window, which keeps OPENER's data store and gives
+   the new page its opener.  The new view starts in OPENER's appearance,
+   and loads what the page asked for by itself.  TARGET names it, as for
+   portal_view_create, and it is the core's to destroy in the same way. */
+bool portal_web_create_window(portal_view *opener, portal_string target, void *request,
+                              portal_view **view, portal_text *error);
 
 /* Terminal views.  The core implements the terminal Lisp functions with
    these primitives, each on one terminal, and keeps Portal's rules: it checks
@@ -502,7 +511,21 @@ typedef enum portal_navigation {
    reports (portal_web_links_script); for those, allow means load URL. */
 portal_navigation portal_web_navigating(portal_string target, portal_string url,
                                         bool main_frame);
-/* The page in TARGET committed URL: a new document, or one from its history. */
+/* The page in TARGET asks for a new window, as window.open and links to
+   target=_blank do, once portal_web_navigating has allowed its URL.  The
+   core opens a web view for it with portal_web_create_window, passing
+   REQUEST through, and returns whether it did; the platform then gives the
+   page that view.  A hosted app opens no windows.  Emacs hears of the view
+   with an "opened NEW TARGET" record, NEW being the view's target, and
+   gives it a buffer. */
+bool portal_web_window(portal_string target, void *request);
+/* The page in TARGET closed its window, as window.close does.  When TARGET
+   is a window a page opened, the core tells Emacs with a "closed TARGET"
+   record, and Emacs closes the view; it ignores any other view. */
+void portal_web_closed(portal_string target);
+/* The page in TARGET committed URL: a new document, or one from its history.
+   For a window a page opened, the core tells Emacs with a "web TARGET"
+   record, and sends no other for that view until Emacs has inspected it. */
 void portal_web_committed(portal_string target, portal_string url);
 /* Something failed that the page cannot report: a load of TARGET's page, its
    web process, or, when TOKEN is not 0, the delivery of the message that

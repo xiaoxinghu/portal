@@ -53,5 +53,11 @@ void portal_web_state_free(struct portal_web_state *state);
    lifecycle call. */
 portal_view *portal_views_find_web(portal_string target, struct portal_web_state **state,
                                    portal_text *error);
+/* For web.c, from views.c: open a web view for the window the page in
+   OPENER asked for with REQUEST, created with portal_web_create_window.
+   Set *TARGET to its target, valid while it is open, and *STATE to its
+   state.  False when the platform or memory fails, having opened nothing. */
+bool portal_views_open_window(portal_view *opener, void *request, portal_string *target,
+                              struct portal_web_state **state);
 
 #endif

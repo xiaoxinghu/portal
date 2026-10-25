@@ -23,6 +23,14 @@
    view commits, and "follow" for each local link handed to Emacs.  It also
    adds "error" for failures the app cannot report, a type apps use too.
 
+   Windows.  A page that is not a hosted app's may open windows, as
+   window.open and links to target=_blank do: each is a new web view, which
+   Emacs hears of with an "opened NEW OPENER" record and gives a buffer.  A
+   window may close itself, as window.close does, which Emacs hears of with
+   a "closed TARGET" record; no other view can.  Each page a window commits
+   sends a "web TARGET" record, and no other until Emacs has inspected the
+   view, so Emacs can name the window's buffer after the page it shows.
+
    Appearance.  A web view's pages see the system's appearance, following
    its changes, unless Lisp forces light or dark, at open or later for every
    web view at once.  The core checks the name; the platform shows it.
@@ -56,6 +64,7 @@ struct portal_web_state {
     uint64_t generation;         /* 1 + pages committed: the token of posts now. */
     struct message *first, *last; /* Waiting messages, oldest first. */
     bool announced;              /* Whether a bridge record went out for them. */
+    bool window;                 /* Whether a page opened it, as a new window. */
 };
 
 /* The shared scripts, embedded with C23's #embed, which Clang and GCC 15
@@ -506,6 +515,30 @@ portal_navigation portal_web_navigating(portal_string target, portal_string url,
     return PORTAL_NAVIGATION_EMACS;
 }
 
+bool portal_web_window(portal_string target, void *request)
+{
+    struct portal_web_state *web, *window;
+    portal_string opened;
+    portal_view *native = find(target, &web);
+    if (!native || web->hosted || !portal_views_open_window(native, request, &opened, &window))
+        return false;
+    window->window = true;
+    if (portal_channel_send(literal("opened"), opened, &target, 1))
+        return true;
+    /* Emacs would never hear of it, so it never gets a buffer. */
+    portal_text error = {0};
+    portal_views_close(opened, &error);
+    free(error.data);
+    return false;
+}
+
+void portal_web_closed(portal_string target)
+{
+    struct portal_web_state *web;
+    if (find(target, &web) && web->window)
+        portal_channel_send(literal("closed"), target, NULL, 0);
+}
+
 void portal_web_committed(portal_string target, portal_string url)
 {
     struct portal_web_state *web;
@@ -515,6 +548,8 @@ void portal_web_committed(portal_string target, portal_string url)
     if (!copy(url, &web->page)) /* Unknown: the next load loads. */
         web->page = (portal_text) {0};
     web->generation++;
+    if (web->window)
+        portal_views_announce(target, PORTAL_WEB, "web");
     if (web->hosted)
         queue_own(web, target, "page", "url", url);
 }

@@ -92,8 +92,13 @@ final class NativeView {
     private var rectangle: CGRect
 
     /// Make a view of TYPE, in the parking window with its session running.
-    init(_ type: any PortalView.Type, target: String, options: ViewOptions) throws {
-        kind = try type.init(target: target, options: options)
+    convenience init(_ type: any PortalView.Type, target: String, options: ViewOptions) throws {
+        try self.init(type.init(target: target, options: options))
+    }
+
+    /// Hold KIND, a view made by other means, such as a page's new window.
+    init(_ kind: any PortalView) throws {
+        self.kind = kind
         rectangle = host.view?.bounds ?? .zero
         move(to: host)
         do { try kind.opened() } catch {

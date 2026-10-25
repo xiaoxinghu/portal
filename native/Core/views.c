@@ -73,6 +73,53 @@ portal_view *portal_views_find_web(portal_string target, struct portal_web_state
     return view->native;
 }
 
+/* Register a new view of KIND, which the platform creates from OPTIONS, or,
+   when OPENER is not NULL, as the window OPENER's page asked for with
+   REQUEST.  Return it, with a copy of its target in *COPY unless COPY is
+   NULL; on failure return NULL with *ERROR set, having registered nothing. */
+static struct view *add(portal_kind kind, const portal_option *options, size_t count,
+                        portal_view *opener, void *request, char **copy, portal_text *error)
+{
+    /* An open that gets this far spends its ID even if it fails, so no two
+       opens share one. */
+    uint64_t id = ++views.ids;
+    char name[32];
+    size_t length = (size_t) snprintf(name, sizeof name, "%s:%" PRIu64, kinds[kind], id);
+    /* Allocate all the core needs first: once the platform has a view,
+       nothing but the platform can fail. */
+    struct view *view = malloc(sizeof *view + length + 1);
+    char *target = copy ? malloc(length + 1) : NULL;
+    struct portal_web_state *web = kind == PORTAL_WEB ? portal_web_state_new(options, count) : NULL;
+    if (!view || (copy && !target) || (kind == PORTAL_WEB && !web)) {
+        free(view);
+        free(target);
+        portal_web_state_free(web);
+        fail_with(error, "Portal is out of memory");
+        return NULL;
+    }
+    *view = (struct view) {.kind = kind, .web = web, .id = id, .length = length};
+    memcpy(view->target, name, length + 1);
+    portal_string own = {view->target, length};
+    if (!(opener ? portal_web_create_window(opener, own, request, &view->native, error)
+                 : portal_view_create(kind, own, options, count, &view->native, error))) {
+        free(view);
+        free(target);
+        portal_web_state_free(web);
+        return NULL;
+    }
+    portal_input_open(&view->input, view->native, own, kind, options, count);
+    if (views.last)
+        views.last->next = view;
+    else
+        views.first = view;
+    views.last = view;
+    if (copy) {
+        memcpy(target, name, length + 1);
+        *copy = target;
+    }
+    return view;
+}
+
 bool portal_views_open(portal_string kind_name, const portal_option *options, size_t count,
                        portal_text *target, portal_text *error)
 {
@@ -87,40 +134,24 @@ bool portal_views_open(portal_string kind_name, const portal_option *options, si
         return false;
     if (kind == PORTAL_WEB && !portal_web_views_check(options, count, error))
         return false;
-    /* An open that gets this far spends its ID even if it fails, so no two
-       opens share one. */
-    uint64_t id = ++views.ids;
-    char name[32];
-    size_t length = (size_t) snprintf(name, sizeof name, "%s:%" PRIu64, kinds[kind], id);
-    /* Allocate all the core needs first: once the platform has a view,
-       nothing but the platform can fail. */
-    struct view *view = malloc(sizeof *view + length + 1);
-    char *copy = malloc(length + 1);
-    struct portal_web_state *web = kind == PORTAL_WEB ? portal_web_state_new(options, count) : NULL;
-    if (!view || !copy || (kind == PORTAL_WEB && !web)) {
-        free(view);
-        free(copy);
-        portal_web_state_free(web);
-        return fail_with(error, "Portal is out of memory");
-    }
-    *view = (struct view) {.kind = kind, .web = web, .id = id, .length = length};
-    memcpy(view->target, name, length + 1);
-    memcpy(copy, name, length + 1);
-    if (!portal_view_create(kind, (portal_string) {view->target, length}, options, count,
-                            &view->native, error)) {
-        free(view);
-        free(copy);
-        portal_web_state_free(web);
+    char *copy;
+    struct view *view = add(kind, options, count, NULL, NULL, &copy, error);
+    if (!view)
         return false;
-    }
-    portal_input_open(&view->input, view->native, (portal_string) {view->target, length},
-                      kind, options, count);
-    if (views.last)
-        views.last->next = view;
-    else
-        views.first = view;
-    views.last = view;
-    *target = (portal_text) {copy, length};
+    *target = (portal_text) {copy, view->length};
+    return true;
+}
+
+bool portal_views_open_window(portal_view *opener, void *request, portal_string *target,
+                              struct portal_web_state **web)
+{
+    portal_text error = {0};
+    struct view *view = add(PORTAL_WEB, NULL, 0, opener, request, NULL, &error);
+    free(error.data); /* No one asked, so no one hears why. */
+    if (!view)
+        return false;
+    *target = (portal_string) {view->target, view->length};
+    *web = view->web;
     return true;
 }
 

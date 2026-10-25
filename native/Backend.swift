@@ -281,6 +281,25 @@ public func portalWebSetAppearance(_ web: OpaquePointer, _ appearance: portal_ap
     return perform(error) { try session(web, as: WebSession.self).show(appearance) } != nil
 }
 
+/// REQUEST is the `WindowRequest` that `Core.window` passed the core.
+@_cdecl("portal_web_create_window")
+public func portalWebCreateWindow(_ opener: OpaquePointer, _ target: portal_string,
+                                  _ request: UnsafeMutableRawPointer?,
+                                  _ view: UnsafeMutablePointer<OpaquePointer?>,
+                                  _ error: UnsafeMutablePointer<portal_text>) -> Bool {
+    let opener = native(opener), target = String(copying: target)
+    guard let request else {
+        error.pointee = owned("The core passed no window request")
+        return false
+    }
+    let window = Unmanaged<WindowRequest>.fromOpaque(request).takeUnretainedValue()
+    guard let created = perform(error, {
+        try NativeView(WebSession(target: target, opener: session(opener, as: WebSession.self), request: window))
+    }) else { return false }
+    view.pointee = OpaquePointer(Unmanaged.passRetained(created).toOpaque())
+    return true
+}
+
 @_cdecl("portal_terminal_list_themes")
 public func portalTerminalListThemes(_ names: UnsafeMutablePointer<UnsafeMutablePointer<portal_text>?>,
                                      _ count: UnsafeMutablePointer<Int>,
