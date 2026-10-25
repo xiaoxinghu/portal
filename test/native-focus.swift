@@ -334,9 +334,10 @@ struct CheckFocus {
         web.evaluateJavaScript("typeof portalBridge") { value, _ in bridgeType = value as? String ?? "" }
         wait { !bridgeType.isEmpty }
         check(bridgeType == "undefined", "A page that is not a hosted app has portalBridge")
-        for use in [{ try Views.send(plain, "{}") }, { _ = try Views.receive(plain) }] {
-            do { try use(); fail("A page that is not a hosted app has a bridge") } catch {}
-        }
+        do { try Views.send(plain, "{}"); fail("A page that is not a hosted app has a bridge") } catch {}
+        // Only the core's own messages, such as downloads, wait for Emacs.
+        let waiting = try Views.receive(plain)
+        check(waiting == "[]", "A page that is not a hosted app posted a message")
         try Views.close(plain)
         print("Only a hosted app's main frame uses the bridge, which announces its messages once until received")
     }

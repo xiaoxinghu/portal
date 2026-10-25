@@ -4,6 +4,7 @@
    platform does for what its pages do: post messages, navigate, commit and
    fail.  Records go to a real pipe, which the tests read as Emacs would. */
 #define _POSIX_C_SOURCE 200809L
+#define _DARWIN_C_SOURCE /* For mkdtemp. */
 
 #include <fcntl.h>
 #include <inttypes.h>
@@ -197,7 +198,7 @@ static void test_the_address_survives_a_failed_load(void)
     post(web, true, "http://127.0.0.1:9090/0123/app", "moved", "{\"type\":\"moved\"}");
     post(web, true, app, "stayed", "{\"type\":\"stayed\"}");
     CHECK(receives(web, "[{\"type\":\"stayed\"}]"));
-    CHECK(portal_web_navigating(text(web), text("http://127.0.0.1:9090/"), true)
+    CHECK(portal_web_navigating(text(web), text("http://127.0.0.1:9090/"), true, false)
           == PORTAL_NAVIGATION_EXTERNAL);
     close_view(web);
 }
@@ -297,7 +298,7 @@ static void test_the_core_reports_pages_and_failures(void)
     close_view(web);
 }
 
-static void test_ordinary_pages_have_no_bridge(void)
+static void test_ordinary_pages_have_no_bridge_to_their_page(void)
 {
     portal_text error = {0};
     char *web = open_web(false);
@@ -306,9 +307,9 @@ static void test_ordinary_pages_have_no_bridge(void)
     portal_web_committed(text(web), text("https://example.com/"));
     post(web, true, "https://example.com/", "hello", "{\"type\":\"hello\"}");
     portal_web_failed(text(web), 0, text("Failed"));
-    CHECK(portal_web_navigating(text(web), text("file:///etc/passwd"), true)
+    CHECK(portal_web_navigating(text(web), text("file:///etc/passwd"), true, false)
           == PORTAL_NAVIGATION_ALLOW);
-    CHECK(portal_web_navigating(text(web), text("https://elsewhere.example/"), true)
+    CHECK(portal_web_navigating(text(web), text("https://elsewhere.example/"), true, false)
           == PORTAL_NAVIGATION_ALLOW);
     CHECK(sent(web, ""));
     char message[128];
@@ -316,10 +317,9 @@ static void test_ordinary_pages_have_no_bridge(void)
     portal_text json = {0};
     CHECK(!portal_web_views_send(text(web), text("{}"), &error));
     CHECK(says(&error, message));
-    CHECK(!portal_web_views_receive(text(web), &json, &error));
-    CHECK(says(&error, message));
-    CHECK(!json.data);
     CHECK(portal_fake_calls().posted == before.posted);
+    /* Only the core's own messages wait for Emacs. */
+    CHECK(receives(web, "[]"));
     close_view(web);
     CHECK(!portal_web_views_send(text("web:0"), text("{}"), &error));
     CHECK(says(&error, "No Portal view web:0"));
@@ -353,7 +353,7 @@ static void test_navigation_decisions(void)
     };
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
         portal_navigation decision =
-            portal_web_navigating(text(web), text(cases[i].url), cases[i].main_frame);
+            portal_web_navigating(text(web), text(cases[i].url), cases[i].main_frame, false);
         if (decision != cases[i].decision)
             fprintf(stderr, "Navigating to %s: expected %d, got %d\n", cases[i].url,
                     cases[i].decision, decision);
@@ -362,7 +362,7 @@ static void test_navigation_decisions(void)
     CHECK(sent(web, ""));
     CHECK(receives(web, "[]"));
     /* A closed or unknown view's pages go nowhere special. */
-    CHECK(portal_web_navigating(text("web:0"), text("file:///etc/passwd"), true)
+    CHECK(portal_web_navigating(text("web:0"), text("file:///etc/passwd"), true, false)
           == PORTAL_NAVIGATION_ALLOW);
     close_view(web);
 }
@@ -383,7 +383,7 @@ static void test_local_links_go_to_emacs(void)
         strcat(url, "r%C3%A9sum%C3%A9%20");
     strcat(url, "notes.ts#L4");
     /* Emacs gets the keyboard with the link, and its mode line hears first. */
-    CHECK(portal_web_navigating(text(web), text(url), true) == PORTAL_NAVIGATION_EMACS);
+    CHECK(portal_web_navigating(text(web), text(url), true, false) == PORTAL_NAVIGATION_EMACS);
     CHECK(sent(web, "focus %s 0\nbridge %s\n"));
     CHECK(portal_input_owner(text(web)) == PORTAL_OWNER_EMACS);
     /* During a handoff, Emacs stops reading its key sequence first. */
@@ -398,7 +398,7 @@ static void test_local_links_go_to_emacs(void)
     CHECK(!strncmp(got, prefix, strlen(prefix)));
     CHECK(sscanf(got + strlen(prefix), "%" SCNd64, &serial) == 1 && serial > 0);
     CHECK(strlen(got) > strlen(tail) && !strcmp(got + strlen(got) - strlen(tail), tail));
-    CHECK(portal_web_navigating(text(web), text("file:///tmp/other.md"), true)
+    CHECK(portal_web_navigating(text(web), text("file:///tmp/other.md"), true, false)
           == PORTAL_NAVIGATION_EMACS);
     char escape[64];
     snprintf(escape, sizeof escape, "escape %%s %" PRId64 " 0\n", serial);
@@ -412,7 +412,7 @@ static void test_local_links_go_to_emacs(void)
     /* A local file loaded as the app itself stays. */
     char *local = open_web(true);
     CHECK(load(local, "file:///tmp/app/index.html", &error));
-    CHECK(portal_web_navigating(text(local), text("file:///tmp/app/other.html"), true)
+    CHECK(portal_web_navigating(text(local), text("file:///tmp/app/other.html"), true, false)
           == PORTAL_NAVIGATION_ALLOW);
     CHECK(sent(local, ""));
     close_view(local);
@@ -484,7 +484,7 @@ static void test_a_closed_view_hears_nothing(void)
     portal_web_committed(text(target), text(app));
     portal_web_failed(text(target), 0, text("Late"));
     portal_web_failed(text(target), 2, text("Late"));
-    CHECK(portal_web_navigating(text(target), text("file:///etc/passwd"), true)
+    CHECK(portal_web_navigating(text(target), text("file:///etc/passwd"), true, false)
           == PORTAL_NAVIGATION_ALLOW);
     CHECK(sent(target, ""));
     CHECK(portal_fake_calls().destroyed == before.destroyed + 1);
@@ -624,7 +624,7 @@ static void test_pages_open_windows(void)
     CHECK(shows(window, "\"kind\":\"web\"", "\"visible\":false", opener,
                 "\"request\":\"https://example.com/popup\"", "\"appearance\":\"dark\"", NULL));
     /* It is an ordinary web view, which Lisp drives as any other. */
-    CHECK(portal_web_navigating(text(window), text("file:///etc/passwd"), true)
+    CHECK(portal_web_navigating(text(window), text("file:///etc/passwd"), true, false)
           == PORTAL_NAVIGATION_ALLOW);
     CHECK(load(window, "https://example.com/next", &error));
     CHECK(shows(window, "\"url\":\"https://example.com/next\"", NULL));
@@ -681,6 +681,184 @@ static void test_windows_that_do_not_open(void)
     close_view(app_view);
 }
 
+/* Whether DOWNLOAD's file, from portal_web_download_started, is NAME in
+   DIRECTORY. */
+static bool saves(portal_string path, uint64_t download, const char *directory, const char *name)
+{
+    char expected[512];
+    snprintf(expected, sizeof expected, "%s/%s", directory, name);
+    bool same = download && path.length == strlen(expected) && !strcmp(path.data, expected);
+    if (!same)
+        fprintf(stderr, "Expected download %" PRIu64 " to save %s, got %s\n", download, expected,
+                path.data);
+    return same;
+}
+
+/* Whether the messages waiting for TARGET are the download messages that
+   LINES describe, in order: one "STATE|FILE" or "STATE|FILE|MESSAGE" per
+   line, each FILE a name in DIRECTORY or empty for none, all for the URL
+   https://example.com/f. */
+static bool downloads_said(const char *target, const char *directory, const char *lines)
+{
+    char expected[4096] = "[";
+    size_t used = 1;
+    for (const char *line = lines; *line;) {
+        const char *bar = strchr(line, '|'), *next = strchr(line, '\n');
+        if (!next)
+            next = line + strlen(line);
+        const char *second = memchr(bar + 1, '|', (size_t) (next - bar - 1));
+        const char *file_end = second ? second : next;
+        used += (size_t) snprintf(
+            expected + used, sizeof expected - used,
+            "%s{\"type\":\"download\",\"state\":\"%.*s\",\"url\":\"https://example.com/f\","
+            "\"file\":\"%s%s%.*s\"",
+            used == 1 ? "" : ",", (int) (bar - line), line, file_end > bar + 1 ? directory : "",
+            file_end > bar + 1 ? "/" : "", (int) (file_end - bar - 1), bar + 1);
+        if (second)
+            used += (size_t) snprintf(expected + used, sizeof expected - used,
+                                      ",\"message\":\"%.*s\"", (int) (next - second - 1),
+                                      second + 1);
+        used += (size_t) snprintf(expected + used, sizeof expected - used, "}");
+        line = *next ? next + 1 : next;
+    }
+    snprintf(expected + used, sizeof expected - used, "]");
+    return receives(target, expected);
+}
+
+/* Start a download in TARGET, and name its file NAME; return its path. */
+static portal_string start(const char *target, const char *name, uint64_t *download)
+{
+    *download = portal_web_download_started(text(target), text("https://example.com/f"));
+    return *download ? portal_web_download_destination(*download, text(name)) : text("");
+}
+
+static void test_downloads(void)
+{
+    portal_text error = {0};
+    uint64_t download = 1;
+    char *web = open_web(false);
+    /* Navigations and responses that download. */
+    CHECK(portal_web_navigating(text(web), text("https://example.com/f"), true, true)
+          == PORTAL_NAVIGATION_DOWNLOAD);
+    CHECK(portal_web_responding(text(web), true, false) == PORTAL_NAVIGATION_ALLOW);
+    CHECK(portal_web_responding(text(web), false, false) == PORTAL_NAVIGATION_DOWNLOAD);
+    CHECK(portal_web_responding(text(web), true, true) == PORTAL_NAVIGATION_DOWNLOAD);
+    CHECK(portal_web_responding(text("web:0"), false, true) == PORTAL_NAVIGATION_ALLOW);
+    /* Until Lisp names a directory, a download has nowhere to go, and its
+       end is no news. */
+    CHECK(start(web, "f.txt", &download).length == 0 && download);
+    portal_web_download_finished(download, NULL);
+    CHECK(sent(web, "bridge %s\n"));
+    CHECK(downloads_said(web, "", "failed||Portal has no download directory"));
+    const char *const relative[] = {"", "downloads", "~/Downloads"};
+    for (size_t i = 0; i < sizeof relative / sizeof *relative; i++) {
+        CHECK(!portal_web_views_download_directory(text(relative[i]), &error));
+        char expected[128];
+        snprintf(expected, sizeof expected,
+                 "The download directory must be an absolute path, not %s", relative[i]);
+        CHECK(says(&error, expected));
+    }
+    char directory[] = "/tmp/portal-downloads-XXXXXX";
+    CHECK(mkdtemp(directory));
+    char slashed[sizeof directory + 16];
+    snprintf(slashed, sizeof slashed, "%s/missing/", directory);
+    CHECK(portal_web_views_download_directory(text(slashed), &error));
+    CHECK(start(web, "f.txt", &download).length == 0 && download);
+    char missing[256];
+    snprintf(missing, sizeof missing, "failed||No download directory %s", slashed);
+    CHECK(downloads_said(web, "", missing));
+    drain();
+    snprintf(slashed, sizeof slashed, "%s/", directory);
+    CHECK(portal_web_views_download_directory(text(slashed), &error));
+    /* A file or a running download keeps its name taken. */
+    char existing[sizeof directory + 16];
+    snprintf(existing, sizeof existing, "%s/notes.txt", directory);
+    FILE *file = fopen(existing, "w");
+    CHECK(file && !fclose(file));
+    uint64_t report, again, notes, unnamed, hidden, odd;
+    portal_string path;
+    path = start(web, "report.pdf", &report);
+    CHECK(saves(path, report, directory, "report.pdf"));
+    path = start(web, "report.pdf", &again);
+    CHECK(saves(path, again, directory, "report (1).pdf"));
+    CHECK(again != report);
+    uint64_t shouted;
+    path = start(web, "REPORT.pdf", &shouted);
+    CHECK(saves(path, shouted, directory, "REPORT (2).pdf"));
+    path = start(web, "notes.txt", &notes);
+    CHECK(saves(path, notes, directory, "notes (1).txt"));
+    /* Names are made safe. */
+    path = start(web, "", &unnamed);
+    CHECK(saves(path, unnamed, directory, "download"));
+    path = start(web, "../.hidden", &hidden);
+    CHECK(saves(path, hidden, directory, "_.hidden"));
+    path = start(web, "a\nb/c.tar.gz", &odd);
+    CHECK(saves(path, odd, directory, "a_b_c.tar.gz"));
+    CHECK(sent(web, "bridge %s\n"));
+    CHECK(downloads_said(web, directory,
+                         "started|report.pdf\nstarted|report (1).pdf\nstarted|REPORT (2).pdf\n"
+                         "started|notes (1).txt\n"
+                         "started|download\nstarted|_.hidden\nstarted|a_b_c.tar.gz"));
+    /* Long names keep their extension and whole characters. */
+    char name[512] = "a", expected[512] = "a";
+    for (int i = 0; i < 150; i++)
+        strcat(name, "\xc3\xa9");
+    strcat(name, ".txt");
+    for (int i = 0; i < 97; i++)
+        strcat(expected, "\xc3\xa9");
+    strcat(expected, ".txt");
+    uint64_t long_name;
+    path = start(web, name, &long_name);
+    CHECK(saves(path, long_name, directory, expected));
+    CHECK(path.length - strlen(directory) - 1 <= 200);
+    free(receive(web));
+    drain();
+    /* An ending frees the name, and Emacs hears how it went. */
+    portal_string full = text("The disk is full.");
+    portal_web_download_finished(report, NULL);
+    portal_web_download_finished(again, &full);
+    portal_web_download_finished(report, NULL); /* Once only. */
+    portal_web_download_finished(0, NULL);
+    CHECK(sent(web, "bridge %s\n"));
+    CHECK(downloads_said(web, directory,
+                         "finished|report.pdf\nfailed|report (1).pdf|The disk is full."));
+    uint64_t later;
+    path = start(web, "report.pdf", &later);
+    CHECK(saves(path, later, directory, "report.pdf"));
+    CHECK(later > long_name);
+    CHECK(portal_web_download_destination(later, text("again.pdf")).length == 0);
+    free(receive(web));
+    drain();
+    /* A download can fail before it has a file. */
+    uint64_t early = portal_web_download_started(text(web), text("https://example.com/f"));
+    portal_string refused = text("Could not connect to the server.");
+    portal_web_download_finished(early, &refused);
+    CHECK(sent(web, "bridge %s\n"));
+    CHECK(downloads_said(web, "", "failed||Could not connect to the server."));
+    /* A closed view's downloads end without a word, and it starts none. */
+    char *target = strdup(web);
+    close_view(web);
+    portal_web_download_finished(later, NULL);
+    portal_web_download_finished(notes, &full);
+    CHECK(start(target, "late.txt", &download).length == 0 && !download);
+    CHECK(!portal_web_download_started(text(target), text("https://example.com/f")));
+    CHECK(sent(target, ""));
+    /* A hosted app's page cannot pass for the core. */
+    char *hosted = open_app();
+    post(hosted, true, app, "download", "{\"type\":\"download\",\"state\":\"finished\"}");
+    uint64_t own;
+    path = start(hosted, "drawing.png", &own);
+    CHECK(saves(path, own, directory, "drawing.png"));
+    CHECK(downloads_said(hosted, directory, "started|drawing.png"));
+    drain();
+    close_view(hosted);
+    const uint64_t rest[] = {shouted, unnamed, hidden, odd, long_name, own};
+    for (size_t i = 0; i < sizeof rest / sizeof *rest; i++)
+        portal_web_download_finished(rest[i], NULL);
+    CHECK(!unlink(existing) && !rmdir(directory));
+    free(target);
+}
+
 static void test_the_shared_links_script(void)
 {
     portal_string source = portal_web_links_script();
@@ -703,7 +881,7 @@ int main(void)
     test_messages_keep_their_order_under_one_record();
     test_only_the_apps_main_frame_may_post();
     test_the_core_reports_pages_and_failures();
-    test_ordinary_pages_have_no_bridge();
+    test_ordinary_pages_have_no_bridge_to_their_page();
     test_navigation_decisions();
     test_local_links_go_to_emacs();
     test_history_steps();
@@ -715,6 +893,7 @@ int main(void)
     test_an_appearance_reaches_every_web_view();
     test_pages_open_windows();
     test_windows_that_do_not_open();
+    test_downloads();
     CHECK(!portal_fake_calls().misused);
     portal_channel_connect(-1);
     close(records);

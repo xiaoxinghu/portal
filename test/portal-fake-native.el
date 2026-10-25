@@ -10,8 +10,8 @@
 
 (defvar portal-fake-native--views (make-hash-table :test #'equal)
   "Open views: target to a plist of :options, :frame, :edges, :visible
-and :focused.  A web view also has the :url it loaded last, and a hosted
-one the JSON :messages its app posted that Emacs has not received yet.")
+and :focused.  A web view also has the :url it loaded last, and the JSON
+:messages that Emacs has not received yet: its own, and a hosted app's.")
 (defvar portal-fake-native--next-id 0 "Last view ID.  IDs are never reused.")
 (defvar portal-fake-native-log nil "Lifecycle calls, newest first, as (NAME ARGS...).")
 (defvar portal-fake-native-channel nil
@@ -129,17 +129,28 @@ The selected frame is kept."
 
 (defun portal--web-receive (target)
   (portal-fake-native--call 'portal--web-receive target)
-  (let* ((view (portal-fake-native--hosted target))
+  (unless (string-prefix-p "web:" target) (error "No Portal view %s" target))
+  (let* ((view (portal-fake-native--view target))
          (messages (plist-get view :messages)))
     (puthash target (plist-put view :messages nil) portal-fake-native--views)
     (format "[%s]" (string-join messages ","))))
 
+(defun portal-fake-native-queue (target &rest messages)
+  "Queue MESSAGES, JSON object strings, as the core does for web view TARGET.
+Send the `bridge' record with `portal-fake-native-send'."
+  (let ((view (portal-fake-native--view target)))
+    (puthash target (plist-put view :messages (append (plist-get view :messages) messages))
+             portal-fake-native--views)))
+
 (defun portal-fake-native-post (target &rest messages)
   "Queue MESSAGES, JSON object strings, as hosted web view TARGET's app posts them.
 Send the `bridge' record with `portal-fake-native-send'."
-  (let ((view (portal-fake-native--hosted target)))
-    (puthash target (plist-put view :messages (append (plist-get view :messages) messages))
-             portal-fake-native--views)))
+  (portal-fake-native--hosted target)
+  (apply #'portal-fake-native-queue target messages))
+
+(defun portal--web-download-directory (directory)
+  (portal-fake-native--call 'portal--web-download-directory directory)
+  t)
 
 (defun portal--inspect (target)
   (copy-sequence (gethash target portal-fake-native--views)))

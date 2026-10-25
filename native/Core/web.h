@@ -29,10 +29,13 @@ bool portal_web_views_check(const portal_option *options, size_t count, portal_t
    changes none.  If a view fails, the error is its own, the views before it
    keep the new appearance, and it and those after it keep their old one. */
 bool portal_web_views_appearance(const portal_string *appearance, portal_text *error);
+/* Save web views' downloads in DIRECTORY, an absolute path, from now on. */
+bool portal_web_views_download_directory(portal_string directory, portal_text *error);
 /* Pass the JSON object JSON to hosted web view TARGET's app over its bridge. */
 bool portal_web_views_send(portal_string target, portal_string json, portal_text *error);
-/* Return, as a JSON array, the messages waiting on hosted web view TARGET's
-   bridge, oldest first; the next message sends a new bridge record. */
+/* Return, as a JSON array, the messages waiting for Emacs on web view
+   TARGET, oldest first; the next message sends a new bridge record.  Only a
+   hosted app's page posts messages; every web view gets the core's own. */
 bool portal_web_views_receive(portal_string target, portal_text *json, portal_text *error);
 
 /* For the view registry, views.c: what the core keeps for one web view, its

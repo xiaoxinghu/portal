@@ -4,10 +4,11 @@ import PortalCore
 import WebKit
 
 /// One WebKit page. It loads what the core decides and reports what the page
-/// does: its navigations, commits, loads, history and failures, and a hosted
-/// app's messages.
+/// does: its navigations, commits, loads, history and failures, its
+/// downloads, and a hosted app's messages.
 @MainActor
-private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, NativeSurface {
+private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate,
+    NativeSurface {
     var nativeView: NSView { self }
     weak var input: NativeInput?
 
@@ -176,19 +177,109 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, Nati
     /// Ask the core whether the page may go to URL, and act on its answer:
     /// true to go on. It hands local files to Emacs itself.
     func mayNavigate(to url: URL, mainFrame: Bool) -> Bool {
-        switch Core.navigating(target, url: url.absoluteString, mainFrame: mainFrame) {
-        case .allow: return true
+        policy(for: url, mainFrame: mainFrame, download: false) == .allow
+    }
+
+    /// Ask the core what the page does with URL, which it asks to DOWNLOAD
+    /// or to load, and act on its answer.
+    private func policy(for url: URL, mainFrame: Bool, download: Bool) -> WKNavigationActionPolicy {
+        switch Core.navigating(target, url: url.absoluteString, mainFrame: mainFrame, download: download) {
+        case .allow: return .allow
+        case .download: return .download
         case .external: WebSession.openInBrowser(url)
         case .emacs: break
         }
-        return false
+        return .cancel
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
         guard let url = action.request.url else { return decisionHandler(.allow) }
         // A request for a new window counts as the main frame.
-        decisionHandler(mayNavigate(to: url, mainFrame: action.targetFrame?.isMainFrame ?? true) ? .allow : .cancel)
+        decisionHandler(policy(for: url, mainFrame: action.targetFrame?.isMainFrame ?? true,
+                               download: action.shouldPerformDownload))
+    }
+
+    /// A response WebKit cannot show, or one its server marks as an
+    /// attachment, downloads if the core says so.
+    func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,
+                 decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void) {
+        let disposition = (response.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition")
+        let attachment = disposition?.split(separator: ";", maxSplits: 1).first?
+            .trimmingCharacters(in: .whitespaces).lowercased() == "attachment"
+        let decision = Core.responding(target, show: response.canShowMIMEType, attachment: attachment)
+        decisionHandler(decision == .download ? .download : .allow)
+    }
+
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        begin(download, url: navigationAction.request.url)
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse,
+                 didBecome download: WKDownload) {
+        begin(download, url: navigationResponse.response.url)
+    }
+
+    /// The running downloads, with the core's number for each and its file
+    /// once the core has chosen it.
+    private var downloads: [ObjectIdentifier: (download: WKDownload, number: UInt64, file: URL?)] = [:]
+
+    /// Tell the core about DOWNLOAD, of URL, from its start, so that even a
+    /// failure before its response reaches Emacs.
+    private func begin(_ download: WKDownload, url: URL?) {
+        guard let number = Core.downloadStarted(target, url: url?.absoluteString ?? "") else {
+            return download.cancel()
+        }
+        download.delegate = self
+        downloads[ObjectIdentifier(download)] = (download, number, nil)
+    }
+
+    /// The file the core chose, or nil, which cancels the download.
+    func download(_ download: WKDownload, decideDestinationUsing response: URLResponse,
+                  suggestedFilename: String) async -> URL? {
+        let key = ObjectIdentifier(download)
+        guard let running = downloads[key] else { return nil }
+        guard let file = Core.downloadDestination(running.number, name: suggestedFilename) else {
+            downloads[key] = nil
+            return nil
+        }
+        downloads[key]?.file = file
+        return file
+    }
+
+    func downloadDidFinish(_ download: WKDownload) { end(download, error: nil) }
+
+    func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+        end(download, error: error.localizedDescription)
+    }
+
+    private func end(_ download: WKDownload, error: String?) {
+        guard let running = downloads.removeValue(forKey: ObjectIdentifier(download)) else { return }
+        Self.ended(download, number: running.number, file: running.file, error: error)
+    }
+
+    /// Tell the core DOWNLOAD ended, once WebKit has stopped writing. A
+    /// failed download leaves no partial file: its file was new, so it is
+    /// WebKit's once WebKit has written to it.
+    private static func ended(_ download: WKDownload, number: UInt64, file: URL?, error: String?) {
+        if error != nil, let file, download.progress.completedUnitCount > 0 {
+            try? FileManager.default.removeItem(at: file)
+        }
+        Core.downloadFinished(number, error: error)
+    }
+
+    /// Cancel every download. Each ends once WebKit has stopped it, even
+    /// after the page is gone.
+    func cancelDownloads() {
+        let running = downloads.values
+        downloads = [:]
+        for (download, number, file) in running {
+            download.cancel { _ in
+                MainActor.assumeIsolated {
+                    Self.ended(download, number: number, file: file, error: "The download was cancelled.")
+                }
+            }
+        }
     }
 
     /// The page asks for a new window, once `decidePolicyFor` has allowed
@@ -312,7 +403,10 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, Nati
     }
 
     private func record(_ error: Error) {
-        if (error as NSError).code != NSURLErrorCancelled {
+        let error = error as NSError
+        // A navigation that became a download ends with WebKit's "frame load
+        // interrupted", WebKitErrorFrameLoadInterruptedByPolicyChange.
+        if error.code != NSURLErrorCancelled && !(error.domain == "WebKitErrorDomain" && error.code == 102) {
             loadError = error.localizedDescription
             Core.failed(target, token: 0, message: error.localizedDescription)
         }
@@ -561,6 +655,7 @@ final class WebSession: PortalView {
         page.dismissDialogs()
         page.configuration.userContentController.removeAllScriptMessageHandlers()
         page.stopLoading()
+        page.cancelDownloads()
     }
 
     func load(_ address: String) throws {

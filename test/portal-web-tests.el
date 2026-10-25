@@ -352,6 +352,43 @@
         (should (equal (portal-fake-native-calls 'portal--web-send)
                        `((,target "{\"type\":\"reply\",\"n\":2}"))))))))
 
+(ert-deftest portal-web-downloads-go-to-the-chosen-directory-and-emacs-says-how-they-went ()
+  (portal-web-test--environment
+    (let ((original portal-web-download-directory)
+          said)
+      (unwind-protect
+          (cl-letf (((symbol-function 'message)
+                     (lambda (format &rest arguments)
+                       (push (apply #'format-message format arguments) said))))
+            (setopt portal-web-download-directory "/tmp/portal downloads/")
+            (portal-open-url "https://example.com/")
+            (let ((target (portal-view-target))
+                  (home (abbreviate-file-name (expand-file-name "~/report.pdf"))))
+              ;; Opening a view tells the core where downloads go, as does a change.
+              (setopt portal-web-download-directory "~/")
+              (should (equal (last (portal-fake-native-calls 'portal--web-download-directory) 2)
+                             `(("/tmp/portal downloads/") (,(expand-file-name "~/")))))
+              (should-error (setq portal-web-download-directory nil))
+              (setq said nil)
+              (portal-fake-native-queue
+               target
+               (format "{\"type\":\"download\",\"state\":\"started\",\"url\":\"https://example.com/r\",\"file\":%S}"
+                       (expand-file-name "~/report.pdf"))
+               (format "{\"type\":\"download\",\"state\":\"finished\",\"url\":\"https://example.com/r\",\"file\":%S}"
+                       (expand-file-name "~/report.pdf"))
+               (format "{\"type\":\"download\",\"state\":\"failed\",\"url\":\"https://example.com/z\",\"file\":%S,\"message\":\"The disk is full.\"}"
+                       (expand-file-name "~/report.pdf"))
+               "{\"type\":\"download\",\"state\":\"failed\",\"url\":\"https://example.com/z\",\"file\":\"\",\"message\":\"Portal has no download directory\"}")
+              (with-current-buffer "*scratch*"
+                (portal-fake-native-send (format "bridge %s\n" target)))
+              (should (equal (reverse said)
+                             (list (format "Downloading %s..." home)
+                                   (format "Downloaded %s" home)
+                                   (format "Could not download %s: The disk is full." home)
+                                   (concat "Could not download https://example.com/z: "
+                                           "Portal has no download directory"))))))
+        (setopt portal-web-download-directory original)))))
+
 (defun portal-web-test--wait (predicate)
   "Allow asynchronous process work until PREDICATE succeeds."
   (let ((deadline (+ (float-time) 5)))

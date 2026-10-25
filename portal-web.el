@@ -9,6 +9,8 @@
 ;; A Markdown preview follows links to other Markdown files itself, and hands
 ;; links to other local files to Emacs, which visits them in another pane.
 ;; Its view reports the pages it shows, and those links, over the bridge.
+;; Every web view saves downloads in `portal-web-download-directory' and
+;; reports how they go over the same queue, which Emacs reports in turn.
 
 (require 'browse-url)
 (require 'json)
@@ -26,6 +28,7 @@
 (declare-function portal--web-appearance "portal-web" (appearance))
 (declare-function portal--inspect "portal-view" (target))
 (declare-function portal--close "portal-view" (target))
+(declare-function portal--web-download-directory "portal-web" (directory))
 
 (defun portal-web--appearance-changed (_symbol value operation _where)
   "Check appearance VALUE and show every web view in it, on OPERATION `set'."
@@ -66,6 +69,23 @@ It only allows attaching: nothing opens until Safari's menu is used.
 It needs macOS 13.3 or later; earlier versions ignore it."
   :type 'boolean
   :group 'portal)
+
+(defun portal-web--download-directory-changed (_symbol value operation _where)
+  "Save downloads in directory VALUE from now on, on OPERATION `set'."
+  (when (eq operation 'set)
+    (unless (stringp value)
+      (error "The web download directory must be a directory name"))
+    (when (fboundp 'portal--web-download-directory)
+      (portal--web-download-directory (expand-file-name value)))))
+
+(defcustom portal-web-download-directory "~/Downloads/"
+  "Directory where web views save the files they download.
+A download keeps the name the site suggests, numbered as in \"report (1).pdf\"
+when a file there already has it.  Emacs says when each download starts,
+finishes or fails.  Changes apply to downloads that start afterwards."
+  :type 'directory
+  :group 'portal)
+(add-variable-watcher 'portal-web-download-directory #'portal-web--download-directory-changed)
 
 (defvar-local portal-web--target nil "This buffer's web view target, or nil.")
 (defvar-local portal-web--url nil
@@ -125,8 +145,10 @@ outside the app host opens in the default browser instead."
 (defun portal-web--open (url options)
   "Open a web view with OPTIONS for the current buffer, and load URL in it.
 The view starts in `portal-web-appearance', inspectable when
-`portal-web-inspectable' says so."
+`portal-web-inspectable' says so, and saves downloads in
+`portal-web-download-directory'."
   (portal-input--connect)
+  (portal--web-download-directory (expand-file-name portal-web-download-directory))
   (let ((target (portal-view-open
                  'web (append (and portal-web-appearance
                                    (list :appearance (symbol-name portal-web-appearance)))
@@ -486,15 +508,29 @@ if it is hidden, and give its view the keyboard.  The page stays as it was."
 The app receives it through `window.portalBridge.receive'."
   (portal--web-send portal-web--target (json-serialize plist)))
 
+(defun portal-web--download (message)
+  "Say how the download that bridge MESSAGE reports goes."
+  (let ((file (plist-get message :file)))
+    (pcase (plist-get message :state)
+      ("started" (message "Downloading %s..." (abbreviate-file-name file)))
+      ("finished" (message "Downloaded %s" (abbreviate-file-name file)))
+      ("failed" (message "Could not download %s: %s"
+                         (if (string-empty-p file)
+                             (plist-get message :url)
+                           (abbreviate-file-name file))
+                         (plist-get message :message))))))
+
 (defun portal-web--bridge (target)
   "Pass each message waiting on TARGET's bridge to `portal-web-bridge-function'.
 The view's own messages are handled here instead: \"page\" reports each
-page it commits, and \"follow\" each click on a link to a local file.
+page it commits, \"follow\" each click on a link to a local file, and
+\"download\" how each download goes, in any web view.
 Receiving the messages lets the next ones send a new record."
   (mapc (lambda (message)
           (pcase (plist-get message :type)
             ("page" (portal-web--page (plist-get message :url)))
             ("follow" (portal-web--queue 'portal-web-follow target (plist-get message :url)))
+            ("download" (portal-web--download message))
             (_ (when portal-web-bridge-function (funcall portal-web-bridge-function message)))))
         (json-parse-string (portal--web-receive target) :object-type 'plist)))
 

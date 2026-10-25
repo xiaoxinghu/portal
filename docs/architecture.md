@@ -127,6 +127,16 @@ other sites in the default browser, or hand local files to Emacs. The core owns 
 single outstanding `bridge` record, accepting messages based on platform-observed
 sender facts, never page claims.
 
+The core also decides what downloads: a link the page asks to download, as
+with a `download` attribute, and a response the platform cannot show or that
+its server marks as an attachment. The platform runs each download and asks
+the core where to save it once the file's name is known; the core picks a new
+name in the directory Lisp set with `portal--web-download-directory`,
+numbering it while a file or another download has that name, and queues
+`download` messages for Emacs as each starts, finishes or fails. Every web
+view has this queue; only a hosted app's page may post to it. Closing a view
+cancels its downloads.
+
 Platform primitives parse URLs into platform spelling and, per view, load a URL,
 navigate history (back, forward or reload, as an enum), post messages and set
 the appearance; `portal--web-go` steps the history by name. The core stores

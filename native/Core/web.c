@@ -22,6 +22,16 @@
    own messages, whose types an app cannot post: "page" for each page the
    view commits, and "follow" for each local link handed to Emacs.  It also
    adds "error" for failures the app cannot report, a type apps use too.
+   Every web view, hosted or not, has the core's "download" messages.
+
+   Downloads.  A page asks to download a link, or gets a response the
+   platform cannot show or that the server marks as an attachment, and the
+   platform downloads it.  Each download goes to a new file in the directory
+   Lisp chose: the name the server or page suggests, made safe, with " (1)",
+   " (2)" and so on before its extension while a file or another download
+   has it.  A "download" message tells Emacs when it starts, and when it
+   finishes or fails.  Closing a view cancels its downloads; each keeps its
+   name taken until the platform reports its end.
 
    Windows.  A page that is not a hosted app's may open windows, as
    window.open and links to target=_blank do: each is a new web view, which
@@ -39,9 +49,13 @@
    posts to a page carries the generation it went to as its token, so a
    failed delivery that the platform reports after the page has gone is
    ignored.  A call for a closed view finds no target and is ignored too. */
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "channel.h"
 #include "core.h"
@@ -229,7 +243,7 @@ static bool loadable(portal_string url)
 /* Types only the core sends. */
 static bool reserved(portal_string type)
 {
-    return is(type, "page") || is(type, "follow");
+    return is(type, "page") || is(type, "follow") || is(type, "download");
 }
 
 /* Send TARGET's bridge record, unless one went out for messages Emacs has
@@ -319,6 +333,230 @@ static void hand_off(portal_string target, const char *type, portal_string url)
     struct portal_web_state *web;
     if (find(target, &web)) /* The platform cannot close it, but check. */
         queue_own(web, target, type, url.length ? "url" : NULL, url);
+}
+
+/* Downloads. */
+
+/* A download the platform runs, from its start until it reports the end,
+   with its file's path from when the core chose it. */
+struct download {
+    struct download *next;
+    uint64_t id;
+    portal_text target, url, path;
+};
+
+static struct {
+    portal_text directory; /* Where downloads go, or no data until Lisp says. */
+    struct download *first; /* Running downloads. */
+    uint64_t ids;           /* The last number given out. */
+} downloads;
+
+/* The longest name, in bytes, given to a download's file: below the 255 of
+   common file systems, with room for a number. */
+enum { NAME_LIMIT = 200, EXTENSION_LIMIT = 32 };
+
+/* Tell Emacs, over TARGET's messages, that the download of URL to FILE is
+   in STATE now, because of PROBLEM unless it is NULL. */
+static void report(portal_string target, const char *state, portal_string url, portal_string file,
+                   const portal_string *problem)
+{
+    struct portal_web_state *web;
+    if (!find(target, &web))
+        return;
+    static const char head[] = "{\"type\":\"download\",\"state\":";
+    struct json json = {0};
+    put(&json, head, sizeof head - 1);
+    put_string(&json, literal(state));
+    put(&json, ",\"url\":", 7);
+    put_string(&json, url);
+    put(&json, ",\"file\":", 8);
+    put_string(&json, file);
+    if (problem) {
+        put(&json, ",\"message\":", 11);
+        put_string(&json, *problem);
+    }
+    put(&json, "}", 1);
+    if (!json.failed)
+        queue(web, target, false, json.data, json.length);
+    free(json.data);
+}
+
+/* NAME as a file's name: without leading dots or spaces, which would hide
+   it, with "_" in place of slashes and control characters, and "download"
+   when nothing is left.  It is split into its STEM and its EXTENSION, from
+   its last dot, and the stem is cut to fit NAME_LIMIT. */
+static bool file_name(portal_string name, portal_text *stem, portal_string *extension)
+{
+    size_t start = 0;
+    while (start < name.length && (name.data[start] == '.' || name.data[start] == ' '))
+        start++;
+    if (start == name.length) {
+        name = literal("download");
+        start = 0;
+    }
+    if (!copy((portal_string) {name.data + start, name.length - start}, stem))
+        return false;
+    for (size_t i = 0; i < stem->length; i++) {
+        unsigned char c = (unsigned char) stem->data[i];
+        if (c == '/' || c < 0x20 || c == 0x7f)
+            stem->data[i] = '_';
+    }
+    const char *dot = NULL;
+    for (size_t i = 1; i < stem->length; i++)
+        if (stem->data[i] == '.')
+            dot = stem->data + i;
+    size_t length = dot ? (size_t) (stem->data + stem->length - dot) : 0;
+    if (length > EXTENSION_LIMIT) {
+        dot = NULL;
+        length = 0;
+    }
+    *extension = (portal_string) {dot ? dot : "", length};
+    size_t limit = NAME_LIMIT - length, end = stem->length - length;
+    if (end > limit) /* Cut whole UTF-8 characters, before any continuation byte. */
+        for (end = limit; end && ((unsigned char) stem->data[end] & 0xc0) == 0x80;)
+            end--;
+    stem->length = end;
+    return true;
+}
+
+/* Whether a file or a running download has PATH.  A running download's
+   file may not exist yet, so its name is compared ignoring case, as the
+   default file systems of macOS and Windows do. */
+static bool taken(const char *path)
+{
+    for (struct download *download = downloads.first; download; download = download->next)
+        if (download->path.data && same_ignoring_case(borrow(download->path), literal(path)))
+            return true;
+    struct stat status;
+    return !lstat(path, &status);
+}
+
+/* A new file's path, to free, for a download suggested to be called NAME:
+   NULL with *PROBLEM set when there is none. */
+static char *destination(portal_string name, portal_text *problem)
+{
+    portal_string directory = borrow(downloads.directory);
+    struct stat status;
+    if (!directory.data) {
+        fail_with(problem, "Portal has no download directory");
+        return NULL;
+    }
+    if (stat(directory.data, &status) || !S_ISDIR(status.st_mode)) {
+        fail(problem, "No download directory ", directory);
+        return NULL;
+    }
+    portal_text stem;
+    portal_string extension;
+    if (!file_name(name, &stem, &extension)) {
+        out_of_memory(problem);
+        return NULL;
+    }
+    bool slash = directory.data[directory.length - 1] == '/';
+    size_t size = directory.length + 1 + stem.length + sizeof " (999)" + extension.length;
+    char *path = malloc(size);
+    if (path)
+        fail(problem, "No free name for the file in ", directory);
+    else
+        out_of_memory(problem);
+    for (unsigned number = 0; path && number < 1000; number++) {
+        char suffix[sizeof " (999)"] = "";
+        if (number)
+            snprintf(suffix, sizeof suffix, " (%u)", number);
+        snprintf(path, size, "%.*s%s%.*s%s%.*s", (int) directory.length, directory.data,
+                 slash ? "" : "/", (int) stem.length, stem.data, suffix,
+                 (int) extension.length, extension.data);
+        if (!taken(path)) {
+            free(stem.data);
+            free(problem->data);
+            *problem = (portal_text) {0};
+            return path;
+        }
+    }
+    free(stem.data);
+    free(path);
+    return NULL;
+}
+
+static void free_download(struct download *download)
+{
+    free(download->target.data);
+    free(download->url.data);
+    free(download->path.data);
+    free(download);
+}
+
+bool portal_web_views_download_directory(portal_string directory, portal_text *error)
+{
+    if (!directory.length || directory.data[0] != '/'
+        || memchr(directory.data, 0, directory.length))
+        return fail(error, "The download directory must be an absolute path, not ", directory);
+    portal_text copied;
+    if (!copy(directory, &copied))
+        return out_of_memory(error);
+    free(downloads.directory.data);
+    downloads.directory = copied;
+    return true;
+}
+
+uint64_t portal_web_download_started(portal_string target, portal_string url)
+{
+    struct portal_web_state *web;
+    struct download *started = find(target, &web) ? calloc(1, sizeof *started) : NULL;
+    if (!started)
+        return 0;
+    if (!copy(target, &started->target) || !copy(url, &started->url)) {
+        free_download(started);
+        return 0;
+    }
+    started->id = ++downloads.ids;
+    started->next = downloads.first;
+    downloads.first = started;
+    return started->id;
+}
+
+/* DOWNLOAD's entry, and the link to it in the list; NULL when there is none. */
+static struct download **running(uint64_t download)
+{
+    struct download **link = &downloads.first;
+    while (*link && (*link)->id != download)
+        link = &(*link)->next;
+    return *link ? link : NULL;
+}
+
+/* Remove DOWNLOAD from the running downloads, telling Emacs it is now in
+   STATE, because of PROBLEM unless it is NULL. */
+static void end(struct download **link, const char *state, const portal_string *problem)
+{
+    struct download *ended = *link;
+    *link = ended->next;
+    report(borrow(ended->target), state, borrow(ended->url),
+           ended->path.data ? borrow(ended->path) : literal(""), problem);
+    free_download(ended);
+}
+
+portal_string portal_web_download_destination(uint64_t download, portal_string name)
+{
+    struct download **link = running(download), *named = link ? *link : NULL;
+    if (!named || named->path.data)
+        return literal("");
+    portal_text problem = {0};
+    char *path = destination(name, &problem);
+    if (!path) {
+        portal_string why = problem.data ? borrow(problem) : literal("Portal is out of memory");
+        end(link, "failed", &why);
+        free(problem.data);
+        return literal("");
+    }
+    named->path = (portal_text) {path, strlen(path)};
+    report(borrow(named->target), "started", borrow(named->url), borrow(named->path), NULL);
+    return borrow(named->path);
+}
+
+void portal_web_download_finished(uint64_t download, const portal_string *error)
+{
+    struct download **link = running(download);
+    if (link)
+        end(link, error ? "failed" : "finished", error);
 }
 
 /* Lifetime, for views.c. */
@@ -453,7 +691,7 @@ bool portal_web_views_send(portal_string target, portal_string json, portal_text
 bool portal_web_views_receive(portal_string target, portal_text *json, portal_text *error)
 {
     struct portal_web_state *web;
-    if (!find_hosted(target, &web, error))
+    if (!portal_views_find_web(target, &web, error))
         return false;
     size_t length = 2;
     for (struct message *message = web->first; message; message = message->next)
@@ -502,8 +740,10 @@ void portal_web_posted(portal_string target, portal_sender sender, portal_string
 }
 
 portal_navigation portal_web_navigating(portal_string target, portal_string url,
-                                        bool main_frame)
+                                        bool main_frame, bool download)
 {
+    if (download) /* Downloading leaves the page where it is. */
+        return PORTAL_NAVIGATION_DOWNLOAD;
     struct portal_web_state *web;
     portal_view *native = find(target, &web);
     if (!native || !web->hosted || !main_frame || has_scheme(url, "about")
@@ -537,6 +777,13 @@ void portal_web_closed(portal_string target)
     struct portal_web_state *web;
     if (find(target, &web) && web->window)
         portal_channel_send(literal("closed"), target, NULL, 0);
+}
+
+portal_navigation portal_web_responding(portal_string target, bool showable, bool attachment)
+{
+    struct portal_web_state *web;
+    return find(target, &web) && (!showable || attachment) ? PORTAL_NAVIGATION_DOWNLOAD
+                                                           : PORTAL_NAVIGATION_ALLOW;
 }
 
 void portal_web_committed(portal_string target, portal_string url)

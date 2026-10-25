@@ -128,7 +128,7 @@ scripts, styles and images. JavaScript is enabled by default.
   dismisses it. WebKit asks before leaving only a page the user has
   interacted with, and closing the view never asks.
   `(portal-web-open-hosted "/dialogs")` opens a page that tries each one.
-- This URL viewer has no address bar or downloads.
+- This URL viewer has no address bar.
   Inspect failed loads through `:error` in
   `(portal--inspect (portal-view-target))`, or the page itself with
   [Web Inspector](#web-inspector).
@@ -187,3 +187,21 @@ until the menu is used. It applies to web views opened afterwards:
 a page is listed; a window a page opens is listed when its opener is. Emacs
 has no command to open Web Inspector itself: WebKit offers that only through
 private interfaces.
+
+## Downloads
+
+A web view downloads what it cannot show, such as a zip archive, anything
+its server sends as an attachment (`Content-Disposition: attachment`), as
+mail attachments are, and links with a `download` attribute. The file goes
+to `portal-web-download-directory`, `~/Downloads/` by default, under the name
+the site suggests; when that name is taken, it becomes `report (1).pdf` and
+so on. The page stays as it was, and the echo area says when the download
+starts, where it finished, or why it failed:
+
+```elisp
+(setopt portal-web-download-directory "~/Downloads/web/")
+```
+
+A change applies to downloads that start afterwards. Killing a web buffer
+cancels its unfinished downloads. There is no download list or progress
+display; `M-x dired` the directory to find files.
