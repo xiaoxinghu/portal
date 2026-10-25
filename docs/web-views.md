@@ -128,6 +128,9 @@ scripts, styles and images. JavaScript is enabled by default.
   dismisses it. WebKit asks before leaving only a page the user has
   interacted with, and closing the view never asks.
   `(portal-web-open-hosted "/dialogs")` opens a page that tries each one.
+- A page can go fullscreen, as a video player's button does, and Escape
+  leaves fullscreen; [fullscreen pages](keyboard.md#fullscreen-pages) says
+  where the keyboard goes.
 - This URL viewer has no address bar.
   Inspect failed loads through `:error` in
   `(portal--inspect (portal-view-target))`, or the page itself with

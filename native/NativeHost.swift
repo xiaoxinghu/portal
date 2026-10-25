@@ -77,7 +77,10 @@ final class NativeHost: NSObject {
         surfaces.values.compactMap(\.value?.input).first { $0.trigger != nil }
     }
 
-    @objc private func windowUpdated() { refreshOwnership() }
+    @objc private func windowUpdated() {
+        reclaimKeyboard()
+        refreshOwnership()
+    }
 
     /// Tell the core which views gained or lost the keyboard; it tells Emacs.
     func refreshOwnership() {
@@ -92,6 +95,14 @@ final class NativeHost: NSObject {
     func returnFocus(from surface: NSView) {
         if ownsFocus(surface) { view?.window?.makeFirstResponder(editor) }
         refreshOwnership()
+    }
+
+    /// Give the window's keyboard to Emacs if nothing in the window has it:
+    /// as when a view took it to a window of its own, or a page asked for it
+    /// on its way back and was refused, after Emacs's view had resigned.
+    func reclaimKeyboard() {
+        guard let window = view?.window, window.firstResponder === window, let editor else { return }
+        window.makeFirstResponder(editor)
     }
 
     /// Show SURFACE at RECTANGLE, in Emacs's frame pixels from the top left.
@@ -183,7 +194,17 @@ final class NativeHost: NSObject {
         if event.type == .keyDown { pressedKeys[event.keyCode] = owner }
         let handled = handler?.handleKeyEvent(event) ?? false
         host?.refreshOwnership()
-        if !handled, handler is any NativeSurface, event.type == .keyDown { deliveredKeys.add(event) }
+        // A key in a view's own window, as a fullscreen page's, is the view's.
+        let guest = handler is any NativeSurface || (host == nil && isAway(window))
+        if !handled, guest, event.type == .keyDown { deliveredKeys.add(event) }
         return handled
+    }
+
+    /// Whether WINDOW is a view's own, out of its host's (`NativeInput.moved`).
+    private static func isAway(_ window: NSWindow) -> Bool {
+        let hosts = frames.objectEnumerator()?.allObjects as? [NativeHost] ?? []
+        return hosts.contains { host in
+            host.surfaces.values.contains { $0.value?.input?.away == true && $0.value?.nativeView.window === window }
+        }
     }
 }

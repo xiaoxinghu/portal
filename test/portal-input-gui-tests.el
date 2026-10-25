@@ -212,4 +212,217 @@ from that thread."
               (should (plist-get (portal-terminal-test--state terminal-id) :focused)))
           (portal-terminal-close-all))))))
 
+(defun portal-input-gui--key-window-js (script)
+  "Run SCRIPT in the page in the key window, returning its result.
+Return `none' while the key window has no page, as while WebKit moves a
+page to or from its fullscreen window."
+  (if (not (portal-test-web-eval script))
+      'none
+    (portal-terminal-test--wait (lambda () (portal-test-web-eval nil)))
+    (let ((result (json-parse-string (portal-test-web-eval nil) :object-type 'plist
+                                     :false-object nil :null-object nil)))
+      (should-not (plist-get result :error))
+      (plist-get result :value))))
+
+(defun portal-input-gui--typed (key)
+  "Wait until the page in the key window has seen KEY, a key name, last."
+  (let ((deadline (+ (float-time) 10)))
+    (while (and (not (equal (portal-input-gui--key-window-js "return keys.at(-1);") key))
+                (< (float-time) deadline))
+      (accept-process-output nil 0.02))
+    (unless (equal (portal-input-gui--key-window-js "return keys.at(-1);") key)
+      (ert-fail (format "The page saw %S, not %s last, with the keyboard in %s"
+                        (portal-input-gui--key-window-js "return keys;") key
+                        (portal-test-responder))))))
+
+(defmacro portal-input-gui--fullscreen-page (&rest body)
+  "Run BODY with an app-host page whose button fills it and goes fullscreen.
+The page records each key press in `keys'.  Leave fullscreen afterwards,
+so that no fullscreen window outlives the test."
+  (declare (indent 0))
+  `(portal-test--with-web
+     (skip-unless (file-executable-p (portal-server-program-file)))
+     (unwind-protect
+         (progn
+           (select-frame-set-input-focus (selected-frame))
+           (sit-for 0.1)
+           (portal-hello)
+           (portal-test--wait-for-page "Hello, world!")
+           (portal-excalidraw-gui--js
+            "const button = document.createElement('button');
+             button.style.cssText = 'position:fixed;inset:0;width:100%;height:100%';
+             button.onclick = () => document.documentElement.requestFullscreen();
+             document.body.append(button);
+             window.keys = [];
+             document.addEventListener('keydown', (e) => keys.push(e.key), true);
+             return true;")
+           ,@body)
+       (setq unread-command-events nil)
+       (when-let* ((target (portal-view-target))
+                   ((plist-get (portal--inspect target) :fullscreen)))
+         (portal-input-gui--key-window-js "await document.exitFullscreen(); return true;")
+         (portal-terminal-test--wait
+          (lambda () (not (plist-get (portal--inspect target) :fullscreen))))))))
+
+(defun portal-input-gui--fullscreen (fullscreen)
+  "Wait until the selected pane's page is FULLSCREEN, and its window has the keyboard.
+Fullscreen, that is WebKit's window, done entering, with the page focused
+in it; otherwise the page is back in its pane in the key window."
+  (let ((target (portal-view-target)))
+    (portal-terminal-test--wait
+     (lambda ()
+       (and (equal (plist-get (portal--inspect target) :fullscreen) (and fullscreen "in"))
+            (eq (portal-input-gui--key-window-js
+                 "return !!document.fullscreenElement && document.hasFocus();")
+                fullscreen))))))
+
+(defun portal-input-gui--emacs-got-nothing ()
+  "Check that no key reached Emacs."
+  (should-not (read-event nil nil 0.3)))
+
+(defun portal-input-gui--fills-pane ()
+  "Whether the selected pane's page is shown at the pane's size."
+  (let ((edges (window-inside-pixel-edges)))
+    (and (portal-test--shown (portal-view-target) (selected-window))
+         (equal (portal-input-gui--key-window-js "return [innerWidth, innerHeight];")
+                (vector (- (nth 2 edges) (nth 0 edges)) (- (nth 3 edges) (nth 1 edges)))))))
+
+(ert-deftest portal-input-gui-web-fullscreen-keeps-the-keyboard-and-escape-leaves-it ()
+  (portal-input-gui--fullscreen-page
+    ;; With a long double escape, an Escape counted in fullscreen would
+    ;; make the next one return to Emacs.
+    (let ((portal-input-double-escape 10)
+          (target (portal-view-target)))
+      ;; Clicking the page's button gives the page the keyboard, and Emacs
+      ;; selects its pane while it goes fullscreen.
+      (should (portal-test-native-click 50 50))
+      (portal-input-gui--fullscreen t)
+      (portal-terminal-test--wait (lambda () unread-command-events))
+      (portal-input--select (pop unread-command-events))
+      (should (portal-input--action "focused"))
+      ;; Every key in fullscreen is the page's, even those it does not use.
+      (portal-test-native-key 49 0 " ")
+      (portal-input-gui--typed " ")
+      (portal-test-native-key 124 (ash 1 23) (string #xF703))
+      (portal-input-gui--typed "ArrowRight")
+      (portal-test-native-key 0 0 "a")
+      (portal-input-gui--typed "a")
+      (portal-input-gui--emacs-got-nothing)
+      ;; Escape leaves fullscreen; the page is back in its pane, with the keyboard.
+      (portal-test-native-key 53 0 "\e")
+      (portal-input-gui--fullscreen nil)
+      (should (portal-input-gui--fills-pane))
+      (should (plist-get (portal--inspect target) :focused))
+      (should (portal-input--action "focused"))
+      ;; The next Escape is the page's, the first of a pair.
+      (portal-test-native-key 53 0 "\e")
+      (portal-input-gui--typed "Escape")
+      (accept-process-output nil 0.2)
+      (should (portal-input--action "focused"))
+      (portal-test-native-key 11 0 "b")
+      (portal-input-gui--typed "b")
+      (portal-test-native-key 47 portal-input-gui--command ".")
+      (should-not (portal-input--action "focused"))
+      (portal-integration-test--emacs-input))))
+
+(ert-deftest portal-input-gui-web-fullscreen-returns-to-where-emacs-put-the-page ()
+  (portal-input-gui--fullscreen-page
+    (let ((target (portal-view-target)))
+      ;; A script, here Emacs's, can make the page fullscreen while Emacs
+      ;; has the keyboard.  Keys in fullscreen are still the page's.
+      (should-not (portal-input--action "focused"))
+      (portal-excalidraw-gui--js "document.documentElement.requestFullscreen(); return true;")
+      (portal-input-gui--fullscreen t)
+      (portal-test-native-key 7 0 "x")
+      (portal-input-gui--typed "x")
+      (portal-input-gui--emacs-got-nothing)
+      ;; Emacs shrinks the page's pane meanwhile; the page stays fullscreen.
+      (split-window-below)
+      (redisplay t)
+      (should (plist-get (portal--inspect target) :fullscreen))
+      (should (eq (portal-input-gui--key-window-js "return !!document.fullscreenElement;") t))
+      ;; Leaving, the page fills its smaller pane, and Emacs has the keyboard.
+      (portal-input-gui--key-window-js "await document.exitFullscreen(); return true;")
+      (portal-input-gui--fullscreen nil)
+      (should (portal-input-gui--fills-pane))
+      (should-not (plist-get (portal--inspect target) :focused))
+      (should-not (portal-input--action "focused"))
+      (portal-integration-test--emacs-input)
+      ;; Hidden while fullscreen, it is hidden once back.
+      (delete-other-windows)
+      (portal-excalidraw-gui--js "document.documentElement.requestFullscreen(); return true;")
+      (portal-input-gui--fullscreen t)
+      (let ((buffer (current-buffer)))
+        (switch-to-buffer "*scratch*")
+        (redisplay t)
+        (portal-input-gui--key-window-js "await document.exitFullscreen(); return true;")
+        (portal-terminal-test--wait
+         (lambda () (not (plist-get (portal--inspect target) :fullscreen))))
+        (should-not (plist-get (portal--inspect target) :visible))
+        ;; WebKit's window goes, Emacs gets the keyboard, and then the page
+        ;; leaves the pane.
+        (portal-terminal-test--wait
+         (lambda () (string-prefix-p "EmacsView in " (portal-test-responder))))
+        (portal-terminal-test--wait
+         (lambda () (eq (portal-input-gui--key-window-js "return true;") 'none)))
+        (portal-integration-test--emacs-input)
+        (switch-to-buffer buffer)
+        (redisplay t))
+      (should (portal-input-gui--fills-pane)))))
+
+(ert-deftest portal-input-gui-web-fullscreen-page-keeps-the-keyboard-in-another-frame ()
+  (portal-input-gui--fullscreen-page
+    (let* ((buffer (current-buffer))
+           (target (portal-view-target))
+           (home (selected-frame))
+           (frame (make-frame)))
+      (unwind-protect
+          (progn
+            (select-frame-set-input-focus home)
+            (sit-for 0.1)
+            (should (portal-test-native-click 50 50))
+            (portal-input-gui--fullscreen t)
+            (setq unread-command-events nil)
+            ;; Emacs shows the page in another frame meanwhile, and gives it
+            ;; the keyboard there.
+            (select-frame frame)
+            (switch-to-buffer buffer)
+            (redisplay t)
+            (should (equal (portal-view-target) target))
+            (portal-input-focus)
+            (should (portal-input--action "focused"))
+            (let* ((owners nil)
+                   (watch (lambda (_symbol value operation _where)
+                            (when (eq operation 'set) (push value owners)))))
+              (add-variable-watcher 'portal-input--focused watch)
+              (unwind-protect
+                  (progn
+                    (portal-test-native-key 53 0 "\e")
+                    ;; Back, the page has the keyboard in that frame, and
+                    ;; never lost it on the way.
+                    (portal-terminal-test--wait
+                     (lambda () (and (not (plist-get (portal--inspect target) :fullscreen))
+                                     (plist-get (portal--inspect target) :focused))))
+                    (accept-process-output nil 0.3)
+                    (should-not (memq nil owners)))
+                (remove-variable-watcher 'portal-input--focused watch)))
+            (should (portal-test--shown target (selected-window)))
+            (should (portal-input--action "focused")))
+        (delete-frame frame)))))
+
+(ert-deftest portal-input-gui-web-fullscreen-page-closes-with-its-buffer ()
+  (portal-input-gui--fullscreen-page
+    (let ((target (portal-view-target)))
+      (should (portal-test-native-click 50 50))
+      (portal-input-gui--fullscreen t)
+      (setq unread-command-events nil)
+      (kill-buffer)
+      (should-not (portal--inspect target))
+      ;; The page leaves fullscreen first, and its window goes: Emacs gets
+      ;; the keyboard.
+      (portal-terminal-test--wait
+       (lambda () (string-prefix-p "EmacsView in " (portal-test-responder))))
+      (should (eq (portal-input-gui--key-window-js "return true;") 'none))
+      (portal-integration-test--emacs-input))))
+
 (provide 'portal-input-gui-tests)

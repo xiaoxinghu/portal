@@ -26,6 +26,49 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
         return super.becomeFirstResponder()
     }
 
+    /// For fullscreen, WebKit moves the page to a window of its own, and
+    /// back to its pane on the way out. The page is back once WebKit is
+    /// done leaving fullscreen.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        input?.moved()
+    }
+
+    private var fullscreen: NSKeyValueObservation?
+    /// WebKit's window for the page in fullscreen, until it hides it.
+    private weak var fullscreenWindow: NSWindow?
+
+    /// WebKit says the page left fullscreen before it is done: once the
+    /// page has drawn in its pane, WebKit hides its own window and brings
+    /// the page's to the front. The page is back after that, so that a
+    /// page Emacs hid meanwhile brings Emacs's frame, not the parking window.
+    private func fullscreenChanged() {
+        switch fullscreenState {
+        case .enteringFullscreen: fullscreenWindow = window
+        case .notInFullscreen:
+            guard let shown = fullscreenWindow, shown.isVisible else { return comeBack() }
+            NotificationCenter.default.addObserver(self, selector: #selector(fullscreenWindowChanged),
+                                                   name: NSWindow.didChangeOcclusionStateNotification, object: shown)
+        default: break
+        }
+    }
+
+    @objc private func fullscreenWindowChanged(_ notification: Notification) {
+        guard let shown = notification.object as? NSWindow, !shown.isVisible else { return }
+        comeBack()
+    }
+
+    /// The page is out of fullscreen, and WebKit has done with its window.
+    private func comeBack() {
+        if let shown = fullscreenWindow {
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didChangeOcclusionStateNotification,
+                                                      object: shown)
+        }
+        fullscreenWindow = nil
+        // After WebKit, which hides its window just before it orders the page's.
+        Task { @MainActor [weak self] in self?.input?.back() }
+    }
+
     /// The press offered to the page, until it answers, and whether the key
     /// script has seen it reach the page.
     private var offered: NSEvent?
@@ -101,8 +144,13 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
         } else {
             configuration.applicationNameForUserAgent = Self.safari
         }
+        // A page may go fullscreen, as a video player's button does.
+        configuration.preferences.isElementFullscreenEnabled = true
         super.init(frame: .zero, configuration: configuration)
         if #available(macOS 13.3, *) { isInspectable = inspectable }
+        fullscreen = observe(\.fullscreenState) { page, _ in
+            MainActor.assumeIsolated { page.fullscreenChanged() }
+        }
         if hosted { PageMessages.install(in: self) }
         KeyReports.install(in: self)
         navigationDelegate = self
@@ -651,11 +699,14 @@ final class WebSession: PortalView {
 
     func detaching() { page.shown(in: nil) }
 
+    /// A fullscreen page leaves fullscreen: WebKit then gives it back
+    /// (`NativeView.close`).
     func close() {
         page.dismissDialogs()
         page.configuration.userContentController.removeAllScriptMessageHandlers()
         page.stopLoading()
         page.cancelDownloads()
+        if page.fullscreenState != .notInFullscreen { page.closeAllMediaPresentations {} }
     }
 
     func load(_ address: String) throws {
@@ -681,6 +732,13 @@ final class WebSession: PortalView {
     func describe() -> [(String, ViewValue)] {
         var state: [(String, ViewValue)] = [("loading", .flag(page.isLoading)),
                                             ("dark", .flag(page.effectiveAppearance.isDark))]
+        // Out of its pane, the page is entering, in or exiting fullscreen.
+        switch page.fullscreenState {
+        case .enteringFullscreen: state.append(("fullscreen", .string("entering")))
+        case .inFullscreen: state.append(("fullscreen", .string("in")))
+        case .exitingFullscreen: state.append(("fullscreen", .string("exiting")))
+        default: break
+        }
         if let url = page.url { state.append(("url", .string(url.absoluteString))) }
         if let title = page.title { state.append(("title", .string(title))) }
         if let error = page.loadError { state.append(("error", .string(error))) }

@@ -249,7 +249,14 @@ Cross-frame placement moves the view in one call.
 
 Swift's `NativeView` attaches both kinds, each implementing `PortalView`.
 Detached and new views occupy a never-shown offscreen window, keeping every view
-in a window and its session or page running. Frame deletion hides its views;
+in a window and its session or page running. Only a fullscreen web page leaves
+these windows, for one of WebKit's that WebKit later returns it from:
+`NativeInput` sees the view arrive in a window that is not its host's, and
+keeps who had the keyboard from the core until the view is back, once WebKit
+has hidden its window. Keys in that window are the page's, and `NativeHost`
+drops WebKit's re-sends of those the page does not use, which would otherwise
+reach Emacs. `NativeView` moves, hides or closes the view only once it is
+back, as Emacs last asked; closing first asks WebKit to leave fullscreen. Frame deletion hides its views;
 the next sync places them wherever their buffers remain visible. Killing a buffer
 or changing its major mode closes its view. Kind-specific operations have separate
 exports, such as `portal--web-load TARGET URL`. Batch tests substitute
