@@ -149,23 +149,24 @@ from that thread."
 (ert-deftest portal-input-gui-web-command-period-returns-to-emacs ()
   (portal-input-gui--page
     ;; The mode line renders who has the keyboard, and follows each change:
-    ;; the tag in the state's face, and the whole line tinted for the app.
+    ;; the light lit or dimmed, and the whole line tinted for the app.
     (cl-flet ((tag () (substring-no-properties (format-mode-line mode-line-process)))
               (tag-face () (get-text-property 0 'face (format-mode-line mode-line-process))))
-      (portal-terminal-test--wait (lambda () (equal (tag) "[app]")))
-      (should (eq (tag-face) 'portal-mode-line-app))
+      (portal-terminal-test--wait (lambda () (eq (tag-face) 'portal-mode-line-app)))
+      (should (equal (tag) " ● "))
       (should (assq 'mode-line-active face-remapping-alist))
       (portal-test-native-key 47 portal-input-gui--command ".")
       (should-not (portal-input--action "focused"))
       (should-not (portal-input--action "pending"))
-      (portal-terminal-test--wait (lambda () (equal (tag) "[emacs]")))
-      (should (eq (tag-face) 'portal-mode-line-emacs))
+      (portal-terminal-test--wait (lambda () (eq (tag-face) 'portal-mode-line-emacs)))
+      (should (equal (tag) " ○ "))
       (should-not (assq 'mode-line-active face-remapping-alist)))
     (portal-integration-test--emacs-input)
     (portal-input-focus)
     (should (portal-input--action "focused"))
     (portal-terminal-test--wait
-     (lambda () (equal (substring-no-properties (format-mode-line mode-line-process)) "[app]")))))
+     (lambda () (eq (get-text-property 0 'face (format-mode-line mode-line-process))
+                    'portal-mode-line-app)))))
 
 (ert-deftest portal-input-gui-web-configured-escape-preempts-the-page ()
   (portal-input-gui--page

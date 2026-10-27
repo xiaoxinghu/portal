@@ -75,8 +75,9 @@ process.  A terminal whose program has exited is killed without asking."
 RET focuses Ghostty.  The shell gets typing and Control and Meta chords; a
 Super chord reaches Emacs, which runs it in this buffer.
 `portal-input-escape-key' always returns focus to Emacs.  Scrollback
-belongs to Ghostty.  The mode line shows [app] while Ghostty has the
-keyboard, [emacs] while Emacs does, and :exited once the program has."
+belongs to Ghostty.  The mode line's light is lit while Ghostty has the
+keyboard and dimmed while Emacs has it, and :exited follows it once the
+program has exited."
   (setq-local cursor-type nil)
   (add-hook 'kill-buffer-hook #'portal-terminal--dismiss-quick nil t)
   (add-hook 'kill-buffer-query-functions #'portal-terminal--kill-query nil t)

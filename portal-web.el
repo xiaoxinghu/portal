@@ -111,8 +111,8 @@ whether Emacs or the page owns the keyboard, unless the page uses
 Command-R itself.  C-s or Command-F finds text in the page, and
 Command-G and Command-Shift-G find it again; + or Command-= zooms in,
 - or Command-- zooms out and 0 or Command-0 resets, for every page from
-the same site.  The mode line shows [app] while the page has the
-keyboard and [emacs] while Emacs does.  q hides the view while the page
+the same site.  The mode line's light is lit while the page has the
+keyboard and dimmed while Emacs has it.  q hides the view while the page
 keeps running, and killing the buffer closes it."
   (setq-local cursor-type nil)
   (portal-input-mode 1))

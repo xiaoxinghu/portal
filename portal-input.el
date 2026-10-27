@@ -9,9 +9,11 @@
 ;; argument, a transient keymap, or keys typed meanwhile.
 ;; The configured escape (Command-period by default) returns to Emacs, as
 ;; can Escape typed twice, with `portal-input-double-escape';
-;; RET in the buffer re-enters the view.  The buffer's mode line says who
-;; has the keyboard, after the major mode's name: [app] while the view has
-;; it, [emacs] while Emacs does.
+;; RET in the buffer re-enters the view.  The buffer's mode line has a
+;; light after the major mode's name, a dot lit (●) while the view has the
+;; keyboard and dimmed (○) while Emacs has it.  `portal-mode-line-focus'
+;; and `portal-input-focus-change-hook' let a configuration show it anywhere
+;; else.
 ;; The native core decides who gets each key (native/Core/input.c).
 
 (require 'cl-lib)
@@ -35,6 +37,7 @@
     (keymap-set map "s-." #'portal-input-unfocus)
     map)
   "Keys of a Portal view's buffer while Emacs has the keyboard.")
+
 ;; Keep the wrapper controls available in Evil states as well.
 (with-eval-after-load 'evil
   (evil-make-overriding-map portal-input-mode-map))
@@ -171,17 +174,39 @@ the same buffer, which has a new target, both count as Emacs's.")
   "Whether this buffer's view has the keyboard."
   (and portal-view--target (equal portal-input--focused portal-view--target)))
 
+(defun portal-input-focused-p (&optional buffer)
+  "Whether the view in BUFFER, by default the current buffer, has the keyboard.
+Nil when Emacs has it, and in a buffer without a view."
+  (with-current-buffer (or buffer (current-buffer))
+    (and (bound-and-true-p portal-input-mode) (portal-input--focused-p))))
+
 (defface portal-mode-line-app
-  '((t :inherit (warning mode-line-emphasis)))
-  "The mode line's [app], while a view has the keyboard.
-Bold in the theme's `warning' color: the state in which Emacs's own keys
-may not work, as compile colors its running status."
+  '((t :inherit mode-line-emphasis))
+  "The mode line's light, lit while a view has the keyboard.
+The theme's `mode-line-emphasis', its face for the mode line's live parts."
   :group 'portal-input)
 
 (defface portal-mode-line-emacs
-  '((t :inherit mode-line-emphasis))
-  "The mode line's [emacs], while Emacs has the keyboard."
+  '((t :inherit (shadow mode-line-emphasis)))
+  "The mode line's light, dimmed while Emacs has the keyboard.
+The theme's `shadow', its face for text that is there but inactive, in
+the lit face's weight, so the light keeps its width."
   :group 'portal-input)
+
+(defface portal-mode-line-focus
+  '((t nil))
+  "A face that follows a Portal buffer's keyboard, for a configuration to use.
+In each view's buffer it takes `portal-mode-line-app' while the view has
+the keyboard and `portal-mode-line-emacs' while Emacs has it, as the light
+does, so a mode line part drawn in it lights up with the light: a major
+mode's icon, say.  Elsewhere, such as in a buffer list, it is plain."
+  :group 'portal-input)
+
+(defcustom portal-input-focus-change-hook nil
+  "Hook run in a Portal buffer when its view gains or loses the keyboard.
+`portal-input-focused-p' says which.  The light, the tint and
+`portal-mode-line-focus' are already up to date when it runs."
+  :type 'hook :group 'portal-input)
 
 (defface portal-mode-line-app-line
   '((t :inherit highlight))
@@ -195,35 +220,75 @@ app's whatever package draws the mode line.  By default the theme's
 (defvar-local portal-input--tint nil
   "The face remapping that tints this buffer's mode line, while it does.")
 
-(defun portal-input--tint ()
-  "Tint this buffer's mode line while its view has the keyboard, else not.
-The tint is `portal-mode-line-app-line' in place of `mode-line-active',
-while `portal-input-mode-line-tint' says so."
-  (let ((wanted (and portal-input-mode-line-tint portal-input-mode (portal-input--focused-p))))
+(defvar-local portal-input--shown nil
+  "The face `portal-mode-line-focus' takes in this buffer, or nil.")
+
+(defvar-local portal-input--focus-remap nil
+  "The face remapping that gives this buffer's `portal-mode-line-focus' its face.")
+
+(defun portal-input--show-focus ()
+  "Show whether this buffer's view has the keyboard, as it now does or not.
+The whole mode line takes `portal-mode-line-app-line' in place of
+`mode-line-active' while the view has it and `portal-input-mode-line-tint'
+says so, `portal-mode-line-focus' takes the light's face, and on a change
+`portal-input-focus-change-hook' runs."
+  (let* ((focused (and portal-input-mode (portal-input--focused-p)))
+         (shown (and portal-input-mode
+                     (if focused 'portal-mode-line-app 'portal-mode-line-emacs)))
+         (wanted (and portal-input-mode-line-tint focused)))
     (cond ((and wanted (not portal-input--tint))
            (setq portal-input--tint
                  (face-remap-add-relative 'mode-line-active 'portal-mode-line-app-line)))
           ((and portal-input--tint (not wanted))
            (face-remap-remove-relative portal-input--tint)
            (setq portal-input--tint nil)))
+    (unless (eq shown portal-input--shown)
+      (when portal-input--focus-remap
+        (face-remap-remove-relative portal-input--focus-remap))
+      (setq portal-input--focus-remap
+            (and shown (face-remap-add-relative 'portal-mode-line-focus shown)))
+      (let ((changed (not (eq focused (eq portal-input--shown 'portal-mode-line-app)))))
+        (setq portal-input--shown shown)
+        (when changed (run-hooks 'portal-input-focus-change-hook))))
     (force-mode-line-update)))
+
+(defcustom portal-input-mode-line-light '("●" . "○")
+  "The light after the mode name that says whether the view has the keyboard.
+A pair (LIT . DIMMED): LIT in `portal-mode-line-app' while the view has
+the keyboard, DIMMED in `portal-mode-line-emacs' while Emacs has it.  The
+two differ in shape as well as face, so the light reads under any theme,
+and in a terminal.  Choose other characters if the mode line's font draws
+these poorly."
+  :type '(cons (string :tag "Lit") (string :tag "Dimmed")) :group 'portal-input
+  :set (lambda (symbol value)
+         (set-default symbol value)
+         (force-mode-line-update t)))
 
 (defcustom portal-input-mode-line-tint t
   "Whether a Portal buffer's mode line takes `portal-mode-line-app-line'.
 It does while the buffer's view has the keyboard, so the whole pane says
-so, not only the tag after the mode name.  Changes reach open views at
+so, not only the light after the mode name.  Changes reach open views at
 once."
   :type 'boolean :group 'portal-input
   :set (lambda (symbol value)
          (set-default symbol value)
          (dolist (buffer (portal-view-buffers))
-           (with-current-buffer buffer (portal-input--tint)))))
+           (with-current-buffer buffer (portal-input--show-focus)))))
 
 (defun portal-input--mode-line-process ()
-  "Return who has the keyboard, for `mode-line-process': [app] or [emacs].
-Each in its face, `portal-mode-line-app' or `portal-mode-line-emacs'."
+  "Return the light for `mode-line-process': who has the keyboard.
+A space and the light of `portal-input-mode-line-light', lit, in
+`portal-mode-line-app', while the view has it; dimmed, in
+`portal-mode-line-emacs', while Emacs has it.  A graphical frame draws
+the light smaller than the text, centered on it, with half a character
+after it, so it sits clear of a mode line's edge."
   (let ((focused (portal-input--focused-p)))
-    (propertize (if focused "[app]" "[emacs]")
+    (propertize (concat " "
+                        (propertize (if focused
+                                        (car portal-input-mode-line-light)
+                                      (cdr portal-input-mode-line-light))
+                                    'display '((height 0.7) (raise 0.26)))
+                        (propertize " " 'display '(space :width 0.5)))
                 'face (if focused 'portal-mode-line-app 'portal-mode-line-emacs)
                 'help-echo (if focused
                                (format "The app has the keyboard; %s%s returns it to Emacs"
@@ -236,8 +301,8 @@ Each in its face, `portal-mode-line-app' or `portal-mode-line-emacs'."
 `portal-input-mode' puts it in `mode-line-process', the place Emacs keeps
 for a buffer's state beside its mode name, as comint and eat use it, so the
 default mode line and the packages that read `mode-line-process' all show
-Ghostty[app] while the view has the keyboard and Ghostty[emacs] while Emacs
-does.  The list it goes in starts with \"\": a list that starts with a
+Ghostty ● while the view has the keyboard and Ghostty ○ while Emacs has
+it.  The list it goes in starts with \"\": a list that starts with a
 symbol is the conditional construct (SYMBOL THEN ELSE), not a sequence.
 The buffer's own `mode-line-process', if it had one, follows as one
 element, so a conditional or a string keeps its shape, and turning the
@@ -246,9 +311,10 @@ mode off restores it; the terminal puts its :exited there.")
 
 (define-minor-mode portal-input-mode
   "Enter a Portal view with RET; `portal-input-escape-key' returns to Emacs.
-The mode line shows who has the keyboard, after the major mode's name:
-[app] while the view has it, [emacs] while Emacs does, and the whole mode
-line takes `portal-mode-line-app-line' while the view has it."
+The mode line shows who has the keyboard with a light after the major
+mode's name, `portal-input-mode-line-light', lit while the view has it and
+dimmed while Emacs has it, and the whole mode line takes
+`portal-mode-line-app-line' while the view has it."
   :lighter nil :keymap portal-input-mode-map
   (let ((wrapped (and (consp mode-line-process) (equal (car mode-line-process) "")
                       (eq (cadr mode-line-process) 'portal-input-mode-line-process))))
@@ -257,7 +323,7 @@ line takes `portal-mode-line-app-line' while the view has it."
                                            (and mode-line-process (list mode-line-process)))))
           ((and (not portal-input-mode) wrapped)
            (setq mode-line-process (nth 2 mode-line-process))))
-    (portal-input--tint)))
+    (portal-input--show-focus)))
 
 (defun portal-input--target (&optional window)
   "Return the native target for WINDOW, defaulting to the selected window."
@@ -330,9 +396,9 @@ The click already gave the view the keyboard; this makes Emacs agree."
 (setf (alist-get "focus" portal-view-record-handlers nil nil #'equal)
       (lambda (target focused)
         (setq portal-input--focused (and (equal focused "1") target))
-        (portal-input--tint)))
+        (portal-input--show-focus)))
 ;; A view closed while it had the keyboard sends no last record.
-(add-hook 'portal-view-close-hook #'portal-input--tint)
+(add-hook 'portal-view-close-hook #'portal-input--show-focus)
 
 (defun portal-input--connect ()
   "Load the module, which has the input bridge."
