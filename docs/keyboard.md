@@ -33,27 +33,46 @@ color or size. Ordinary buffers get no global physical keybinding.
 
 ## Who has the keyboard
 
-The window's mode line says who has the keyboard, right after the major
-mode's name, where Emacs shows a buffer's process state: `Ghostty[app]` or
-`Portal Web[app]` while the view has it, and `Ghostty[emacs]` while Emacs
-does, including while Emacs reads a command the view handed it. A terminal
-whose program has exited adds `:exited`, as in `Ghostty[emacs]:exited`.
-Hovering the indicator says how to move the keyboard.
+The window's mode line has a light right after the major mode's name, where
+Emacs shows a buffer's process state: a dot, lit as in `Ghostty ●` or
+`Portal Web ●` while the view has the keyboard, and dimmed as in `Ghostty ○`
+while Emacs has it, including while Emacs reads a command the view handed it.
+A terminal whose program has exited adds `:exited`, as in `Ghostty ○:exited`.
+Hovering the light says who has the keyboard and how to move it.
 
-The state is colored the way Emacs colors a buffer's state elsewhere.
-`[app]` is bold in the theme's `warning` color, the face
-`portal-mode-line-app`, as compile colors its running status; `[emacs]` is
-plain bold, `portal-mode-line-emacs`. While the app has the keyboard the
-pane's whole mode line also takes `portal-mode-line-app-line`, by default
-the theme's `highlight`, the way solaire-mode recolors its buffers, so the
-pane reads as the app's before anyone reads the tag, and explains why an
-Emacs key just typed into the app. Themes differ in how far `highlight` is
-from their mode line; inherit another of the theme's faces for more contrast.
+Lit, the dot takes the face `portal-mode-line-app`, by default the theme's
+`mode-line-emphasis`, its face for the mode line's live parts. Dimmed, it takes
+`portal-mode-line-emacs`, the theme's `shadow`, its face for inactive text.
+The dot changes shape as well as face, so it reads under any theme, and in a
+terminal. `portal-input-mode-line-light` chooses other characters, for a mode
+line font that draws these poorly. While the app has the keyboard the pane's
+whole mode line also takes `portal-mode-line-app-line`, by default the theme's
+`highlight`, the way solaire-mode recolors its buffers, so the pane reads as
+the app's before anyone reads the light, and explains why an Emacs key just
+typed into the app. Themes differ in how far `highlight` is from their mode
+line; inherit another of the theme's faces for more contrast.
 
 ```elisp
 (setq portal-input-mode-line-tint nil)   ; keep the mode line's usual colors
 (set-face-attribute 'portal-mode-line-app-line nil :inherit 'secondary-selection)
 (set-face-attribute 'portal-mode-line-app nil :inherit 'error)
+(setq portal-input-mode-line-light '("◆" . "◇"))
+```
+
+Anything else in the mode line can follow the light too. In a view's buffer,
+the face `portal-mode-line-focus` takes the lit face while the view has the
+keyboard and the dimmed face while Emacs has it; elsewhere it is plain. The
+hook `portal-input-focus-change-hook` runs in the buffer on each change, and
+`portal-input-focused-p` says which. For example, with nerd-icons, as
+doom-modeline uses, each kind of view gets its own icon, lit with the light:
+
+```elisp
+(with-eval-after-load 'nerd-icons
+  (dolist (icon '((portal-terminal-mode nerd-icons-devicon "nf-dev-terminal")
+                  (portal-web-mode nerd-icons-mdicon "nf-md-web")
+                  (portal-excalidraw-mode nerd-icons-mdicon "nf-md-draw")))
+    (add-to-list 'nerd-icons-mode-icon-alist
+                 (append icon '(:face portal-mode-line-focus)))))
 ```
 
 The indicator is the construct `portal-input-mode-line-process`, which

@@ -315,7 +315,7 @@
             (portal-terminal-test--wait (lambda () (funcall metadata :exited)))
             ;; Rendered, not inspected: a GUI Emacs formats mode lines.
             (should (equal (with-current-buffer buffer (format-mode-line mode-line-process))
-                           "[app]:exited"))
+                           " ● :exited"))
             (should (string-match-p "sleep 3" (portal-terminal-test--text)))
             (should (plist-get (portal-terminal-test--state) :focused))
             (when (fboundp 'portal-test-native-key)

@@ -3,6 +3,21 @@
 (require 'ert)
 (require 'portal)
 
+(defun portal-input-test--focus-face ()
+  "The face `portal-mode-line-focus' takes in this buffer, if any."
+  (cadr (assq 'portal-mode-line-focus face-remapping-alist)))
+
+(defun portal-input-test--light ()
+  "The face of this buffer's light, which says who has the keyboard.
+A lit light is the lit character, and a dimmed one the dimmed character."
+  (let* ((light (portal-input--mode-line-process))
+         (face (get-text-property 0 'face light)))
+    (should (equal light (concat " " (if (eq face 'portal-mode-line-app)
+                                         (car portal-input-mode-line-light)
+                                       (cdr portal-input-mode-line-light))
+                                 " ")))
+    face))
+
 (ert-deftest portal-input-chords-become-emacs-events ()
   ;; The core sends a chord as typed: Shift made the character.
   (dolist (case '((?x 8 "s-x") (?A 9 "s-A") (?! 9 "s-!") (?A 3 "C-S-a") (?x 2 "C-x")
@@ -22,29 +37,33 @@
       ;; the conditional construct, and show nothing of the owner.
       (should (equal mode-line-process '("" portal-input-mode-line-process)))
       (should (get 'portal-input-mode-line-process 'risky-local-variable))
-      (should (equal (portal-input--mode-line-process) "[emacs]"))
+      (should (eq (portal-input-test--light) 'portal-mode-line-emacs))
+      (should (eq (portal-input-test--focus-face) 'portal-mode-line-emacs))
       (portal-view--dispatch "focus web:7 1")
       (should (portal-input--focused-p))
-      (should (equal (portal-input--mode-line-process) "[app]"))
-      ;; The tag has the state's face, and the whole mode line the app's.
-      (should (eq (get-text-property 0 'face (portal-input--mode-line-process))
-                  'portal-mode-line-app))
+      (should (portal-input-focused-p))
+      (should (eq (portal-input-test--light) 'portal-mode-line-app))
+      ;; The face a configuration can draw in follows the light.
+      (should (eq (portal-input-test--focus-face) 'portal-mode-line-app))
+      ;; The whole mode line takes the app's face too.
       (should (and portal-input--tint (assq 'mode-line-active face-remapping-alist)))
       (should (string-match-p (regexp-quote portal-input-escape-key)
                               (get-text-property 0 'help-echo (portal-input--mode-line-process))))
       (portal-view--dispatch "focus web:7 0")
-      (should (equal (portal-input--mode-line-process) "[emacs]"))
-      (should (eq (get-text-property 0 'face (portal-input--mode-line-process))
-                  'portal-mode-line-emacs))
+      (should (eq (portal-input-test--light) 'portal-mode-line-emacs))
+      (should (eq (portal-input-test--focus-face) 'portal-mode-line-emacs))
+      (should-not (portal-input-focused-p))
       (should-not (or portal-input--tint (assq 'mode-line-active face-remapping-alist)))
       ;; Turning the tint off, or the mode, drops the remapping at once.
       (portal-view--dispatch "focus web:7 1")
-      (let ((portal-input-mode-line-tint nil)) (portal-input--tint))
+      (let ((portal-input-mode-line-tint nil)) (portal-input--show-focus))
       (should-not portal-input--tint)
-      (portal-input--tint)
+      (portal-input--show-focus)
       (should portal-input--tint)
       (portal-input-mode -1)
       (should-not (or portal-input--tint (assq 'mode-line-active face-remapping-alist)))
+      (should-not (portal-input-test--focus-face))
+      (should-not (portal-input-focused-p))
       (portal-input-mode 1)
       (should portal-input--tint)
       (portal-view--dispatch "focus web:7 0")
@@ -53,11 +72,11 @@
       ;; with the next view in the buffer until that one says otherwise.
       (portal-view--dispatch "focus web:7 1")
       (setq portal-view--target nil)
-      (should (equal (portal-input--mode-line-process) "[emacs]"))
+      (should (eq (portal-input-test--light) 'portal-mode-line-emacs))
       (setq portal-view--target "web:8")
-      (should (equal (portal-input--mode-line-process) "[emacs]"))
+      (should (eq (portal-input-test--light) 'portal-mode-line-emacs))
       (portal-view--dispatch "focus web:8 1")
-      (should (equal (portal-input--mode-line-process) "[app]"))
+      (should (eq (portal-input-test--light) 'portal-mode-line-app))
       ;; Turning the mode off takes the construct out; on puts it back once.
       (portal-input-mode -1)
       (should-not mode-line-process)
@@ -73,12 +92,36 @@
       (portal-input-mode -1)
       (should (equal mode-line-process own)))))
 
+(ert-deftest portal-input-focus-change-hook-runs-on-each-change ()
+  ;; A configuration hears of each change of who has the keyboard, once,
+  ;; with everything Portal shows already up to date.
+  (with-temp-buffer
+    (portal-web-mode)
+    (setq portal-view--target "web:7")
+    (let* ((portal-view--buffers (list (current-buffer)))
+           (heard nil)
+           (portal-input-focus-change-hook
+            (list (lambda ()
+                    (push (list (portal-input-focused-p) (portal-input-test--focus-face))
+                          heard)))))
+      (portal-view--dispatch "focus web:7 1")
+      (portal-view--dispatch "focus web:7 1")
+      (portal-view--dispatch "focus web:7 0")
+      (portal-view--dispatch "focus web:7 0")
+      (should (equal (nreverse heard)
+                     '((t portal-mode-line-app) (nil portal-mode-line-emacs))))
+      ;; Turning the mode off while the view has the keyboard is a change.
+      (setq heard nil)
+      (portal-view--dispatch "focus web:7 1")
+      (portal-input-mode -1)
+      (should (equal (nreverse heard) '((t portal-mode-line-app) (nil nil)))))))
+
 (ert-deftest portal-input-terminal-mode-line-adds-the-exit ()
   (with-temp-buffer
     (portal-terminal-mode)
     (should (equal mode-line-process
                    '("" portal-input-mode-line-process (portal-terminal--exited ":exited"))))
-    (should (equal (portal-input--mode-line-process) "[emacs]"))
+    (should (eq (portal-input-test--light) 'portal-mode-line-emacs))
     (portal-input-mode -1)
     (should (equal mode-line-process '(portal-terminal--exited ":exited")))))
 
