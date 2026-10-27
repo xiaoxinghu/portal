@@ -72,7 +72,7 @@ are built for, not a tested support claim.
 
 A combination is verified when, at one Portal commit:
 
-1. `./build.sh` and every [check before a PR](../CONTRIBUTING.md#checks-before-a-pr)
+1. `./build.sh` and the [full set](../CONTRIBUTING.md#full-set) of checks
    pass;
 2. `sh test/views-gui.sh` and `sh test/input-gui.sh` pass with no skips in a
    graphical session of that combination, on a Mac or in a VM guest, for

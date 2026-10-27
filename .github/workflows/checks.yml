@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Every check, graphical ones included, in one job on one macOS runner, so the
-# downloads and the build serve them all. Runs on main after a merge, not on
-# pull requests: macOS minutes are scarce on this private repository.
+# The full set of checks, graphical ones and expensive tests included, in one
+# job on one macOS runner, so the downloads and the build serve them all. Runs
+# on main after a merge, not on pull requests: macOS minutes are scarce on this
+# private repository.
 name: Checks
 
 on:
@@ -38,6 +39,8 @@ jobs:
       HOMEBREW_NO_INSTALL_CLEANUP: 1
       HOMEBREW_NO_ANALYTICS: 1
       USE_CACHE: ${{ github.event_name != 'workflow_dispatch' || inputs.cache }}
+      # Every ERT runner includes the tests tagged :expensive.
+      PORTAL_TEST_EXPENSIVE: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
