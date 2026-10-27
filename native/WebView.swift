@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 import PortalCore
+import SecurityInterface
 import WebKit
 
 /// One WebKit page. It loads what the core decides and reports what the page
@@ -124,6 +125,8 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
     var loadError: String?
     /// The view's target, which names it in every call to the core.
     let target: String
+    /// Whether the page is a hosted app's, which keeps nothing between sessions.
+    private let hosted: Bool
 
     /// What an ordinary page adds to WebKit's user agent: Safari's own
     /// suffix, as the installed Safari, which ships with the system's
@@ -139,6 +142,7 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
     /// Web Inspector attach to it.
     init(target: String, configuration: WKWebViewConfiguration, hosted: Bool, inspectable: Bool) {
         self.target = target
+        self.hosted = hosted
         if hosted {
             configuration.websiteDataStore = .nonPersistent()
         } else {
@@ -366,9 +370,10 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
         Core.failed(target, token: 0, message: "The page's web process stopped.")
     }
 
-    /// The dialogs the page waits on, in the order it asked: JavaScript's,
-    /// one at a time, and its requests for the camera and microphone.
-    private var dialogs: [PageDialog] = []
+    /// The questions the page waits on, in the order it asked: JavaScript's
+    /// dialogs, one at a time, its requests for the camera and microphone,
+    /// and its servers' for the user's name and password or certificate.
+    private var dialogs: [any PageQuestion] = []
     /// The frame's window the page is shown in, while it is.
     private weak var shownIn: NSWindow?
     /// Whether the view has closed, so no dialog can show.
@@ -383,7 +388,7 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
 
     /// Show NEXT, the page's dialog, as a sheet on the page's frame, now or
     /// once the page is shown and has answered those before it.
-    private func ask(_ next: PageDialog) {
+    private func ask(_ next: any PageQuestion) {
         guard !closed else { return next.answer(false) }
         dialogs.append(next)
         next.done = { [weak self, weak next] in
@@ -415,15 +420,15 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
 
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping @MainActor () -> Void) {
-        ask(PageDialog(title: speaker(frame), message: message, buttons: ["OK"]) { _, _ in
+        ask(PageDialog(title: speaker(frame), message: message, buttons: ["OK"]) { _ in
             completionHandler()
         })
     }
 
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping @MainActor (Bool) -> Void) {
-        ask(PageDialog(title: speaker(frame), message: message, buttons: ["OK", "Cancel"]) { ok, _ in
-            completionHandler(ok)
+        ask(PageDialog(title: speaker(frame), message: message, buttons: ["OK", "Cancel"]) { answer in
+            completionHandler(answer.chosen)
         })
     }
 
@@ -431,8 +436,8 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
                  defaultText: String?, initiatedByFrame frame: WKFrameInfo,
                  completionHandler: @escaping @MainActor (String?) -> Void) {
         ask(PageDialog(title: speaker(frame), message: prompt, buttons: ["OK", "Cancel"],
-                       text: defaultText ?? "") { ok, text in
-            completionHandler(ok ? text : nil)
+                       fields: [.init(text: defaultText ?? "")]) { answer in
+            completionHandler(answer.chosen ? answer.texts[0] : nil)
         })
     }
 
@@ -444,8 +449,8 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
     func webView(_ webView: WKWebView, runBeforeUnloadConfirmPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
         ask(PageDialog(title: "Leave this page?", message: "Changes you made may not be saved.",
-                       buttons: ["Leave Page", "Stay on Page"]) { leave, _ in
-            completionHandler(leave)
+                       buttons: ["Leave Page", "Stay on Page"]) { answer in
+            completionHandler(answer.chosen)
         })
     }
 
@@ -475,9 +480,9 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
         if asking != page { who += " in \(Self.name(origin))" }
         let dialog = PageDialog(title: "Allow \(who) to use your \(what)?",
                                 message: "It may use it again until Emacs quits.",
-                                buttons: ["Allow", "Don’t Allow"]) { [target] allow, _ in
-            if allow { Core.mediaGranted(target, origin: page, frame: asking, devices: UInt32(devices)) }
-            decisionHandler(allow ? .grant : .deny)
+                                buttons: ["Allow", "Don’t Allow"]) { [target] answer in
+            if answer.chosen { Core.mediaGranted(target, origin: page, frame: asking, devices: UInt32(devices)) }
+            decisionHandler(answer.chosen ? .grant : .deny)
         }
         dialog.settled = { decide() == .grant }
         ask(dialog)
@@ -491,6 +496,92 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
     /// ORIGIN as the user knows it: its host, in quotes.
     private static func name(_ origin: WKSecurityOrigin) -> String {
         origin.host.isEmpty ? "this page" : "“\(origin.host)”"
+    }
+
+    /// A server, or a proxy, asks who the user is. A sheet asks for a user
+    /// name and password, as the page's dialogs do; WebKit then sends them
+    /// for the rest of the session without asking. Ordinary pages may
+    /// remember them in the login keychain, where they are then used without
+    /// asking until they fail; hosted apps keep nothing. A request for a
+    /// certificate gets the system's identity picker. A server's own
+    /// certificate is the system's to trust: one it does not fails the load.
+    func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge,
+                 completionHandler: @escaping @MainActor (URLSession.AuthChallengeDisposition,
+                                                          URLCredential?) -> Void) {
+        switch challenge.protectionSpace.authenticationMethod {
+        case NSURLAuthenticationMethodHTTPBasic, NSURLAuthenticationMethodHTTPDigest,
+             NSURLAuthenticationMethodNTLM:
+            askPassword(for: challenge, reply: completionHandler)
+        case NSURLAuthenticationMethodClientCertificate:
+            chooseIdentity(for: challenge, reply: completionHandler)
+        default:
+            completionHandler(.performDefaultHandling, nil)
+        }
+    }
+
+    private func askPassword(for challenge: URLAuthenticationChallenge,
+                             reply: @escaping @MainActor (URLSession.AuthChallengeDisposition,
+                                                          URLCredential?) -> Void) {
+        let space = challenge.protectionSpace, store = URLCredentialStorage.shared
+        let kept = hosted ? nil : store.defaultCredential(for: space)
+        if challenge.previousFailureCount == 0, let kept, let user = kept.user, let password = kept.password {
+            return reply(.useCredential, URLCredential(user: user, password: password, persistence: .forSession))
+        }
+        let usual = space.protocol == "https" ? 443 : 80
+        let host = space.port == usual ? space.host : "\(space.host):\(space.port)"
+        var message = challenge.previousFailureCount > 0 ? "The user name or password was incorrect. " : ""
+        if let realm = space.realm, !realm.isEmpty {
+            message += "“\(realm)” asks for a user name and password."
+        } else {
+            message += "It asks for a user name and password."
+        }
+        if !space.receivesCredentialSecurely { message += " The password will be sent unencrypted." }
+        let user = challenge.proposedCredential?.user ?? kept?.user ?? ""
+        ask(PageDialog(title: space.isProxy() ? "Log in to the proxy “\(host)”" : "Log in to “\(host)”",
+                       message: message, buttons: ["Log In", "Cancel"],
+                       fields: [.init(placeholder: "User Name", text: user),
+                                .init(placeholder: "Password", text: "", secure: true)],
+                       check: hosted ? nil : "Remember this password", checked: kept != nil) { [hosted] answer in
+            // Cancelled, the page shows what the server sends without them.
+            guard answer.chosen else { return reply(.rejectProtectionSpace, nil) }
+            let (user, password) = (answer.texts[0], answer.texts[1])
+            if answer.checked {
+                store.setDefaultCredential(URLCredential(user: user, password: password, persistence: .permanent),
+                                           for: space)
+            } else if !hosted {
+                for credential in store.credentials(for: space)?.values ?? [:].values {
+                    store.remove(credential, for: space)
+                }
+            }
+            reply(.useCredential, URLCredential(user: user, password: password, persistence: .forSession))
+        })
+    }
+
+    /// The identity the host prefers, or one the user picks from those in
+    /// the keychain the server accepts. Without one, or when the user
+    /// cancels, the page goes on without a certificate.
+    private func chooseIdentity(for challenge: URLAuthenticationChallenge,
+                                reply: @escaping @MainActor (URLSession.AuthChallengeDisposition,
+                                                             URLCredential?) -> Void) {
+        let space = challenge.protectionSpace
+        let issuers = space.distinguishedNames ?? []
+        let use = { (identity: SecIdentity) in
+            reply(.useCredential, URLCredential(identity: identity, certificates: nil, persistence: .forSession))
+        }
+        if let preferred = SecIdentityCopyPreferred(space.host as CFString, nil, issuers as CFArray) {
+            return use(preferred)
+        }
+        var query: [CFString: Any] = [kSecClass: kSecClassIdentity, kSecMatchLimit: kSecMatchLimitAll,
+                                      kSecReturnRef: true]
+        if !issuers.isEmpty { query[kSecMatchIssuers] = issuers }
+        var found: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &found) == errSecSuccess,
+              let identities = found as? [SecIdentity], !identities.isEmpty else {
+            return reply(.rejectProtectionSpace, nil)
+        }
+        ask(IdentityDialog(host: space.host, identities: identities) { identity in
+            if let identity { use(identity) } else { reply(.rejectProtectionSpace, nil) }
+        })
     }
 
     // File inputs, such as inserting an image, use the native file picker.
@@ -514,37 +605,73 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
     }
 }
 
-/// A JavaScript dialog, which the page waits on until it has an answer: its
-/// first button, or any other, and the text in its field if it has one. It is
-/// a sheet on the frame the page is shown in. Hiding the page takes the sheet
-/// down and showing it again puts it back, as a background tab's dialog
-/// waits, so a parked page's dialog is never lost offscreen.
+/// A question the page waits on, as a sheet on the frame the page is shown
+/// in. Hiding the page takes the sheet down and showing it again puts it
+/// back, as a background tab's dialog waits, so a parked page's question is
+/// never lost offscreen.
 @MainActor
-private final class PageDialog {
+private protocol PageQuestion: AnyObject {
+    /// Called once, after the answer.
+    var done: (() -> Void)? { get set }
+    /// Whether the question needs no asking any more, when its turn comes:
+    /// it is then answered as chosen.
+    var settled: (() -> Bool)? { get }
+    /// Show the sheet on WINDOW, moving it there if it is on another.
+    func show(on window: NSWindow)
+    /// Take the sheet down, keeping the question unanswered.
+    func hide()
+    /// Answer the page, once: as chosen, or as dismissed.
+    func answer(_ chosen: Bool)
+}
+
+/// A dialog, which the page waits on until it has an answer: its first
+/// button, or any other, the text in its fields, and whether its checkbox is
+/// ticked.
+@MainActor
+private final class PageDialog: PageQuestion {
+    /// A text field: what it says while empty, its text as last shown, and
+    /// whether it hides what is typed, as a password's does.
+    struct Field {
+        var placeholder = ""
+        var text: String
+        var secure = false
+    }
+
+    struct Answer {
+        /// Whether the first button was chosen.
+        let chosen: Bool
+        /// The fields' texts, in order.
+        let texts: [String]
+        /// Whether the checkbox was ticked.
+        let checked: Bool
+    }
+
     private let title: String
     private let message: String
     private let buttons: [String]
-    /// A prompt's text, as last shown.
-    private var text: String?
-    private var reply: (@MainActor (Bool, String?) -> Void)?
-    /// Called once, after the answer.
+    private var fields: [Field]
+    /// The checkbox's title, if the dialog has one, and its state as last shown.
+    private let check: String?
+    private var checked: Bool
+    private var reply: (@MainActor (Answer) -> Void)?
     var done: (() -> Void)?
-    /// Whether the dialog needs no asking any more, when its turn comes: it
-    /// is then answered with its first button.
     var settled: (() -> Bool)?
     private var sheet: NSAlert?
+    private var fieldViews: [NSTextField] = []
+    private var checkbox: NSButton?
     private weak var window: NSWindow?
 
-    init(title: String, message: String, buttons: [String], text: String? = nil,
-         reply: @escaping @MainActor (Bool, String?) -> Void) {
+    init(title: String, message: String, buttons: [String], fields: [Field] = [],
+         check: String? = nil, checked: Bool = false, reply: @escaping @MainActor (Answer) -> Void) {
         self.title = title
         self.message = message
         self.buttons = buttons
-        self.text = text
+        self.fields = fields
+        self.check = check
+        self.checked = checked
         self.reply = reply
     }
 
-    /// Show the dialog as a sheet on WINDOW, moving it there if it is on another.
     func show(on window: NSWindow) {
         guard sheet == nil || self.window !== window else { return }
         hide()
@@ -556,11 +683,24 @@ private final class PageDialog {
         if alert.buttons.count > 1, alert.buttons[1].keyEquivalent.isEmpty {
             alert.buttons[1].keyEquivalent = "\u{1b}"
         }
-        if let text {
-            let field = NSTextField(string: text)
-            field.frame = CGRect(x: 0, y: 0, width: 300, height: 24)
-            alert.accessoryView = field
-            alert.window.initialFirstResponder = field
+        fieldViews = fields.map { field in
+            let view = field.secure ? NSSecureTextField(string: field.text) : NSTextField(string: field.text)
+            if !field.placeholder.isEmpty { view.placeholderString = field.placeholder }
+            return view
+        }
+        checkbox = check.map { title in
+            let box = NSButton(checkboxWithTitle: title, target: nil, action: nil)
+            box.state = checked ? .on : .off
+            return box
+        }
+        let controls: [NSView] = fieldViews + (checkbox.map { [$0] } ?? [])
+        if !controls.isEmpty {
+            alert.accessoryView = Self.stack(controls)
+            for (view, next) in zip(controls, controls.dropFirst() + controls.prefix(1)) {
+                view.nextKeyView = next
+            }
+            // The first empty field, as a password's once its user is known.
+            alert.window.initialFirstResponder = fieldViews.first { $0.stringValue.isEmpty } ?? fieldViews.first
         }
         sheet = alert
         self.window = window
@@ -568,7 +708,7 @@ private final class PageDialog {
             MainActor.assumeIsolated {
                 // A sheet taken down by `hide` has no answer.
                 guard let self, self.sheet === alert else { return }
-                self.text = (alert.accessoryView as? NSTextField)?.stringValue ?? self.text
+                self.keep()
                 self.sheet = nil
                 self.window = nil
                 Self.returnKeyboard(to: window)
@@ -577,10 +717,32 @@ private final class PageDialog {
         }
     }
 
-    /// Take the sheet down, keeping the dialog unanswered.
+    /// CONTROLS one above another, as wide as a prompt's field.
+    private static func stack(_ controls: [NSView]) -> NSView {
+        let width: CGFloat = 300, gap: CGFloat = 8
+        let heights = controls.map { $0 is NSTextField ? 24 : $0.fittingSize.height }
+        let height = heights.reduce(0, +) + gap * CGFloat(controls.count - 1)
+        let stack = NSView(frame: CGRect(x: 0, y: 0, width: width, height: height))
+        var top = height
+        for (control, size) in zip(controls, heights) {
+            top -= size
+            control.frame = CGRect(x: 0, y: top, width: width, height: size)
+            stack.addSubview(control)
+            top -= gap
+        }
+        return stack
+    }
+
+    /// Keep what the sheet's fields and checkbox show, for the answer or the
+    /// next time it shows.
+    private func keep() {
+        for (index, view) in fieldViews.enumerated() { fields[index].text = view.stringValue }
+        if let checkbox { checked = checkbox.state == .on }
+    }
+
     func hide() {
         guard let alert = sheet else { return }
-        text = (alert.accessoryView as? NSTextField)?.stringValue ?? text
+        keep()
         sheet = nil
         if let window {
             window.endSheet(alert.window)
@@ -592,7 +754,7 @@ private final class PageDialog {
     /// AppKit leaves no window key once a sheet on an Emacs frame ends, so
     /// the next key would reach nothing and the next click only make the
     /// frame key. Give WINDOW the keyboard back, unless another window took it.
-    private static func returnKeyboard(to window: NSWindow) {
+    static func returnKeyboard(to window: NSWindow) {
         Task { @MainActor in
             guard NSApp.isActive, NSApp.keyWindow == nil, window.attachedSheet == nil,
                   window.isVisible else { return }
@@ -605,7 +767,71 @@ private final class PageDialog {
         hide()
         guard let reply else { return }
         self.reply = nil
-        reply(chosen, text)
+        reply(Answer(chosen: chosen, texts: fields.map(\.text), checked: checked))
+        done?()
+    }
+}
+
+/// The system's identity picker, for a server that asks for a certificate
+/// of the user's: the identities in the keychain it accepts. The choice
+/// becomes the host's identity preference in the keychain.
+@MainActor
+private final class IdentityDialog: NSObject, PageQuestion {
+    private let host: String
+    private let identities: [SecIdentity]
+    private var chosen: SecIdentity?
+    private var reply: (@MainActor (SecIdentity?) -> Void)?
+    var done: (() -> Void)?
+    let settled: (() -> Bool)? = nil
+    private var sheet: SFChooseIdentityPanel?
+    private weak var window: NSWindow?
+
+    init(host: String, identities: [SecIdentity], reply: @escaping @MainActor (SecIdentity?) -> Void) {
+        self.host = host
+        self.identities = identities
+        self.reply = reply
+    }
+
+    func show(on window: NSWindow) {
+        guard sheet == nil || self.window !== window else { return }
+        hide()
+        let panel = SFChooseIdentityPanel()
+        panel.setDomain(host)
+        sheet = panel
+        self.window = window
+        panel.beginSheet(for: window, modalDelegate: self,
+                         didEnd: #selector(ended(_:returnCode:contextInfo:)), contextInfo: nil,
+                         identities: identities,
+                         message: "“\(host)” asks for a certificate to identify you.")
+    }
+
+    @objc private func ended(_ panel: NSWindow, returnCode: Int, contextInfo: UnsafeMutableRawPointer?) {
+        // A sheet taken down by `hide` has no answer.
+        guard let sheet, sheet === panel, let window else { return }
+        chosen = returnCode == NSApplication.ModalResponse.OK.rawValue
+            ? sheet.identity()?.takeUnretainedValue() : nil
+        self.sheet = nil
+        self.window = nil
+        PageDialog.returnKeyboard(to: window)
+        answer(chosen != nil)
+    }
+
+    func hide() {
+        guard let panel = sheet else { return }
+        sheet = nil
+        if let window {
+            window.endSheet(panel)
+            PageDialog.returnKeyboard(to: window)
+        }
+        window = nil
+    }
+
+    /// Answer the page, once: with the chosen identity, or none.
+    func answer(_ chosen: Bool) {
+        hide()
+        guard let reply else { return }
+        self.reply = nil
+        reply(chosen ? self.chosen : nil)
         done?()
     }
 }

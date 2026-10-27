@@ -16,6 +16,8 @@ and load when the host sends its readiness message. External URLs need no server
   pipe. URLs have the form `http://127.0.0.1:PORT/TOKEN/hello`,
   `http://127.0.0.1:PORT/TOKEN/dialogs`, a page that tries the
   [JavaScript dialogs](web-views.md#web-view-behaviour),
+  `http://127.0.0.1:PORT/TOKEN/sign-in`, a page behind HTTP Basic
+  authentication that [asks for a password](web-views.md#passwords-and-certificates),
   `http://127.0.0.1:PORT/TOKEN/about?portal=VERSION&emacs=VERSION` or
   `http://127.0.0.1:PORT/TOKEN/markdown?path=ENCODED_ABSOLUTE_PATH`. Previews
   load local images from `image?path=ENCODED_ABSOLUTE_PATH`, which serves

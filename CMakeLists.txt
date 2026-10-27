@@ -46,6 +46,7 @@ add_custom_command(
     BYPRODUCTS "${CMAKE_BINARY_DIR}/portal-host.meta.json"
         "${CMAKE_SOURCE_DIR}/host/.generated/editor-inputs.json"
     DEPENDS host/server.ts host/app.ts host/hello.html host/dialogs.html host/about.ts host/about.html
+        host/sign-in.ts
         host/markdown.ts host/markdown.css
         host/icons/portal-32.png host/icons/portal-64.png host/icons/portal-256.png
         host/package.json host/bun.lock host/tsconfig.json host/build-editor.ts

@@ -6,6 +6,7 @@ import dialogs from "./dialogs.html" with { type: "text" };
 import editor from "./excalidraw.html" with { type: "text" };
 import hello from "./hello.html" with { type: "text" };
 import { image, markdown } from "./markdown";
+import { signIn } from "./sign-in";
 
 // Applies only to the local editor. Fonts, images and lazy modules cannot fall
 // back to a CDN; user-authored URLs cannot embed remote pages or run scripts.
@@ -32,6 +33,7 @@ async function dispatch(
 		route !== "/hello" &&
 		route !== "/about" &&
 		route !== "/dialogs" &&
+		route !== "/sign-in" &&
 		route !== "/markdown" &&
 		route !== "/image" &&
 		route !== "/excalidraw/" &&
@@ -48,6 +50,7 @@ async function dispatch(
 	if (route === "/markdown") return markdown(url.searchParams.get("path"));
 	if (route === "/image") return image(url.searchParams.get("path"));
 	if (route === "/about") return about(url.searchParams);
+	if (route === "/sign-in") return signIn(request);
 	if (route === "/dialogs")
 		return new Response(dialogs, {
 			headers: { "Content-Type": "text/html; charset=utf-8" },

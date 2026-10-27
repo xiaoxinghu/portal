@@ -281,6 +281,49 @@ on the page meanwhile."
       (portal-test--sheet "Leave Page")
       (portal-test--wait-for-page "Hello, world!" target))))
 
+;;; Passwords
+
+;; The app host's sign-in page takes any user name with the password
+;; "portal"; see host/sign-in.ts.
+(ert-deftest portal-web-asks-for-a-password-once ()
+  :tags '(:gui)
+  (portal-test--with-dialogs
+    (let* ((host (progn (string-match "//\\([^/]+\\)" (portal-server-url))
+                        (match-string 1 (portal-server-url))))
+           (title (format "Log in to “%s”" host))
+           (asks "“Portal” asks for a user name and password. The password will be sent unencrypted."))
+      (portal-web--visit-hosted "/sign-in" "sign-in")
+      (let ((sheet (portal-test--wait-for-sheet title)))
+        (should (member asks (plist-get sheet :texts)))
+        (should (equal (plist-get sheet :fields) '("" "")))
+        ;; Hosted apps keep nothing, so the sheet offers to remember nothing.
+        (should (equal (sort (plist-get sheet :buttons) #'string<) '("Cancel" "Log In"))))
+      ;; Cancelled, the page is what the server sends without a password.
+      (portal-test--sheet "Cancel")
+      (portal-test--wait-for-page "Not signed in")
+      (portal-web-reload)
+      (portal-test--wait-for-sheet title)
+      (portal-test--sheet "Log In" ["Ada" "wrong"])
+      (let ((sheet (portal-test--wait-for-sheet
+                    (concat "The user name or password was incorrect. " asks))))
+        (should (equal (plist-get sheet :fields) '("Ada" ""))))
+      (portal-test--sheet "Log In" ["Ada" "portal"])
+      (portal-test--wait-for-page "Signed in as Ada")
+      (portal-test--no-sheet)
+      ;; WebKit keeps the password for the session, so reloading asks nothing.
+      (portal-excalidraw-gui--js "document.title = 'Reloading'; return true;")
+      (portal-test--wait-for-page "Reloading")
+      (portal-web-reload)
+      (portal-test--wait-for-page "Signed in as Ada")
+      (should-not (portal-test--sheet))
+      ;; An ordinary page, with a session of its own, asks too and offers to
+      ;; remember, which this test leaves off to keep out of the keychain.
+      (portal-open-url (portal-excalidraw-gui--js "return location.href;"))
+      (should (member "Remember this password"
+                      (plist-get (portal-test--wait-for-sheet title) :buttons)))
+      (portal-test--sheet "Log In" ["Grace" "portal"])
+      (portal-test--wait-for-page "Signed in as Grace"))))
+
 (defun portal-test--serve (routes)
   "Serve ROUTES on a local port, and return the server process.
 ROUTES is an alist of each path to the HTTP response, headers and body,
