@@ -151,6 +151,7 @@ when the view is hidden, or `elsewhere'."
                                       (buffer-local-value 'portal-view--target buffer))))))
 
 (ert-deftest portal-choose-gui-preview-from-emacs-and-another-frame ()
+  :tags '(:gui)
   (portal-choose-gui--environment
     (let* ((window (selected-window))
            (shown (portal-choose-gui--open "pqz-shown"))
@@ -200,6 +201,7 @@ when the view is hidden, or `elsewhere'."
         (delete-frame frame)))))
 
 (ert-deftest portal-choose-gui-preview-from-a-focused-terminal ()
+  :tags '(:gui)
   (portal-terminal-test--native-maps
     (portal-choose-gui--environment
       (portal-terminal-bind-key portal-terminal-native-map "s-j" #'portal-terminal-choose)
@@ -229,6 +231,7 @@ when the view is hidden, or `elsewhere'."
         (portal-choose-gui--untouched target origin)))))
 
 (ert-deftest portal-choose-gui-preview-from-a-quick-panel ()
+  :tags '(:gui)
   (portal-terminal-test--native-maps
     (portal-choose-gui--environment
       (portal-terminal-bind-key portal-terminal-native-map "s-j" #'portal-terminal-choose)

@@ -70,6 +70,7 @@
          (portal-terminal-close-all)))))
 
 (ert-deftest portal-terminal-start-uses-shell-startup ()
+  :tags '(:gui)
   (skip-unless (eq window-system 'ns))
   ;; test/terminal-shell-startup.sh launches a fresh native process with these
   ;; dotfiles. Lisp-side setenv cannot change the native parent's environment.
@@ -109,6 +110,7 @@
       (delete-directory directory t))))
 
 (ert-deftest portal-terminal-start-missing-program-is-reported-in-terminal ()
+  :tags '(:gui)
   (skip-unless (eq window-system 'ns))
   (save-window-excursion
     (let* ((buffer (portal-terminal-start temporary-file-directory "portal-no-such-program-4817" nil))
@@ -119,6 +121,7 @@
         (kill-buffer buffer)))))
 
 (ert-deftest portal-terminal-theme-live-and-new-sessions ()
+  :tags '(:gui)
   (skip-unless (eq window-system 'ns))
   (let ((original portal-terminal-theme))
     (unwind-protect
@@ -155,6 +158,7 @@
       (setq portal-terminal-theme original))))
 
 (ert-deftest portal-terminal-real-shell-survives-hiding-and-resizes ()
+  :tags '(:gui)
   (portal-terminal-test--session
     (let* ((terminal-buffer (current-buffer))
            (directory (make-temp-file "portal-terminal-test-" t))
@@ -209,6 +213,7 @@
         (delete-directory directory t)))))
 
 (ert-deftest portal-terminal-follows-its-buffer-into-another-frame ()
+  :tags '(:gui)
   (skip-unless (fboundp 'portal-test-native-key))
   (portal-terminal-test--session
     (let* ((buffer (current-buffer))
@@ -255,6 +260,7 @@
         (delete-directory directory t)))))
 
 (ert-deftest portal-terminal-alternate-screen-and-buffer-cleanup ()
+  :tags '(:gui)
   (portal-terminal-test--session
     ;; A real interactive shell writes alternate-screen control sequences.
     ;; Read the actual Ghostty grid to verify the parser and screen switching.
@@ -268,6 +274,7 @@
     (should-not (portal-terminal-test--state))))
 
 (ert-deftest portal-terminal-metadata-follows-a-real-shell ()
+  :tags '(:gui)
   (portal-terminal-test--session
     (let* ((buffer (current-buffer))
            (project (plist-get (portal-terminal-metadata) :project))
@@ -333,6 +340,7 @@
         (delete-directory directory t)))))
 
 (ert-deftest portal-terminal-native-keys-clipboard-and-focus ()
+  :tags '(:gui)
   (skip-unless (fboundp 'portal-test-native-key))
   (portal-terminal-test--session
     (let ((clipboard (gui-get-selection 'CLIPBOARD 'STRING)))
@@ -366,6 +374,7 @@
         (gui-set-selection 'CLIPBOARD clipboard)))))
 
 (ert-deftest portal-terminal-windowless-escape-restores-emacs-input ()
+  :tags '(:gui)
   (skip-unless (fboundp 'portal-test-native-post-key))
   (portal-terminal-test--session
     (select-frame-set-input-focus (selected-frame))
@@ -383,6 +392,7 @@
       (should (eq (key-binding keys) #'switch-to-buffer)))))
 
 (ert-deftest portal-terminal-focus-takes-the-key-window ()
+  :tags '(:gui)
   (skip-unless (fboundp 'portal-test-native-key))
   (portal-terminal-test--session
     (let ((frame (selected-frame))
@@ -404,6 +414,7 @@
         (delete-frame other)))))
 
 (ert-deftest portal-terminal-unfocus-command-returns-focus ()
+  :tags '(:gui)
   (portal-terminal-test--session
     (should (plist-get (portal-terminal-test--state) :focused))
     (call-interactively #'portal-terminal-unfocus)
@@ -413,6 +424,7 @@
     (should (plist-get (portal-terminal-test--state) :focused))))
 
 (ert-deftest portal-terminal-invalid-target-preserves-live-shell ()
+  :tags '(:gui)
   (portal-terminal-test--session
     (should-error (portal--close 42) :type 'wrong-type-argument)
     (should-error (portal--close "terminal:0"))
@@ -421,6 +433,7 @@
     (should (plist-get (portal-terminal-test--state) :focused))))
 
 (ert-deftest portal-terminal-native-vim-edits-a-real-file ()
+  :tags '(:gui)
   (skip-unless (and (fboundp 'portal-test-native-key) (executable-find "vim")))
   (portal-terminal-test--session
     (let ((file (make-temp-name (expand-file-name "portal-vim-" temporary-file-directory))))
@@ -479,6 +492,7 @@ The terminal does not use TRIGGER, so Emacs reads it, and STROKES after it."
 (defconst portal-terminal-test--super (ash 1 20))
 
 (ert-deftest portal-terminal-chords-run-emacs-commands ()
+  :tags '(:gui)
   (portal-terminal-test--with-keys
       '(("s-n" . portal-terminal-new) ("s-p" . portal-terminal-previous)
         ("s-]" . portal-terminal-next) ("s-l" . portal-terminal-last)
@@ -522,6 +536,7 @@ The terminal does not use TRIGGER, so Emacs reads it, and STROKES after it."
             (should (= (length (portal-view-buffers 'terminal)) 2))))))))
 
 (ert-deftest portal-terminal-control-chords-reach-the-shell ()
+  :tags '(:gui)
   ;; tmux's prefix is the shell's, and a Super chord never leaks into it.
   (portal-terminal-test--with-keys '(("s-j" . undefined))
     (portal-terminal-test--session
@@ -539,6 +554,7 @@ The terminal does not use TRIGGER, so Emacs reads it, and STROKES after it."
   (setq portal-terminal-test--answer (read-string "Answer: ")))
 
 (ert-deftest portal-terminal-chord-minibuffer-cancel-and-escape ()
+  :tags '(:gui)
   (let ((map (make-sparse-keymap)))
     (keymap-set map "a" #'ignore)
     (portal-terminal-test--with-keys
@@ -569,6 +585,7 @@ The terminal does not use TRIGGER, so Emacs reads it, and STROKES after it."
                          (vconcat (kbd "C-x b")))))))))
 
 (ert-deftest portal-terminal-chord-follows-native-pane-and-keeps-shells-independent ()
+  :tags '(:gui)
   (portal-terminal-test--with-keys '(("s-n" . portal-terminal-new))
     (portal-terminal-test--session
       (let ((left (current-buffer))
@@ -610,6 +627,7 @@ The terminal does not use TRIGGER, so Emacs reads it, and STROKES after it."
 ;;; portal-terminal-tests.el ends here
 
 (ert-deftest portal-terminal-quick-real-process-and-native-toggle ()
+  :tags '(:gui)
   (skip-unless (and (eq window-system 'ns) (fboundp 'portal-test-native-key)))
   (let* ((directory (make-temp-file "portal-quick-native-" t))
          (receipt (expand-file-name "started" directory))
@@ -711,6 +729,7 @@ The terminal does not use TRIGGER, so Emacs reads it, and STROKES after it."
   (user-error "Deliberate native binding failure"))
 
 (ert-deftest portal-terminal-bindings-live-rebind-prompt-error-and-unbind ()
+  :tags '(:gui)
   (portal-terminal-test--native-maps
     (portal-terminal-test--session
       (let ((id (portal-view-target)))
@@ -735,6 +754,7 @@ The terminal does not use TRIGGER, so Emacs reads it, and STROKES after it."
          (lambda () (portal-test-native-key 30 (ash 1 18) "\C-]" t)) 29)))))
 
 (ert-deftest portal-terminal-bindings-nested-prefix-cancel-and-literal ()
+  :tags '(:gui)
   (portal-terminal-test--native-maps
     (portal-terminal-test--session
       (portal-terminal-bind-key portal-terminal-native-map "C-] x y" #'portal-terminal-test--prompt)
@@ -756,6 +776,7 @@ The terminal does not use TRIGGER, so Emacs reads it, and STROKES after it."
        29))))
 
 (ert-deftest portal-terminal-bindings-quick-only-toggle-and-hidden-session-updates ()
+  :tags '(:gui)
   (portal-terminal-test--native-maps
     (portal-terminal-test--session
       (let ((regular (current-buffer)) (regular-id (portal-view-target)))
@@ -777,6 +798,7 @@ The terminal does not use TRIGGER, so Emacs reads it, and STROKES after it."
           (kill-buffer quick))))))
 
 (ert-deftest portal-terminal-bindings-new-session-and-native-validation ()
+  :tags '(:gui)
   (portal-terminal-test--native-maps
     (portal-terminal-bind-key portal-terminal-native-map "s-j" #'portal-terminal-test--prompt)
     (portal-terminal-test--session
@@ -795,6 +817,7 @@ The terminal does not use TRIGGER, so Emacs reads it, and STROKES after it."
       (should (equal portal-terminal-test--answer "b")))))
 
 (ert-deftest portal-terminal-bindings-shifted-characters ()
+  :tags '(:gui)
   (portal-terminal-test--native-maps
     (portal-terminal-test--session
       (dolist (binding '(("s-!" 18 "!") ("s-J" 38 "J")))

@@ -455,3 +455,55 @@ test("the runner's alias comes from PORTAL_TEST_VM, then portal.testVm", async (
 		rmSync(cwd, { recursive: true, force: true });
 	}
 });
+
+test("the runner passes the tests' tier to the guest", async () => {
+	const cwd = await guiClone();
+	try {
+		copyFileSync(script, join(cwd, "test", "vm.sh"));
+		// Stand-ins: ssh makes the run directory, then records the guest
+		// command; rsync copies nothing.
+		mkdirSync(join(cwd, "bin"));
+		await Bun.write(
+			join(cwd, "bin", "ssh"),
+			`#!/bin/sh
+case $5 in
+*mkdir*) echo /guest/portal-test-runs/run.test ;;
+*) printf "%s\\n" "$5" >>"$SSH_LOG" ;;
+esac
+`,
+		);
+		await Bun.write(join(cwd, "bin", "rsync"), "#!/bin/sh\n");
+		Bun.spawnSync([
+			"chmod",
+			"+x",
+			join(cwd, "bin", "ssh"),
+			join(cwd, "bin", "rsync"),
+		]);
+		const log = join(cwd, "ssh.log");
+		const runner = (expensive: string) => {
+			rmSync(join(cwd, ".cache"), { recursive: true, force: true });
+			const result = Bun.spawnSync(
+				["/bin/bash", join(cwd, "test", "vm.sh"), "true"],
+				{
+					cwd,
+					env: {
+						...gitEnv,
+						PATH: `${join(cwd, "bin")}:${process.env.PATH}`,
+						PORTAL_TEST_VM: "guest",
+						PORTAL_TEST_EXPENSIVE: expensive,
+						SSH_LOG: log,
+					},
+				},
+			);
+			expect(result.exitCode).toBe(0);
+		};
+		runner("");
+		runner("1");
+		const commands = readFileSync(log, "utf8").trimEnd().split("\n");
+		expect(commands).toHaveLength(2);
+		expect(commands[0]).not.toContain("PORTAL_TEST_EXPENSIVE");
+		expect(commands[1]).toContain("PORTAL_TEST_EXPENSIVE=1 /bin/bash");
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});

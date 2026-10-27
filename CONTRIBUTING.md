@@ -11,7 +11,7 @@ the project's checks pass, push it, and open a PR against `main` with
 `gh pr create`. Describe the behavior changed and the checks actually run.
 
 Besides the [build prerequisites](README.md#build-and-run), the
-[checks before a PR](#checks-before-a-pr) need Bun on `PATH` for the host checks
+[checks](#checks) need Bun on `PATH` for the host checks
 (the pinned version in `tools/bun.manifest` or newer) and Python 3, which Xcode
 includes. Opening a PR from the command line uses the GitHub CLI, `gh`.
 
@@ -128,7 +128,13 @@ examples and fails on any compilation error or warning.
 For distribution alternatives and size measurements, see
 [Bun distribution notes](docs/bun-distribution.md).
 
-## Checks before a PR
+## Checks
+
+The checks come in two tiers. Run the default loop while working: about two
+minutes after an incremental build. Run the full set once before merging; CI
+runs it again on `main` after each merge.
+
+### Default loop
 
 ```sh
 ./build.sh
@@ -137,9 +143,22 @@ bun run --cwd host check
 bun run --cwd host typecheck
 python3 -B -m unittest discover -s test -p 'test_*.py'
 git diff --check
+sh test/views-gui.sh
+sh test/input-gui.sh
 ```
 
-Then the graphical checks, each suite in a fresh graphical Emacs:
+The last two each run in a fresh graphical Emacs. They open windows and take
+keyboard focus while they run. To keep working meanwhile,
+[run them in a VM](docs/testing.md#graphical-checks-in-a-vm). Add the full
+set's graphical check for what a change touches: `launcher-gui.sh` for the
+launcher, `package-gui.sh` for installation and the build.
+
+### Full set
+
+The full set adds the tests tagged `:expensive`, long soaks and matrices, to
+every ERT runner, and three more graphical checks. With
+`PORTAL_TEST_EXPENSIVE=1` set, run the default loop's batch checks, then every
+graphical suite:
 
 ```sh
 sh test/gui-all.sh
@@ -148,9 +167,10 @@ sh test/gui-all.sh
 It runs `test/views-gui.sh`, `test/input-gui.sh`, `test/launcher-gui.sh`,
 `test/terminal-shell-startup.sh` and `test/package-gui.sh` in turn, after a
 failure too, and fails if any of them did; run one of those to repeat a single
-suite. They open windows and take keyboard focus while they run. To keep
-working meanwhile, [run them in a VM](docs/testing.md#graphical-checks-in-a-vm),
-where the wrapper builds once for all of them.
+suite. In a VM the wrapper builds once for all of them.
+[Test tiers](docs/testing.md#test-tiers) says how tests join a tier.
+
+### What they cover
 
 The build installs the locked host dependencies and CMake downloads hash-checked
 Emacs packages for integration tests. The `licenses` suite fails when a

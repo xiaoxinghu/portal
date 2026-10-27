@@ -175,8 +175,13 @@ main() {
         echo "Logs: $logs"
     }
     trap collect_logs EXIT
+    # SSH passes no environment; the tests' tier crosses with the stage limit.
+    forward=("PORTAL_TEST_TIMEOUT=$timeout")
+    if [[ -n ${PORTAL_TEST_EXPENSIVE:-} ]]; then
+        forward+=("PORTAL_TEST_EXPENSIVE=$PORTAL_TEST_EXPENSIVE")
+    fi
     status=0
-    "${ssh_vm[@]}" "$(quote env "PORTAL_TEST_TIMEOUT=$timeout" /bin/bash \
+    "${ssh_vm[@]}" "$(quote env "${forward[@]}" /bin/bash \
         "$run/repo/test/vm.sh" --guest "$run" "$@")" || status=$?
     exit "$status"
 }

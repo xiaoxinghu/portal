@@ -57,6 +57,7 @@ TARGET defaults to the selected pane's view.  Return its state."
          (equal (plist-get state :edges) (window-inside-pixel-edges window)))))
 
 (ert-deftest portal-web-runs-javascript-and-keeps-its-page-while-hidden ()
+  :tags '(:gui)
   (portal-test--with-web
     (portal-open-url
      "data:text/html,<title>Initial</title><h1>WebKit works</h1><script>document.title='JS works'</script>")
@@ -74,6 +75,7 @@ TARGET defaults to the selected pane's view.  Return its state."
       (should-not (portal--inspect target)))))
 
 (ert-deftest portal-web-about-draws-with-webgl-even-after-losing-it-and-learns-when-it-is-hidden ()
+  :tags '(:gui)
   (portal-test--with-web
     (skip-unless (file-executable-p (portal-server-program-file)))
     (select-frame-set-input-focus (selected-frame))
@@ -154,6 +156,7 @@ TARGET defaults to the selected pane's view.  Return its state."
     (substring (plist-get state :title) 3)))
 
 (ert-deftest portal-web-ordinary-pages-claim-safari-and-hosted-apps-do-not ()
+  :tags '(:gui)
   ;; Google refuses to sign in to a page whose user agent does not claim Safari.
   (portal-test--with-web
     (let ((ordinary (portal-test--user-agent nil))
@@ -163,6 +166,7 @@ TARGET defaults to the selected pane's view.  Return its state."
       (should-not (string-match-p "Safari" hosted)))))
 
 (ert-deftest portal-web-loads-local-file-with-relative-javascript ()
+  :tags '(:gui)
   (portal-test--with-web
     (let* ((directory (make-temp-file "portal-web-" t))
            (file (expand-file-name "Résumé #%?.HTML" directory)))
@@ -179,6 +183,7 @@ TARGET defaults to the selected pane's view.  Return its state."
         (delete-directory directory t)))))
 
 (ert-deftest portal-web-loads-again-and-rejects-invalid-urls ()
+  :tags '(:gui)
   (portal-test--with-web
     (portal-open-url "data:text/html,<title>First</title>")
     (let ((target (portal-view-target)))
@@ -193,6 +198,7 @@ TARGET defaults to the selected pane's view.  Return its state."
 
 ;; Safari's Develop menu lists exactly the pages WebKit marks inspectable.
 (ert-deftest portal-web-inspectable-follows-the-option ()
+  :tags '(:gui)
   (portal-test--with-web
     (skip-unless (version<= "13.3" (car (process-lines "sw_vers" "-productVersion"))))
     (let ((original portal-web-inspectable))
@@ -261,6 +267,7 @@ on the page meanwhile."
     (should (portal-test-native-click (aref point 0) (aref point 1)))))
 
 (ert-deftest portal-web-dialogs-give-the-page-its-answers ()
+  :tags '(:gui)
   (portal-test--with-dialogs
     (portal-test--click "alert")
     (let ((sheet (portal-test--wait-for-sheet "Hello from the page")))
@@ -290,6 +297,7 @@ on the page meanwhile."
     (portal-test--wait-for-page "prompt: null")))
 
 (ert-deftest portal-web-dialog-waits-while-its-page-is-hidden ()
+  :tags '(:gui)
   (portal-test--with-dialogs
     (let ((buffer (current-buffer))
           (target (portal-view-target)))
@@ -312,6 +320,7 @@ on the page meanwhile."
       (portal-test--no-sheet))))
 
 (ert-deftest portal-web-asks-before-leaving-a-page-that-guards-it ()
+  :tags '(:gui)
   (portal-test--with-dialogs
     (let ((target (portal-view-target)))
       ;; WebKit asks only for a page the user has used, as a click does.
@@ -395,6 +404,7 @@ navigator.mediaDevices.getUserMedia(%s).then(
 return true;" constraints)))
 
 (ert-deftest portal-web-pages-ask-for-the-camera-and-microphone ()
+  :tags '(:gui)
   (portal-test--with-dialogs
     (let* ((server (portal-test--serve
                     `(("/" . ,(portal-test--response '("Content-Type: text/html")
@@ -481,6 +491,7 @@ return true;" constraints)))
         (delete-process server)))))
 
 (ert-deftest portal-web-downloads-instead-of-failing-and-says-so ()
+  :tags '(:gui)
   (portal-test--with-web
     (let* ((directory (file-name-as-directory (make-temp-file "portal-downloads-" t)))
            (original portal-web-download-directory)
@@ -582,6 +593,7 @@ return true;" constraints)))
     (portal-web-find)))
 
 (ert-deftest portal-web-finds-text-from-the-minibuffer-and-emacs-keeps-the-keyboard ()
+  :tags '(:gui)
   (portal-test--with-web
     (portal-test--with-page-scripts
       (let ((portal-web-find-history nil)
@@ -605,6 +617,7 @@ return true;" constraints)))
         (portal-integration-test--emacs-input)))))
 
 (ert-deftest portal-web-zoom-lays-the-page-out-again-and-stays-with-its-site ()
+  :tags '(:gui)
   (portal-test--with-web
     (portal-test--with-page-scripts
       (let ((portal-web-zoom-levels nil)

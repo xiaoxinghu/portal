@@ -46,6 +46,7 @@ from that thread."
 (defun portal-input-gui--mark () (interactive) (setq portal-input-gui--ran t))
 
 (ert-deftest portal-input-gui-web-page-keeps-typing-and-the-chords-it-uses ()
+  :tags '(:gui)
   (portal-input-gui--page
     (portal-test-native-key 53 0 "\e")
     (portal-test-native-key 0 0 "a")
@@ -59,6 +60,7 @@ from that thread."
              "return keys.map(k=>k[0]).join()==='Escape,a,A,k,b' && keys.every(k=>k[2]) && document.querySelector('input').value==='aAb';"))))
 
 (ert-deftest portal-input-gui-web-unused-chord-runs-in-emacs-with-what-follows ()
+  :tags '(:gui)
   (portal-input-gui--page
     (keymap-set (current-local-map) "C-c t" #'portal-input-gui--mark)
     (let ((portal-input-gui--ran nil))
@@ -75,6 +77,7 @@ from that thread."
                "return keys.map(k=>k[0]).join()==='c,z' && document.querySelector('input').value==='z';")))))
 
 (ert-deftest portal-input-gui-web-keys-after-a-whole-command-stay-with-emacs ()
+  :tags '(:gui)
   (portal-input-gui--page
     (keymap-set (current-local-map) "C-c" #'portal-input-gui--mark)
     (let ((portal-input-gui--ran nil))
@@ -89,6 +92,7 @@ from that thread."
       (should (= (portal-excalidraw-gui--js "return keys.length") 1)))))
 
 (ert-deftest portal-input-gui-web-trigger-again-inside-a-sequence-is-emacs-s ()
+  :tags '(:gui)
   (portal-input-gui--page
     (keymap-set (current-local-map) "C-c C-c" #'portal-input-gui--mark)
     (let ((portal-input-gui--ran nil))
@@ -100,6 +104,7 @@ from that thread."
       (should (= (portal-excalidraw-gui--js "return keys.length") 1)))))
 
 (ert-deftest portal-input-gui-web-command-f-finds-while-emacs-has-the-keyboard ()
+  :tags '(:gui)
   (portal-test--with-web
     (select-frame-set-input-focus (selected-frame))
     (portal-open-url "data:text/html,<title>Find ready</title><p>apple pie</p><input autofocus spellcheck=false>")
@@ -126,6 +131,7 @@ from that thread."
       (should (portal-input--action "focused" target)))))
 
 (ert-deftest portal-input-gui-web-page-focusing-a-field-leaves-emacs-the-keyboard ()
+  :tags '(:gui)
   (portal-test--with-web
     (select-frame-set-input-focus (selected-frame))
     ;; Autofocus, then a script, focus the field while Emacs has the keyboard.
@@ -147,6 +153,7 @@ from that thread."
                        "a")))))
 
 (ert-deftest portal-input-gui-web-command-period-returns-to-emacs ()
+  :tags '(:gui)
   (portal-input-gui--page
     ;; The mode line renders who has the keyboard, and follows each change:
     ;; the light lit or dimmed, and the whole line tinted for the app.
@@ -169,6 +176,7 @@ from that thread."
                     'portal-mode-line-app)))))
 
 (ert-deftest portal-input-gui-web-configured-escape-preempts-the-page ()
+  :tags '(:gui)
   (portal-input-gui--page
     ;; This page explicitly claims C-k. Reserving it must bypass the page.
     (let ((portal-input-escape-key "C-k"))
@@ -183,6 +191,7 @@ from that thread."
     (should-not (portal-input--action "focused"))))
 
 (ert-deftest portal-input-gui-web-double-escape-returns-to-emacs ()
+  :tags '(:gui)
   (portal-input-gui--page
     (let ((portal-input-double-escape 0.5))
       ;; Escape typed slowly twice is the page's both times.
@@ -202,6 +211,7 @@ from that thread."
       (should (portal-excalidraw-gui--js "return keys.every(k=>k[0]==='Escape')")))))
 
 (ert-deftest portal-input-gui-web-command-c-and-v-copy-and-paste ()
+  :tags '(:gui)
   (portal-input-gui--page
     (let ((saved (gui-get-selection 'CLIPBOARD)))
       (unwind-protect
@@ -222,6 +232,7 @@ from that thread."
         (when saved (gui-set-selection 'CLIPBOARD saved))))))
 
 (ert-deftest portal-input-gui-web-command-selects-and-focuses-terminal ()
+  :tags '(:gui)
   (portal-input-gui--page
     (keymap-set (current-local-map) "C-c o" #'other-window)
     (let ((web-window (selected-window)))
@@ -315,6 +326,7 @@ in it; otherwise the page is back in its pane in the key window."
                 (vector (- (nth 2 edges) (nth 0 edges)) (- (nth 3 edges) (nth 1 edges)))))))
 
 (ert-deftest portal-input-gui-web-fullscreen-keeps-the-keyboard-and-escape-leaves-it ()
+  :tags '(:gui)
   (portal-input-gui--fullscreen-page
     ;; With a long double escape, an Escape counted in fullscreen would
     ;; make the next one return to Emacs.
@@ -353,6 +365,7 @@ in it; otherwise the page is back in its pane in the key window."
       (portal-integration-test--emacs-input))))
 
 (ert-deftest portal-input-gui-web-fullscreen-returns-to-where-emacs-put-the-page ()
+  :tags '(:gui)
   (portal-input-gui--fullscreen-page
     (let ((target (portal-view-target)))
       ;; A script, here Emacs's, can make the page fullscreen while Emacs
@@ -398,6 +411,7 @@ in it; otherwise the page is back in its pane in the key window."
       (should (portal-input-gui--fills-pane)))))
 
 (ert-deftest portal-input-gui-web-fullscreen-page-keeps-the-keyboard-in-another-frame ()
+  :tags '(:gui)
   (portal-input-gui--fullscreen-page
     (let* ((buffer (current-buffer))
            (target (portal-view-target))
@@ -438,6 +452,7 @@ in it; otherwise the page is back in its pane in the key window."
         (delete-frame frame)))))
 
 (ert-deftest portal-input-gui-web-fullscreen-page-closes-with-its-buffer ()
+  :tags '(:gui)
   (portal-input-gui--fullscreen-page
     (let ((target (portal-view-target)))
       (should (portal-test-native-click 50 50))

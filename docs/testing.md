@@ -4,15 +4,16 @@ Tests define coverage. Do not duplicate their inventory here.
 
 ## Verifying work
 
-1. Run every [check before a PR](../CONTRIBUTING.md#checks-before-a-pr): CTest,
-   Bun and Python tests, lint and type checks, then the graphical scripts.
-   For native view, keyboard or launcher changes, also run the
-   relevant standalone checks below.
+1. Run the [default loop](../CONTRIBUTING.md#default-loop) while working:
+   CTest, Bun and Python tests, lint and type checks, then the view and input
+   graphical scripts. Run the [full set](../CONTRIBUTING.md#full-set) once
+   before merging. For native view, keyboard or launcher changes, also run
+   the relevant standalone checks below.
 2. Graphical checks open real windows, take keyboard focus and can crash.
    Run them in a logged-in desktop session and leave it alone meanwhile, or
    [in a VM](#graphical-checks-in-a-vm).
-3. Report commands, results and skipped checks. Report graphical checks you
-   could not run as not run.
+3. Report commands, results and skipped checks, and which tier ran. Report
+   graphical checks you could not run as not run.
 
 For this Homebrew Emacs build, set its native compiler library path before
 running checks from a shell. CLI launches do not inherit the app's environment:
@@ -46,6 +47,18 @@ export LIBRARY_PATH="$(/usr/libexec/PlistBuddy -c Print:LSEnvironment:LIBRARY_PA
   Keep special setup beside the test. Use
   [native failure helpers](../test/native-checks.swift) to avoid assertion
   failures that trigger macOS crash dialogs.
+
+## Test tiers
+
+ERT tags place each test in a tier. Tag a test `:gui` when it needs graphical
+Emacs. Tag it `:expensive` when it is a long soak or a matrix of variants
+whose plain case another test covers: the full set runs it, the default loop
+does not. Every runner narrows its selector through
+[portal-test-tiers.el](../test/portal-test-tiers.el): `:expensive` tests run
+only when `PORTAL_TEST_EXPENSIVE` is set and not empty, and batch Emacs never
+selects `:gui` tests. `test/vm.sh` passes the variable on to the VM. Register
+a new batch suite with `${ert_batch}` in CMake, and start a graphical one
+through `portal-gui-ert-start`, so that it honours the tiers too.
 
 ## Evidence and safety
 
@@ -158,11 +171,11 @@ Pass other graphical Emacs or standalone AppKit checks as needed.
 
 ## Every graphical suite
 
-To run every graphical suite that the [checks before a PR](../CONTRIBUTING.md#checks-before-a-pr)
-list, each in a fresh Emacs:
+To run every graphical suite in the [full set](../CONTRIBUTING.md#full-set),
+each in a fresh Emacs:
 
 ```sh
-sh test/gui-all.sh
+PORTAL_TEST_EXPENSIVE=1 sh test/gui-all.sh
 ```
 
 In the VM, the runner builds once and the suites run one after another in the
@@ -189,7 +202,7 @@ coexistence, Markdown previews and Excalidraw) in one fresh Emacs:
 sh test/views-gui.sh
 ```
 
-Pass an ERT selector regexp to run part of it. It fails on any skip. The
+Pass an ERT selector regexp to run part of its tier. It fails on any skip. The
 [platform matrix](platforms.md) uses it as the view acceptance check.
 
 ## Input graphical checks
@@ -208,7 +221,7 @@ sh test/input-gui.sh
 ```
 
 It passes only with every selected test as expected and none skipped. Give
-`input-gui.sh` an ERT selector regexp to run part of it.
+`input-gui.sh` an ERT selector regexp to run part of its tier.
 
 ### Diagnosing a stalled GUI run
 
@@ -227,10 +240,11 @@ shell watchdog bounds each test. When no test starts or ends for
 `emacs-sample.log`, kills Emacs and its subprocesses, reports which test did
 not finish, and exits 124. Emacs gives each subprocess its own process group,
 so the runner's cleanup alone would leave them holding the desktop lock. Both logs copy back with `test.log`. The runner's stage timeout still
-bounds the whole command. To rerun only the stalled test:
+bounds the whole command. To rerun only the stalled test, in the tier that
+stalled:
 
 ```sh
-sh test/views-gui.sh '^portal-integration-focus-'
+PORTAL_TEST_EXPENSIVE=1 sh test/views-gui.sh '^portal-integration-focus-'
 ```
 
 In the sample, read the main thread below the test's Lisp frames. A nested
@@ -257,7 +271,9 @@ directories, with and without Consult and Embark. It fails on any compilation
 error or warning, even when package-vc reports success; a copy with a planted
 compilation error proves that. It also upgrades an older copy with
 `package-vc-upgrade` from an Emacs that has loaded it, and installs a copy whose
-build fails as it installs, which package-vc only warns about.
+build fails as it installs, which package-vc only warns about. The default
+loop runs only the plain installation and loading from a clone; the variants are
+`:expensive`.
 `test_resolve_bun.py` covers Bun selection with stand-in executables and
 archives. Neither builds native code nor downloads anything.
 
@@ -280,8 +296,8 @@ fresh Emacs:
 sh test/launcher-gui.sh
 ```
 
-Pass an ERT selector regexp to run part of it. Tests that need a second display
-skip. Set `PORTAL_LAUNCHER_SCREENSHOTS` to a directory to save the panel's
+Pass an ERT selector regexp to run part of its tier. Tests that need a second
+display skip. Set `PORTAL_LAUNCHER_SCREENSHOTS` to a directory to save the panel's
 drawings there. The next VM run replaces the work tree, so save them in the run
 directory, then copy them back from the printed run directory:
 

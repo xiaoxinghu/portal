@@ -7,6 +7,7 @@
 ;; bounds each test.
 
 (require 'ert)
+(require 'portal-test-tiers)
 
 (defvar portal-gui-ert--printed nil
   "Marker in *Messages* up to which text has reached standard error.")
@@ -70,7 +71,8 @@
     (unwind-protect
         (condition-case err
             (let ((stats (progn (advice-add 'ert-run-tests :filter-args #'portal-gui-ert--wrap)
-                                (unwind-protect (ert-run-tests-batch selector)
+                                (unwind-protect (ert-run-tests-batch
+                                                 (portal-test-tiers-selector selector))
                                   (advice-remove 'ert-run-tests #'portal-gui-ert--wrap)))))
               (if-let* ((failure (portal-gui-ert--verdict stats allow-skips expected)))
                   (message "GUI checks failed: %s" failure)
@@ -82,6 +84,8 @@
 
 (defun portal-gui-ert-start (selector &optional allow-skips expected)
   "Run the ERT tests SELECTOR once the command loop runs, then exit.
+SELECTOR leaves out tests tagged :expensive unless PORTAL_TEST_EXPENSIVE
+is set; see `portal-test-tiers-selector'.
 Exit 0 if every test ran as expected, none skipped but those that
 ALLOW-SKIPS, a list of test names, permits, and EXPECTED tests, or at
 least one, passed."

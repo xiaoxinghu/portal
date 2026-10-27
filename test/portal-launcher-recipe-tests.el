@@ -25,6 +25,7 @@
          (= (cadr (window-pixel-edges mini)) (frame-internal-border-width frame)))))
 
 (ert-deftest portal-launcher-recipe-input-rules ()
+  :tags '(:gui)
   (skip-unless (fboundp 'portal-test-hotkey))
   (portal-launcher-gui--with-panel
     (portal-launcher-gui--example "launcher-app")
@@ -114,6 +115,7 @@
     pid))
 
 (ert-deftest portal-launcher-recipe-real-launch-and-focus ()
+  :tags '(:gui)
   ;; Real Spotlight and `open', from another app in front: Escape leaves it
   ;; in front, and launching Finder, already running, gives Finder focus as
   ;; the panel hides.

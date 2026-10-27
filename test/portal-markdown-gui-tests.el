@@ -99,6 +99,7 @@ The folder is `portal-markdown-gui--directory'."
     (funcall (lookup-key global-map (vector type)) event)))
 
 (ert-deftest portal-markdown-gui-links-go-back-and-forward-with-reading-position ()
+  :tags '(:gui)
   (portal-markdown-gui--documents
     (let ((preview (current-buffer)))
       (portal-excalidraw-gui--js "window.scrollTo(0, 1200); return true;")
@@ -164,6 +165,7 @@ The folder is `portal-markdown-gui--directory'."
       (portal-test--wait-for-page "README.md"))))
 
 (ert-deftest portal-markdown-gui-source-links-hand-off-and-return ()
+  :tags '(:gui)
   (portal-markdown-gui--documents
     (let* ((preview (current-buffer))
            (target (portal-view-target))
@@ -226,6 +228,7 @@ The folder is `portal-markdown-gui--directory'."
         (should (equal (portal-excalidraw-gui--js "return window.marker;") "kept"))))))
 
 (ert-deftest portal-markdown-gui-link-click-ends-a-pending-sequence ()
+  :tags '(:gui)
   (portal-markdown-gui--documents
     (let ((target (portal-view-target))
           (point (portal-markdown-gui--link-point "Source")))
@@ -247,6 +250,7 @@ The folder is `portal-markdown-gui--directory'."
       (should-not (portal-input--action "focused" target)))))
 
 (ert-deftest portal-markdown-gui-open-in-emacs-edits-the-file-on-screen ()
+  :tags '(:gui)
   (portal-markdown-gui--documents
     (let ((target (portal-view-target))
           (origin (selected-window)))
@@ -268,6 +272,7 @@ The folder is `portal-markdown-gui--directory'."
       (should (equal buffer-file-name (portal-markdown-gui--file "docs é/arch notes.md"))))))
 
 (ert-deftest portal-markdown-gui-shows-relative-images ()
+  :tags '(:gui)
   (portal-markdown-gui--documents
     (let ((loaded "const i = document.querySelector('img[alt=Inline]');
                    return i.complete && i.naturalWidth;")
@@ -279,6 +284,7 @@ The folder is `portal-markdown-gui--directory'."
 
 ;; Emacs frames may force an appearance of their own; previews follow the system's.
 (ert-deftest portal-markdown-gui-appearance-follows-the-system-or-the-option ()
+  :tags '(:gui)
   (let ((original portal-web-appearance)
         (frame-appearance (frame-parameter nil 'ns-appearance))
         (system-dark (equal (string-trim

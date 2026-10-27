@@ -44,6 +44,7 @@ JavaScript's false and null are nil."
            (delete-directory directory t))))))
 
 (ert-deftest portal-excalidraw-gui-loads-offline-editor-and-saves ()
+  :tags '(:gui)
   (portal-excalidraw-gui--document
     (should (equal (portal-excalidraw-gui--js "return !!document.querySelector('.excalidraw canvas')") t))
     (should (equal (portal-excalidraw-gui--js
@@ -58,6 +59,7 @@ JavaScript's false and null are nil."
       (should (= (length (plist-get scene :elements)) 0)))))
 
 (ert-deftest portal-excalidraw-gui-edits-survive-hiding-and-reopening ()
+  :tags '(:gui)
   (portal-excalidraw-gui--document
     ;; Paste goes through Excalidraw's normal clipboard import and history.
     (portal-view-focus)
@@ -88,6 +90,7 @@ JavaScript's false and null are nil."
       (should-not (buffer-modified-p)))))
 
 (ert-deftest portal-excalidraw-gui-revert-reloads-the-saved-drawing ()
+  :tags '(:gui)
   (portal-excalidraw-gui--document
     (portal-excalidraw-save)
     (portal-view-focus)
@@ -104,6 +107,7 @@ JavaScript's false and null are nil."
     (should-not (buffer-modified-p))))
 
 (ert-deftest portal-excalidraw-gui-pasted-mermaid-becomes-drawing ()
+  :tags '(:gui)
   ;; Excalidraw converts pasted Mermaid text with mermaid-to-excalidraw, which
   ;; groups a sequence box under nanoid IDs; see docs/dependency-security.md.
   (portal-excalidraw-gui--document
@@ -124,6 +128,7 @@ JavaScript's false and null are nil."
                         elements)))))
 
 (ert-deftest portal-excalidraw-gui-image-roundtrip-and-document-isolation ()
+  :tags '(:gui)
   (portal-excalidraw-gui--document
     (portal-view-focus)
     (portal-excalidraw-gui--js
@@ -159,6 +164,7 @@ JavaScript's false and null are nil."
           (kill-buffer other))))))
 
 (ert-deftest portal-excalidraw-gui-unused-chord-keeps-fast-followup-keys ()
+  :tags '(:gui)
   ;; The drawing does not use C-x, so C-x C-s reaches Emacs whole, typed at once.
   (portal-excalidraw-gui--document
     (select-frame-set-input-focus (selected-frame))
@@ -178,6 +184,7 @@ JavaScript's false and null are nil."
     (should (portal-input--action "focused"))))
 
 (ert-deftest portal-excalidraw-gui-save-commits-active-text-editing ()
+  :tags '(:gui)
   (portal-excalidraw-gui--document
     (portal-view-focus)
     (should (portal-excalidraw-gui--js
@@ -195,6 +202,7 @@ JavaScript's false and null are nil."
     (should-not (buffer-modified-p))))
 
 (ert-deftest portal-excalidraw-gui-save-button-prompts-for-untitled-file ()
+  :tags '(:gui)
   (portal-excalidraw-gui--document
     (portal-excalidraw--close)
     (set-buffer-modified-p nil)

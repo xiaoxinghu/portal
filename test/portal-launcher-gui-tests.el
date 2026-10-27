@@ -102,6 +102,7 @@ the presentation's own timeout to report it."
   (nth 3 (plist-get (portal--launcher-inspect) :actual)))
 
 (ert-deftest portal-launcher-gui-real-buffer-and-reuse ()
+  :tags '(:gui)
   (portal-launcher-gui--with-panel
     (with-current-buffer content (insert "Real buffer in a native panel\n"))
     (portal-launcher-mode 1)
@@ -128,6 +129,7 @@ the presentation's own timeout to report it."
       (portal-launcher-hide))))
 
 (ert-deftest portal-launcher-gui-native-keyboard ()
+  :tags '(:gui)
   (skip-unless (fboundp 'portal-test-native-post-key))
   (portal-launcher-gui--with-panel
     (portal-launcher-show content)
@@ -140,6 +142,7 @@ the presentation's own timeout to report it."
       (portal-test-native-target-frame nil))))
 
 (ert-deftest portal-launcher-gui-geometry-and-appearance ()
+  :tags '(:gui :expensive)
   (portal-launcher-gui--with-panel
     (portal-launcher-show content)
     (let ((screens (plist-get (portal--launcher-inspect) :screens)) measurements)
@@ -178,6 +181,7 @@ the presentation's own timeout to report it."
     (let ((portal-launcher-screen 999)) (portal-launcher-show))))
 
 (ert-deftest portal-launcher-gui-delete-disable-and-child ()
+  :tags '(:gui)
   (portal-launcher-gui--with-panel
     (dotimes (_ 20)
       (let ((frame (portal-launcher-show content)))
@@ -200,6 +204,7 @@ the presentation's own timeout to report it."
     (should (eq (selected-window) ordinary))))
 
 (ert-deftest portal-launcher-gui-rejects-mutation-and-rolls-back ()
+  :tags '(:gui)
   (portal-launcher-gui--with-panel
     (let ((initial-frames (frame-list)))
       (cl-letf (((symbol-function 'portal--launcher-attach)
@@ -337,6 +342,7 @@ OPTIONS are `portal-launcher-present' keywords and values.  With
                     (string char))) text)))
 
 (ert-deftest portal-launcher-gui-picker-selection-without-typing ()
+  :tags '(:gui)
   ;; A user's picker in a minibuffer panel, typed into with native keys.
   ;; Portal returns whatever completion returns; it adds no input policy.
   (require 'vertico)
@@ -376,6 +382,7 @@ OPTIONS are `portal-launcher-present' keywords and values.  With
 ;; M-x, its key and its global shortcut through the real command loop, a
 ;; persistent buffer and a shortcut that presents nothing.
 (ert-deftest portal-launcher-gui-user-launchers-through-command-loop ()
+  :tags '(:gui)
   (skip-unless (fboundp 'portal-test-hotkey))
   (portal-launcher-gui--with-panel
     (let ((global (current-global-map))
@@ -452,6 +459,7 @@ OPTIONS are `portal-launcher-present' keywords and values.  With
         (when (get-buffer "*Hello*") (kill-buffer "*Hello*"))))))
 
 (ert-deftest portal-launcher-gui-session-stock-and-completion-stack ()
+  :tags '(:gui)
   (portal-launcher-gui--with-panel
     (require 'vertico)
     (require 'orderless)
@@ -527,6 +535,7 @@ OPTIONS are `portal-launcher-present' keywords and values.  With
           :actual (plist-get state :actual))))
 
 (ert-deftest portal-launcher-gui-minibuffer-panel-vertico ()
+  :tags '(:gui)
   (require 'vertico)
   (portal-launcher-gui--with-panel
     (dolist (size '((720 420) (640 320)))
@@ -716,6 +725,7 @@ EXACT, the text must also be that many default lines high."
   "Steps from five rows of `portal-launcher-gui--fruits' to two, none and five.")
 
 (ert-deftest portal-launcher-gui-minibuffer-panel-fits-content ()
+  :tags '(:gui)
   ;; Five rows, then two, none and five again: the height follows, from
   ;; the first placement's top edge, in the same presentation. A numeric
   ;; size, the control, stays fixed.
@@ -756,6 +766,7 @@ EXACT, the text must also be that many default lines high."
           (should (equal (list (plist-get layout :height) (plist-get layout :frame)) '(240 (720 240)))))))))
 
 (ert-deftest portal-launcher-gui-minibuffer-panel-fits-rendered-lines ()
+  :tags '(:gui)
   ;; Line spacing, a trailing newline, a taller row and wrapped input.
   (portal-launcher-gui--with-panel
     (let ((portal-launcher-size nil)
@@ -797,6 +808,7 @@ EXACT, the text must also be that many default lines high."
         (portal-launcher-gui--check-fitted result 720 (list (1- (car lines)) (1- (cadr lines)) 5) t)))))
 
 (ert-deftest portal-launcher-gui-minibuffer-panel-stops-at-the-screen ()
+  :tags '(:gui)
   ;; Content taller than the space below the top edge stops there, with the
   ;; prompt still shown and usable, then shrinks again.
   (portal-launcher-gui--with-panel
@@ -836,6 +848,7 @@ EXACT, the text must also be that many default lines high."
         (portal-launcher-gui--check-fitted (cons (car result) (list first last)) 720 '(5 5) t)))))
 
 (ert-deftest portal-launcher-gui-minibuffer-panel-height-limits ()
+  :tags '(:gui)
   ;; Menlo 24's 28-point lines and the 16-point borders make a minibuffer
   ;; frame's legal height 60 points: `content' allows it, below 100. A
   ;; maximum caps the rows, which clip below the prompt as at the screen.
@@ -889,6 +902,7 @@ EXACT, the text must also be that many default lines high."
           :buffer (window-buffer (frame-first-window portal-launcher--frame)))))
 
 (ert-deftest portal-launcher-gui-too-small-maximum-leaves-presentations-alone ()
+  :tags '(:gui)
   ;; A maximum below the legal height fails before an existing panel is
   ;; cancelled, hidden, replaced or loses the keyboard. With a launcher
   ;; font, that height is measured on a hidden candidate frame, made and
@@ -944,6 +958,7 @@ EXACT, the text must also be that many default lines high."
                              nil '(:kind minibuffer))))))))
 
 (ert-deftest portal-launcher-gui-too-small-maximum-on-a-changed-panel ()
+  :tags '(:gui)
   ;; The live minibuffer panel's internal border changes to 80 points, from
   ;; the initial 16. Presenting reuses that panel, applying the launcher
   ;; font, so its legal height is 188 points with Menlo 24, not the 60 of a
@@ -1028,6 +1043,7 @@ EXACT, the text must also be that many default lines high."
           :input (and (eq (active-minibuffer-window) mini) (minibuffer-contents-no-properties)))))
 
 (ert-deftest portal-launcher-gui-buffer-panel-legal-height ()
+  :tags '(:gui)
   ;; A normal frame, a buffer window above the frame's own minibuffer,
   ;; fitting one line of content at the least height Emacs allows it: its
   ;; frame matches the panel, the line shows with the mode line, and the
@@ -1085,6 +1101,7 @@ EXACT, the text must also be that many default lines high."
           (should (= (plist-get capped :height) 300)))))))
 
 (ert-deftest portal-launcher-gui-buffer-panel-maximum-checks-the-panel-to-show ()
+  :tags '(:gui)
   ;; With Menlo 13 and `window-min-height' 1, a buffer panel's legal height
   ;; is 77 points with its mode line and 62 without. A maximum is checked
   ;; on a hidden candidate set up as the presentation shows its panel, not
@@ -1114,6 +1131,7 @@ EXACT, the text must also be that many default lines high."
           (should (equal frames (frame-list))))))))
 
 (ert-deftest portal-launcher-gui-buffer-panel-maximum-checks-the-reused-panel ()
+  :tags '(:gui)
   ;; The candidate also has what presenting keeps of the live panel: a font
   ;; set on it directly, and a split from an explicit show. Rejected
   ;; presentations leave both, and the selection, as they were.
@@ -1291,6 +1309,7 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
   (mapconcat (lambda (n) (format "Line %d" n)) (number-sequence from to) "\n"))
 
 (ert-deftest portal-launcher-gui-buffer-panel-fits-content ()
+  :tags '(:gui)
   ;; Short content, long content at the maximum, scrolled to its end,
   ;; short again, another buffer and back: the panel fits each, from its
   ;; first top edge, in one presentation and native session. Scrolling and
@@ -1365,6 +1384,7 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
       (should (> (plist-get layout :text) (plist-get layout :body))))))
 
 (ert-deftest portal-launcher-gui-buffer-panel-fits-rendered-lines ()
+  :tags '(:gui)
   ;; Wrapped lines, a taller face, line spacing, overlay strings, header
   ;; lines and hidden mode lines are measured as Emacs displays them.
   (portal-launcher-gui--with-panel
@@ -1422,6 +1442,7 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
         (with-current-buffer content (kill-all-local-variables))))))
 
 (ert-deftest portal-launcher-gui-buffer-panel-follows-streamed-output ()
+  :tags '(:gui)
   ;; A process's output, then a timer's change, fit with no key pressed,
   ;; stop at the maximum and leave point and the view at the beginning.
   ;; After the presentation, more output resizes nothing.
@@ -1503,6 +1524,7 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
   "What the echo area test saw: a layout during a message.")
 
 (ert-deftest portal-launcher-gui-buffer-panel-fits-the-minibuffer ()
+  :tags '(:gui)
   ;; A compact panel at its least height grows for a multi-line prompt, a
   ;; nested prompt and Vertico's rows in its minibuffer, and returns.
   ;; Completion UIs resize the minibuffer from Lisp: at that height, with
@@ -1627,6 +1649,7 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
             (should (plist-get cleared :all))))))))
 
 (ert-deftest portal-launcher-gui-buffer-panel-guide-example ()
+  :tags '(:gui)
   ;; The launcher guide's fitted hello panel, from its own text: at its
   ;; least height until the greetings outgrow it, then a line each.
   (portal-launcher-gui--with-panel
@@ -1664,6 +1687,7 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
             (should (= (plist-get layout :decorations) 0))))))))
 
 (ert-deftest portal-launcher-gui-buffer-panel-pauses-for-splits-and-resizes ()
+  :tags '(:gui)
   ;; A caller's split keeps the panel's height, raised to the split's legal
   ;; height, until one window is left; a numeric resize fixes it for the
   ;; rest of the presentation.
@@ -1717,6 +1741,7 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
         (should (equal (plist-get fixed :session) (plist-get resized :session)))))))
 
 (ert-deftest portal-launcher-gui-minibuffer-panel-follows-later-changes ()
+  :tags '(:gui)
   ;; A timer's change fits with no key pressed; an echo area message keeps
   ;; the input's height; a nested prompt fits, and its outer prompt again.
   (portal-launcher-gui--with-panel
@@ -1777,6 +1802,7 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
         (portal-launcher-gui--check-unwound)))))
 
 (ert-deftest portal-launcher-gui-minibuffer-panel-stays-on-its-display ()
+  :tags '(:gui)
   ;; Moving the pointer to another display while typing moves nothing.
   (skip-unless (fboundp 'portal-test-pointer))
   (portal-launcher-gui--with-panel
@@ -1807,6 +1833,7 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
         (portal-test-pointer (car pointer) (cdr pointer))))))
 
 (ert-deftest portal-launcher-gui-minibuffer-panel-keeps-composition ()
+  :tags '(:gui)
   ;; Input-method marked text survives the panel resizing around it, as
   ;; Emacs's NS input client sees it, then commits. Timers drive this: with
   ;; marked text, every key would go to the input method.
@@ -1880,6 +1907,7 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
           (portal-launcher-gui--check-fitted (cons initial layouts) 720 '(5 5 2 0) nil limits))))))
 
 (ert-deftest portal-launcher-gui-minibuffer-panel-fits-vertico ()
+  :tags '(:gui :expensive)
   ;; Vertico draws its rows in an end-of-buffer before-string, with group
   ;; titles here, whatever its own window policy. Its settings stay.
   (require 'vertico)
@@ -1935,6 +1963,7 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
                                     (default-value 'max-mini-window-height) resize-mini-frames))))))
 
 (ert-deftest portal-launcher-gui-minibuffer-panel-stock-completion ()
+  :tags '(:gui)
   (portal-launcher-gui--with-panel
     ;; At a fixed size, then fitting its content.
     (dolist (portal-launcher-size '((720 420) nil))
@@ -1962,6 +1991,7 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
         (should (equal windows (window-list (window-frame ordinary) t)))))))
 
 (ert-deftest portal-launcher-gui-buffer-panel-mode-lines ()
+  :tags '(:gui)
   (portal-launcher-gui--with-panel
     (let ((format (buffer-local-value 'mode-line-format ordinary-buffer))
           (ordinary-height (window-mode-line-height ordinary)))
@@ -2010,6 +2040,7 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
         (portal-launcher-hide)))))
 
 (ert-deftest portal-launcher-gui-alternating-kinds ()
+  :tags '(:gui)
   (require 'vertico)
   (portal-launcher-gui--with-panel
     (let ((settings (list display-buffer-alist display-buffer-overriding-action resize-mini-frames
@@ -2085,6 +2116,7 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
           (vertico-mode -1))))))
 
 (ert-deftest portal-launcher-gui-session-nested-dismissal-and-reentry ()
+  :tags '(:gui)
   ;; The batch suite dismisses every kind of panel every way, on the fake
   ;; native module. These are the ways only the platform can prove: native
   ;; Escape, and the global shortcut's hot key.
@@ -2116,6 +2148,7 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
         (should (eq 'again (portal-launcher-present (lambda () (interactive) 'again))))))))
 
 (ert-deftest portal-launcher-gui-session-command-error ()
+  :tags '(:gui)
   (portal-launcher-gui--with-panel
     (pcase-dolist (`(,kind ,portal-launcher-size) '((buffer (720 420)) (minibuffer (720 420)) (minibuffer nil)))
       (let (read-finished)
@@ -2134,6 +2167,7 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
       (should (eq 'again (portal-launcher-present (lambda () (interactive) 'again) :kind kind))))))
 
 (ert-deftest portal-launcher-gui-session-focus-loss ()
+  :tags '(:gui)
   (portal-launcher-gui--with-panel
     (pcase-dolist (`(,kind ,portal-launcher-size) '((buffer (720 420)) (minibuffer (720 420)) (minibuffer nil)))
       (let (continued)
@@ -2183,6 +2217,7 @@ The local command n reads a name in the minibuffer and greets it."
   (should-not (cl-find 'portal-launcher-blur unread-command-events :key #'car-safe)))
 
 (ert-deftest portal-launcher-gui-persistent-buffer ()
+  :tags '(:gui)
   (portal-launcher-gui--with-panel
     (unwind-protect
         (let ((depth (recursion-depth)) (portal-launcher-gui--prompts nil) state)
@@ -2219,6 +2254,7 @@ The local command n reads a name in the minibuffer and greets it."
       (kill-buffer "*Hello*"))))
 
 (ert-deftest portal-launcher-gui-persistent-dismissal-and-reentry ()
+  :tags '(:gui)
   ;; The batch suite dismisses a persistent panel every way, from its
   ;; buffer and from a prompt. These are the ways only the platform can
   ;; prove: native Escape, the global shortcut's hot key and focus loss.
@@ -2249,6 +2285,7 @@ The local command n reads a name in the minibuffer and greets it."
       (kill-buffer "*Hello*"))))
 
 (ert-deftest portal-launcher-gui-persistent-command-errors ()
+  :tags '(:gui)
   (portal-launcher-gui--with-panel
     (unwind-protect
         (let ((messages (with-current-buffer "*Messages*" (point-max-marker))) state)
@@ -2297,6 +2334,7 @@ The local command n reads a name in the minibuffer and greets it."
       (kill-buffer "*Hello*"))))
 
 (ert-deftest portal-launcher-gui-z-session-external-focus ()
+  :tags '(:gui)
   ;; Two other apps besides Emacs, whatever else runs: a fresh desktop may
   ;; have only Finder, and asking the already active app to activate changes
   ;; nothing. Calculator starts in the background, and quits if it started.
@@ -2386,6 +2424,7 @@ hidden frame."
   (should-not (frame-focus-state portal-launcher--frame)))
 
 (ert-deftest portal-launcher-gui-dismissal-leaves-focus ()
+  :tags '(:gui)
   ;; The batch suite checks which dismissals give the previous app its
   ;; focus back. These rows leave Emacs's own focus events to AppKit: a
   ;; panel that read no input, which leaves the panel's focus-in queued,
@@ -2417,6 +2456,7 @@ hidden frame."
     (portal-launcher-gui--check-focus-left ordinary)))
 
 (ert-deftest portal-launcher-gui-dismissal-survives-focus-hook-errors ()
+  :tags '(:gui)
   ;; Handling the frame's focus events runs the user's function; its errors
   ;; are reported, the panel still hides, and input read before the focus
   ;; event is queued again.

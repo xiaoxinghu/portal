@@ -46,6 +46,7 @@
     (unwind-protect (recursive-edit) (cancel-timer timer))))
 
 (ert-deftest portal-global-shortcut-gui-two-shortcuts-from-another-app ()
+  :tags '(:gui)
   (portal-global-shortcut-gui--with
     (let ((calls nil)
           (frames (frame-list))
@@ -85,6 +86,7 @@
             (while (not (eql previous (portal-test-frontmost))) (sit-for 0.05))))))))
 
 (ert-deftest portal-global-shortcut-gui-errors-replacement-and-removal ()
+  :tags '(:gui)
   (portal-global-shortcut-gui--with
     (let ((calls nil))
       (portal-global-shortcut-set 'gui-broken "Control-Option-Command-F13"
@@ -119,6 +121,7 @@
         (should (equal calls '(broken new)))))))
 
 (ert-deftest portal-global-shortcut-gui-held-and-repeated-presses ()
+  :tags '(:gui)
   (portal-global-shortcut-gui--with
     (let ((calls 0))
       (portal-global-shortcut-set 'gui-count "Control-Option-Command-F15"
@@ -138,6 +141,7 @@
         (should (= calls 2))))))
 
 (ert-deftest portal-global-shortcut-gui-runs-during-a-prompt ()
+  :tags '(:gui)
   (portal-global-shortcut-gui--with
     (let (depths)
       (portal-global-shortcut-set 'gui-exit "Control-Option-Command-F16"
