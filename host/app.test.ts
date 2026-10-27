@@ -39,6 +39,42 @@ test("pages are HTML that is never cached, sniffed or referred", async () => {
 	);
 });
 
+test("the sign-in page asks for a password until it is given", async () => {
+	const signIn = (authorization?: string) =>
+		respond(
+			new Request(`http://${authority}/${token}/sign-in`, {
+				headers: authorization
+					? { Host: authority, Authorization: authorization }
+					: { Host: authority },
+			}),
+			authority,
+			token,
+		);
+	const basic = (pair: string) =>
+		`Basic ${Buffer.from(pair, "utf8").toString("base64")}`;
+	for (const authorization of [
+		undefined,
+		basic("ada:wrong"),
+		basic(":portal"),
+		"Basic !!!",
+		"Bearer portal",
+	]) {
+		const response = await signIn(authorization);
+		expect(response.status).toBe(401);
+		expect(response.headers.get("www-authenticate")).toBe(
+			'Basic realm="Portal", charset="UTF-8"',
+		);
+		expect(await response.text()).toContain("<title>Not signed in</title>");
+	}
+	const response = await signIn(basic("Ada <Lovelace>:portal"));
+	expect(response.status).toBe(200);
+	expect(response.headers.get("cache-control")).toBe("no-store");
+	// The page shows the name as text.
+	expect(await response.text()).toContain(
+		"<title>Signed in as Ada &lt;Lovelace&gt;</title>",
+	);
+});
+
 test("unknown routes are not found", async () => {
 	for (const path of ["/missing", "/", "/excalidraw", "/assets/missing.png"]) {
 		expect((await get(path)).status).toBe(404);
