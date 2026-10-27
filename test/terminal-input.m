@@ -327,49 +327,70 @@ static emacs_value responder(emacs_env *env, ptrdiff_t nargs, emacs_value *args,
     return env->make_string(env, text.UTF8String, (ptrdiff_t)strlen(text.UTF8String));
 }
 
+/* The Lisp string VALUE as an NSString, or nil if it is not one. */
+static NSString *lispString(emacs_env *env, emacs_value value)
+{
+    ptrdiff_t size = 0;
+    if (!env->copy_string_contents(env, value, NULL, &size)) return nil;
+    char *bytes = malloc((size_t)size);
+    if (!bytes) return nil;
+    NSString *string = env->copy_string_contents(env, value, bytes, &size)
+        ? [NSString stringWithUTF8String:bytes] : nil;
+    free(bytes);
+    return string;
+}
+
 /* Describe the sheet on the targeted window as JSON, or return nil without
-   one: its labels' texts, its text field's text or null, its buttons' titles,
-   and whether it has the keyboard. With BUTTON, first put TEXT, if given, in
-   its text field, then press the button titled BUTTON; nil if none is. */
+   one: its labels' texts, its last text field's text or null, every text
+   field's text in order, its buttons' and checkboxes' titles, and whether it
+   has the keyboard. With BUTTON, first put TEXT, if given, in its last text
+   field, or each string of a vector TEXT in its text fields in order, then
+   press the button titled BUTTON; nil if none is. */
 static emacs_value sheet(emacs_env *env, ptrdiff_t nargs, emacs_value *args, void *data)
 {
     (void)data;
     emacs_value nilValue = env->intern(env, "nil");
-    NSString *strings[2] = {nil, nil};
-    for (ptrdiff_t i = 0; i < nargs && i < 2; i++) {
-        if (!env->is_not_nil(env, args[i])) continue;
-        ptrdiff_t size = 0;
-        if (!env->copy_string_contents(env, args[i], NULL, &size)) return nilValue;
-        char *bytes = malloc((size_t)size);
-        if (!bytes) return nilValue;
-        if (!env->copy_string_contents(env, args[i], bytes, &size)) { free(bytes); return nilValue; }
-        strings[i] = [NSString stringWithUTF8String:bytes];
-        free(bytes);
+    NSString *button = nil;
+    NSMutableArray<NSString *> *typed = [NSMutableArray array];
+    BOOL vector = NO;
+    if (nargs > 0 && env->is_not_nil(env, args[0]) && !(button = lispString(env, args[0]))) return nilValue;
+    if (nargs > 1 && env->is_not_nil(env, args[1])) {
+        vector = env->eq(env, env->type_of(env, args[1]), env->intern(env, "vector"));
+        ptrdiff_t count = vector ? env->vec_size(env, args[1]) : 1;
+        for (ptrdiff_t i = 0; i < count; i++) {
+            NSString *text = lispString(env, vector ? env->vec_get(env, args[1], i) : args[1]);
+            if (!text) return nilValue;
+            [typed addObject:text];
+        }
     }
     NSWindow *panel = activeWindow().attachedSheet;
     if (!panel) return nilValue;
     NSMutableArray<NSString *> *texts = [NSMutableArray array], *titles = [NSMutableArray array];
-    NSTextField *field = nil;
+    NSMutableArray<NSTextField *> *fields = [NSMutableArray array];
     NSButton *chosen = nil;
     for (NSView *view in descendants(panel.contentView)) {
         if (view.isHiddenOrHasHiddenAncestor) continue;
         if ([view isKindOfClass:NSTextField.class]) {
             NSTextField *text = (NSTextField *)view;
-            if (text.isEditable) field = text;
+            if (text.isEditable) [fields addObject:text];
             else if (text.stringValue.length) [texts addObject:text.stringValue];
         } else if ([view isKindOfClass:NSButton.class] && ((NSButton *)view).title.length) {
             [titles addObject:((NSButton *)view).title];
-            if ([((NSButton *)view).title isEqualToString:strings[0]]) chosen = (NSButton *)view;
+            if ([((NSButton *)view).title isEqualToString:button]) chosen = (NSButton *)view;
         }
     }
-    if (strings[0]) {
+    if (button) {
         if (!chosen) return nilValue;
-        if (strings[1]) field.stringValue = strings[1];
+        if (typed.count > fields.count) return nilValue;
+        if (!vector && typed.count) fields.lastObject.stringValue = typed[0];
+        else for (NSUInteger i = 0; i < typed.count; i++) fields[i].stringValue = typed[i];
         [chosen performClick:nil];
         return env->intern(env, "t");
     }
-    NSDictionary *result = @{ @"texts": texts, @"field": field ? field.stringValue : NSNull.null,
-                              @"buttons": titles, @"key": @(panel.isKeyWindow) };
+    NSMutableArray<NSString *> *values = [NSMutableArray array];
+    for (NSTextField *field in fields) [values addObject:field.stringValue];
+    NSDictionary *result = @{ @"texts": texts, @"field": fields.count ? values.lastObject : NSNull.null,
+                              @"fields": values, @"buttons": titles, @"key": @(panel.isKeyWindow) };
     NSData *json = [NSJSONSerialization dataWithJSONObject:result options:0 error:nil];
     NSString *text = [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
     return env->make_string(env, text.UTF8String, (ptrdiff_t)strlen(text.UTF8String));
