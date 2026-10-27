@@ -28,10 +28,20 @@ export LIBRARY_PATH="$(/usr/libexec/PlistBuddy -c Print:LSEnvironment:LIBRARY_PA
   for shared rules. Use native integration tests for behavior controlled by
   AppKit, WebKit or Emacs's command loop.
 - Test what the app host serves in Bun, beside it in `host/*.test.ts`: routes,
-  headers, Markdown previews, local images and the offline editor bundle. They
-  call `respond` with a `Request`, without a listener or Emacs.
+  headers, Markdown previews, local images, the offline editor bundle and its
+  dependency releases. They call `respond` with a `Request`, without a
+  listener or Emacs.
   `test/portal-server-tests.el` tests only the Emacs seam: how Emacs starts the
   host, reads its handshake, restarts it and cleans up after it.
+- Graphical tests prove the seam between Emacs and what it embeds: that keys,
+  pages, files and questions cross it. Keep one such proof per feature.
+  Matrices of rules live in the C core's tests, command behavior in batch
+  Lisp, and the host's bundle and dependency releases in its Bun tests. Leave
+  Ghostty's parser, WebKit's rendering, Excalidraw's importers and stylesheet
+  colors to their own projects; give a drawing its content as a file.
+- Launcher tests may drive Vertico, Orderless and Marginalia. The panel must
+  fit what Emacs draws for the completion stacks people use, which only a
+  graphical Emacs shows; the tests check the panel, not those packages.
 - Assert observable results, not incidental caches, hook names or call counts.
   Platform contracts include resource ownership and ordering.
 - Drive input and focus tests through the event loop. Direct handler calls do

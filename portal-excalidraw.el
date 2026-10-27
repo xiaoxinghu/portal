@@ -217,8 +217,10 @@ Unsaved changes in the buffer are kept."
            (text (with-temp-buffer (insert-file-contents file) (buffer-string))))
       (portal-excalidraw--validate text)
       (portal-excalidraw--close)
-      (let ((inhibit-read-only t)) (erase-buffer) (insert text))
+      ;; Take the file's time first, or replacing the text asks whether to
+      ;; edit a buffer whose file changed on disk.
       (set-visited-file-modtime)
+      (let ((inhibit-read-only t)) (erase-buffer) (insert text))
       (set-buffer-modified-p nil)
       (setq portal-excalidraw--saved text portal-excalidraw--error nil)
       (portal-excalidraw--start))))

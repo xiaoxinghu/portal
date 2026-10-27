@@ -74,68 +74,6 @@ TARGET defaults to the selected pane's view.  Return its state."
       (kill-buffer buffer)
       (should-not (portal--inspect target)))))
 
-(ert-deftest portal-web-about-draws-with-webgl-even-after-losing-it-and-learns-when-it-is-hidden ()
-  :tags '(:gui)
-  (portal-test--with-web
-    (skip-unless (file-executable-p (portal-server-program-file)))
-    (select-frame-set-input-focus (selected-frame))
-    (sit-for 0.1)
-    ;; Page scripts run in this frame's visible web view.
-    (should (portal-view--with-frame-title (selected-frame)
-                                           #'portal-test-native-target-frame))
-    (unwind-protect
-        (let ((buffer (progn (portal-about) (current-buffer)))
-              (target (portal-view-target)))
-          (portal-test--wait-for-page "About Portal")
-          (should (equal (portal-excalidraw-gui--js
-                          "return document.documentElement.dataset.renderer;")
-                         "webgl"))
-          (should (string-search emacs-version
-                                 (portal-excalidraw-gui--js
-                                  "return document.getElementById('term').textContent;")))
-          ;; WebKit may drop the context; the portal draws again once it is back.
-          (should (equal (portal-excalidraw-gui--js
-                          "const canvas = document.getElementById('gl');
-                           const gl = canvas.getContext('webgl');
-                           const lose = gl.getExtension('WEBGL_lose_context');
-                           const event = (name) => new Promise((done) => {
-                             canvas.addEventListener(name, done, { once: true });
-                             setTimeout(done, 2000);
-                           });
-                           const lost = event('webglcontextlost');
-                           lose.loseContext();
-                           await lost;
-                           // WebKit allows a restore only once the loss event is done.
-                           await new Promise((done) => setTimeout(done));
-                           const restored = event('webglcontextrestored');
-                           lose.restoreContext();
-                           await restored;
-                           // Read the portal's centre after the page's next frame.
-                           const pixel = new Uint8Array(4);
-                           await new Promise((done) => requestAnimationFrame(() => {
-                             gl.readPixels(canvas.width >> 1, canvas.height >> 1, 1, 1,
-                                           gl.RGBA, gl.UNSIGNED_BYTE, pixel);
-                             done();
-                           }));
-                           return !gl.isContextLost() && pixel[3] > 0
-                             && pixel[0] + pixel[1] + pixel[2] > 0;")
-                         t))
-          ;; The page stops animating when told it is hidden.
-          (portal-excalidraw-gui--js
-           "window.hiddenSeen = false;
-            document.addEventListener('visibilitychange', () => {
-              if (document.hidden) window.hiddenSeen = true;
-            });
-            return true;")
-          (quit-window)
-          (redisplay t)
-          (sleep-for 0.5)
-          (switch-to-buffer buffer)
-          (portal-test--wait-for-page "About Portal" target)
-          (should (portal-test--shown target (selected-window)))
-          (should (portal-excalidraw-gui--js "return window.hiddenSeen;")))
-      (portal-test-native-target-frame nil))))
-
 (defun portal-test--user-agent (options)
   "Open a web view with OPTIONS in a new buffer and return its page's user agent."
   (portal-web--visit nil "user agent"
@@ -377,18 +315,6 @@ sent before the connection closes."
 
 ;;; Camera and microphone
 
-(defun portal-test--frame (url)
-  "Have the visible page embed a frame at URL, which may use any device.
-The page's title then says what the frame reported."
-  (should (portal-test-web-mock-capture t))
-  (portal-excalidraw-gui--js
-   (format "addEventListener('message', (event) => { document.title = event.data; });
-const frame = document.createElement('iframe');
-frame.allow = 'camera *; microphone *';
-frame.src = %S;
-document.body.append(frame);
-return true;" url)))
-
 (defun portal-test--capture (constraints)
   "Have the visible page ask for CONSTRAINTS, getUserMedia's, with mock devices.
 The page's title then says what it got, or the error's name."
@@ -403,28 +329,18 @@ navigator.mediaDevices.getUserMedia(%s).then(
   (error) => { document.title = error.name; });
 return true;" constraints)))
 
+;; The core decides who may and who is asked; see test/portal-web-tests.c.
 (ert-deftest portal-web-pages-ask-for-the-camera-and-microphone ()
   :tags '(:gui)
   (portal-test--with-dialogs
     (let* ((server (portal-test--serve
                     `(("/" . ,(portal-test--response '("Content-Type: text/html")
-                                                     "<title>Media</title><p>Media"))
-                      ;; A frame that asks for the microphone, and tells its parent.
-                      ("/frame" . ,(portal-test--response
-                                    '("Content-Type: text/html")
-                                    "<script>navigator.mediaDevices.getUserMedia({audio: true}).then(
-  () => parent.postMessage('Framed got audio', '*'),
-  (error) => parent.postMessage('Framed ' + error.name, '*'));</script>")))))
+                                                     "<title>Media</title><p>Media")))))
            (port (process-contact server :service))
            (camera "Allow “127.0.0.1” to use your camera?")
            (both "Allow “127.0.0.1” to use your camera and microphone?"))
       (unwind-protect
           (progn
-            ;; A hosted app may not, and is never asked.
-            (portal-test--capture "{audio: true}")
-            (portal-test--wait-for-page "NotAllowedError")
-            (should-not (portal-test--sheet))
-            ;; Another page asks, and a refusal lasts for that request only.
             (portal-open-url (format "http://127.0.0.1:%d/" port))
             (portal-test--wait-for-page "Media")
             (portal-test--capture "{video: true}")
@@ -435,17 +351,7 @@ return true;" constraints)))
             (should (portal-test-native-key 53 0 "\e" t))
             (portal-test--wait-for-page "NotAllowedError")
             (portal-test--no-sheet)
-            (portal-test--capture "{video: true}")
-            (portal-test--wait-for-sheet camera)
-            (portal-test--sheet "Allow")
-            (portal-test--wait-for-page "Got video")
-            ;; The grant outlives the page; the microphone needs one too.
-            (portal-web-reload)
-            (portal-test--wait-for-page "Media")
-            (portal-test--capture "{video: true}")
-            (portal-test--wait-for-page "Got video")
-            (should-not (portal-test--sheet))
-            ;; Hidden, the page's question waits for it.
+            ;; Hidden, the page's question waits for it; Allow grants.
             (let ((buffer (current-buffer)))
               (portal-test--capture "{audio: true, video: true}")
               (portal-test--wait-for-sheet both)
@@ -455,57 +361,22 @@ return true;" constraints)))
               (switch-to-buffer buffer)
               (portal-test--wait-for-sheet both)
               (portal-test--sheet "Allow")
-              (portal-test--wait-for-page "Got audio video"))
-            ;; Another view of the site needs no asking; another site does.
-            (portal-open-url (format "http://127.0.0.1:%d/" port))
-            (portal-test--wait-for-page "Media")
-            (portal-test--capture "{audio: true}")
-            (portal-test--wait-for-page "Got audio")
-            (should-not (portal-test--sheet))
-            (portal-open-url (format "http://localhost:%d/" port))
-            (portal-test--wait-for-page "Media")
-            (portal-test--capture "{audio: true}")
-            (portal-test--wait-for-sheet "Allow “localhost” to use your microphone?")
-            (portal-test--sheet "Don’t Allow")
-            (portal-test--wait-for-page "NotAllowedError")
-            ;; A frame from another site names both, and its grant is for
-            ;; it in that site only.
-            (portal--web-load (portal-view-target) (format "http://127.0.0.1:%d/" port))
-            (portal-test--wait-for-page "Media")
-            (portal-test--frame (format "http://localhost:%d/frame" port))
-            (portal-test--wait-for-sheet "Allow “localhost” in “127.0.0.1” to use your microphone?")
-            (portal-test--sheet "Allow")
-            (portal-test--wait-for-page "Framed got audio")
-            (portal--web-load (portal-view-target) (format "http://127.0.0.1:%d/" port))
-            (portal-test--wait-for-page "Media")
-            (portal-test--frame (format "http://localhost:%d/frame" port))
-            (portal-test--wait-for-page "Framed got audio")
-            (should-not (portal-test--sheet))
-            (portal--web-load (portal-view-target) (format "http://localhost:%d/" port))
-            (portal-test--wait-for-page "Media")
-            (portal-test--capture "{audio: true}")
-            (portal-test--wait-for-sheet "Allow “localhost” to use your microphone?")
-            ;; Closing the view refuses, and takes the sheet down.
-            (kill-buffer (current-buffer))
-            (portal-test--no-sheet))
+              (portal-test--wait-for-page "Got audio video")))
         (delete-process server)))))
 
+;; Names, directories and failures are the core's; see test/portal-web-tests.c.
 (ert-deftest portal-web-downloads-instead-of-failing-and-says-so ()
   :tags '(:gui)
   (portal-test--with-web
     (let* ((directory (file-name-as-directory (make-temp-file "portal-downloads-" t)))
            (original portal-web-download-directory)
            (server (portal-test--serve
-                    `(("/attribute" . ,(portal-test--response
-                                        '("Content-Type: text/html")
-                                        (concat "<title>Attribute</title>"
-                                                "<a id='save' download='hello.txt' href='data:text/plain,hello'>Save</a>"
-                                                "<script>document.getElementById('save').click()</script>")))
+                    `(("/" . ,(portal-test--response '("Content-Type: text/html")
+                                                     "<title>Page</title>"))
                       ("/report" . ,(portal-test--response
                                      '("Content-Type: text/plain"
                                        "Content-Disposition: attachment; filename=\"report.txt\"")
                                      "report"))
-                      ("/archive.zip" . ,(portal-test--response '("Content-Type: application/zip") "PK"))
                       ("/broken" . ,(concat "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n"
                                             "Content-Disposition: attachment; filename=\"broken.bin\"\r\n"
                                             "Content-Length: 100000\r\n\r\nonly a little")))))
@@ -514,51 +385,29 @@ return true;" constraints)))
       (unwind-protect
           (let ((start (with-current-buffer (messages-buffer) (point-max))))
             (setopt portal-web-download-directory directory)
-            ;; A link with a download attribute.
-            (portal-open-url (concat base "/attribute"))
-            (portal-test--wait-for-page "Attribute")
-            (portal-test--wait-for-message
-             (concat "^Downloaded " (regexp-quote (abbreviate-file-name (funcall file "hello.txt"))) "$")
-             start)
-            (should (equal (with-temp-buffer
-                             (insert-file-contents-literally (funcall file "hello.txt"))
-                             (buffer-string))
-                           "hello"))
-            ;; A response marked as an attachment, and one WebKit cannot
-            ;; show, leave the page as it was.
+            (portal-open-url (concat base "/"))
+            (portal-test--wait-for-page "Page")
             (let ((target (portal-view-target)))
-              (dolist (download '(("/report" . "report.txt") ("/archive.zip" . "archive.zip")
-                                  ("/report" . "report (1).txt")))
-                (portal--web-load target (concat base (car download)))
-                (portal-test--wait-for-message
-                 (concat "^Downloaded "
-                         (regexp-quote (abbreviate-file-name (funcall file (cdr download)))) "$")
-                 start))
+              ;; A response marked as an attachment leaves the page as it was.
+              (portal--web-load target (concat base "/report"))
+              (portal-test--wait-for-message
+               (concat "^Downloaded " (regexp-quote (abbreviate-file-name (funcall file "report.txt"))) "$")
+               start)
               (should (equal (with-temp-buffer
-                               (insert-file-contents-literally (funcall file "report (1).txt"))
+                               (insert-file-contents-literally (funcall file "report.txt"))
                                (buffer-string))
                              "report"))
-              (let ((state (portal--inspect target)))
-                (should (equal (plist-get state :title) "Attribute"))
-                (should-not (plist-get state :error)))
-              ;; Failures reach Emacs as messages, not as a dead page.
+              ;; A failure reaches Emacs as a message, not as a dead page.
               (portal--web-load target (concat base "/broken"))
               (portal-test--wait-for-message
                (concat "^Could not download "
                        (regexp-quote (abbreviate-file-name (funcall file "broken.bin"))) ": .")
                start)
-              (setopt portal-web-download-directory (funcall file "missing/"))
-              (portal--web-load target (concat base "/report"))
-              (portal-test--wait-for-message
-               (concat "^Could not download " (regexp-quote base) "/report: No download directory "
-                       (regexp-quote (funcall file "missing/")) "$")
-               start)
               (let ((state (portal--inspect target)))
-                (should (equal (plist-get state :title) "Attribute"))
+                (should (equal (plist-get state :title) "Page"))
                 (should-not (plist-get state :error)))
               ;; Only complete files remain.
-              (should (equal (directory-files directory nil "\\`[^.]")
-                             '("archive.zip" "hello.txt" "report (1).txt" "report.txt")))))
+              (should (equal (directory-files directory nil "\\`[^.]") '("report.txt")))))
         (setopt portal-web-download-directory original)
         (delete-process server)
         (delete-directory directory t)))))
@@ -573,6 +422,29 @@ return true;" constraints)))
                                             #'portal-test-native-target-frame))
      (unwind-protect (progn ,@body)
        (portal-test-native-target-frame nil))))
+
+;; The page stops its work when Emacs hides it, as the About page's animation does.
+(ert-deftest portal-web-pages-learn-when-they-are-hidden ()
+  :tags '(:gui)
+  (portal-test--with-web
+    (portal-test--with-page-scripts
+      (portal-open-url "data:text/html,<title>Visible</title>")
+      (portal-test--wait-for-page "Visible")
+      (let ((buffer (current-buffer))
+            (target (portal-view-target)))
+        (portal-excalidraw-gui--js
+         "window.hiddenSeen = false;
+          document.addEventListener('visibilitychange', () => {
+            if (document.hidden) window.hiddenSeen = true;
+          });
+          return true;")
+        (quit-window)
+        (redisplay t)
+        (sleep-for 0.5)
+        (switch-to-buffer buffer)
+        (portal-test--wait-for-page "Visible" target)
+        (should (portal-test--shown target (selected-window)))
+        (should (portal-excalidraw-gui--js "return window.hiddenSeen;"))))))
 
 (defun portal-test--wait-for-selection (expected)
   "Wait until the page's selection is EXPECTED, its text @ its start offset."

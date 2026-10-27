@@ -16,20 +16,49 @@ JavaScript's false and null are nil."
     (should-not (plist-get result :error))
     (plist-get result :value)))
 
-(defmacro portal-excalidraw-gui--document (&rest body)
-  (declare (indent 0))
+;; Drawings with content are files that hold it, as Excalidraw saves them;
+;; Excalidraw fills in the properties they leave out.
+(defun portal-excalidraw-gui--text (id text)
+  "A text element ID that says TEXT."
+  (list :type "text" :id id :x 100 :y 100 :width 300 :height 25
+        :text text :fontSize 20 :fontFamily 5))
+
+(defconst portal-excalidraw-gui--picture
+  (list :type "image" :id "picture" :x 0 :y 0 :width 64 :height 64
+        :fileId "pixel" :status "saved")
+  "An image element showing `portal-excalidraw-gui--pixel'.")
+
+(defconst portal-excalidraw-gui--pixel
+  (list :pixel (list :id "pixel" :mimeType "image/png" :created 1
+                     :dataURL "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jS1sAAAAASUVORK5CYII="))
+  "The image files of a drawing with `portal-excalidraw-gui--picture'.")
+
+(defun portal-excalidraw-gui--write (file elements &optional files)
+  "Write a drawing holding ELEMENTS and FILES, its images, to FILE."
+  (with-temp-file file
+    (insert (json-serialize (list :type "excalidraw" :version 2 :source "portal"
+                                  :elements (vconcat elements) :appState (make-hash-table)
+                                  :files (or files (make-hash-table)))))))
+
+(defmacro portal-excalidraw-gui--drawing (elements files &rest body)
+  "Run BODY with drawing.excalidraw open in `document', its buffer.
+The file holds ELEMENTS and FILES; without ELEMENTS, it is a new drawing.
+`directory' is the file's directory."
+  (declare (indent 2))
   `(progn
      (skip-unless (eq window-system 'ns))
      (save-window-excursion
        (let ((directory (make-temp-file "portal-drawing-gui-" t)) document)
          (unwind-protect
-             (progn
+             (let ((file (expand-file-name "drawing.excalidraw" directory))
+                   (elements ,elements))
+               (when elements (portal-excalidraw-gui--write file elements ,files))
                (delete-other-windows)
                (select-frame-set-input-focus (selected-frame))
                (sit-for 0.1)
                (should (portal-view--with-frame-title (selected-frame)
                                                       #'portal-test-native-target-frame))
-               (find-file (expand-file-name "drawing.excalidraw" directory))
+               (find-file file)
                (setq document (current-buffer))
                (portal-excalidraw--wait (lambda () portal-excalidraw--ready))
                (redisplay t)
@@ -43,6 +72,11 @@ JavaScript's false and null are nil."
            (portal-test-native-target-frame nil)
            (delete-directory directory t))))))
 
+(defmacro portal-excalidraw-gui--document (&rest body)
+  "Run BODY with a new drawing.excalidraw open in `document', its buffer."
+  (declare (indent 0))
+  `(portal-excalidraw-gui--drawing nil nil ,@body))
+
 ;; host/editor.test.ts checks that the editor loads only what the host serves.
 (ert-deftest portal-excalidraw-gui-loads-editor-and-saves ()
   :tags '(:gui)
@@ -55,17 +89,12 @@ JavaScript's false and null are nil."
       (should (equal (plist-get scene :type) "excalidraw"))
       (should (= (length (plist-get scene :elements)) 0)))))
 
-(ert-deftest portal-excalidraw-gui-edits-survive-hiding-and-reopening ()
+(ert-deftest portal-excalidraw-gui-drawing-survives-hiding-and-reopening ()
   :tags '(:gui)
-  (portal-excalidraw-gui--document
-    ;; Paste goes through Excalidraw's normal clipboard import and history.
-    (portal-view-focus)
-    (portal-excalidraw-gui--js
-     "const container = document.querySelector('.excalidraw'); container.focus();
-      const data = new DataTransfer(); data.setData('text/plain', 'Portal local drawing');
-      container.dispatchEvent(new ClipboardEvent('paste', {bubbles: true, clipboardData: data})); return true;")
-    (portal-terminal-test--wait (lambda () (string-match-p "Portal local drawing" (buffer-string))))
-    (should (buffer-modified-p))
+  (portal-excalidraw-gui--drawing
+      (list (portal-excalidraw-gui--text "words" "Portal local drawing")) nil
+    (should (string-match-p "Portal local drawing" (buffer-string)))
+    (should-not (buffer-modified-p))
     (let ((target (portal-view-target))
           (text (buffer-string)))
       (switch-to-buffer (get-buffer-create " *drawing-hidden*"))
@@ -78,8 +107,6 @@ JavaScript's false and null are nil."
       (should (equal target (portal-view-target)))
       (portal-excalidraw--flush)
       (should (equal text (buffer-string)))
-      (portal-excalidraw-save)
-      (should-not (buffer-modified-p))
       (portal-excalidraw-reopen)
       (portal-excalidraw--wait (lambda () portal-excalidraw--ready))
       (portal-excalidraw--flush)
@@ -88,60 +115,32 @@ JavaScript's false and null are nil."
 
 (ert-deftest portal-excalidraw-gui-revert-reloads-the-saved-drawing ()
   :tags '(:gui)
-  (portal-excalidraw-gui--document
-    (portal-excalidraw-save)
-    (portal-view-focus)
-    (portal-excalidraw-gui--js
-     "const container = document.querySelector('.excalidraw'); container.focus();
-      const data = new DataTransfer(); data.setData('text/plain', 'Unsaved text');
-      container.dispatchEvent(new ClipboardEvent('paste', {bubbles: true, clipboardData: data})); return true;")
-    (portal-terminal-test--wait (lambda () (string-match-p "Unsaved text" (buffer-string))))
-    (should (buffer-modified-p))
+  (portal-excalidraw-gui--drawing
+      (list (portal-excalidraw-gui--text "words" "Opened text")) nil
+    (should (string-match-p "Opened text" (buffer-string)))
+    ;; Another program saves the file meanwhile.
+    (portal-excalidraw-gui--write buffer-file-name
+                                  (list (portal-excalidraw-gui--text "words" "Saved text")))
     (revert-buffer nil t)
     (portal-excalidraw--wait (lambda () portal-excalidraw--ready))
     (portal-excalidraw--flush)
-    (should-not (string-match-p "Unsaved text" (buffer-string)))
+    (should (string-match-p "Saved text" (buffer-string)))
+    (should-not (string-match-p "Opened text" (buffer-string)))
     (should-not (buffer-modified-p))))
-
-(ert-deftest portal-excalidraw-gui-pasted-mermaid-becomes-drawing ()
-  :tags '(:gui)
-  ;; Excalidraw converts pasted Mermaid text with mermaid-to-excalidraw, which
-  ;; groups a sequence box under nanoid IDs; see docs/dependency-security.md.
-  (portal-excalidraw-gui--document
-    (portal-view-focus)
-    (portal-excalidraw-gui--js
-     "const container = document.querySelector('.excalidraw'); container.focus();
-      const data = new DataTransfer();
-      data.setData('text/plain', 'sequenceDiagram\\n  box PortalMermaidBox\\n    participant Alice\\n    participant Bob\\n  end\\n  Alice->>Bob: PortalMermaidHello');
-      container.dispatchEvent(new ClipboardEvent('paste', {bubbles: true, clipboardData: data})); return true;")
-    (portal-terminal-test--wait (lambda () (string-match-p "PortalMermaidBox" (buffer-string))))
-    (portal-excalidraw-save)
-    (let ((elements (plist-get (json-parse-string (buffer-string) :object-type 'plist)
-                               :elements)))
-      (should (string-match-p "PortalMermaidHello" (buffer-string)))
-      (should (seq-some (lambda (element)
-                          (and (equal (plist-get element :text) "PortalMermaidBox")
-                               (> (length (plist-get element :groupIds)) 0)))
-                        elements)))))
 
 (ert-deftest portal-excalidraw-gui-image-roundtrip-and-document-isolation ()
   :tags '(:gui)
-  (portal-excalidraw-gui--document
-    (portal-view-focus)
-    (portal-excalidraw-gui--js
-     "const container = document.querySelector('.excalidraw'); container.focus();
-      const image = {id:'picture', type:'image', x:0, y:0, width:64, height:64,
-        angle:0, strokeColor:'transparent', backgroundColor:'transparent', fillStyle:'solid',
-        strokeWidth:1, strokeStyle:'solid', roughness:0, opacity:100, groupIds:[],
-        seed:1, version:1, versionNonce:1, isDeleted:false, boundElements:null,
-        updated:1, link:null, locked:false, fileId:'pixel', scale:[1,1], status:'saved'};
-      const files = {pixel:{id:'pixel', mimeType:'image/png', created:1,
-        dataURL:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jS1sAAAAASUVORK5CYII='}};
-      const data = new DataTransfer();
-      data.setData('text/plain', JSON.stringify({type:'excalidraw/clipboard', elements:[image], files}));
-      container.dispatchEvent(new ClipboardEvent('paste', {bubbles:true, clipboardData:data})); return true;")
-    (portal-terminal-test--wait (lambda () (string-match-p "data:image/png;base64" (buffer-string))))
-    (portal-excalidraw-save)
+  (portal-excalidraw-gui--drawing
+      (list portal-excalidraw-gui--picture) portal-excalidraw-gui--pixel
+    (should (string-match-p "data:image/png;base64" (buffer-string)))
+    ;; Written to another file, through Emacs, the drawing keeps its image.
+    (let ((copy (expand-file-name "copy.excalidraw" directory)))
+      (write-file copy)
+      (should (equal buffer-file-name copy))
+      (should (eq major-mode 'portal-excalidraw-mode))
+      (should-not (buffer-modified-p))
+      (should (string-match-p "data:image/png;base64"
+                              (with-temp-buffer (insert-file-contents copy) (buffer-string)))))
     (let ((original (buffer-string)) other)
       (unwind-protect
           (progn

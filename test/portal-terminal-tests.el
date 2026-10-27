@@ -129,29 +129,28 @@
           (setq portal-terminal-theme "Dracula")
           (portal-terminal-test--session
             (should (member "Dracula" (portal-terminal-themes)))
+            ;; One color tells the themes apart; Ghostty owns the rest.
             (let* ((first (portal-view-target))
                    (initial (portal-terminal-test--colors first)))
               (should (equal (plist-get initial :background) "282a36"))
-              (should (equal (plist-get initial :foreground) "f8f8f2"))
-              (should (equal (plist-get initial :cursor) "f8f8f2"))
-              (should (equal (plist-get initial :red) "ff5555"))
               ;; Hide the first shell, then recolor both existing sessions.
               (portal-terminal-new)
               (let ((second (portal-view-target)))
                 (should-not (plist-get (portal-terminal-test--state first) :visible))
                 (setopt portal-terminal-theme "Alabaster")
-                (dolist (id (list first second))
-                  (should (equal (plist-get (portal-terminal-test--colors id) :background)
-                                 "f7f7f7")))
+                (dolist (id (list second first))
+                  (let ((colors (portal-terminal-test--colors id)))
+                    (should (equal (plist-get colors :background) "f7f7f7"))
+                    ;; The first shell survives its recoloring.
+                    (when (equal id first)
+                      (should (equal (plist-get colors :pid) (plist-get initial :pid))))))
+                ;; The native catalog refuses a name it lacks.
                 (should-error (setq portal-terminal-theme "No such Portal theme"))
-                (should-error (setq portal-terminal-theme 42))
                 (should (equal portal-terminal-theme "Alabaster"))
-                ;; New shells use the same setting; the original shell survives.
+                ;; New shells use the same setting.
                 (portal-terminal-new)
                 (should (equal (plist-get (portal-terminal-test--colors (portal-view-target))
                                          :background) "f7f7f7"))
-                (should (equal (plist-get (portal-terminal-test--colors first) :pid)
-                               (plist-get initial :pid)))
                 (setq portal-terminal-theme nil)
                 (should (member (plist-get (portal-terminal-test--colors first) :background)
                                 '("f7f7f7" "212121")))))))
@@ -258,20 +257,6 @@
             (should (string-match-p "^PORTAL_LINE_3000$" (portal-terminal-test--text))))
         (when (frame-live-p frame) (delete-frame frame))
         (delete-directory directory t)))))
-
-(ert-deftest portal-terminal-alternate-screen-and-buffer-cleanup ()
-  :tags '(:gui)
-  (portal-terminal-test--session
-    ;; A real interactive shell writes alternate-screen control sequences.
-    ;; Read the actual Ghostty grid to verify the parser and screen switching.
-    (portal-terminal-test--paste
-     "printf '\\033[?1049h\\033[2J\\033[HPORTAL_ALT_SCREEN'; sleep 1; printf '\\033[?1049l'; printf '\\nPORTAL_PRIMARY_SCREEN\\n'" t)
-    (portal-terminal-test--wait
-     (lambda () (string-prefix-p "PORTAL_ALT_SCREEN" (portal-terminal-test--text))))
-    (portal-terminal-test--wait
-     (lambda () (string-match-p "^PORTAL_PRIMARY_SCREEN" (portal-terminal-test--text))))
-    (kill-buffer (current-buffer))
-    (should-not (portal-terminal-test--state))))
 
 (ert-deftest portal-terminal-metadata-follows-a-real-shell ()
   :tags '(:gui)
@@ -432,31 +417,6 @@
     (should (plist-get (portal-terminal-test--state) :ready))
     (should (plist-get (portal-terminal-test--state) :focused))))
 
-(ert-deftest portal-terminal-native-vim-edits-a-real-file ()
-  :tags '(:gui)
-  (skip-unless (and (fboundp 'portal-test-native-key) (executable-find "vim")))
-  (portal-terminal-test--session
-    (let ((file (make-temp-name (expand-file-name "portal-vim-" temporary-file-directory))))
-      (unwind-protect
-          (progn
-            (select-frame-set-input-focus (selected-frame))
-            (portal-terminal-focus)
-            (portal-terminal-test--paste
-             (format "vim -Nu NONE -n -i NONE %s" (shell-quote-argument file)) t)
-            (portal-terminal-test--wait
-             (lambda () (string-match-p "\\[New\\]" (portal-terminal-test--text))))
-            (should (portal-test-native-key 34 0 "i"))
-            (should (portal-test-native-key 0 0 "Edited inside native Ghostty"))
-            (should (portal-test-native-key 53 0 "\e"))
-            (should (portal-test-native-key 41 (ash 1 17) ":"))
-            (should (portal-test-native-key 13 0 "wq"))
-            (should (portal-test-native-key 36 0 "\r"))
-            (portal-terminal-test--wait (lambda () (file-exists-p file)))
-            (should (equal (with-temp-buffer
-                             (insert-file-contents file) (buffer-string))
-                           "Edited inside native Ghostty\n")))
-        (when (file-exists-p file) (delete-file file))))))
-
 (provide 'portal-terminal-tests)
 (defvar portal-terminal-test--keys (make-sparse-keymap)
   "Emacs bindings the chord tests give every buffer, as a user's config does.")
@@ -491,49 +451,18 @@ The terminal does not use TRIGGER, so Emacs reads it, and STROKES after it."
 
 (defconst portal-terminal-test--super (ash 1 20))
 
-(ert-deftest portal-terminal-chords-run-emacs-commands ()
+;; One chord proves delivery; portal-view-tests.el runs the commands in batch.
+(ert-deftest portal-terminal-chord-runs-an-emacs-command ()
   :tags '(:gui)
-  (portal-terminal-test--with-keys
-      '(("s-n" . portal-terminal-new) ("s-p" . portal-terminal-previous)
-        ("s-]" . portal-terminal-next) ("s-l" . portal-terminal-last)
-        ("s-%" . portal-terminal-split-right) ("s-o" . other-window)
-        ("s-z" . portal-terminal-zoom) ("s-k" . portal-terminal-kill-pane))
+  (portal-terminal-test--with-keys '(("s-n" . portal-terminal-new))
     (portal-terminal-test--session
       (let ((first (current-buffer))
-            (first-id (portal-view-target))
-            (super portal-terminal-test--super))
-        (portal-terminal-test--chord (list 45 super "n"))
-        (let ((second (current-buffer)))
-          (should-not (eq second first))
-          (should (= (length (portal-view-buffers 'terminal)) 2))
-          (should (plist-get (portal-terminal-test--state (portal-view-target)) :focused))
-          (should-not (plist-get (portal-terminal-test--state first-id) :visible))
-          (portal-terminal-test--chord (list 35 super "p"))
-          (should (eq (current-buffer) first))
-          (portal-terminal-test--chord (list 30 super "]"))
-          (should (eq (current-buffer) second))
-          (portal-terminal-test--chord (list 37 super "l"))
-          (should (eq (current-buffer) first))
-          (portal-terminal-test--chord (list 23 (+ super (ash 1 17)) "%"))
-          (should (= (length (window-list)) 2))
-          (should (= (length (portal-view-buffers 'terminal)) 3))
-          (should (plist-get (portal-terminal-test--state first-id) :visible))
-          (let ((right (current-buffer)))
-            (portal-terminal-test--chord (list 31 super "o"))
-            (should (eq (current-buffer) first))
-            (should (plist-get (portal-terminal-test--state first-id) :focused))
-            (portal-terminal-test--chord (list 31 super "o"))
-            (should (eq (current-buffer) right))
-            (portal-terminal-test--chord (list 6 super "z"))
-            (should (= (length (window-list)) 1))
-            (portal-terminal-test--chord (list 6 super "z"))
-            (should (= (length (window-list)) 2))
-            ;; The real key answers the real question.
-            (let ((portal-terminal-confirm-kill t))
-              (portal-terminal-test--chord (list 40 super "k") '(16 0 "y")))
-            (should-not (buffer-live-p right))
-            (should (= (length (window-list)) 1))
-            (should (= (length (portal-view-buffers 'terminal)) 2))))))))
+            (first-id (portal-view-target)))
+        (portal-terminal-test--chord (list 45 portal-terminal-test--super "n"))
+        (should-not (eq (current-buffer) first))
+        (should (= (length (portal-view-buffers 'terminal)) 2))
+        (should (plist-get (portal-terminal-test--state (portal-view-target)) :focused))
+        (should-not (plist-get (portal-terminal-test--state first-id) :visible))))))
 
 (ert-deftest portal-terminal-control-chords-reach-the-shell ()
   :tags '(:gui)

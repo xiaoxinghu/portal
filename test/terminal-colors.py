@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Query actual terminal colors over its PTY for the graphical ERT tests."""
+"""Query a terminal's actual background color over its PTY for the graphical ERT tests."""
 
 import json
 import os
@@ -29,15 +29,7 @@ with open("/dev/tty", "r+b", buffering=0) as terminal:
     previous = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
-        colors = {
-            name: query(fd, sequence)
-            for name, sequence in (
-                ("background", b"\x1b]11;?\x07"),
-                ("foreground", b"\x1b]10;?\x07"),
-                ("cursor", b"\x1b]12;?\x07"),
-                ("red", b"\x1b]4;1;?\x07"),
-            )
-        }
+        colors = {"background": query(fd, b"\x1b]11;?\x07")}
     finally:
         termios.tcsetattr(fd, termios.TCSANOW, previous)
 colors["pid"] = os.getppid()

@@ -306,6 +306,55 @@ Return the view's target."
         (portal-terminal-focus)
         (should (= (length (portal-fake-native-calls 'portal--open)) 2))))))
 
+(ert-deftest portal-view-terminal-commands-switch-split-zoom-and-kill ()
+  (portal-view-test--environment
+    (portal-terminal)
+    (let* ((first (current-buffer))
+           (first-id (portal-view-target))
+           (second (progn (portal-terminal-new) (current-buffer))))
+      (portal-view-sync)
+      (should-not (plist-get (portal--inspect first-id) :visible))
+      ;; Previous and next go in creation order; last returns to the one before.
+      (portal-terminal-previous)
+      (should (eq (current-buffer) first))
+      (portal-terminal-next)
+      (should (eq (current-buffer) second))
+      (portal-terminal-last)
+      (should (eq (current-buffer) first))
+      ;; Splitting starts a third shell beside the first, which stays shown.
+      (portal-terminal-split-right)
+      (portal-view-sync)
+      (let ((right (current-buffer)))
+        (should (= (length (window-list)) 2))
+        (should (= (length (portal-terminal-buffers)) 3))
+        (should (plist-get (portal--inspect first-id) :visible))
+        (other-window 1)
+        (should (eq (current-buffer) first))
+        (other-window 1)
+        (should (eq (current-buffer) right))
+        ;; Zoom fills the frame, then restores the layout.
+        (portal-terminal-zoom)
+        (should (= (length (window-list)) 1))
+        (portal-terminal-zoom)
+        (should (= (length (window-list)) 2))
+        ;; Killing the pane asks, then ends its shell and removes the pane.
+        (let ((portal-terminal-confirm-kill t) asked)
+          (cl-letf (((symbol-function 'y-or-n-p) (lambda (prompt) (setq asked prompt) t)))
+            (portal-terminal-kill-pane))
+          (should asked))
+        (should-not (buffer-live-p right))
+        (should (= (length (window-list)) 1))
+        (should (= (length (portal-terminal-buffers)) 2))))))
+
+(ert-deftest portal-view-terminal-theme-is-a-name-or-nil ()
+  (let ((original portal-terminal-theme))
+    (unwind-protect
+        (progn
+          (setq portal-terminal-theme "Dracula")
+          (should-error (setq portal-terminal-theme 42))
+          (should (equal portal-terminal-theme "Dracula")))
+      (setq portal-terminal-theme original))))
+
 (ert-deftest portal-view-terminal-buffers-follow-the-view-lifecycle ()
   (portal-view-test--environment
     (portal-terminal)
