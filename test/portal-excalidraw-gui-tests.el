@@ -43,14 +43,11 @@ JavaScript's false and null are nil."
            (portal-test-native-target-frame nil)
            (delete-directory directory t))))))
 
-(ert-deftest portal-excalidraw-gui-loads-offline-editor-and-saves ()
+;; host/editor.test.ts checks that the editor loads only what the host serves.
+(ert-deftest portal-excalidraw-gui-loads-editor-and-saves ()
   :tags '(:gui)
   (portal-excalidraw-gui--document
     (should (equal (portal-excalidraw-gui--js "return !!document.querySelector('.excalidraw canvas')") t))
-    (should (equal (portal-excalidraw-gui--js
-                    "try { await fetch('https://example.com/'); return false; } catch { return true; }") t))
-    (should (equal (portal-excalidraw-gui--js
-                    "await document.fonts.load('20px Excalifont'); return document.fonts.check('20px Excalifont');") t))
     (portal-excalidraw-save)
     (should (file-exists-p buffer-file-name))
     (should-not (buffer-modified-p))
