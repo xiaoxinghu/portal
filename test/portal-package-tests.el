@@ -169,6 +169,7 @@ The source is a copy of this checkout in ROOT.  Return the package directory."
           (should (string-match-p "not built: run M-x portal-build" error)))))))
 
 (ert-deftest portal-package-installs-optional-integrations ()
+  :tags '(:expensive)
   (let ((elpa (getenv "PORTAL_TEST_ELPA")))
     (skip-unless elpa)
     (portal-package-test--with-home
@@ -197,6 +198,7 @@ The source is a copy of this checkout in ROOT.  Return the package directory."
   (portal-package-test--append source "native/Package.swift" "\n// Older\n"))
 
 (ert-deftest portal-package-upgrades-with-package-vc ()
+  :tags '(:expensive)
   (portal-package-test--with-home
     (let* ((source (portal-package-test--source root #'portal-package-test--age))
            (package (portal-package-test--check-install
@@ -245,6 +247,7 @@ The source is a copy of this checkout in ROOT.  Return the package directory."
         (should (equal (portal-package-test--read-result output) '(nil stale)))))))
 
 (ert-deftest portal-package-check-fails-on-compile-errors ()
+  :tags '(:expensive)
   ;; package-vc reports success however Portal compiles: the check must not.
   (portal-package-test--with-home
     (let ((install (portal-package-test--install-from
@@ -260,6 +263,7 @@ The source is a copy of this checkout in ROOT.  Return the package directory."
                     :type 'ert-test-failed))))
 
 (ert-deftest portal-package-failed-build-on-install-leaves-portal-unbuilt ()
+  :tags '(:expensive)
   ;; package-vc only warns when the installation's build fails; Portal itself
   ;; must still report that it has no build.
   (portal-package-test--with-home

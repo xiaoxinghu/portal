@@ -11,6 +11,7 @@
 (declare-function portal-test-frontmost "test-terminal-input" (&optional app))
 
 (ert-deftest portal-launcher-daily-use-configured-completion ()
+  :tags '(:gui)
   ;; Unlike the stock/enhanced matrix, keep the caller's completion and theme
   ;; settings throughout. A picker records what it would launch; native input
   ;; is real.
@@ -48,6 +49,7 @@
                            (bound-and-true-p marginalia-mode)))))))
 
 (ert-deftest portal-launcher-daily-use-reload-and-rollback-with-live-views ()
+  :tags '(:gui)
   (portal-launcher-gui--with-panel
     (let ((frame (make-frame))
           (receipt (make-temp-file "portal-launcher-shell-"))

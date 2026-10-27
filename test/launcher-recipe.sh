@@ -21,10 +21,12 @@ export PORTAL_LAUNCHER_TEST_ROOT="$root"
     --eval '(module-load (expand-file-name "build/test-terminal-input.dylib"
                                          (getenv "PORTAL_LAUNCHER_TEST_ROOT")))' \
     -l "$root/test/portal-launcher-recipe-tests.el" \
+    -l "$root/test/portal-test-tiers.el" \
     --eval '(run-at-time 1 nil
       (lambda ()
         (condition-case err
-            (let ((stats (ert-run-tests-batch "^portal-launcher-recipe-")))
+            (let ((stats (ert-run-tests-batch
+                          (portal-test-tiers-selector "^portal-launcher-recipe-"))))
               (with-current-buffer "*Messages*"
                 (princ (buffer-string) (quote external-debugging-output)))
               (princ (format "launcher.el: %s\n" (locate-library "launcher"))

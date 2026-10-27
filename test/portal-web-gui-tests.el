@@ -46,6 +46,7 @@ The window's pane is then the only one, so scripts reach its page."
     (should-not (portal--inspect target))))
 
 (ert-deftest portal-web-gui-windows-open-in-their-own-buffers-and-close-themselves ()
+  :tags '(:gui)
   (portal-test--with-web
     (let ((directory (make-temp-file "portal-web-gui-" t))
           (display-buffer-alist nil))

@@ -37,6 +37,7 @@ its field.  Wait for that, as a person's next key would."
                "return document.hasFocus() && document.activeElement === document.querySelector('input');"))))
 
 (ert-deftest portal-integration-focus-and-cleanup-in-either-startup-order ()
+  :tags '(:gui :expensive)
   (skip-unless (fboundp 'portal-test-native-key))
   (dolist (terminal-first '(t nil))
     (portal-test--with-web
@@ -100,6 +101,7 @@ its field.  Wait for that, as a person's next key would."
         (portal-terminal-close-all)))))
 
 (ert-deftest portal-integration-frame-deletion-hides-terminal-and-web-views ()
+  :tags '(:gui)
   (skip-unless (eq window-system 'ns))
   (let ((frame (make-frame))
         (receipt (make-temp-name (expand-file-name "portal-frame-shell-" temporary-file-directory)))

@@ -80,6 +80,6 @@ if(BUILD_TESTING)
         COMMAND "${CMAKE_COMMAND}" -E env "PORTAL_TEST_MODULE=$<TARGET_FILE:portal-test-module>"
             "${EMACS}" --batch -Q --module-assertions
             -l "${portal_root}/test/portal-module-tests.el"
-            -f ert-run-tests-batch-and-exit)
+            -l "${portal_root}/test/portal-test-tiers.el" -f portal-test-tiers-run-batch)
     set_tests_properties(module PROPERTIES TIMEOUT 30)
 endif()
