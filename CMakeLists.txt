@@ -94,7 +94,7 @@ if(BUILD_TESTING)
             -f ert-run-tests-batch-and-exit)
     set_tests_properties(build PROPERTIES TIMEOUT 60)
     add_test(NAME vm-runner COMMAND "${BUN}" test "${CMAKE_SOURCE_DIR}/test/vm.test.ts")
-    set_tests_properties(vm-runner PROPERTIES TIMEOUT 30)
+    set_tests_properties(vm-runner PROPERTIES TIMEOUT 30 ENVIRONMENT "EMACS=${EMACS}")
     add_test(NAME gui-runner COMMAND "${BUN}" test "${CMAKE_SOURCE_DIR}/test/gui-ert.test.ts")
     set_tests_properties(gui-runner PROPERTIES TIMEOUT 30)
     add_test(NAME gui-verdict

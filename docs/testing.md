@@ -75,8 +75,9 @@ git config portal.testVm portal-vm
 
 Every worktree of the clone shares the setting. The graphical scripts then
 rerun themselves in the VM through `test/vm.sh`, so `sh test/views-gui.sh`
-builds and runs there. `git config --unset portal.testVm` runs them locally
-again. For other commands, such as standalone checks, call the runner from the
+builds and runs there, and [`sh test/gui-all.sh`](#every-graphical-suite) runs
+every suite there after one build. `git config --unset portal.testVm` runs them
+locally again. For other commands, such as standalone checks, call the runner from the
 checkout under test:
 
 ```sh
@@ -85,10 +86,18 @@ bash test/vm.sh sh test/launcher-daily-use.sh
 ```
 
 Each run copies tracked and untracked non-ignored files, including uncommitted
-changes, into a new `~/portal-test-runs/run.XXXXXXXX/repo` directory. It builds
-there, then runs the command. Deleted files, Git metadata and ignored build
-outputs stay out.
+changes, into a new `~/portal-test-runs/run.XXXXXXXX/repo` directory. Deleted
+files, Git metadata and ignored build outputs stay out. Once it has the VM's
+desktop, the run moves them to `~/portal-test-runs/work`, replacing the
+previous run's tree, builds there, then runs the command there.
 Pass `sh -c 'command…'` for compound commands.
+
+When the previous run's build is complete and its `build/portal-build.eld`
+records the [source identity](install.md#what-portal-checks) of the new files,
+the run keeps that build, with the host's packages, and says it is skipping
+`./build.sh`. Changes to Lisp, tests and documentation need no rebuild. The
+identity covers neither the guest's Emacs nor Xcode: after changing either,
+delete `~/portal-test-runs/work` so that the next run builds afresh.
 
 Commands inherit the installed Emacs app's native compiler library path, which
 direct SSH launches miss. Trampolines stay enabled. `PORTAL_TEST_VM` names the
@@ -107,12 +116,14 @@ Keep commands in the foreground. The runner terminates their process group on
 completion or timeout. SSH disconnects can leave runs active until timeout.
 Reconnect to inspect saved logs.
 
-Remote output goes to `build.log` and `test.log` beside the repo. Commands can
-save more `*.log` files in `PORTAL_TEST_LOGS`, the run directory. Logs and
-`exit-status` copy back to `.cache/vm/<run>/`. Command failure status reaches the
+Remote output goes to `build.log` and `test.log` in the run directory. Commands
+can save more `*.log` files in `PORTAL_TEST_LOGS`, the run directory, or in its
+subdirectories. Logs and `exit-status` files, at the top and one directory
+down, copy back to `.cache/vm/<run>/`. Command failure status reaches the
 caller.
-Successful runs delete the source/build tree and keep logs. Failed runs keep
-everything for diagnosis; remove their directories when no longer needed.
+The next run replaces the work tree, so a failed run also keeps an APFS clone
+of it in its `repo/` for diagnosis; it takes space only once the work tree
+changes. Remove failed runs' directories when no longer needed.
 Keep at least 5 GiB free per fresh guest build. Leave host disk space for VM
 image growth.
 
@@ -140,6 +151,30 @@ Guest preparation:
 
 Default: launcher daily-use acceptance check, not the full GUI suite.
 Pass other graphical Emacs or standalone AppKit checks as needed.
+
+## Every graphical suite
+
+To run every graphical suite that the [checks before a PR](../CONTRIBUTING.md#checks-before-a-pr)
+list, each in a fresh Emacs:
+
+```sh
+sh test/gui-all.sh
+```
+
+In the VM, the runner builds once and the suites run one after another in the
+same run. A failing suite does not stop the others; the wrapper ends with each
+suite's result and fails if any failed. Each suite logs to a directory of its
+own in `PORTAL_TEST_LOGS`, or `build/gui-all` outside the runner: `views`,
+`input`, `launcher`, `terminal-shell-startup` and `package`, each with the
+suite's output in `test.log`, its `exit-status` and its diagnostics, such as
+`gui-progress.log`. In the VM they copy back below `.cache/vm/<run>/`. The
+wrapper raises `PORTAL_TEST_TIMEOUT` to 3,600 seconds, as one stage runs every
+suite and `test/package-gui.sh`'s own build. Calling the runner directly keeps
+its default, so set the limit too:
+
+```sh
+PORTAL_TEST_TIMEOUT=3600 bash test/vm.sh sh test/gui-all.sh
+```
 
 ## View graphical checks
 
@@ -243,12 +278,12 @@ sh test/launcher-gui.sh
 
 Pass an ERT selector regexp to run part of it. Tests that need a second display
 skip. Set `PORTAL_LAUNCHER_SCREENSHOTS` to a directory to save the panel's
-drawings there. A successful VM run deletes `repo/`, so save them beside it,
-then copy them back from the printed run directory:
+drawings there. The next VM run replaces the work tree, so save them in the run
+directory, then copy them back from the printed run directory:
 
 ```sh
-bash test/vm.sh sh -c 'mkdir -p ../screenshots &&
-  PORTAL_LAUNCHER_SCREENSHOTS="$(cd .. && pwd)/screenshots" sh test/launcher-gui.sh'
+bash test/vm.sh sh -c 'mkdir -p "$PORTAL_TEST_LOGS/screenshots" &&
+  PORTAL_LAUNCHER_SCREENSHOTS="$PORTAL_TEST_LOGS/screenshots" sh test/launcher-gui.sh'
 ```
 
 ## Combined graphical suite

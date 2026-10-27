@@ -3,6 +3,13 @@
 # Copy this checkout to a macOS VM, build it, and run a test command.
 set -euo pipefail
 
+# What a build adds to the sources, all ignored by Git: a run that reuses the
+# previous run's build takes these.
+build_outputs=(build host/node_modules host/.generated)
+# The logs a run copies back: its own and those of each suite in a directory.
+log_files=(--exclude=/repo/ --include='/*/' --include='/*.log' --include='/*/*.log'
+    --include=/exit-status --include='/*/exit-status' --exclude='*' --prune-empty-dirs)
+
 quote() { printf '%q ' "$@"; }
 
 source_files() {
@@ -42,6 +49,32 @@ run_stage() (
     exit "$status"
 )
 
+# Whether the build in $2 is complete and was built from the sources in $1,
+# by the rule Portal applies before loading its module.
+build_current() {
+    PORTAL_REUSED_BUILD=$2 "$EMACS" --batch -Q -l "$1/portal-build.el" --eval \
+        '(kill-emacs (let ((portal-build-directory (getenv "PORTAL_REUSED_BUILD")))
+                       (if (portal-build-problem) 1 0)))' >/dev/null 2>&1
+}
+
+# Move the sources in $1 to the work tree $2, replacing the previous run's.
+# Keep that run's build when it is current for them, setting reused.
+# Every run builds at the same path: CMake's build directory records it.
+take_work_tree() {
+    local sources=$1 work=$2 output
+    reused=
+    if [[ -d $work/build ]] && build_current "$sources" "$work/build"; then
+        reused=1
+        for output in "${build_outputs[@]}"; do
+            if [[ -e $work/$output && ! -e $sources/$output ]]; then
+                mv -- "$work/$output" "$sources/$output"
+            fi
+        done
+    fi
+    rm -rf -- "$work"
+    mv -- "$sources" "$work"
+}
+
 guest() {
     run=$(cd -- "$1" && pwd -P); shift
     [[ $(dirname "$run") == "$HOME/portal-test-runs" && ${run##*/} == run.* ]]
@@ -59,9 +92,16 @@ guest() {
         echo "The VM needs at least 5 GiB free for a fresh build" >&2; exit 1;
     }
     caffeinate -disu -w "$$" 9>&- &
-    cd -- "$run/repo"
+    work=$HOME/portal-test-runs/work
     status=0
-    run_stage "$run/build.log" ./build.sh || status=$?
+    take_work_tree "$run/repo" "$work"
+    cd -- "$work"
+    if [[ -n $reused ]]; then
+        echo "Skipping ./build.sh: the previous run's build is current for these sources" |
+            tee "$run/build.log"
+    else
+        run_stage "$run/build.log" ./build.sh || status=$?
+    fi
     if [[ $status == 0 ]]; then
         # Direct SSH launches miss the Homebrew app's compiler environment.
         export LIBRARY_PATH
@@ -71,7 +111,9 @@ guest() {
         export PORTAL_TEST_LOGS="$run"
         run_stage "$run/test.log" "$@" || status=$?
     fi
-    if [[ $status == 0 ]]; then cd -- "$run"; rm -rf -- "$run/repo"; fi
+    # The next run replaces the work tree, so a failed run keeps a copy; APFS
+    # clones it without copying data.
+    if [[ $status != 0 ]]; then cp -Rc -- "$work" "$run/repo" || :; fi
     exit "$status"
 }
 
@@ -105,8 +147,8 @@ main() {
     rsync -a --from0 --files-from="$logs/files" -e 'ssh -o BatchMode=yes' \
         ./ "$vm:$(quote "$run/repo/")"
     collect_logs() {
-        rsync -a -e 'ssh -o BatchMode=yes' --include='/*.log' \
-            --include=/exit-status --exclude='*' "$vm:$(quote "$run/")" "$logs/" ||
+        rsync -a -e 'ssh -o BatchMode=yes' "${log_files[@]}" \
+            "$vm:$(quote "$run/")" "$logs/" ||
             echo "Could not fetch logs; retained at $vm:$run" >&2
         echo "Logs: $logs"
     }
