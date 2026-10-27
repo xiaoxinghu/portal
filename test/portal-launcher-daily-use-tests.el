@@ -8,6 +8,7 @@
 (declare-function portal--web-load "portal-web" (target url))
 (declare-function portal--launcher-inspect "portal-launcher" ())
 (declare-function portal--shortcuts "portal-global-shortcut" ())
+(declare-function portal-test-frontmost "test-terminal-input" (&optional app))
 
 (ert-deftest portal-launcher-daily-use-configured-completion ()
   ;; Unlike the stock/enhanced matrix, keep the caller's completion and theme
@@ -53,8 +54,9 @@
           terminal-buffer terminal-id web-buffer web-id pid)
       (unwind-protect
           (progn
+            (setq portal-launcher-gui--unsettled t)
             (select-frame-set-input-focus frame)
-            (sit-for 0.1)
+            (portal-terminal-test--wait (lambda () (eq (frame-visible-p frame) t)))
             (portal-terminal)
             (setq terminal-buffer (current-buffer) terminal-id (portal-view-target))
             (let ((window (selected-window)))

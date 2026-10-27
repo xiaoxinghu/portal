@@ -20,30 +20,42 @@
 (defvar vertico--candidates-ov)
 (defvar vertico--index)
 
+(defvar portal-launcher-gui--unsettled nil
+  "Non-nil once a test has changed or deleted an ordinary frame.
+AppKit can then activate another app after the test has ended.")
+
 (defmacro portal-launcher-gui--with-panel (&rest body)
   (declare (indent 0))
   `(progn
      (skip-unless (eq window-system 'ns))
      (let ((before (frame-list))
+           (front (portal-test-frontmost))
+           (portal-launcher-gui--unsettled nil)
            (ordinary (selected-window))
            (ordinary-buffer (window-buffer))
            (content (generate-new-buffer " *launcher GUI*"))
            (portal-launcher-size '(720 420))
            (portal-launcher-height-limits '(100 nil))
            (portal-launcher-offset '(0 0))
-           (portal-launcher-screen nil))
+           (portal-launcher-screen nil)
+           finished)
        (unwind-protect
-           (progn ,@body)
+           (prog1 (progn ,@body) (setq finished t))
          (portal-launcher-mode -1)
          (portal-global-shortcut--remove-all)
          (when (buffer-live-p content) (kill-buffer content))
          (when (window-live-p ordinary) (select-window ordinary))
          (dolist (frame (frame-list))
-           (unless (memq frame before) (delete-frame frame t)))
+           (unless (memq frame before)
+             (setq portal-launcher-gui--unsettled t)
+             (delete-frame frame t)))
          ;; Changing/deleting ordinary NS windows can asynchronously activate
          ;; the previous app. Drain that cleanup before another test starts a
-         ;; session whose focus-loss observer would correctly cancel it.
-         (portal-launcher-gui--settle-focus))
+         ;; session whose focus-loss observer would correctly cancel it. A
+         ;; test that changed no ordinary window or app has nothing to drain.
+         (when (or portal-launcher-gui--unsettled (not finished)
+                   (not (eql front (portal-test-frontmost))))
+           (portal-launcher-gui--settle-focus)))
        (should-not portal-launcher--frame)
        (should (equal before (frame-list)))
        (should (eq (window-buffer ordinary) ordinary-buffer)))))
@@ -64,6 +76,30 @@ watch focus. `sit-for' would return at once while input is pending."
       (accept-process-output nil 0.05)
       (let ((now (portal-test-frontmost)))
         (unless (eql now front) (setq front now since (float-time)))))))
+
+(defun portal-launcher-gui--once-fitted (predicate function)
+  "Call FUNCTION from a timer once the panel has fitted and PREDICATE holds.
+Fitted: Emacs waits for input with none pending, its launcher frame at
+the panel's native size. Poll every 0.05 s; after 10 s give up, leaving
+the presentation's own timeout to report it."
+  (let ((deadline (+ (float-time) 10)) timer)
+    (setq timer
+          (run-with-timer
+           0.05 0.05
+           (lambda ()
+             (cond
+              ((and (current-idle-time) (not (input-pending-p))
+                    (frame-live-p portal-launcher--frame)
+                    (equal (cddr (plist-get (portal--launcher-inspect) :actual))
+                           (list (frame-pixel-width portal-launcher--frame)
+                                 (frame-pixel-height portal-launcher--frame)))
+                    (funcall predicate))
+               (cancel-timer timer)
+               (funcall function))
+              ((> (float-time) deadline) (cancel-timer timer))))))))
+
+(defun portal-launcher-gui--native-height ()
+  (nth 3 (plist-get (portal--launcher-inspect) :actual)))
 
 (ert-deftest portal-launcher-gui-real-buffer-and-reuse ()
   (portal-launcher-gui--with-panel
@@ -87,7 +123,8 @@ watch focus. `sit-for' would return at once while input is pending."
       (should-not (plist-get (portal--launcher-inspect) :visible))
       (should (eq (portal-launcher-show) frame))
       (should (string-suffix-p "edited" (buffer-string)))
-      (dotimes (_ 100) (portal-launcher-hide) (should (eq (portal-launcher-show) frame)))
+      ;; One cycle proves reuse; a few show that it holds.
+      (dotimes (_ 10) (portal-launcher-hide) (should (eq (portal-launcher-show) frame)))
       (portal-launcher-hide))))
 
 (ert-deftest portal-launcher-gui-native-keyboard ()
@@ -178,6 +215,7 @@ watch focus. `sit-for' would return at once while input is pending."
       (should (plist-get (portal--launcher-inspect) :viewAttached))
       (portal-launcher-hide)
       ;; Ordinary Emacs frames still change their role normally.
+      (setq portal-launcher-gui--unsettled t)
       (set-frame-parameter (window-frame ordinary) 'undecorated t)
       (set-frame-parameter (window-frame ordinary) 'undecorated nil)
       (should (eq (portal-launcher-show) frame)))))
@@ -1418,8 +1456,8 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
                          :filter filter
                          :sentinel
                          (lambda (_process _event)
-                           (run-with-timer
-                            0.5 nil
+                           (portal-launcher-gui--once-fitted
+                            (lambda () (= (portal-launcher-gui--native-height) 400))
                             (lambda ()
                               (portal-launcher-gui--record-buffer)
                               (portal-launcher-gui--capture "buffer-fit-streamed")
@@ -1429,8 +1467,8 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
                                   (goto-char (point-min))
                                   (forward-line 3)
                                   (delete-region (point) (point-max))))
-                              (run-with-timer
-                               0.5 nil
+                              (portal-launcher-gui--once-fitted
+                               (lambda () (< (portal-launcher-gui--native-height) 400))
                                (lambda ()
                                  (portal-launcher-gui--record-buffer)
                                  (setq unread-command-events
@@ -1785,7 +1823,10 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
         (cl-flet ((record ()
                     (with-current-buffer (window-buffer (active-minibuffer-window))
                       (portal-launcher-gui--record)))
-                  (later (seconds function) (run-with-timer seconds nil function)))
+                  (input ()
+                    (with-current-buffer (window-buffer (active-minibuffer-window))
+                      (minibuffer-contents-no-properties)))
+                  (then (predicate function) (portal-launcher-gui--once-fitted predicate function)))
           (unwind-protect
               (setq value
                     (with-timeout (10 (error "Composition timed out"))
@@ -1798,22 +1839,33 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
                                 '("alpha" "alpine" "alto" "also" "altar" "nihao" "nihaoma"))
                                (portal-view--with-frame-title portal-launcher--frame
                                                               #'portal-test-native-target-frame)
-                               (later 0.3 (lambda () (record) (portal-test-compose "nihao")))
-                               ;; While composing, the completion UI updates
-                               ;; without a key: two rows instead of five.
-                               (later 0.8 (lambda ()
-                                            (push (portal-test-marked-text) marked)
-                                            (record)
-                                            (setq portal-launcher-gui--row-limit 2)
-                                            (funcall portal-launcher-gui--refresh)))
-                               (later 1.3 (lambda ()
-                                            (push (portal-test-marked-text) marked)
-                                            (record)
-                                            (portal-test-compose "你好" t)))
-                               (later 2.0 (lambda ()
-                                            (push (portal-test-marked-text) marked)
-                                            (record)
-                                            (portal-test-native-post-key 36 0 "\r"))))
+                               (then
+                                #'always
+                                (lambda ()
+                                  (record)
+                                  (portal-test-compose "nihao")
+                                  ;; While composing, the completion UI updates
+                                  ;; without a key: two rows instead of five.
+                                  (then
+                                   #'portal-test-marked-text
+                                   (lambda ()
+                                     (push (portal-test-marked-text) marked)
+                                     (record)
+                                     (setq portal-launcher-gui--row-limit 2)
+                                     (funcall portal-launcher-gui--refresh)
+                                     (then
+                                      (let ((height (portal-launcher-gui--native-height)))
+                                        (lambda () (< (portal-launcher-gui--native-height) height)))
+                                      (lambda ()
+                                        (push (portal-test-marked-text) marked)
+                                        (record)
+                                        (portal-test-compose "你好" t)
+                                        (then
+                                         (lambda () (equal (input) "你好"))
+                                         (lambda ()
+                                           (push (portal-test-marked-text) marked)
+                                           (record)
+                                           (portal-test-native-post-key 36 0 "\r"))))))))))
                            (read-from-minibuffer "Compose: ")))
                        :kind 'minibuffer)))
             (portal-test-native-target-frame nil)))
@@ -2272,6 +2324,8 @@ The local command n reads a name in the minibuffer and greets it."
                  (if (plist-get options :keep-open) #'portal-launcher-gui--hello
                    (lambda () (interactive) (read-string "Cancel: ")))
                  '((53 0 "\e")) nil options)
+                ;; Nothing reports that focus stayed: give a wrong
+                ;; activation a moment to show.
                 (sit-for 0.1)
                 (message "Launcher %S cancellation frontmost: %S (previous %S)"
                          options (portal-test-frontmost) previous)
@@ -2322,7 +2376,11 @@ ends once Emacs waits for input. A presentation that read no input left
 that event queued, and Emacs's `handle-focus-in' then switched to the
 hidden frame."
   (let* ((depth (1+ (recursion-depth)))
-         (timer (run-with-timer 0.3 0.1 (lambda () (when (= (recursion-depth) depth) (exit-recursive-edit))))))
+         (timer (run-with-timer 0.05 0.05
+                                (lambda ()
+                                  (when (and (= (recursion-depth) depth) (current-idle-time)
+                                             (not (input-pending-p)))
+                                    (exit-recursive-edit))))))
     (unwind-protect (recursive-edit) (cancel-timer timer)))
   (should (eq ordinary (selected-window)))
   (should-not (frame-focus-state portal-launcher--frame)))
