@@ -25,11 +25,20 @@ run_stage() (
     # Bash job control gives each background job its own process group.
     set -m
     child= watchdog=
-    cleanup() {
+    kill_groups() {
         for pid in "$child" "$watchdog"; do
             if [[ -n "$pid" ]]; then kill -KILL -- "-$pid" 2>/dev/null || :; fi
         done
+    }
+    # A process that is forking as its group is killed can leave a child
+    # behind in that group, such as the watchdog's sleep when the command
+    # fails at once; it would hold the output and the desktop lock until
+    # the limit. Once both jobs are reaped no fork is under way, so kill
+    # the groups again.
+    cleanup() {
+        kill_groups
         wait 2>/dev/null || :
+        kill_groups
     }
     trap cleanup EXIT
     trap 'exit 130' INT

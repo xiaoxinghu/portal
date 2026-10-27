@@ -132,7 +132,7 @@ For distribution alternatives and size measurements, see
 
 ```sh
 ./build.sh
-ctest --test-dir build --output-on-failure
+ctest --test-dir build -j$(sysctl -n hw.ncpu) --output-on-failure
 bun run --cwd host check
 bun run --cwd host typecheck
 python3 -B -m unittest discover -s test -p 'test_*.py'
@@ -164,7 +164,9 @@ Physical-key and manual checks are opt-in; report any not run.
 
 For a focused change to the C core, the [standalone core build](docs/testing.md#c-core-checks)
 avoids Swift, Bun and Ghostty. CMake's registered tests are the source of truth
-for the batch suite; use `ctest --test-dir build -N` to list them.
+for the batch suite; use `ctest --test-dir build -N` to list them. `-j` runs
+the suites side by side, in about a third of the time; the
+[test-writing rules](docs/testing.md#writing-tests) say what that asks of a suite.
 
 ## Where to make changes
 

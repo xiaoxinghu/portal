@@ -159,7 +159,9 @@ if(BUILD_TESTING)
             ${test_emacs}
             -l "${CMAKE_SOURCE_DIR}/test/portal-package-tests.el"
             -f ert-run-tests-batch-and-exit)
-    set_tests_properties(package PROPERTIES TIMEOUT 300)
+    # The longest suite by far: start it first in a parallel run, even in a
+    # new build directory with no recorded timings.
+    set_tests_properties(package PROPERTIES TIMEOUT 300 COST 100)
     foreach(adapter consult embark)
         add_test(NAME terminal-${adapter}
             COMMAND ${test_emacs} -L "${CMAKE_SOURCE_DIR}" ${elpa_load_path}
