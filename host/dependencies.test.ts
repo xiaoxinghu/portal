@@ -41,7 +41,7 @@ test("the bundled nanoid makes the IDs its callers ask for", async () => {
 	for (const [size, length] of [
 		[undefined, 21],
 		[40, 40],
-	]) {
+	] as const) {
 		const id = nanoid(size);
 		expect(id).toMatch(/^[A-Za-z0-9_-]+$/);
 		expect(id).toHaveLength(length);
