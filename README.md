@@ -95,7 +95,7 @@ shortcuts. Runtime use needs neither Bun nor Node nor adjacent web assets; see
 
 Start with the [documentation index](docs/README.md) for user guides and design
 notes. [Contributing](CONTRIBUTING.md) covers the worktree workflow,
-editor setup, generated files and checks before a PR. [Testing Portal](docs/testing.md)
+editor setup, generated files and the two tiers of checks. [Testing Portal](docs/testing.md)
 contains graphical procedures and detailed coverage; [AGENTS.md](AGENTS.md)
 adds agent-specific working instructions.
 

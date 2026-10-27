@@ -21,7 +21,7 @@ Run shell examples from the repository root, not `docs/`.
 - [Supported platforms](platforms.md): the Emacs, macOS and CPU matrix, build
   and runtime requirements, and the evidence behind each claim.
 - [Contributing](../CONTRIBUTING.md): build/editor setup, distribution, worktrees
-  and checks before a PR.
+  and the two tiers of checks.
 - [Testing Portal](testing.md): batch coverage, graphical procedures, standalone
   native checks and opt-in smoke tests. Recorded results are not a new test run.
 - [Releasing Portal](releasing.md): the checklist and evidence a release needs.
