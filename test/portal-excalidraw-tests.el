@@ -134,6 +134,26 @@
           (should (= starts 1)))
       (delete-file file))))
 
+(ert-deftest portal-excalidraw-revert-takes-a-file-changed-on-disk-without-asking ()
+  (let ((file (make-temp-file "portal-drawing-" nil ".excalidraw" portal-excalidraw--empty)))
+    (unwind-protect
+        (portal-excalidraw-test--buffer
+          (setq buffer-file-name file
+                buffer-file-truename (abbreviate-file-name (file-truename file)))
+          (set-file-times file (time-subtract nil 60))
+          (set-visited-file-modtime)
+          (portal-excalidraw--scene portal-excalidraw--empty t)
+          (should-not (buffer-modified-p))
+          ;; Another program saves the drawing.
+          (write-region portal-excalidraw-test--scene nil file nil 'silent)
+          (cl-letf (((symbol-function 'ask-user-about-supersession-threat)
+                     (lambda (_) (ert-fail "Asked whether to edit the buffer")))
+                    ((symbol-function 'portal-excalidraw--start) #'ignore))
+            (revert-buffer nil t))
+          (should (equal (buffer-string) portal-excalidraw-test--scene))
+          (should-not (buffer-modified-p)))
+      (delete-file file))))
+
 (ert-deftest portal-excalidraw-loads-the-drawing-into-its-hosted-app-over-the-bridge ()
   (portal-fake-native-reset)
   (cl-letf (((symbol-function 'portal-start-server) #'ignore)
