@@ -109,6 +109,22 @@ test("unlaunchable commands record a failure", async () => {
 	}
 });
 
+test("a command that fails at once leaves no watchdog holding the output", async () => {
+	// Killing the watchdog as it forks its sleep left the sleep running in
+	// about one run in six; the output stayed open until the limit.
+	const cwd = mkdtempSync(join(tmpdir(), "vm-launch-"));
+	try {
+		await Bun.write(join(cwd, "not-executable"), "#!/bin/sh\nexit 0\n");
+		for (let run = 0; run < 20; run++) {
+			const start = performance.now();
+			shell(cwd, "timeout=3; run_stage test.log ./not-executable");
+			expect(performance.now() - start).toBeLessThan(2000);
+		}
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
 test("timeout kills the command's process group and releases its desktop lock", () => {
 	const cwd = mkdtempSync(join(tmpdir(), "vm-timeout-"));
 	try {
