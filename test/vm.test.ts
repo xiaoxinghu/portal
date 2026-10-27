@@ -147,7 +147,10 @@ test("a run takes the previous build only when it is current for its sources", a
 	const cwd = mkdtempSync(join(tmpdir(), "vm-work-"));
 	try {
 		// Sources as the runner syncs them: no build outputs.
-		const sources = async (swift: string, notice = "notice") => {
+		const sources = async (
+			swift: string,
+			{ notice = "notice", test = "test" } = {},
+		) => {
 			rmSync(join(cwd, "sources"), { recursive: true, force: true });
 			await writeFiles(join(cwd, "sources"), {
 				LICENSE: "license",
@@ -156,6 +159,7 @@ test("a run takes the previous build only when it is current for its sources", a
 				"native/Package.swift": swift,
 				"portal.el": ";; Version: 1.0\n",
 				"test/new.el": "",
+				"test/portal-core-tests.c": test,
 			});
 			copyFileSync(buildLisp, join(cwd, "sources", "portal-build.el"));
 		};
@@ -189,6 +193,7 @@ test("a run takes the previous build only when it is current for its sources", a
 				"licenses/texts/notice": "notice",
 				"native/Package.swift": "one",
 				"test/old.el": "",
+				"test/portal-core-tests.c": "test",
 			});
 		};
 		const take = () => {
@@ -220,9 +225,13 @@ test("a run takes the previous build only when it is current for its sources", a
 		).toEqual([]);
 		expect(existsSync(join(cwd, "work", "test", "new.el"))).toBe(true);
 
-		// So do changed license files, whose notices the build stages.
+		// So do changed license files, whose notices the build stages, and
+		// changed C tests, which it compiles.
 		await previous();
-		await sources("one", "another notice");
+		await sources("one", { notice: "another notice" });
+		expect(take()).toBe("reused=\n");
+		await previous();
+		await sources("one", { test: "another test" });
 		expect(take()).toBe("reused=\n");
 
 		// So does an incomplete build, and no previous tree at all.

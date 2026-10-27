@@ -49,15 +49,25 @@ run_stage() (
     exit "$status"
 )
 
+# Files in the tree $1 that the build reads but Portal's source identity leaves
+# out, as Portal does not run them: the sources of the staged license notices
+# and the C core's test programs.
+build_extras() (
+    cd -- "$1" && shopt -s nullglob && printf '%s\n' LICENSE licenses test/*.[ch]
+)
+
 # Whether the build in the work tree $2 is complete and was built from the
 # sources in $1: by the rule Portal applies before loading its module, and
-# with the license files its notices were staged from, which that rule omits.
+# with the same files that rule leaves out.
 build_current() {
-    diff -rq -- "$1/licenses" "$2/licenses" >/dev/null 2>&1 &&
-        cmp -s -- "$1/LICENSE" "$2/LICENSE" &&
-        PORTAL_REUSED_BUILD=$2/build "$EMACS" --batch -Q -l "$1/portal-build.el" --eval \
-            '(kill-emacs (let ((portal-build-directory (getenv "PORTAL_REUSED_BUILD")))
-                           (if (portal-build-problem) 1 0)))' >/dev/null 2>&1
+    local extras extra
+    extras=$(build_extras "$1") && [[ $extras == "$(build_extras "$2")" ]] || return 1
+    for extra in $extras; do
+        diff -rq -- "$1/$extra" "$2/$extra" >/dev/null 2>&1 || return 1
+    done
+    PORTAL_REUSED_BUILD=$2/build "$EMACS" --batch -Q -l "$1/portal-build.el" --eval \
+        '(kill-emacs (let ((portal-build-directory (getenv "PORTAL_REUSED_BUILD")))
+                       (if (portal-build-problem) 1 0)))' >/dev/null 2>&1
 }
 
 # Move the sources in $1 to the work tree $2, replacing the previous run's.
