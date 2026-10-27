@@ -82,9 +82,9 @@ Apart from whitespace, `nanoid` is unchanged. Only `customRandom`, which
 `customAlphabet` uses, changed: it returns `''` for a size of 0 or less and
 truncates its byte count with `step | 0`. Portal's callers use `nanoid()` and
 `nanoid(40)` only, so their behavior is unchanged. The 4.0 major dropped CommonJS and old Node.js, which
-this browser bundle does not use. The `portal-excalidraw-gui-pasted-mermaid-becomes-drawing`
-GUI test converts a pasted sequence diagram whose `box` group IDs come from
-mermaid-to-excalidraw's `nanoid`.
+this browser bundle does not use. [host/dependencies.test.ts](../host/dependencies.test.ts)
+checks that the editor bundle holds this one `nanoid` beside mermaid-to-excalidraw, and
+that its `nanoid()` and `nanoid(40)` make IDs of those lengths.
 
 Remove the override when Excalidraw and mermaid-to-excalidraw depend on fixed
 releases.
