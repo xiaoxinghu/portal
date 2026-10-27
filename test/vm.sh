@@ -49,12 +49,15 @@ run_stage() (
     exit "$status"
 )
 
-# Whether the build in $2 is complete and was built from the sources in $1,
-# by the rule Portal applies before loading its module.
+# Whether the build in the work tree $2 is complete and was built from the
+# sources in $1: by the rule Portal applies before loading its module, and
+# with the license files its notices were staged from, which that rule omits.
 build_current() {
-    PORTAL_REUSED_BUILD=$2 "$EMACS" --batch -Q -l "$1/portal-build.el" --eval \
-        '(kill-emacs (let ((portal-build-directory (getenv "PORTAL_REUSED_BUILD")))
-                       (if (portal-build-problem) 1 0)))' >/dev/null 2>&1
+    diff -rq -- "$1/licenses" "$2/licenses" >/dev/null 2>&1 &&
+        cmp -s -- "$1/LICENSE" "$2/LICENSE" &&
+        PORTAL_REUSED_BUILD=$2/build "$EMACS" --batch -Q -l "$1/portal-build.el" --eval \
+            '(kill-emacs (let ((portal-build-directory (getenv "PORTAL_REUSED_BUILD")))
+                           (if (portal-build-problem) 1 0)))' >/dev/null 2>&1
 }
 
 # Move the sources in $1 to the work tree $2, replacing the previous run's.
@@ -63,7 +66,7 @@ build_current() {
 take_work_tree() {
     local sources=$1 work=$2 output
     reused=
-    if [[ -d $work/build ]] && build_current "$sources" "$work/build"; then
+    if [[ -d $work/build ]] && build_current "$sources" "$work"; then
         reused=1
         for output in "${build_outputs[@]}"; do
             if [[ -e $work/$output && ! -e $sources/$output ]]; then

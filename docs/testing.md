@@ -92,9 +92,10 @@ desktop, the run moves them to `~/portal-test-runs/work`, replacing the
 previous run's tree, builds there, then runs the command there.
 Pass `sh -c 'command…'` for compound commands.
 
-When the previous run's build is complete and its `build/portal-build.eld`
+When the previous run's build is complete, its `build/portal-build.eld`
 records the [source identity](install.md#what-portal-checks) of the new files,
-the run keeps that build, with the host's packages, and says it is skipping
+and their `LICENSE` and `licenses/`, which the build's notices come from, are
+unchanged too, the run keeps that build, with the host's packages, and says it is skipping
 `./build.sh`. Changes to Lisp, tests and documentation need no rebuild. The
 identity covers neither the guest's Emacs nor Xcode: after changing either,
 delete `~/portal-test-runs/work` so that the next run builds afresh.
