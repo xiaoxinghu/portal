@@ -38,6 +38,9 @@ export LIBRARY_PATH="$(/usr/libexec/PlistBuddy -c Print:LSEnvironment:LIBRARY_PA
   but not its field.
 - Isolate fixtures. Clean up buffers, processes, files and registrations, even
   after failure. Leave user configuration and existing sessions untouched.
+- CTest runs suites in parallel. Keep each one to its own temporary files and
+  dynamically chosen ports; mark a suite that cannot share the machine
+  `RUN_SERIAL`.
 - Keep default checks headless and credential-free. Register them in the
   [CMake suite](../CMakeLists.txt) or [core suite](../native/Core/CMakeLists.txt).
   Keep special setup beside the test. Use
