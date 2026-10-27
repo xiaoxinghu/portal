@@ -132,7 +132,8 @@ bridge for non-hosted views.
 Graphical tests require a disposable graphical Emacs with the
 [test event injector](testing.md#input-graphical-checks) loaded.
 Load `test/portal-excalidraw-gui-tests.el`; run `M-x ert` with selector
-`^portal-excalidraw-gui-`. Coverage includes real WKWebView, offline fonts, paste,
+`^portal-excalidraw-gui-`. Coverage includes real WKWebView, paste,
 image round trips, several drawings, revert, hidden-state retention, and rapid
 `C-x C-s` delivery to Emacs. The test-only JavaScript evaluator is absent from
-the production module.
+the production module. That the editor works offline, loading its modules and
+fonts only from the app host, is an [app host check](testing.md#app-host-checks).

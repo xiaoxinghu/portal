@@ -27,6 +27,11 @@ export LIBRARY_PATH="$(/usr/libexec/PlistBuddy -c Print:LSEnvironment:LIBRARY_PA
 - Test at the narrowest useful boundary. Use the real core with a fake platform
   for shared rules. Use native integration tests for behavior controlled by
   AppKit, WebKit or Emacs's command loop.
+- Test what the app host serves in Bun, beside it in `host/*.test.ts`: routes,
+  headers, Markdown previews, local images and the offline editor bundle. They
+  call `respond` with a `Request`, without a listener or Emacs.
+  `test/portal-server-tests.el` tests only the Emacs seam: how Emacs starts the
+  host, reads its handshake, restarts it and cleans up after it.
 - Assert observable results, not incidental caches, hook names or call counts.
   Platform contracts include resource ownership and ordering.
 - Drive input and focus tests through the event loop. Direct handler calls do
@@ -262,6 +267,17 @@ physical-key delivery.
 
 The standalone focus check below also verifies live escape rebinding.
 Physical-key delivery on the affected macOS version still needs a manual check.
+
+## App host checks
+
+The `app-host` CTest suite runs `bun test` in `host/`, and `app-host-seam` runs
+the Emacs side. Both need a build: the Bun tests read the generated editor
+bundle and start the compiled `build/portal-host` (or `$PORTAL_BUILD/portal-host`).
+After `./build.sh`, run them directly:
+
+```sh
+(cd host && bun test)
+```
 
 ## Package installation checks
 

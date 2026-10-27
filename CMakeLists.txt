@@ -45,7 +45,7 @@ add_custom_command(
     # The license notices read both bundler records; rebuild if either is gone.
     BYPRODUCTS "${CMAKE_BINARY_DIR}/portal-host.meta.json"
         "${CMAKE_SOURCE_DIR}/host/.generated/editor-inputs.json"
-    DEPENDS host/server.ts host/hello.html host/dialogs.html host/about.ts host/about.html
+    DEPENDS host/server.ts host/app.ts host/hello.html host/dialogs.html host/about.ts host/about.html
         host/markdown.ts host/markdown.css
         host/icons/portal-32.png host/icons/portal-64.png host/icons/portal-256.png
         host/package.json host/bun.lock host/tsconfig.json host/build-editor.ts
@@ -104,13 +104,20 @@ if(BUILD_TESTING)
             -l "${CMAKE_SOURCE_DIR}/test/portal-gui-ert-tests.el"
             ${ert_batch})
     set_tests_properties(gui-verdict PROPERTIES TIMEOUT 30)
-    add_test(NAME ui-host
+    # What the app host serves, tested in Bun beside its sources.
+    add_test(NAME app-host
+        COMMAND "${CMAKE_COMMAND}" -E env "PORTAL_BUILD=${CMAKE_BINARY_DIR}"
+            "${BUN}" test
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/host")
+    set_tests_properties(app-host PROPERTIES TIMEOUT 30)
+    # How Emacs starts, handshakes with and restarts it.
+    add_test(NAME app-host-seam
         COMMAND "${CMAKE_COMMAND}" -E env
             "PORTAL_TEST_HOST=${CMAKE_BINARY_DIR}/portal-host"
             ${test_emacs} -L "${CMAKE_SOURCE_DIR}"
             -l "${CMAKE_SOURCE_DIR}/test/portal-server-tests.el"
             ${ert_batch})
-    set_tests_properties(ui-host PROPERTIES TIMEOUT 30)
+    set_tests_properties(app-host-seam PROPERTIES TIMEOUT 30)
     add_test(NAME quick-terminal
         COMMAND ${test_emacs} -L "${CMAKE_SOURCE_DIR}"
             -l "${CMAKE_SOURCE_DIR}/test/portal-terminal-quick-tests.el"
