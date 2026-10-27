@@ -2,6 +2,7 @@
 import { expect, test } from "bun:test";
 import {
 	copyFileSync,
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
@@ -14,6 +15,10 @@ import { join } from "node:path";
 
 const script = new URL("./vm.sh", import.meta.url).pathname;
 const desktop = new URL("./gui-desktop.sh", import.meta.url).pathname;
+const guiAll = new URL("./gui-all.sh", import.meta.url).pathname;
+const buildLisp = new URL("../portal-build.el", import.meta.url).pathname;
+const emacs =
+	process.env.EMACS || "/Applications/Emacs.app/Contents/MacOS/Emacs";
 // Only the scratch clone's own configuration counts.
 const gitEnv = {
 	...process.env,
@@ -117,6 +122,215 @@ test("timeout kills the command's process group and releases its desktop lock", 
 		expect(() => process.kill(-pid, 0)).toThrow();
 		expect(shell(cwd, "lockf -k -t 0 desktop.lock true").exitCode).toBe(0);
 		expect(readFileSync(join(cwd, "test.log"), "utf8")).toContain("Timed out");
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+// Files below ROOT, relative to it, with directories marked by a final slash.
+function tree(root: string): string[] {
+	return readdirSync(root, { recursive: true, withFileTypes: true })
+		.map((entry) => {
+			const path = join(entry.parentPath, entry.name).slice(root.length + 1);
+			return entry.isDirectory() ? `${path}/` : path;
+		})
+		.sort();
+}
+
+async function writeFiles(root: string, files: Record<string, string>) {
+	for (const [file, text] of Object.entries(files)) {
+		await Bun.write(join(root, file), text);
+	}
+}
+
+test("a run takes the previous build only when it is current for its sources", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "vm-work-"));
+	try {
+		// Sources as the runner syncs them: no build outputs.
+		const sources = async (
+			swift: string,
+			{ notice = "notice", test = "test" } = {},
+		) => {
+			rmSync(join(cwd, "sources"), { recursive: true, force: true });
+			await writeFiles(join(cwd, "sources"), {
+				LICENSE: "license",
+				"licenses/texts/notice": notice,
+				"host/package.json": "{}",
+				"native/Package.swift": swift,
+				"portal.el": ";; Version: 1.0\n",
+				"test/new.el": "",
+				"test/portal-core-tests.c": test,
+			});
+			copyFileSync(buildLisp, join(cwd, "sources", "portal-build.el"));
+		};
+		await sources("one");
+		const identity = Bun.spawnSync([
+			emacs,
+			"--batch",
+			"-Q",
+			"-l",
+			join(cwd, "sources", "portal-build.el"),
+			"--eval",
+			"(princ (portal-build-source-identity))",
+		]).stdout.toString();
+		expect(identity).toMatch(/^[0-9a-f]{64}$/);
+		// The previous run's tree, its build recorded from the same native
+		// sources, its Lisp tests older.
+		const artifacts = [
+			"portal.bundle/Contents/Info.plist",
+			"portal.bundle/Contents/MacOS/portal.dylib",
+			"portal.bundle/Contents/Resources/GhosttyKit_GhosttyTerminal.bundle/Contents/Resources/terminfo/78/xterm-ghostty",
+			"portal.bundle/Contents/Resources/GhosttyKit_GhosttyTerminal.bundle/Contents/Resources/Ghostty/shell-integration",
+			"portal-host",
+		];
+		const previous = async () => {
+			rmSync(join(cwd, "work"), { recursive: true, force: true });
+			await writeFiles(join(cwd, "work"), {
+				...Object.fromEntries(artifacts.map((file) => [`build/${file}`, ""])),
+				"build/portal-build.eld": `(:identity "${identity}" :version "1.0")`,
+				"host/node_modules/package/index.js": "",
+				LICENSE: "license",
+				"licenses/texts/notice": "notice",
+				"native/Package.swift": "one",
+				"test/old.el": "",
+				"test/portal-core-tests.c": "test",
+			});
+		};
+		const take = () => {
+			const result = shell(
+				cwd,
+				'EMACS="$1"; take_work_tree sources work; echo "reused=$reused"',
+				emacs,
+			);
+			expect(result.exitCode).toBe(0);
+			expect(existsSync(join(cwd, "sources"))).toBe(false);
+			return result.stdout.toString();
+		};
+		await previous();
+		expect(take()).toBe("reused=1\n");
+		const kept = tree(join(cwd, "work"));
+		expect(kept).toContain("build/portal-build.eld");
+		expect(kept).toContain("host/node_modules/package/index.js");
+		expect(kept).toContain("test/new.el");
+		expect(kept).not.toContain("test/old.el");
+
+		// Changed native sources build afresh.
+		await previous();
+		await sources("two");
+		expect(take()).toBe("reused=\n");
+		expect(
+			tree(join(cwd, "work")).filter((file) =>
+				/^(build|host\/node_modules)\//.test(file),
+			),
+		).toEqual([]);
+		expect(existsSync(join(cwd, "work", "test", "new.el"))).toBe(true);
+
+		// So do changed license files, whose notices the build stages, and
+		// changed C tests, which it compiles.
+		await previous();
+		await sources("one", { notice: "another notice" });
+		expect(take()).toBe("reused=\n");
+		await previous();
+		await sources("one", { test: "another test" });
+		expect(take()).toBe("reused=\n");
+
+		// So does an incomplete build, and no previous tree at all.
+		await previous();
+		await sources("one");
+		rmSync(join(cwd, "work", "build", "portal-host"));
+		expect(take()).toBe("reused=\n");
+		rmSync(join(cwd, "work"), { recursive: true });
+		await sources("one");
+		expect(take()).toBe("reused=\n");
+		expect(existsSync(join(cwd, "work", "portal-build.el"))).toBe(true);
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("a run copies back its logs and each suite's, not its tree", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "vm-logs-"));
+	try {
+		await writeFiles(join(cwd, "run"), {
+			"build.log": "",
+			"test.log": "",
+			"exit-status": "1",
+			"gui-progress.log": "",
+			"views/test.log": "",
+			"views/gui-progress.log": "",
+			"views/emacs-sample.log": "",
+			"views/exit-status": "124",
+			"views/deep/nested.log": "",
+			"package/test.log": "",
+			"screenshots/panel.png": "",
+			"repo/build/portal-build.log": "",
+			"repo/test.log": "",
+		});
+		const result = shell(cwd, `rsync -a "\${log_files[@]}" run/ logs/`);
+		expect(result.exitCode).toBe(0);
+		expect(tree(join(cwd, "logs"))).toEqual([
+			"build.log",
+			"exit-status",
+			"gui-progress.log",
+			"package/",
+			"package/test.log",
+			"test.log",
+			"views/",
+			"views/emacs-sample.log",
+			"views/exit-status",
+			"views/gui-progress.log",
+			"views/test.log",
+		]);
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("every graphical suite runs, each logging to its own directory", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "vm-gui-all-"));
+	try {
+		// A copy without Git metadata, as in the VM: the suites run here.
+		const suite = (body: string) =>
+			`echo "$(basename "$0") logs to $PORTAL_TEST_LOGS"\n${body}\n`;
+		await writeFiles(join(cwd, "repo", "test"), {
+			"views-gui.sh": suite(': >"$PORTAL_TEST_LOGS/gui-progress.log"'),
+			"input-gui.sh": suite("echo 'stalled' >&2; exit 124"),
+			"launcher-gui.sh": suite(""),
+			"terminal-shell-startup.sh": suite(""),
+			"package-gui.sh": suite(""),
+		});
+		copyFileSync(guiAll, join(cwd, "repo", "test", "gui-all.sh"));
+		copyFileSync(desktop, join(cwd, "repo", "test", "gui-desktop.sh"));
+		const logs = join(cwd, "logs");
+		const result = Bun.spawnSync(
+			["/bin/sh", join(cwd, "repo", "test", "gui-all.sh")],
+			{ cwd, env: { ...gitEnv, PORTAL_TEST_LOGS: logs, PORTAL_TEST_VM: "" } },
+		);
+		expect(result.exitCode).toBe(1);
+		const output = result.stdout.toString();
+		expect(output).toMatch(/^views: passed in \d+ s$/m);
+		expect(output).toMatch(/^input: failed \(124\) in \d+ s$/m);
+		expect(output).toMatch(/^package: passed in \d+ s$/m);
+		const suites = [
+			"views",
+			"input",
+			"launcher",
+			"terminal-shell-startup",
+			"package",
+		];
+		expect(tree(logs).filter((file) => file.endsWith("/"))).toEqual(
+			suites.map((name) => `${name}/`).sort(),
+		);
+		expect(readFileSync(join(logs, "input", "test.log"), "utf8")).toBe(
+			`input-gui.sh logs to ${join(logs, "input")}\nstalled\n`,
+		);
+		expect(readFileSync(join(logs, "input", "exit-status"), "utf8")).toBe(
+			"124\n",
+		);
+		expect(readFileSync(join(logs, "package", "exit-status"), "utf8")).toBe(
+			"0\n",
+		);
+		expect(existsSync(join(logs, "views", "gui-progress.log"))).toBe(true);
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
 	}

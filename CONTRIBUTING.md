@@ -139,18 +139,18 @@ python3 -B -m unittest discover -s test -p 'test_*.py'
 git diff --check
 ```
 
-Then the graphical checks, each in a fresh graphical Emacs:
+Then the graphical checks, each suite in a fresh graphical Emacs:
 
 ```sh
-sh test/views-gui.sh
-sh test/input-gui.sh
-sh test/launcher-gui.sh
-sh test/terminal-shell-startup.sh
-sh test/package-gui.sh
+sh test/gui-all.sh
 ```
 
-They open windows and take keyboard focus while they run. To keep working
-meanwhile, [run them in a VM](docs/testing.md#graphical-checks-in-a-vm).
+It runs `test/views-gui.sh`, `test/input-gui.sh`, `test/launcher-gui.sh`,
+`test/terminal-shell-startup.sh` and `test/package-gui.sh` in turn, after a
+failure too, and fails if any of them did; run one of those to repeat a single
+suite. They open windows and take keyboard focus while they run. To keep
+working meanwhile, [run them in a VM](docs/testing.md#graphical-checks-in-a-vm),
+where the wrapper builds once for all of them.
 
 The build installs the locked host dependencies and CMake downloads hash-checked
 Emacs packages for integration tests. The `licenses` suite fails when a
