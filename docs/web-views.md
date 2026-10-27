@@ -235,6 +235,33 @@ A change applies to downloads that start afterwards. Killing a web buffer
 cancels its unfinished downloads. There is no download list or progress
 display; `M-x dired` the directory to find files.
 
+## Passwords and certificates
+
+A site behind HTTP authentication, as many self-hosted and intranet sites
+are, asks for a user name and password with a sheet on the page's frame,
+such as "Log in to “wiki.example”", naming the area of the site it is for
+and saying when the password would be sent unencrypted. The sheet follows
+the page as its JavaScript dialogs do. Once logged in, WebKit sends them
+without asking for the rest of the Emacs session, from every ordinary web
+view, or from a hosted app's own view; a wrong one asks again with the user
+name kept. Cancel, and the page shows what the site sends without them.
+Basic, Digest and NTLM authentication ask; other kinds, such as Kerberos,
+are left to the system.
+
+Ticking "Remember this password" keeps it in the login keychain, from where
+the site gets it without asking in later sessions, until it fails; logging
+in again with the box clear forgets it. Hosted apps keep nothing, so their
+sheet does not offer to remember.
+`(portal-web-open-hosted "/sign-in")` opens a page that asks: any user name
+with the password `portal` signs in.
+
+A site that asks for a certificate of the user's gets one from the keychain:
+the one chosen for that site before, or one chosen in the system's
+certificate sheet from those the site accepts. The sheet keeps the choice in
+the keychain for that site. Without one, or when cancelled, the page goes on
+without a certificate. A site whose own certificate the system does not
+trust fails to load, with no way to go on anyway.
+
 ## Camera and microphone
 
 A page that asks to use the camera or microphone, as a video call does,
