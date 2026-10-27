@@ -1,9 +1,10 @@
 ;;; portal-fake-native.el --- In-memory Portal native module for batch tests -*- lexical-binding: t; -*-
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
-;; Stands in for the native module at the `portal-view.el' seam, so batch
-;; Emacs can drive real buffers, windows and frames without AppKit.  Load it
-;; before Portal; never load it into an Emacs that uses the real module.
+;; Stands in for the native module at the `portal-view.el' and
+;; `portal-launcher.el' seams, so batch Emacs can drive real buffers, windows
+;; and frames without AppKit.  Load it before Portal; never load it into an
+;; Emacs that uses the real module.
 
 (require 'cl-lib)
 (require 'subr-x)
@@ -19,9 +20,18 @@ and :focused.  A web view also has the :url it loaded last, and the JSON
 (defvar portal-fake-native-failures nil
   "Exports that signal an error, such as `portal--open' or `portal--place'.")
 
+(defvar portal-fake-native--launcher nil
+  "The launcher panel: a plist of the attached :frame, whether it is :visible
+and :key, whether it is :presenting and has :lost-focus since, and its
+last :height.  nil when no frame is attached.")
+(defvar portal-fake-native--launcher-session 0
+  "The launcher's presentation session.
+Showing, hiding and detaching start a new one, as the native module does.")
+
 (defun portal-fake-native-reset ()
-  "Forget every view and logged call."
+  "Forget every view, the launcher panel and logged calls."
   (clrhash portal-fake-native--views)
+  (setq portal-fake-native--launcher nil)
   (setq portal-fake-native-log nil))
 
 (defun portal-fake-native-calls (name)
@@ -232,6 +242,88 @@ Send its `opened' record, as the native module does, and return its target."
 (defun portal--input-double-escape (milliseconds)
   (portal-fake-native--call 'portal--input-double-escape milliseconds)
   t)
+
+;; Launcher exports.  One frame at a time lends the panel its view; showing
+;; makes the panel key and starts a presentation, as native placement does.
+(defun portal-fake-native--launcher-set (&rest facts)
+  "Set FACTS in the attached launcher's state."
+  (while facts
+    (setq portal-fake-native--launcher
+          (plist-put portal-fake-native--launcher (pop facts) (pop facts)))))
+
+(defun portal-fake-native--launcher-end ()
+  "End the panel's presentation, hiding it, and start a new session."
+  (cl-incf portal-fake-native--launcher-session)
+  (portal-fake-native--launcher-set :visible nil :key nil :presenting nil))
+
+(defun portal--launcher-attach (title)
+  (portal-fake-native--call 'portal--launcher-attach title)
+  (when portal-fake-native--launcher (error "Portal launcher is already attached"))
+  (let ((frame (cl-find title (frame-list)
+                        :key (lambda (frame) (frame-parameter frame 'title)) :test #'equal)))
+    (unless frame
+      (error "Portal launcher needs a new hidden, undecorated GNU Emacs NS frame"))
+    (setq portal-fake-native--launcher (list :frame frame :visible nil :key nil))
+    t))
+
+(defun portal--launcher-prepare ()
+  (portal-fake-native--call 'portal--launcher-prepare)
+  t)
+
+(defun portal--launcher-show (width height dx dy screen shadow radius)
+  (portal-fake-native--call 'portal--launcher-show width height dx dy screen shadow radius)
+  (unless (and (integerp width) (>= width 200) (integerp height) (>= height 1)
+               (integerp dx) (integerp dy) (integerp screen) (>= screen -1)
+               (natnump radius))
+    (error "Launcher needs width >= 200, height >= 1, screen >= -1 and radius >= 0"))
+  (unless portal-fake-native--launcher (error "Portal launcher is not attached"))
+  (cl-incf portal-fake-native--launcher-session)
+  (portal-fake-native--launcher-set :visible t :key t :presenting t :lost-focus nil :height height)
+  t)
+
+(defun portal--launcher-fit (session height)
+  (portal-fake-native--call 'portal--launcher-fit session height)
+  (unless (and (natnump session) (integerp height) (>= height 1))
+    (error "Launcher fit needs a session >= 0 and height >= 1"))
+  ;; A stale session or a hidden panel is ignored.
+  (when (and (eql session portal-fake-native--launcher-session)
+             (plist-get portal-fake-native--launcher :presenting))
+    (portal-fake-native--launcher-set :height height))
+  t)
+
+(defun portal--launcher-hide (&optional restore-focus)
+  (portal-fake-native--call 'portal--launcher-hide restore-focus)
+  (when portal-fake-native--launcher (portal-fake-native--launcher-end))
+  t)
+
+(defun portal--launcher-detach ()
+  (portal-fake-native--call 'portal--launcher-detach)
+  (when portal-fake-native--launcher
+    (portal-fake-native--launcher-end)
+    (setq portal-fake-native--launcher nil))
+  t)
+
+(defun portal--launcher-inspect ()
+  (append (list :attached (and portal-fake-native--launcher t)
+                :session portal-fake-native--launcher-session)
+          (when portal-fake-native--launcher
+            (list :visible (plist-get portal-fake-native--launcher :visible)
+                  :key (plist-get portal-fake-native--launcher :key)
+                  :height (plist-get portal-fake-native--launcher :height)))))
+
+(defun portal-fake-native-launcher-frame ()
+  "Return the frame whose view the launcher panel holds, or nil."
+  (plist-get portal-fake-native--launcher :frame))
+
+(defun portal-fake-native-launcher-blur ()
+  "Take the keyboard from a presenting panel, as another window or app does.
+Send its `launcher-blur' record, once per presentation, as the native
+module does."
+  (when (and (plist-get portal-fake-native--launcher :presenting)
+             (not (plist-get portal-fake-native--launcher :lost-focus)))
+    (portal-fake-native--launcher-set :key nil :lost-focus t)
+    (portal-fake-native-send (format "launcher-blur %d\n" portal-fake-native--launcher-session))))
+
 (defun portal--terminal-bindings (_json) t)
 (defun portal--terminal-theme (_theme) t)
 (defun portal--web-appearance (appearance)

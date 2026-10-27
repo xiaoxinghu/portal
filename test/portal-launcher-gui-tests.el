@@ -2033,46 +2033,35 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
           (vertico-mode -1))))))
 
 (ert-deftest portal-launcher-gui-session-nested-dismissal-and-reentry ()
+  ;; The batch suite dismisses every kind of panel every way, on the fake
+  ;; native module. These are the ways only the platform can prove: native
+  ;; Escape, and the global shortcut's hot key.
   (portal-launcher-gui--with-panel
     (portal-launcher-gui--dismiss-shortcut)
-    ;; A minibuffer panel at a fixed size, and fitting its content.
-    (pcase-dolist (`(,kind ,portal-launcher-size) '((buffer (720 420)) (minibuffer (720 420)) (minibuffer nil)))
-      (dolist (reason '(escape quit second shortcut hide delete disable))
-        (message "Launcher nested dismissal: %S %S %S" kind portal-launcher-size reason)
-        (let (frames continued)
-          (portal-launcher-gui--present
-           (lambda ()
-             (interactive)
-             (minibuffer-with-setup-hook
-                 (lambda ()
-                   (push (window-frame (active-minibuffer-window)) frames)
-                   (minibuffer-with-setup-hook
-                       (lambda () (push (window-frame (active-minibuffer-window)) frames))
-                     (completing-read "Inner: " '("alpha") nil t)))
-               (completing-read "Outer: " '("alpha") nil t))
-             (setq continued t))
-           (list (pcase reason ('escape '(53 0 "\e")) ('quit 'quit)
-                        (_ '(30 262144 "\C-]"))))
-           (lambda ()
-             (pcase reason
-               ('second (portal-launcher-present #'ignore))
-               ('shortcut (portal-launcher-gui--press 'portal-launcher-gui))
-               ('hide (portal-launcher-hide))
-               ('delete (delete-frame portal-launcher--frame t))
-               ('disable (portal-launcher-mode -1))))
-           (list :kind kind))
-          (should-not continued)
-          (should (= (length frames) 2))
-          (should (eq (car frames) (cadr frames)))
-          (should-not (eq (car frames) (window-frame ordinary)))
-          (when (frame-live-p (car frames))
-            (should (eq kind (portal-launcher--kind (car frames)))))
-          (should (eq ordinary (selected-window)))
-          (when (eq reason 'disable) (should-not portal-launcher-mode))
-          (when (memq reason '(delete disable)) (should-not (frame-live-p (car frames))))
-          ;; Re-entry works, in a buffer launcher even after a minibuffer one.
-          (should (eq 'again (portal-launcher-present (lambda () (interactive) 'again))))
-          (should (portal-launcher--live-p 'buffer)))))))
+    (pcase-dolist (`(,kind ,portal-launcher-size ,reason)
+                   '((minibuffer nil escape) (buffer (720 420) shortcut)))
+      (message "Launcher nested dismissal: %S %S %S" kind portal-launcher-size reason)
+      (let (frames continued)
+        (portal-launcher-gui--present
+         (lambda ()
+           (interactive)
+           (minibuffer-with-setup-hook
+               (lambda ()
+                 (push (window-frame (active-minibuffer-window)) frames)
+                 (minibuffer-with-setup-hook
+                     (lambda () (push (window-frame (active-minibuffer-window)) frames))
+                   (completing-read "Inner: " '("alpha") nil t)))
+             (completing-read "Outer: " '("alpha") nil t))
+           (setq continued t))
+         (list (pcase reason ('escape '(53 0 "\e")) (_ '(30 262144 "\C-]"))))
+         (lambda () (portal-launcher-gui--press 'portal-launcher-gui))
+         (list :kind kind))
+        (should-not continued)
+        (should (= (length frames) 2))
+        (should (eq (car frames) (cadr frames)))
+        (should (eq kind (portal-launcher--kind (car frames))))
+        (should (eq ordinary (selected-window)))
+        (should (eq 'again (portal-launcher-present (lambda () (interactive) 'again))))))))
 
 (ert-deftest portal-launcher-gui-session-command-error ()
   (portal-launcher-gui--with-panel
@@ -2178,38 +2167,33 @@ The local command n reads a name in the minibuffer and greets it."
       (kill-buffer "*Hello*"))))
 
 (ert-deftest portal-launcher-gui-persistent-dismissal-and-reentry ()
+  ;; The batch suite dismisses a persistent panel every way, from its
+  ;; buffer and from a prompt. These are the ways only the platform can
+  ;; prove: native Escape, the global shortcut's hot key and focus loss.
   (portal-launcher-gui--with-panel
     (portal-launcher-gui--dismiss-shortcut)
     (unwind-protect
-        (dolist (prompt '(nil t))
-          (dolist (reason '(escape quit second shortcut hide delete disable focus))
-            (message "Launcher persistent dismissal: %S %S" (if prompt 'prompt 'buffer) reason)
-            (let ((portal-launcher-gui--prompts nil) frame)
-              (should-not
-               (portal-launcher-gui--present
-                (lambda () (setq frame portal-launcher--frame) (portal-launcher-gui--hello))
-                (append (when prompt (portal-launcher-gui--text "na"))
-                        (list (pcase reason ('escape '(53 0 "\e")) ('quit 'quit)
-                                     (_ '(30 262144 "\C-]")))))
-                (lambda ()
-                  (pcase reason
-                    ('second (portal-launcher-present #'ignore))
-                    ('shortcut (portal-launcher-gui--press 'portal-launcher-gui))
-                    ('hide (portal-launcher-hide))
-                    ('delete (delete-frame portal-launcher--frame t))
-                    ('disable (portal-launcher-mode -1))
-                    ('focus
-                     (portal-view--with-frame-title (window-frame ordinary)
-                                                    #'portal-test-native-target-frame)
-                     (portal-test-native-focus-target))))
-                '(:mode-line nil :keep-open t)))
-              (should (equal portal-launcher-gui--prompts (and prompt '(t))))
-              (portal-launcher-gui--check-unwound)
-              (should (eq ordinary (selected-window)))
-              (should (equal "Hello world!" (with-current-buffer "*Hello*" (buffer-string))))
-              (should (eq (and (frame-live-p frame) t) (not (memq reason '(delete disable)))))
-              (when (eq reason 'disable) (should-not portal-launcher-mode))
-              (should (eq 'again (portal-launcher-present (lambda () (interactive) 'again)))))))
+        (pcase-dolist (`(,prompt ,reason) '((t escape) (nil shortcut) (t focus)))
+          (message "Launcher persistent dismissal: %S %S" (if prompt 'prompt 'buffer) reason)
+          (let ((portal-launcher-gui--prompts nil))
+            (should-not
+             (portal-launcher-gui--present
+              #'portal-launcher-gui--hello
+              (append (when prompt (portal-launcher-gui--text "na"))
+                      (list (pcase reason ('escape '(53 0 "\e")) (_ '(30 262144 "\C-]")))))
+              (lambda ()
+                (pcase reason
+                  ('shortcut (portal-launcher-gui--press 'portal-launcher-gui))
+                  ('focus
+                   (portal-view--with-frame-title (window-frame ordinary)
+                                                  #'portal-test-native-target-frame)
+                   (portal-test-native-focus-target))))
+              '(:mode-line nil :keep-open t)))
+            (should (equal portal-launcher-gui--prompts (and prompt '(t))))
+            (portal-launcher-gui--check-unwound)
+            (should (eq ordinary (selected-window)))
+            (should (equal "Hello world!" (with-current-buffer "*Hello*" (buffer-string))))
+            (should (eq 'again (portal-launcher-present (lambda () (interactive) 'again))))))
       (kill-buffer "*Hello*"))))
 
 (ert-deftest portal-launcher-gui-persistent-command-errors ()
@@ -2344,30 +2328,31 @@ hidden frame."
   (should-not (frame-focus-state portal-launcher--frame)))
 
 (ert-deftest portal-launcher-gui-dismissal-leaves-focus ()
+  ;; The batch suite checks which dismissals give the previous app its
+  ;; focus back. These rows leave Emacs's own focus events to AppKit: a
+  ;; panel that read no input, which leaves the panel's focus-in queued,
+  ;; native Escape, the global shortcut's hot key and focus loss to
+  ;; another Emacs frame.
   (portal-launcher-gui--with-panel
     (portal-launcher-gui--dismiss-shortcut)
-    (dolist (kind '(buffer minibuffer))
-      (dolist (reason '(no-input success escape quit second shortcut hide blur-emacs))
-        (message "Launcher dismissal focus: %S %S" kind reason)
-        (portal-launcher-gui--present
-         (if (eq reason 'no-input) (lambda () 'done)
-           (lambda () (interactive) (read-string "Focus: ")))
+    (pcase-dolist (`(,kind ,reason) '((buffer no-input) (minibuffer escape)
+                                      (buffer shortcut) (minibuffer blur-emacs)))
+      (message "Launcher dismissal focus: %S %S" kind reason)
+      (portal-launcher-gui--present
+       (if (eq reason 'no-input) (lambda () 'done)
+         (lambda () (interactive) (read-string "Focus: ")))
+       (pcase reason
+         ('no-input nil)
+         ('escape '((53 0 "\e")))
+         (_ '((30 262144 "\C-]"))))
+       (lambda ()
          (pcase reason
-           ('no-input nil)
-           ('success '((36 0 "\r")))
-           ('escape '((53 0 "\e")))
-           ('quit '(quit))
-           (_ '((30 262144 "\C-]"))))
-         (lambda ()
-           (pcase reason
-             ('second (portal-launcher-present #'ignore))
-             ('shortcut (portal-launcher-gui--press 'portal-launcher-gui))
-             ('hide (portal-launcher-hide))
-             ('blur-emacs
-              (portal-view--with-frame-title (window-frame ordinary) #'portal-test-native-target-frame)
-              (portal-test-native-focus-target))))
-         (list :kind kind))
-        (portal-launcher-gui--check-focus-left ordinary)))
+           ('shortcut (portal-launcher-gui--press 'portal-launcher-gui))
+           ('blur-emacs
+            (portal-view--with-frame-title (window-frame ordinary) #'portal-test-native-target-frame)
+            (portal-test-native-focus-target))))
+       (list :kind kind))
+      (portal-launcher-gui--check-focus-left ordinary))
     ;; An explicitly shown panel, hidden again.
     (portal-launcher-show content)
     (portal-launcher-hide)

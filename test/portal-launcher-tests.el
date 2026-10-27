@@ -1,6 +1,12 @@
 ;;; portal-launcher-tests.el --- Launcher policy checks -*- lexical-binding: t; -*-
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 (require 'ert)
+(require 'portal-fake-native
+         (expand-file-name "portal-fake-native"
+                           (file-name-directory
+                            (or load-file-name
+                                (bound-and-true-p byte-compile-current-file)
+                                buffer-file-name))))
 (require 'portal-launcher)
 (require 'portal-launcher-examples)
 
@@ -176,8 +182,7 @@ NATIVE is an alist of the IDs and chords native code has registered."
          (kill-emacs-hook nil)
          (unread-command-events nil)
          (native nil) (token 0))
-     (cl-letf (((symbol-function 'portal-view--load) #'ignore)
-               ((symbol-function 'portal--shortcut-chord) #'identity)
+     (cl-letf (((symbol-function 'portal--shortcut-chord) #'identity)
                ((symbol-function 'portal--shortcut-set)
                 (lambda (replacing chord)
                   (setq native (cons (cons (cl-incf token) chord)
@@ -1325,36 +1330,214 @@ Return its buffer, as setup functions may."
             (portal-launcher-test--unwound depth))
         (kill-buffer "*Portal launcher hello*")))))
 
-(ert-deftest portal-launcher-keep-open-dismissal-unwinds-the-interaction ()
-  (portal-launcher-test--session
-    (let ((depth (recursion-depth)) (count 0))
+;; Every kind of panel, dismissed every way, on the fake native module.  The
+;; graphical suite keeps one row for each way that only the platform can
+;; prove: a native key, the global shortcut's hot key and focus loss.
+(defmacro portal-launcher-test--fake-panel (&rest body)
+  "Run BODY with the real launcher, whose native calls go to the fake module.
+ORDINARY is the selected window of a terminal frame, and panels are
+terminal frames too: on the same terminal, whose prompts a keyboard macro
+can type into.  The global shortcut `portal-launcher-test' presents a
+launcher, as the guide's toggling chords do."
+  (declare (indent 0))
+  `(portal-launcher-test--shortcuts
+     (portal-fake-native-with-frame frame
+       ;; Nothing is drawn, so the terminal can take new frames.
+       (let ((inhibit-redisplay t)
+             (portal-launcher-mode nil)
+             (portal-launcher--frame nil)
+             (portal-launcher--session nil)
+             (portal-launcher--return-window nil)
+             (portal-launcher-frame-parameters
+              (cons (cons 'terminal (frame-terminal frame)) portal-launcher-frame-parameters))
+             (portal-launcher-size '(720 420))
+             (native-comp-enable-subr-trampolines nil)
+             (make-frame (symbol-function 'make-frame)))
+         (resume-tty (frame-terminal frame))
+         (portal-fake-native-reset)
+         (select-frame frame)
+         (cl-letf (((symbol-function 'portal-launcher--check-support) #'ignore)
+                   ((symbol-function 'portal-launcher--check-guard) #'ignore)
+                   ;; A terminal frame always has its own minibuffer, so the
+                   ;; frame keeps the kind it was made for in a parameter.
+                   ;; Making it sets the minibuffer parameter's cell to t,
+                   ;; so it gets copies, not the launcher's constants.
+                   ((symbol-function 'make-frame)
+                    (lambda (&optional parameters)
+                      (funcall make-frame
+                               (cons (cons 'portal-launcher-test-kind
+                                           (if (eq (alist-get 'minibuffer parameters) 'only)
+                                               'minibuffer 'buffer))
+                                     (copy-alist parameters)))))
+                   ((symbol-function 'portal-launcher--kind)
+                    (lambda (frame) (frame-parameter frame 'portal-launcher-test-kind))))
+           (let ((ordinary (selected-window)))
+             (unwind-protect
+                 (progn
+                   (portal-global-shortcut-set
+                    'portal-launcher-test "test chord"
+                    (lambda () (interactive) (portal-launcher-present #'ignore)))
+                   ,@body)
+               (portal-launcher-mode -1)
+               (should-not (portal-fake-native-launcher-frame))
+               (select-frame frame)
+               (suspend-tty (frame-terminal frame)))))))))
+
+(defun portal-launcher-test--dismissal (reason)
+  "Return (KEYS . ACTION) that dismiss a presentation for REASON.
+KEYS, for `portal-launcher-test--type', type Escape or C-g, or <f14>,
+which calls ACTION."
+  (pcase reason
+    ('escape '("<escape>"))
+    ('quit '("C-g"))
+    (_ (cons "<f14>"
+             (pcase reason
+               ('second (lambda () (portal-launcher-present #'ignore)))
+               ('shortcut
+                (lambda ()
+                  (portal-fake-native-send
+                   (format "shortcut %d\n"
+                           (cadr (assq 'portal-launcher-test portal-global-shortcut--registrations))))))
+               ('hide #'portal-launcher-hide)
+               ('cancel #'portal-launcher-cancel)
+               ('delete (lambda () (delete-frame portal-launcher--frame t)))
+               ('disable (lambda () (portal-launcher-mode -1)))
+               ;; Another app, or another Emacs frame, takes the keyboard.
+               ('blur #'portal-fake-native-launcher-blur)
+               ;; A persistent panel's own recursive edit.
+               ('exit #'exit-recursive-edit)
+               ('abort #'abort-recursive-edit))))))
+
+(defun portal-launcher-test--check-dismissed (reason frame)
+  "Check that dismissing panel FRAME for REASON hid it as REASON should.
+Only cancelling may give the previous app back its focus; deleting the
+panel or disabling the mode also detaches it."
+  (should-not (plist-get (portal--launcher-inspect) :visible))
+  (should-not (plist-get (portal--launcher-inspect) :key))
+  (should (equal (car (last (portal-fake-native-calls 'portal--launcher-hide)))
+                 (list (not (memq reason '(blur no-input success))))))
+  (should (eq (and (frame-live-p frame) t) (not (memq reason '(delete disable)))))
+  (should (eq (portal-fake-native-launcher-frame) (and (frame-live-p frame) frame)))
+  (should (eq portal-launcher-mode (not (eq reason 'disable)))))
+
+(ert-deftest portal-launcher-nested-dismissal-and-reentry ()
+  (portal-launcher-test--fake-panel
+    (let ((depth (recursion-depth)))
+      ;; A minibuffer panel at a fixed size, and fitting its content.
+      (pcase-dolist (`(,kind ,portal-launcher-size) '((buffer (720 420)) (minibuffer (720 420)) (minibuffer nil)))
+        (dolist (reason '(escape quit second shortcut hide cancel delete disable blur))
+          (ert-info ((format "%S %S %S" kind portal-launcher-size reason))
+            (let* ((dismissal (portal-launcher-test--dismissal reason))
+                   (portal-launcher-test--action (cdr dismissal))
+                   prompts continued)
+              (setq portal-fake-native-log nil)
+              (should-not
+               (portal-launcher-test--type
+                (car dismissal)
+                (lambda ()
+                  (interactive)
+                  (cl-flet ((note () (push (list (window-frame (active-minibuffer-window))
+                                                 (portal-fake-native-launcher-frame)
+                                                 (portal-launcher--kind portal-launcher--frame))
+                                           prompts)))
+                    (minibuffer-with-setup-hook
+                        (lambda ()
+                          (note)
+                          (minibuffer-with-setup-hook #'note
+                            (completing-read "Inner: " '("alpha") nil t)))
+                      (completing-read "Outer: " '("alpha") nil t)))
+                  (setq continued t))
+                :kind kind))
+              (should-not continued)
+              ;; Both prompts were in the attached panel made for KIND.
+              (should (= (length prompts) 2))
+              (should (equal (car prompts) (cadr prompts)))
+              (pcase-let ((`(,frame ,attached ,made-for) (car prompts)))
+                (should (eq frame attached))
+                (should-not (eq frame (window-frame ordinary)))
+                (should (eq made-for kind))
+                (portal-launcher-test--check-dismissed reason frame))
+              (should (eq ordinary (selected-window)))
+              (portal-launcher-test--unwound depth)
+              ;; Re-entry works, in a buffer panel even after a minibuffer one.
+              (should (eq 'again (portal-launcher-present (lambda () (interactive) 'again))))
+              (should (portal-launcher--live-p 'buffer))
+              (should (eq portal-launcher--frame (portal-fake-native-launcher-frame)))
+              (should (eq ordinary (selected-window))))))))))
+
+(ert-deftest portal-launcher-keep-open-dismissal-and-reentry ()
+  (portal-launcher-test--fake-panel
+    (let ((depth (recursion-depth)))
       (unwind-protect
           (dolist (prompt '(nil t))
-            (dolist (dismissal
-                     `(("<escape>") ("C-g")
-                       ("<f14>" . ,(lambda () (portal-launcher-present #'ignore)))
-                       ("<f14>" . portal-launcher-hide)
-                       ("<f14>" . portal-launcher-cancel)
-                       ("<f14>" . ,(lambda ()
-                                     (portal-launcher--delete-frame
-                                      (lambda (&rest _) (ert-fail "Deleted during the session")))))
-                       ;; In a prompt, these act on the prompt, as elsewhere.
-                       ,@(unless prompt
-                           '(("<f14>" . exit-recursive-edit) ("<f14>" . abort-recursive-edit)))))
-              (let ((portal-launcher-test--action
-                     (lambda () (funcall (cdr dismissal)) (ert-fail "The command survived dismissal"))))
-                (should-not (portal-launcher-test--type
-                             ;; A later command's prompt, with text typed in it.
-                             (concat (if prompt "n a " "") (car dismissal))
-                             #'portal-launcher-test--hello :keep-open t))
-                (cl-incf count)
-                (should (= count (length hidden)))
-                (should (eq t (car hidden)))
-                (portal-launcher-test--unwound depth)
-                (should (equal "Hello world!"
-                               (with-current-buffer "*Portal launcher hello*" (buffer-string)))))))
-        (kill-buffer "*Portal launcher hello*"))
-      (should (= deleted 2)))))
+            (dolist (reason `(escape quit second shortcut hide cancel delete disable blur
+                                     ;; In a prompt, these act on the prompt, as elsewhere.
+                                     ,@(unless prompt '(exit abort))))
+              (ert-info ((format "%S %S" (if prompt 'prompt 'buffer) reason))
+                (let* ((dismissal (portal-launcher-test--dismissal reason))
+                       (portal-launcher-test--action (cdr dismissal))
+                       prompts frame)
+                  (setq portal-fake-native-log nil)
+                  (should-not
+                   (portal-launcher-test--type
+                    ;; A later command's prompt, with text typed in it.
+                    (concat (if prompt "N a " "") (car dismissal))
+                    (lambda ()
+                      (setq frame (portal-fake-native-launcher-frame))
+                      (portal-launcher-test--hello
+                       (cons "N" (lambda ()
+                                   (interactive)
+                                   (minibuffer-with-setup-hook
+                                       (lambda ()
+                                         (push (eq (window-frame (active-minibuffer-window)) frame)
+                                               prompts))
+                                     (portal-launcher-test--greet))))))
+                    :mode-line nil :keep-open t))
+                  (should (framep frame))
+                  (should (equal prompts (and prompt '(t))))
+                  (portal-launcher-test--check-dismissed reason frame)
+                  (portal-launcher-test--unwound depth)
+                  (should (eq ordinary (selected-window)))
+                  (should (equal "Hello world!"
+                                 (with-current-buffer "*Portal launcher hello*" (buffer-string))))
+                  (should (eq 'again (portal-launcher-present (lambda () (interactive) 'again))))
+                  (should (eq ordinary (selected-window)))))))
+        (kill-buffer "*Portal launcher hello*")))))
+
+(ert-deftest portal-launcher-dismissal-hides-the-panel ()
+  ;; Each way a presentation ends hides the panel and selects the window
+  ;; it was presented from; only cancelling gives the previous app focus.
+  (portal-launcher-test--fake-panel
+    (let ((depth (recursion-depth)) (content (generate-new-buffer " *launcher content*")))
+      (unwind-protect
+          (progn
+            (dolist (kind '(buffer minibuffer))
+              (dolist (reason '(no-input success escape quit second shortcut hide blur))
+                (ert-info ((format "%S %S" kind reason))
+                  (let* ((dismissal (portal-launcher-test--dismissal reason))
+                         (portal-launcher-test--action (cdr dismissal)))
+                    (setq portal-fake-native-log nil)
+                    (should (equal (pcase reason ('no-input 'done) ('success "ok"))
+                                   (portal-launcher-test--type
+                                    (pcase reason ('no-input "") ('success "o k RET") (_ (car dismissal)))
+                                    (if (eq reason 'no-input) (lambda () 'done)
+                                      (lambda () (interactive) (read-string "Focus: ")))
+                                    :kind kind)))
+                    (should (equal (portal-fake-native-calls 'portal--launcher-show)
+                                   (list (list 720 420 0 0 -1 t 14))))
+                    (portal-launcher-test--check-dismissed reason portal-launcher--frame)
+                    (portal-launcher-test--unwound depth)
+                    (should (eq ordinary (selected-window)))))))
+            ;; An explicitly shown panel, hidden again.
+            (setq portal-fake-native-log nil)
+            (should (eq (portal-launcher-show content) (portal-fake-native-launcher-frame)))
+            (should (plist-get (portal--launcher-inspect) :visible))
+            (should (eq (selected-frame) portal-launcher--frame))
+            (portal-launcher-hide)
+            (should (equal (portal-fake-native-calls 'portal--launcher-hide) '((nil))))
+            (should-not (plist-get (portal--launcher-inspect) :visible))
+            (should (eq ordinary (selected-window))))
+        (kill-buffer content)))))
 
 (ert-deftest portal-launcher-keep-open-survives-command-errors ()
   (portal-launcher-test--session
