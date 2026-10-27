@@ -129,7 +129,7 @@
           (setq portal-terminal-theme "Dracula")
           (portal-terminal-test--session
             (should (member "Dracula" (portal-terminal-themes)))
-            ;; One colour tells the themes apart; Ghostty owns the rest.
+            ;; One color tells the themes apart; Ghostty owns the rest.
             (let* ((first (portal-view-target))
                    (initial (portal-terminal-test--colors first)))
               (should (equal (plist-get initial :background) "282a36"))
