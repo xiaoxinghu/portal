@@ -361,15 +361,14 @@ typedef struct portal_screen {
 bool portal_screens(portal_screen **screens, size_t *count, portal_text *error);
 
 /* What a status means, which decides how the platform marks it: an icon or a
-   color, and for PROGRESS and RECORDING an animation, such as a spinner and
-   a red dot that breathes.  NEUTRAL has no mark. */
+   color, and for PROGRESS an animation, such as a spinner.  NEUTRAL has no
+   mark. */
 typedef enum portal_status_tone {
     PORTAL_STATUS_NEUTRAL,
     PORTAL_STATUS_PROGRESS,
     PORTAL_STATUS_SUCCESS,
     PORTAL_STATUS_WARNING,
-    PORTAL_STATUS_ERROR,
-    PORTAL_STATUS_RECORDING
+    PORTAL_STATUS_ERROR
 } portal_status_tone;
 
 /* The status panel: one small panel, above every application's windows and

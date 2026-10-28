@@ -71,12 +71,12 @@ The calls still reach the module."
   (portal-system-tests--with
     (let (calls)
       (portal-system-tests--recording-status calls
-        (should-not (portal-status-show "Recording" :tone 'recording))
+        (should-not (portal-status-show "Pasted" :tone 'success))
         (should-not (portal-status-show "Transcribing…" :tone 'progress))
         (should-not (portal-status-hide))
         (should-not (portal-status-hide)))
       (should (equal (nreverse calls)
-                     '((show "Recording" "recording" "bottom" -1 0 24 0 0 0 0 1)
+                     '((show "Pasted" "success" "bottom" -1 0 24 0 0 0 0 1)
                        (show "Transcribing…" "progress" "bottom" -1 0 24 0 0 0 0 1)
                        (hide) (hide)))))))
 
@@ -123,8 +123,8 @@ The calls still reach the module."
       (should-error (portal-status-show text) :type 'user-error))
     (dolist (options '((:position middle) (:position "top") (:offset (1 2)) (:offset 5)
                        (:screen main) (:screen -1) (:width 0) (:height -5) (:min-width 1.5)
-                       (:max-width "wide") (:max-lines 0) (:tone loud) (:timeout 0)
-                       (:timeout "soon")))
+                       (:max-width "wide") (:max-lines 0) (:tone loud) (:tone recording)
+                       (:timeout 0) (:timeout "soon")))
       (should-error (apply #'portal-status-show "Recording" options) :type 'user-error))
     ;; The core rejects what only it can check.
     (should (equal (should-error (portal-status-show "Recording" :min-width 300

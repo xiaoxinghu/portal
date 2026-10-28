@@ -76,21 +76,6 @@ struct StatusChecks {
             check(panel.label.frame.minX >= panel.spinner.frame.maxX)
             show("Recording", "error")
             check(panel.tone == PORTAL_STATUS_ERROR && !panel.mark.isHidden && panel.mark.image != nil)
-            // Recording: a red dot that breathes, unless motion is reduced.
-            show("Recording", "recording")
-            check(panel.tone == PORTAL_STATUS_RECORDING && panel.mark.isHidden && !panel.dot.isHidden)
-            check(panel.dot.frame.width == StatusPanel.dotSize && panel.label.frame.minX >= panel.dot.frame.maxX)
-            let breathes = panel.dot.layer?.animation(forKey: StatusPanel.breathing) != nil
-            check(breathes != NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
-            // A change to the accessibility display options applies to the
-            // shown dot: here the setting stays, so its animation comes back.
-            panel.dot.layer?.removeAnimation(forKey: StatusPanel.breathing)
-            NSWorkspace.shared.notificationCenter.post(
-                name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: NSWorkspace.shared)
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-            check((panel.dot.layer?.animation(forKey: StatusPanel.breathing) != nil) == breathes)
-            show("Recording", "neutral")
-            check(panel.dot.isHidden && panel.dot.layer?.animation(forKey: StatusPanel.breathing) == nil)
 
             // Wrapping at a maximum width, up to the lines allowed.
             let long = String(repeating: "Transcribing a long dictation ", count: 6)
@@ -110,7 +95,7 @@ struct StatusChecks {
             // panel there, for a person to look at. Its layers render on a gray
             // backdrop; the material's blur of what is behind it does not.
             if let directory = ProcessInfo.processInfo.environment["PORTAL_STATUS_SCREENSHOTS"] {
-                for (tone, text) in [("neutral", "Ready"), ("recording", "Recording"), ("progress", "Transcribing…"),
+                for (tone, text) in [("neutral", "Ready"), ("progress", "Transcribing…"),
                                      ("success", "Pasted"), ("warning", "On the clipboard"),
                                      ("error", "Failed: the recorder exited abnormally with code 2")] {
                     show(text, tone)

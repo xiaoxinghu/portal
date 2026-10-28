@@ -35,7 +35,7 @@ A chord, named by a symbol, that calls a Lisp function when pressed in any appli
 _Avoid_: hotkey (the platform's primitive that registers a chord), launcher shortcut
 
 **Status panel**:
-The one small panel, floating above every application, that shows a line of text set from Lisp, such as what dictation is doing. It never takes the keyboard or the mouse.
+The one small panel, floating above every application, that shows a line of text set from Lisp, such as what a command running from a global shortcut is doing. It never takes the keyboard or the mouse.
 _Avoid_: HUD, toast, notification, overlay
 
 ## Web content

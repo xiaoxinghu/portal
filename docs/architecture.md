@@ -259,7 +259,7 @@ borderless nonactivating `NSPanel` at status-bar level, on every Space and
 over fullscreen apps, that never becomes key or main and ignores the mouse,
 so showing it neither activates Emacs nor moves the keyboard. It draws the
 HUD material with a hairline edge, rounded to at most 18 points, a spinner
-an SF Symbol or a breathing red dot for the tone, and wrapped text; it fades in and out and asks
+or an SF Symbol for the tone, and wrapped text; it fades in and out and asks
 VoiceOver to announce new text.
 
 ## Geometry, attachment and lifetime

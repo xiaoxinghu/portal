@@ -5,12 +5,11 @@ import PortalCore
 /// The screens and the status panel of portal.h: portal_screens,
 /// portal_status_measure, portal_status_show and portal_status_hide. The core
 /// decides the panel's rectangle; this draws it: text on the system's HUD
-/// material, after a mark for the tone, with a hairline edge: a spinner, a
-/// symbol, or a red dot that breathes unless the user asked to reduce motion.
-/// The panel floats
-/// above every application's windows, on every Space and over fullscreen
-/// apps. It never becomes key or main and ignores the mouse, and showing it
-/// never activates Emacs, so the frontmost application keeps the keyboard.
+/// material, after a mark for the tone, a spinner or a symbol, with a hairline
+/// edge. The panel floats above every application's windows, on every Space
+/// and over fullscreen apps. It never becomes key or main and ignores the
+/// mouse, and showing it never activates Emacs, so the frontmost application
+/// keeps the keyboard.
 @MainActor
 enum StatusPanel {
     static let font = NSFont.systemFont(ofSize: 13, weight: .medium)
@@ -22,8 +21,6 @@ enum StatusPanel {
     private(set) static var panel: Panel?
     /// Counts shows and hides, so a fade-out that a show interrupted leaves the panel up.
     private static var generation = 0
-    /// Observes Reduce Motion for the shown recording dot, once there is a panel.
-    private static var motionObserver: NSObjectProtocol?
 
     final class Panel: NSPanel {
         let background = NSVisualEffectView()
@@ -31,7 +28,6 @@ enum StatusPanel {
         let label = StatusPanel.field()
         let mark = NSImageView()
         let spinner = NSProgressIndicator()
-        let dot = NSView()
         fileprivate(set) var tone = PORTAL_STATUS_NEUTRAL
         fileprivate(set) var hiding = false
 
@@ -57,8 +53,7 @@ enum StatusPanel {
             spinner.style = .spinning
             spinner.controlSize = .small
             spinner.isDisplayedWhenStopped = false
-            dot.wantsLayer = true
-            for view in [mark, spinner, dot, label, edge] { background.addSubview(view) }
+            for view in [mark, spinner, label, edge] { background.addSubview(view) }
             contentView = background
         }
 
@@ -121,15 +116,6 @@ enum StatusPanel {
 
     static func show(_ text: String, tone: portal_status_tone, rect: portal_rect, lines: Int64) {
         let panel = panel ?? Panel()
-        if self.panel == nil {
-            motionObserver = NSWorkspace.shared.notificationCenter.addObserver(
-                forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
-            ) { _ in
-                MainActor.assumeIsolated {
-                    if let panel = StatusPanel.panel, panel.isVisible, !panel.hiding { breathe(panel) }
-                }
-            }
-        }
         self.panel = panel
         generation += 1
         let frame = NSRect(x: CGFloat(rect.x), y: top - CGFloat(rect.y + rect.height),
@@ -167,7 +153,6 @@ enum StatusPanel {
         panel.orderOut(nil)
         panel.hiding = false
         panel.spinner.stopAnimation(nil)
-        panel.dot.layer?.removeAnimation(forKey: breathing)
     }
 
     /// Fill PANEL, SIZE big: TONE's mark, then TEXT centered vertically.
@@ -195,7 +180,6 @@ enum StatusPanel {
         }
         panel.spinner.frame = markFrame
         if tone == PORTAL_STATUS_PROGRESS { panel.spinner.startAnimation(nil) } else { panel.spinner.stopAnimation(nil) }
-        layOutDot(panel, in: markFrame)
 
         let x = padding.width + markWidth(tone)
         let width = max(size.width - x - padding.width, 1)
@@ -204,45 +188,6 @@ enum StatusPanel {
         panel.label.maximumNumberOfLines = lines
         panel.label.lineBreakMode = lines == 1 ? .byTruncatingTail : .byWordWrapping
         panel.label.frame = NSRect(x: x, y: floor((size.height - height) / 2), width: width, height: height)
-    }
-
-    static let dotSize: CGFloat = 10
-    /// The key of the dot's breathing animation.
-    static let breathing = "breathing"
-
-    /// Show the recording tone's red dot centered in FRAME, breathing, or hide it for another tone.
-    private static func layOutDot(_ panel: Panel, in frame: NSRect) {
-        let recording = panel.tone == PORTAL_STATUS_RECORDING
-        panel.dot.isHidden = !recording
-        guard recording, let layer = panel.dot.layer else {
-            panel.dot.layer?.removeAnimation(forKey: breathing)
-            return
-        }
-        panel.dot.frame = NSRect(x: frame.midX - dotSize / 2, y: frame.midY - dotSize / 2,
-                                 width: dotSize, height: dotSize)
-        layer.cornerRadius = dotSize / 2
-        panel.background.effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer.backgroundColor = NSColor.systemRed.cgColor
-        }
-        breathe(panel)
-    }
-
-    /// Start the recording dot breathing, or stop it for another tone or when
-    /// the user asks to reduce motion, which can change while it shows.
-    static func breathe(_ panel: Panel) {
-        guard let layer = panel.dot.layer else { return }
-        if panel.tone != PORTAL_STATUS_RECORDING || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            layer.removeAnimation(forKey: breathing)
-        } else if layer.animation(forKey: breathing) == nil {
-            let animation = CABasicAnimation(keyPath: "opacity")
-            animation.fromValue = 1
-            animation.toValue = 0.3
-            animation.duration = 0.9
-            animation.autoreverses = true
-            animation.repeatCount = .infinity
-            animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            layer.add(animation, forKey: breathing)
-        }
     }
 
     /// Symbol and color of each tone with a still mark, by raw value.

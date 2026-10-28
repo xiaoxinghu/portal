@@ -24,8 +24,6 @@ itself. Results from an earlier commit are not evidence for it.
 4. **Checks outside CI.** Run these in the VM or on a Mac, or record them as not
    run:
    - the [standalone AppKit checks](testing.md#standalone-appkit-checks);
-   - `sh test/escape-shortcut-leak.sh`, which needs a person to switch on
-     Accessibility for Emacs.app;
    - physical-key delivery, by hand, which injected events cannot prove.
 5. **Record.** Write the evidence into the GitHub release's notes, then tag and
    publish.

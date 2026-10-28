@@ -77,8 +77,6 @@ static void test_positions(void)
     CHECK(show("Recording", "success", at("bottom", 0, 24)) && placed(658, 846, 124, 30));
     CHECK(portal_fake_status().tone == PORTAL_STATUS_SUCCESS);
     CHECK(portal_fake_status().lines == 1 && !strcmp(portal_fake_status().text, "Recording"));
-    CHECK(show("Recording", "recording", at("bottom", 0, 24)) && placed(658, 846, 124, 30));
-    CHECK(portal_fake_status().tone == PORTAL_STATUS_RECORDING);
     hide();
     hide();
 }
@@ -119,6 +117,7 @@ static void test_invalid(void)
     struct portal_fake_status before = portal_fake_status();
     CHECK(rejected(at("bottom", 0, 0), "", "neutral", "A status is not empty"));
     CHECK(rejected(at("bottom", 0, 0), "Recording", "loud", "No such status tone: loud"));
+    CHECK(rejected(at("bottom", 0, 0), "Recording", "recording", "No such status tone: recording"));
     CHECK(rejected(at("middle", 0, 0), "Recording", "neutral",
                    "No such status panel position: middle"));
     portal_status_layout layout = at("bottom", 0, 0);

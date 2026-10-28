@@ -163,17 +163,19 @@ struct ShortcutChecks {
                 check(records().isEmpty)
                 check(available(p) && available(UInt32(64), UInt32(controlKey | shiftKey)))
             }
-            // A bare Escape takes Carbon's Escape with no modifiers, and only that.
+            // Escape takes Control, Option or Command to be a shortcut, as
+            // every key does, and then Carbon's Escape with those, and only that.
+            if case .success = set(0, "Escape") { fail("A bare Escape registered") }
             let escapeCode = UInt32(kVK_Escape)
-            check(available(escapeCode, 0))
-            let escape = registered("Escape")
-            check(!available(escapeCode, 0) && available(escapeCode, UInt32(shiftKey)))
+            check(available(escapeCode, 0) && available(escapeCode, UInt32(controlKey)))
+            let escape = registered("Control-Escape")
+            check(!available(escapeCode, UInt32(controlKey)) && available(escapeCode, 0))
             press(hotkey(escape))
             check(records() == "shortcut \(escape)\n")
-            check(removed(escape) && available(escapeCode, 0))
+            check(removed(escape) && available(escapeCode, UInt32(controlKey)))
 
             check(shortcuts().isEmpty && !Hotkeys.handling)
-            print("Shortcut native checks passed: Carbon registration, conflicts, rebinding, release, stale and held events, pipe delivery without views, 20 set/remove cycles, bare Escape")
+            print("Shortcut native checks passed: Carbon registration, conflicts, rebinding, release, stale and held events, pipe delivery without views, 20 set/remove cycles, Escape with a modifier")
         }
     }
 }

@@ -370,15 +370,6 @@ Swap `test/native-launcher.swift`,
 `test/native-focus.swift`. Rename the output to match. These checks open real
 windows or register real hot keys.
 
-Whether a bare Escape shortcut keeps Escape from the frontmost app takes key
-events that macOS matches against hot keys, which only an Emacs with
-Accessibility permission can post. Once a person has switched it on for
-Emacs.app, run:
-
-```sh
-sh test/escape-shortcut-leak.sh
-```
-
 ## C core checks
 
 Run this standalone build for shared rules without the native backend.

@@ -90,7 +90,8 @@ static void test_chords(void)
     CHECK(normalizes("option-space", "Option-Space"));
     CHECK(normalizes("Command-f1", "Command-F1"));
     CHECK(normalizes("Control-F20", "Control-F20"));
-    /* Escape is the one key that needs no modifier. */
+    /* Escape is the one key that needs no modifier, to post; portal_shortcuts_set
+       still refuses it alone. */
     CHECK(normalizes("escape", "Escape"));
     CHECK(normalizes("Shift-ESCAPE", "Shift-Escape"));
     CHECK(normalizes("command-option-escape", "Option-Command-Escape"));
@@ -193,13 +194,20 @@ static void test_registration(void)
     CHECK(removed(again) && removed(moved));
     CHECK(is_text(portal_fake_hotkeys(), "6:F18+2"));
 
-    /* A bare Escape reaches the platform with no modifiers. */
-    uint64_t escape = set(0, "escape", &error);
+    /* Escape, like every key, takes Control, Option or Command to be a
+       shortcut: alone or with Shift only, it is refused. */
+    CHECK(!set(0, "escape", &error));
+    CHECK(says(&error, "A shortcut is Control, Option or Command, then A-Z, 0-9, Space, Escape or "
+                       "F1-F20, as in Control-Option-Command-P, not: escape"));
+    CHECK(!set(0, "Shift-Escape", &error));
+    free(error.data), error = (portal_text) {0};
+    CHECK(is_text(portal_fake_hotkeys(), "6:F18+2"));
+    uint64_t escape = set(0, "control-escape", &error);
     char hotkeys[64]; /* A new chord's ID is its hot key. */
-    snprintf(hotkeys, sizeof hotkeys, "6:F18+2 %llu:Escape+0", (unsigned long long) escape);
+    snprintf(hotkeys, sizeof hotkeys, "6:F18+2 %llu:Escape+2", (unsigned long long) escape);
     CHECK(escape);
     CHECK(is_text(portal_fake_hotkeys(), hotkeys));
-    CHECK(strstr(described(), "\"chord\":\"Escape\""));
+    CHECK(strstr(described(), "\"chord\":\"Control-Escape\""));
     CHECK(removed(escape));
     CHECK(is_text(portal_fake_hotkeys(), "6:F18+2"));
 }
