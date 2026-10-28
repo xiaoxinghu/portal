@@ -99,7 +99,8 @@ static bool parse(portal_string chord, uint32_t *key, uint32_t *bits, portal_tex
         word = hyphen + 1;
     }
     *key = key_named(word, (size_t) (end - word));
-    /* Escape is the one key that needs no modifier. */
+    /* Escape is the one key that needs no modifier, to post as a person
+       presses it; a shortcut still needs one (portal_shortcuts_set). */
     if (!*key
         || (*key != PORTAL_ESCAPE_KEY && !(*bits & (PORTAL_CONTROL | PORTAL_META | PORTAL_SUPER))))
         return fail(error,
@@ -178,6 +179,11 @@ bool portal_shortcuts_set(uint64_t replacing, portal_string chord, uint64_t *id,
     uint32_t key, bits;
     if (!parse(chord, &key, &bits, error))
         return false;
+    if (!(bits & (PORTAL_CONTROL | PORTAL_META | PORTAL_SUPER)))
+        return fail(error,
+                    "A shortcut is Control, Option or Command, then A-Z, 0-9, Space, Escape or "
+                    "F1-F20, as in Control-Option-Command-P, not: ",
+                    chord);
     struct shortcut *old = NULL;
     if (replacing && !(old = with_id(replacing)))
         return fail_with(error, "That Portal shortcut was removed");

@@ -7,10 +7,9 @@
    A chord is written as hyphen-separated modifiers, Control, Option, Command
    and Shift, each at most once, then a key: A to Z, 0 to 9, Space, Escape or
    F1 to F20, such as Control-Option-Command-P.  The modifiers include one of
-   the first three, except with Escape, which may be a chord alone: a caller
-   takes Escape from every application while it needs it, such as while
-   dictating, and releases it afterwards.  Case does not matter.  Letters
-   and digits are positions on a US keyboard.
+   the first three, except that a chord posted to an application may be
+   Escape alone.  Case does not matter.  Letters and digits are positions on
+   a US keyboard.
 
    Each registration has an ID that no other registration, earlier or later,
    ever has, and every successful set gives it a new one.  A press of its

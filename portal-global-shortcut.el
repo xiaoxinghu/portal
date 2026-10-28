@@ -54,11 +54,9 @@ already set replaces its chord and function, and releases its old chord.
 CHORD names physical keys: hyphen-separated modifiers, Control, Option,
 Command and Shift, each at most once and at least one of the first three,
 then A-Z, 0-9, Space, Escape or F1-F20, such as \"Control-Option-Command-P\".
-Escape needs no modifier: \"Escape\" alone takes Escape from every
-application until the shortcut is removed, so set it only while it is
-needed, such as while dictating.  Case does not matter, and Shift is never
-implied.  Letters and digits are positions on a US keyboard, whatever the
-input source or Emacs's modifier settings.  Fn, Caps Lock, punctuation,
+Case does not matter, and Shift is never implied.  Letters and digits are
+positions on a US keyboard, whatever the input source or Emacs's modifier
+settings.  Fn, Caps Lock, punctuation,
 left and right modifiers and key sequences are unsupported.
 
 FUNCTION is an interactive command, run with `call-interactively', or any

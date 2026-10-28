@@ -44,9 +44,6 @@ It signals only if macOS cannot release the chord, retaining it on failure.
 Notation uses case-insensitive, hyphen-separated modifiers (`Control`, `Option`,
 `Command`, `Shift`) followed by `A`–`Z`, `0`–`9`, `Space`, `Escape` or `F1`–`F20`.
 Require at least one of Control, Option or Command; never repeat a modifier.
-Escape is the exception: `Escape` alone is a chord, and takes Escape from every
-application until it is removed, so set it only while it is needed, such as
-while dictating.
 Letters/digits denote **US physical key positions**, independent of input layout
 and Emacs's `ns-*-modifier` settings. Shift must be explicit; capitals do not
 imply it. Fn, Caps Lock, punctuation, left/right modifier distinctions and
