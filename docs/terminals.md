@@ -153,15 +153,25 @@ reports. Portal rejects nonexistent/nonlocal directories, such as container
 paths, and never passes reports to TRAMP. Until a report arrives, the buffer
 retains the starting directory.
 
+Each terminal also reports its foreground program: the executable of the
+process group in the foreground of its pty, the shell at a prompt and the
+program while one runs. Nothing announces that a shell started a program, so
+Portal samples it at each title and directory report and about once a second.
+A terminal multiplexer stops directory reports at itself; the program fact
+still names it, so user configuration can recognise one and follow its state
+through its own interface.
+
 Program exit adds `:exited` to the mode line; buffer and last output remain
 until killed.
 
 Packages can use `(portal-terminal-buffers PROJECT QUICK)` to list terminals in
 creation order. PROJECT filters by assigned root, regardless of current shell
 directories; QUICK includes quick terminals. `(portal-terminal-metadata BUFFER)`
-returns `:name`, `:project`, `:directory`, `:title`, `:exited` and `:quick`, cached
-from native change reports even while hidden. These are only facts: titles are
-program-set, not process names; live shells may be busy or idle.
+returns `:name`, `:project`, `:directory`, `:title`, `:program`, `:progress`,
+`:exited` and `:quick`, cached from native change reports even while hidden.
+These are only facts: titles are program-set, not process names; `:program` is
+an executable path, the shell's at a prompt, or nil until one is known; live
+shells may be busy or idle.
 
 `(portal-terminal-start DIRECTORY PROGRAM ARGUMENTS NAME)` runs PROGRAM with
 literal ARGUMENTS in a new terminal, optionally named NAME, and shows it with

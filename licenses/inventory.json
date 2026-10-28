@@ -3,22 +3,22 @@
 		{
 			"id": "libghostty-spm",
 			"name": "libghostty-spm (GhosttyKit Swift wrapper, terminfo and shell integration)",
-			"version": "2.2.2026100303",
-			"source": "https://github.com/Lakr233/libghostty-spm/tree/f320873965a57d8f138a922853f255a77da6c9c0",
+			"version": "2.2.2026102101",
+			"source": "https://github.com/Lakr233/libghostty-spm/tree/5b9cb63d83e687b4a66d6c3a3c2a840341c576d9",
 			"license": "MIT",
 			"shipped": "portal.dylib; portal.bundle resources",
-			"when": ["swift:libghostty-spm@2.2.2026100303"],
+			"when": ["swift:libghostty-spm@2.2.2026102101"],
 			"texts": ["swift:libghostty-spm/LICENSE"],
 			"note": "The bash and zsh integration it ships is the wrapper's own MIT rewrite, not Ghostty's GPL-3.0 originals"
 		},
 		{
 			"id": "bash-preexec",
 			"name": "bash-preexec",
-			"version": "as vendored by libghostty-spm 2.2.2026100303",
+			"version": "as vendored by libghostty-spm 2.2.2026102101",
 			"source": "https://github.com/rcaloras/bash-preexec",
 			"license": "MIT",
 			"shipped": "portal.bundle resources (bash shell integration)",
-			"when": ["swift:libghostty-spm@2.2.2026100303"],
+			"when": ["swift:libghostty-spm@2.2.2026102101"],
 			"texts": [
 				"swift:libghostty-spm/Sources/GhosttyTerminal/Resources/Ghostty/shell-integration/bash/LICENSE-bash-preexec.md"
 			],
@@ -29,11 +29,11 @@
 		{
 			"id": "iterm2-color-schemes",
 			"name": "iTerm2-Color-Schemes theme data (GhosttyTheme)",
-			"version": "as generated in libghostty-spm 2.2.2026100303",
+			"version": "as generated in libghostty-spm 2.2.2026102101",
 			"source": "https://github.com/mbadolato/iTerm2-Color-Schemes",
 			"license": "MIT",
 			"shipped": "portal.dylib",
-			"when": ["swift:libghostty-spm@2.2.2026100303"],
+			"when": ["swift:libghostty-spm@2.2.2026102101"],
 			"texts": ["swift:libghostty-spm/Sources/GhosttyTheme/LICENSE"],
 			"note": "SwiftPM excludes this license from the build products"
 		},
@@ -50,11 +50,11 @@
 		{
 			"id": "ghostty",
 			"name": "Ghostty",
-			"version": "0538f7535be0cbca6bbe54e6fde654d5c628f1f2 (1.3.2-dev), with libghostty-spm's patches",
-			"source": "https://github.com/ghostty-org/ghostty/tree/0538f7535be0cbca6bbe54e6fde654d5c628f1f2",
+			"version": "1e9e14af5df14211892f5fc15fd21a49c7d94868 (1.3.2-dev), with libghostty-spm's patches",
+			"source": "https://github.com/ghostty-org/ghostty/tree/1e9e14af5df14211892f5fc15fd21a49c7d94868",
 			"license": "MIT",
-			"shipped": "portal.dylib (libghostty.a from libghostty-spm's upstream.0538f7535be0-2 GhosttyKit.xcframework)",
-			"when": ["swift:libghostty-spm@2.2.2026100303"],
+			"shipped": "portal.dylib (libghostty.a from libghostty-spm's upstream.1e9e14af5df1-3 GhosttyKit.xcframework)",
+			"when": ["swift:libghostty-spm@2.2.2026102101"],
 			"texts": ["ghostty/LICENSE"]
 		},
 		{
@@ -64,7 +64,7 @@
 			"source": "https://deps.files.ghostty.org/freetype-1220b81f6ecfb3fd222f76cf9106fecfa6554ab07ec7fdc4124b9bb063ae2adf969d.tar.gz",
 			"license": "FTL (FreeType is FTL or GPL-2.0-or-later); BDF and PCF drivers under X11-style terms; gzip module under Zlib",
 			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026100303"],
+			"when": ["swift:libghostty-spm@2.2.2026102101"],
 			"texts": [
 				"freetype/LICENSE.TXT",
 				"freetype/FTL.TXT",
@@ -80,7 +80,7 @@
 			"source": "https://deps.files.ghostty.org/libpng-1220aa013f0c83da3fb64ea6d327f9173fa008d10e28bc9349eac3463457723b1c66.tar.gz",
 			"license": "libpng-2.0",
 			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026100303"],
+			"when": ["swift:libghostty-spm@2.2.2026102101"],
 			"texts": ["libpng/LICENSE"]
 		},
 		{
@@ -90,7 +90,7 @@
 			"source": "https://deps.files.ghostty.org/zlib-1220fed0c74e1019b3ee29edae2051788b080cd96e90d56836eea857b0b966742efb.tar.gz",
 			"license": "Zlib",
 			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026100303"],
+			"when": ["swift:libghostty-spm@2.2.2026102101"],
 			"texts": ["zlib/LICENSE"]
 		},
 		{
@@ -100,7 +100,7 @@
 			"source": "https://deps.files.ghostty.org/oniguruma-1220c15e72eadd0d9085a8af134904d9a0f5dfcbed5f606ad60edc60ebeccd9706bb.tar.gz",
 			"license": "BSD-2-Clause",
 			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026100303"],
+			"when": ["swift:libghostty-spm@2.2.2026102101"],
 			"texts": ["oniguruma/COPYING"]
 		},
 		{
@@ -110,7 +110,7 @@
 			"source": "https://deps.files.ghostty.org/gettext-0.24.tar.gz",
 			"license": "LGPL-2.1-or-later",
 			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026100303"],
+			"when": ["swift:libghostty-spm@2.2.2026102101"],
 			"texts": ["gettext/COPYING.LIB"],
 			"blocker": "statically linked LGPL code: a binary release must provide this source and let users relink the module with a modified libintl (docs/licenses.md)"
 		},
@@ -121,7 +121,7 @@
 			"source": "https://deps.files.ghostty.org/wuffs-7411f488fe2e2c205c3d3b3d28638b7356522930.tar.gz",
 			"license": "Apache-2.0 OR MIT",
 			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026100303"],
+			"when": ["swift:libghostty-spm@2.2.2026102101"],
 			"texts": ["wuffs/LICENSE", "wuffs/LICENSE-APACHE", "wuffs/LICENSE-MIT"]
 		},
 		{
@@ -131,17 +131,17 @@
 			"source": "https://deps.files.ghostty.org/highway-66486a10623fa0d72fe91260f96c892e41aceb06.tar.gz",
 			"license": "Apache-2.0 OR BSD-3-Clause",
 			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026100303"],
+			"when": ["swift:libghostty-spm@2.2.2026102101"],
 			"texts": ["highway/LICENSE", "highway/LICENSE-BSD3"]
 		},
 		{
 			"id": "simdutf",
 			"name": "simdutf",
 			"version": "9.0.0",
-			"source": "https://github.com/ghostty-org/ghostty/tree/0538f7535be0cbca6bbe54e6fde654d5c628f1f2/pkg/simdutf/vendor",
+			"source": "https://github.com/ghostty-org/ghostty/tree/1e9e14af5df14211892f5fc15fd21a49c7d94868/pkg/simdutf/vendor",
 			"license": "Apache-2.0 OR MIT",
 			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026100303"],
+			"when": ["swift:libghostty-spm@2.2.2026102101"],
 			"texts": ["simdutf/LICENSE-APACHE", "simdutf/LICENSE-MIT"],
 			"note": "License files from simdutf v9.0.0; Ghostty vendors the amalgamated source"
 		},
@@ -149,10 +149,10 @@
 			"id": "stb",
 			"name": "stb_image",
 			"version": "2.28",
-			"source": "https://github.com/ghostty-org/ghostty/blob/0538f7535be0cbca6bbe54e6fde654d5c628f1f2/src/stb/stb_image.h",
+			"source": "https://github.com/ghostty-org/ghostty/blob/1e9e14af5df14211892f5fc15fd21a49c7d94868/src/stb/stb_image.h",
 			"license": "MIT OR Unlicense",
 			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026100303"],
+			"when": ["swift:libghostty-spm@2.2.2026102101"],
 			"texts": ["stb/LICENSE"],
 			"note": "The license block at the end of stb_image.h"
 		},
@@ -163,7 +163,7 @@
 			"source": "https://deps.files.ghostty.org/libxev-9ce8e8e6ff89e583258a7f8e7adeeeaeae8611bf.tar.gz",
 			"license": "MIT",
 			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026100303"],
+			"when": ["swift:libghostty-spm@2.2.2026102101"],
 			"texts": ["libxev/LICENSE"]
 		},
 		{
@@ -173,7 +173,7 @@
 			"source": "https://deps.files.ghostty.org/vaxis-1dbbe575dff4586fe51e3217aa5c3fecdcbb6089.tar.gz",
 			"license": "MIT",
 			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026100303"],
+			"when": ["swift:libghostty-spm@2.2.2026102101"],
 			"texts": ["vaxis/LICENSE"]
 		},
 		{
@@ -183,7 +183,7 @@
 			"source": "https://deps.files.ghostty.org/z2d-7dbae85c81784dba9988320bf9543ed9a81350c8.tar.gz",
 			"license": "MPL-2.0 (with code adapted from Cairo under MPL-1.1, redistributed under MPL-2.0)",
 			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026100303"],
+			"when": ["swift:libghostty-spm@2.2.2026102101"],
 			"texts": ["z2d/LICENSE", "z2d/COPYING"],
 			"blocker": "MPL-2.0 code in executable form: a binary release must tell recipients how to obtain this source (docs/licenses.md)"
 		},
@@ -194,7 +194,7 @@
 			"source": "https://deps.files.ghostty.org/zig_objc-c8de82ff80281215ad92900866dab7103a8efa8b.tar.gz",
 			"license": "MIT",
 			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026100303"],
+			"when": ["swift:libghostty-spm@2.2.2026102101"],
 			"texts": ["zig-objc/LICENSE"]
 		},
 		{
@@ -204,7 +204,7 @@
 			"source": "https://github.com/jacobsandlund/uucode/tree/9d55524551411b493cca41ca06363625d90aff1e",
 			"license": "MIT; Unicode-3.0 data; MIT UTF-8 decoder by Bjoern Hoehrmann",
 			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026100303"],
+			"when": ["swift:libghostty-spm@2.2.2026102101"],
 			"texts": [
 				"uucode/LICENSE.md",
 				"uucode/LICENSE_unicode",
@@ -218,7 +218,7 @@
 			"source": "https://codeberg.org/ziglang/zig/src/tag/0.16.0",
 			"license": "MIT",
 			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026100303"],
+			"when": ["swift:libghostty-spm@2.2.2026102101"],
 			"texts": ["zig/LICENSE"],
 			"note": "The xcframework release does not record its Zig build; Ghostty requires at least 0.16.0"
 		},
@@ -229,7 +229,7 @@
 			"source": "https://deps.files.ghostty.org/JetBrainsMono-2.304.tar.gz",
 			"license": "OFL-1.1",
 			"shipped": "portal.dylib (Ghostty's embedded fallback font)",
-			"when": ["swift:libghostty-spm@2.2.2026100303"],
+			"when": ["swift:libghostty-spm@2.2.2026102101"],
 			"texts": ["jetbrains-mono/OFL.txt"]
 		},
 		{
@@ -239,7 +239,7 @@
 			"source": "https://deps.files.ghostty.org/NerdFontsSymbolsOnly-3.4.0.tar.gz",
 			"license": "MIT; glyphs under CC-BY-4.0, Apache-2.0, OFL-1.1, MIT and others per license-audit.md",
 			"shipped": "portal.dylib (Ghostty's embedded symbol font)",
-			"when": ["swift:libghostty-spm@2.2.2026100303"],
+			"when": ["swift:libghostty-spm@2.2.2026102101"],
 			"texts": [
 				"nerd-fonts/LICENSE",
 				"nerd-fonts/license-audit.md",

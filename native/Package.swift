@@ -16,7 +16,7 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [.library(name: "portal", type: .dynamic, targets: ["Portal"])],
     dependencies: [
-        .package(url: "https://github.com/Lakr233/libghostty-spm.git", exact: "2.2.2026100303")
+        .package(url: "https://github.com/Lakr233/libghostty-spm.git", exact: "2.2.2026102101")
     ],
     targets: [
         // The C core: the Emacs bindings, the view registry, input, terminal and

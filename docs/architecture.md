@@ -97,17 +97,21 @@ without synthetic keys. Reading text on macOS selects all, leaving the selection
 active. The macOS platform owns Ghostty types, binding strings such as
 `select_all`, and the system-appearance default theme.
 
-Every platform reports a terminal's `:ready`, `:title`, `:pwd`, `:columns`,
-`:rows` and `:exited`. `:title` and `:pwd` hold values last set and reported by the
-running program, initially `""`; Ghostty forwards only percent-decoded working directories
-reported from this host. Test diagnostics include `:layer`, the macOS renderer's
+Every platform reports a terminal's `:ready`, `:title`, `:pwd`, `:program`,
+`:columns`, `:rows` and `:exited`. `:title` and `:pwd` hold values last set and
+reported by the running program, initially `""`; Ghostty forwards only
+percent-decoded working directories reported from this host. `:program` is the
+executable of the pty's foreground process group, `""` until known and once the
+process has ended. No callback announces a program starting, so macOS reads
+Ghostty's foreground pid at each report and once a second, and resolves it
+with `proc_pidpath`. Test diagnostics include `:layer`, the macOS renderer's
 layer class, and input-owned `:focused`. Process exit leaves the view, last output
 and buffer open until Lisp closes them; nothing restarts the shell. Closing
 (destroying) the view ends the process. As with every kind, the core never passes
 closed terminals to the platform: stale targets fail with "No Portal view TARGET",
 and themes reach only open terminals.
 
-The platform reports title, working-directory and exit changes through
+The platform reports title, working-directory, program and exit changes through
 `portal_terminal_changed`. The core sends one `terminal TARGET` record until
 `portal--inspect` describes that view, preventing frequent retitling from flooding
 the pipe. Texts of any length stay with the platform; `portal-terminal.el`
