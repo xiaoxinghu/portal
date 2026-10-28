@@ -139,7 +139,11 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
         return String(decoding: path.prefix(Int(length)), as: UTF8.self)
     }
 
-    private func stopSamplingProgram() {
+    /// The run loop keeps a scheduled timer whatever happens to its owner, so
+    /// the session also stops it when the view closes while the shell runs:
+    /// Ghostty frees the surface only once this view is gone, when its
+    /// detach callback has nobody to reach.
+    func stopSamplingProgram() {
         programTimer?.invalidate()
         programTimer = nil
     }
@@ -207,6 +211,9 @@ final class TerminalSession: PortalView {
 
     /// Parking keeps the last size, so hiding never resizes the shell's grid.
     func detaching() { terminal.setSurfaceVisible(false) }
+
+    /// Destroying the view ends its process; nothing is left sampling it.
+    func close() { terminal.stopSamplingProgram() }
 
     func describe() -> [(String, ViewValue)] {
         [("ready", .flag(terminal.terminalSurface != nil)),
