@@ -59,6 +59,12 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     /// The process has ended. The view stays, showing its last output.
     var exited = false
     var progress = ""
+    /// The executable of the process group in the foreground of its pty: the
+    /// shell at a prompt, the program while one runs; "" until known and once
+    /// the process has ended. Nothing announces that the shell started a
+    /// program, so it is sampled at each report and about once a second.
+    var program = ""
+    private var programTimer: Timer?
 
     init(directory: String, command: String?, theme: TerminalTheme) {
         super.init(frame: .zero)
@@ -83,21 +89,61 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
 
     func terminalDidReportProgress(state: TerminalProgressState, percent: Int?) {
         progress = "\(state)"
+        refreshProgram()
         session?.changed()
     }
     func terminalDidChangeTitle(_ title: String) {
         guard title != terminalTitle else { return }
         terminalTitle = title
+        refreshProgram()
         session?.changed()
     }
     func terminalDidChangeWorkingDirectory(_ path: String) {
         guard path != workingDirectory else { return }
         workingDirectory = path
+        refreshProgram()
         session?.changed()
     }
     func terminalDidResize(_ size: TerminalGridMetrics) { grid = size }
-    func terminalDidAttachSurface(_ surface: TerminalSurface) { terminalSurface = surface }
-    func terminalDidDetachSurface() { terminalSurface = nil }
+    func terminalDidAttachSurface(_ surface: TerminalSurface) {
+        terminalSurface = surface
+        programTimer?.invalidate()
+        programTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.refreshProgram() else { return }
+                self.session?.changed()
+            }
+        }
+    }
+    func terminalDidDetachSurface() {
+        terminalSurface = nil
+        stopSamplingProgram()
+    }
+
+    /// Note the foreground program now; true when it is not the one noted.
+    @discardableResult
+    private func refreshProgram() -> Bool {
+        let current = exited ? "" : foregroundProgram()
+        guard current != program else { return false }
+        program = current
+        return true
+    }
+
+    /// The executable of the pty's foreground process group, "" when there is
+    /// none or it cannot be read.
+    private func foregroundProgram() -> String {
+        guard let pid = foregroundPid else { return "" }
+        var path = [UInt8](repeating: 0, count: Int(4 * MAXPATHLEN))
+        let length = proc_pidpath(pid, &path, UInt32(path.count))
+        guard length > 0 else { return "" }
+        return String(decoding: path.prefix(Int(length)), as: UTF8.self)
+    }
+
+    private func stopSamplingProgram() {
+        programTimer?.invalidate()
+        programTimer = nil
+    }
+
     /// Ghostty asks to close the surface when its process ends, at each key
     /// press after that, and when a close is requested while the process
     /// still runs. Portal keeps the view: the end is reported, and a key
@@ -105,6 +151,8 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     func terminalDidClose(processAlive: Bool) {
         if !processAlive && !exited {
             exited = true
+            program = ""
+            stopSamplingProgram()
             session?.changed()
         } else {
             session?.returnFocus()
@@ -164,6 +212,7 @@ final class TerminalSession: PortalView {
         [("ready", .flag(terminal.terminalSurface != nil)),
          ("title", .string(terminal.terminalTitle)),
          ("pwd", .string(terminal.workingDirectory)),
+         ("program", .string(terminal.program)),
          ("exited", .flag(terminal.exited)),
          ("progress", .string(terminal.progress)),
          ("columns", .integer(Int(terminal.grid?.columns ?? 0))),
@@ -211,7 +260,7 @@ final class TerminalSession: PortalView {
 
     func returnFocus() { input.host.returnFocus(from: terminal) }
 
-    /// Its title, working directory or exit changed; the core tells Emacs.
+    /// Its title, working directory, program or exit changed; the core tells Emacs.
     func changed() { Core.terminalChanged(target) }
 
     /// The core decides what each key does, including text size shortcuts.

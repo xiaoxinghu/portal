@@ -247,9 +247,14 @@ bool portal_web_set_zoom(portal_view *web, double factor, portal_text *error);
    A terminal describes itself with "ready", whether its engine can draw and
    take input; "title", which the running program may set, "" until it does;
    "pwd", the working directory the running program last reported from this
-   host, "" until it does; "columns" and "rows", its grid, 0 until known; and
-   "exited", whether its process has ended.  Report each change of title,
-   working directory or exit with portal_terminal_changed, below.  A process
+   host, "" until it does; "program", the executable of the process group in
+   the foreground of its pty, the shell at a prompt and the program while one
+   runs, "" until known and once its process has ended; "columns" and "rows",
+   its grid, 0 until known; and "exited", whether its process has ended.
+   Nothing announces that a shell started a program, so a platform samples
+   "program" at each report and about once a second.  Report each change of
+   title, working directory, program or exit with portal_terminal_changed,
+   below.  A process
    that exits leaves its view open, showing its last output, until Lisp
    closes it; destroying a view ends its process.  Any other fact a platform
    describes, such as macOS's "layer", the class of the renderer's layer, is
@@ -412,7 +417,7 @@ void portal_hotkey_pressed(uint64_t hotkey);
 void portal_hotkey_released(uint64_t hotkey);
 
 /* What TARGET's terminal describes changed: its title, its working
-   directory or whether it exited.  The core tells Emacs with a "terminal TARGET" record,
+   directory, its program or whether it exited.  The core tells Emacs with a "terminal TARGET" record,
    and sends no other for that view until Emacs has inspected it, so a
    program that retitles itself constantly never floods the pipe.  The core
    ignores a call for a target that names no open terminal. */

@@ -295,16 +295,22 @@
             (switch-to-buffer (get-buffer-create "*scratch*"))
             (redisplay t)
             (should-not (plist-get (portal-terminal-test--state) :visible))
+            ;; At a prompt the shell is in the foreground.
+            (should (funcall metadata :program))
             (portal-terminal-test--paste "printf '\\033]2;PORTAL hidden title\\007'; sleep 3" t)
             (portal-terminal-test--wait
              (lambda () (equal (funcall metadata :title) "PORTAL hidden title")))
             (should (equal (buffer-name buffer) "portal-metadata-smoke"))
+            ;; The program running in the foreground is reported by its executable.
+            (portal-terminal-test--wait
+             (lambda () (string-suffix-p "/sleep" (or (funcall metadata :program) ""))))
             ;; The exit is reported when it happens, leaving the buffer, its
             ;; last output and the keyboard until a key returns it to Emacs.
             (switch-to-buffer buffer)
             (portal-terminal-focus)
             (portal-terminal-test--paste "exit" t)
             (portal-terminal-test--wait (lambda () (funcall metadata :exited)))
+            (should-not (funcall metadata :program))
             ;; Rendered, not inspected: a GUI Emacs formats mode lines.
             (should (equal (with-current-buffer buffer (format-mode-line mode-line-process))
                            " ● :exited"))
