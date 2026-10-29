@@ -23,12 +23,82 @@ To open a local HTML file programmatically:
 In a web buffer, `g` reloads and `q` (`quit-window`) hides the still-running
 page. Killing the buffer closes it.
 
-Command-L (`portal-web-load-url`) loads another URL in the same buffer, as a
-browser's address bar does: the minibuffer starts from the page on screen, the
-buffer takes the new page's name and `g` reloads it from then on. A hosted
-app's buffer, such as a Markdown preview, opens the URL in a new buffer instead.
 `l` or Command-[ (`portal-web-back`) and `r` or Command-] (`portal-web-forward`)
 move through the view's history.
+
+## Address bar
+
+Command-L (`portal-web-load-url`) loads another page in the same buffer, as a
+browser's address bar does; the buffer takes the new page's name and `g`
+reloads it from then on. Command-T (`portal-open-url`) reads the same way and
+opens the page in a new buffer, as a browser opens a tab. A hosted app's
+buffer, such as a Markdown preview, opens the page in a new buffer for
+Command-L too.
+
+The minibuffer starts with the page's URL selected, in the `region` face:
+
+- Typing replaces it, and yanking replaces it with what is yanked.
+- Backspace, `C-d` or a kill clears it.
+- Left and Right keep it, with the cursor at its start or end, and any other
+  key, such as `C-a` or `TAB`, keeps it as text and does what it always does.
+- `RET` with it still selected loads the page again. `M-n` brings it back.
+
+`M-x portal-open-url` from a buffer that is not a web page starts empty.
+
+As you type, [bookmarks](#bookmarks) are suggested, matching their name or
+their URL; Vertico, Orderless and Marginalia apply as for any completion. On
+`RET`, the address bar loads:
+
+1. The chosen suggestion's page. Plain Emacs completes with `TAB`; Vertico
+   chooses the first suggestion, and `M-RET` takes what was typed instead.
+2. A URL with a scheme, as typed, such as `https://example.com/a` or
+   `file:///tmp/index.html`.
+3. A site: a host with a dot or a port, and maybe a path, gains `https://`,
+   such as `example.com`, `192.168.1.1`, `myhost:8080` or
+   `en.wikipedia.org/wiki/Free software`. `localhost`, with or without a port
+   or path, gains `http://`.
+4. Anything else, such as `emacs bookmarks`, searches the web through
+   `portal-web-search-url`, Google by default. Its `%s` becomes the words,
+   each percent-encoded and joined by `+`:
+
+```elisp
+(setopt portal-web-search-url "https://duckduckgo.com/?q=%s")
+```
+
+`(portal-web-read-url PROMPT CURRENT)` reads a URL this way for your own
+commands. Suggestions come from `portal-web-omnibox-sources`, a list of
+`(GROUP . FUNCTION)`, where FUNCTION returns `(STRING . URL)` pairs; completion
+matches STRING.
+
+## Bookmarks
+
+A web page's bookmark is an ordinary Emacs bookmark of type Web, kept in your
+bookmark file with the others: its name is the page's title, its location
+the page's URL. So `C-x r m` (`bookmark-set`) bookmarks the page on screen,
+and `C-x r b` (`bookmark-jump`), `C-x r l` (`bookmark-bmenu-list`),
+`consult-bookmark` and Embark's bookmark actions open, rename and delete it as
+any bookmark. Opening one always opens its page in a new web buffer, where
+the command shows buffers: `bookmark-jump-other-window`, Embark's `o` and
+Consult's other-window commands put it in another window.
+
+In a web buffer:
+
+- Command-D (`portal-web-bookmark-set`) bookmarks the page, reading a name
+  that starts as the page's title, or its host without one. A bookmark of the
+  same name is replaced.
+- `b` or Command-B (`portal-web-bookmark-load`) loads a bookmarked page in this
+  buffer.
+- `B` or Command-Shift-B (`portal-web-bookmark-open`) opens one in a new
+  buffer; `M-x portal-web-bookmark-open` does so from any buffer.
+
+Both pick from web pages' bookmarks only, with their URLs beside them.
+A hosted app, such as a Markdown preview, cannot be bookmarked, and opens a
+bookmark in a new buffer.
+
+Loading Portal and Consult, in either order, enables `portal-web-consult-mode`:
+`consult-bookmark` then lists web pages with EWW's under Web, narrowed with
+`w SPC`. Opt out with `portal-web-consult-auto-enable` set to nil before
+loading them, or `M-x portal-web-consult-mode`.
 
 ## Find and zoom
 
@@ -163,8 +233,8 @@ scripts, styles and images. JavaScript is enabled by default.
 - A page can go fullscreen, as a video player's button does, and Escape
   leaves fullscreen; [fullscreen pages](keyboard.md#fullscreen-pages) says
   where the keyboard goes.
-- This URL viewer has no address bar. Inspecting a view reports its `:zoom`
-  in percent.
+- The minibuffer is the [address bar](#address-bar): the page has no toolbar.
+  Inspecting a view reports its `:zoom` in percent.
   Inspect failed loads through `:error` in
   `(portal--inspect (portal-view-target))`, or the page itself with
   [Web Inspector](#web-inspector).

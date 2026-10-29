@@ -43,12 +43,23 @@ can still be enabled or disabled with `portal-terminal-consult-mode'."
   :type 'boolean
   :group 'portal-terminal)
 
+(defcustom portal-web-consult-auto-enable t
+  "Whether loading Portal and Consult enables their web bookmark integration.
+Set this to nil before loading either package to opt out.  The integration
+can still be enabled or disabled with `portal-web-consult-mode'."
+  :type 'boolean
+  :group 'portal)
+
 (declare-function portal-terminal-consult-mode "portal-terminal-consult" (&optional arg))
+(declare-function portal-web-consult-mode "portal-web-consult" (&optional arg))
 
 (with-eval-after-load 'consult
   (when portal-terminal-consult-auto-enable
     (require 'portal-terminal-consult)
-    (portal-terminal-consult-mode 1)))
+    (portal-terminal-consult-mode 1))
+  (when portal-web-consult-auto-enable
+    (require 'portal-web-consult)
+    (portal-web-consult-mode 1)))
 
 (provide 'portal)
 ;;; portal.el ends here

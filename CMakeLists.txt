@@ -179,6 +179,11 @@ if(BUILD_TESTING)
                 ${ert_batch})
         set_tests_properties(terminal-${adapter} PROPERTIES TIMEOUT 30)
     endforeach()
+    add_test(NAME web-consult
+        COMMAND ${test_emacs} -L "${CMAKE_SOURCE_DIR}" ${elpa_load_path}
+            -l "${CMAKE_SOURCE_DIR}/test/portal-web-consult-tests.el"
+            ${ert_batch})
+    set_tests_properties(web-consult PROPERTIES TIMEOUT 30)
     add_test(NAME view
         COMMAND ${test_emacs} -L "${CMAKE_SOURCE_DIR}"
             -l "${CMAKE_SOURCE_DIR}/test/portal-view-tests.el"
