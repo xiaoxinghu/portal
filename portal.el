@@ -26,6 +26,7 @@
 
 (require 'portal-build)
 (require 'portal-web)
+(require 'portal-web-bookmark)
 (require 'portal-terminal)
 (require 'portal-excalidraw)
 

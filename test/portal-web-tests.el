@@ -470,8 +470,8 @@
                   prompted)
               (setq portal-fake-native-log nil)
               ;; The minibuffer starts from the page on screen.
-              (cl-letf (((symbol-function 'read-string)
-                         (lambda (_prompt initial &rest _)
+              (cl-letf (((symbol-function 'completing-read)
+                         (lambda (_prompt _table _predicate _require initial &rest _)
                            (setq prompted initial)
                            "https://example.com/a")))
                 (call-interactively (key-binding (kbd "s-l"))))
@@ -963,6 +963,272 @@ Markdown FILE gets its preview URL, and any other a file: URL."
       (portal-web-test--run-events)
       (should (eq (selected-window) origin))
       (should (plist-get (portal-web-test--state target) :focused)))))
+
+;; The address bar and bookmarks.
+
+(defun portal-web-test--type (command keys)
+  "Run COMMAND and type KEYS, in `kbd' notation, into a real minibuffer.
+Batch Emacs reads a keyboard macro's keys in a real minibuffer, so the
+address bar's selection and completion run as they do for a person."
+  (let ((map (make-sparse-keymap))
+        (global (current-global-map)))
+    (keymap-set map "<f12>" command)
+    (set-keymap-parent map global)
+    (use-global-map map)
+    (unwind-protect
+        (execute-kbd-macro (vconcat (kbd "<f12>") (kbd keys)))
+      (use-global-map global))
+    (should-not (active-minibuffer-window))))
+
+(defmacro portal-web-test--bookmarks (&rest body)
+  "Run BODY with no bookmarks, in a bookmark file of its own that it never saves."
+  (declare (indent 0))
+  `(let* ((bookmark-default-file (make-temp-name
+                                  (expand-file-name "portal-bookmarks-" temporary-file-directory)))
+          (bookmark-alist nil)
+          (bookmark-bookmarks-timestamp nil)
+          (bookmark-save-flag nil)
+          (bookmark-current-bookmark nil)
+          (bookmark-history nil)
+          (bookmark-fringe-mark nil)
+          (bookmark-automatically-show-annotations nil))
+     ,@body
+     (should-not (file-exists-p bookmark-default-file))))
+
+(ert-deftest portal-web-address-bar-tells-urls-from-searches ()
+  (let ((portal-web-search-url "https://www.google.com/search?q=%s")
+        (candidates (list (cons (propertize "Docs  https://docs.example.com/"
+                                            'portal-web-url "https://docs.example.com/")
+                                "https://docs.example.com/"))))
+    (dolist (case '(;; A suggestion gives its URL.
+                    ("Docs  https://docs.example.com/" . "https://docs.example.com/")
+                    ;; A URL a web view loads stands as typed.
+                    ("https://example.com/a?b=c" . "https://example.com/a?b=c")
+                    ("  http://example.com/  " . "http://example.com/")
+                    ("about:blank" . "about:blank")
+                    ("file:///tmp/a.html" . "file:///tmp/a.html")
+                    ;; A host, with a port or a path, is a site.
+                    ("example.com" . "https://example.com")
+                    ("www.example.co.uk:8443" . "https://www.example.co.uk:8443")
+                    ("192.168.1.1" . "https://192.168.1.1")
+                    ("en.wikipedia.org/wiki/Free software" . "https://en.wikipedia.org/wiki/Free%20software")
+                    ("myhost:8080/status" . "https://myhost:8080/status")
+                    ;; Local servers rarely have certificates.
+                    ("localhost" . "http://localhost")
+                    ("localhost:3000/app" . "http://localhost:3000/app")
+                    ;; Anything else searches, each word percent-encoded.
+                    ("emacs" . "https://www.google.com/search?q=emacs")
+                    ("what is c++ & why" . "https://www.google.com/search?q=what+is+c%2B%2B+%26+why")
+                    ("example.com is down" . "https://www.google.com/search?q=example.com+is+down")
+                    ("note: buy milk" . "https://www.google.com/search?q=note%3A+buy+milk")
+                    ("javascript:alert(1)" . "https://www.google.com/search?q=javascript%3Aalert%281%29")))
+      (should (equal (portal-web--resolve (car case) candidates) (cdr case))))
+    ;; A suggestion's string, as a completion framework returns it.
+    (should (equal (portal-web--resolve (propertize "renamed" 'portal-web-url "https://a.example/")
+                                        nil)
+                   "https://a.example/"))
+    (let ((portal-web-search-url "https://duckduckgo.com/?q=%s"))
+      (should (equal (portal-web--resolve "two words" nil) "https://duckduckgo.com/?q=two+words")))
+    (should-error (portal-web--resolve "  " nil) :type 'user-error)))
+
+(ert-deftest portal-web-address-bar-starts-with-the-current-url-selected ()
+  (portal-web-test--environment
+    (portal-open-url "http://example.com/page")
+    (let ((target (portal-view-target))
+          (portal-web-search-url "https://search.example/?q=%s"))
+      (dolist (case '(;; A typed character replaces the URL.
+                      ("e m a c s RET" . "https://search.example/?q=emacs")
+                      ;; Backspace clears it.
+                      ("DEL e x a m p l e . o r g RET" . "https://example.org")
+                      ;; Left keeps it, with the cursor at its start.
+                      ("<left> <right> <right> <right> <right> s RET" . "https://example.com/page")
+                      ;; Right keeps it, with the cursor at its end.
+                      ("<right> / a RET" . "http://example.com/page/a")
+                      ;; Other commands keep it as text too.
+                      ("C-a C-k a b o u t : b l a n k RET" . "about:blank")
+                      ;; RET loads it again.
+                      ("RET" . "http://example.com/page")))
+        (dolist (transient '(nil t))
+          (let ((transient-mark-mode transient))
+            (portal-fake-native-commit target "http://example.com/page")
+            (setq portal-fake-native-log nil)
+            (portal-web-test--type #'portal-web-load-url (car case))
+            (should (equal (portal-fake-native-calls 'portal--web-load)
+                           `((,target ,(cdr case)))))
+            (should (equal (portal-view-target) target)))))
+      ;; Yanking replaces the URL too.
+      (kill-new "https://example.net/")
+      (portal-fake-native-commit target "http://example.com/page")
+      (portal-web-test--type #'portal-web-load-url "C-y RET")
+      (should (equal (plist-get (portal-web-test--state target) :url) "https://example.net/"))
+      ;; Command-T opens what it reads in a new buffer, starting from this page.
+      (setq portal-fake-native-log nil)
+      (portal-web-test--type (key-binding (kbd "s-t")) "<right> b RET")
+      (should-not (equal (portal-view-target) target))
+      (should (equal (portal-fake-native-calls 'portal--web-load)
+                     `((,(portal-view-target) "https://example.net/b"))))
+      ;; Elsewhere, the minibuffer starts empty, and empty input asks for more.
+      (switch-to-buffer "*scratch*")
+      (let ((count (length (portal-view-buffers 'web))))
+        (should-error (portal-web-test--type #'portal-open-url "RET") :type 'user-error)
+        (portal-web-test--type #'portal-open-url "e x a m p l e . c o m RET")
+        (should (equal (buffer-name) "*portal: example.com*"))
+        (should (= (length (portal-view-buffers 'web)) (1+ count)))))))
+
+(ert-deftest portal-web-bookmarks-are-ordinary-bookmarks-of-type-web ()
+  (portal-web-test--environment
+    (portal-web-test--bookmarks
+      (portal-open-url "https://example.com/a")
+      (let ((buffer (current-buffer))
+            (target (portal-view-target)))
+        ;; A page's bookmark takes its title, or its host without one.
+        (should (equal (portal-web-bookmark-make-record)
+                       '("example.com" (location . "https://example.com/a")
+                         (handler . portal-web-bookmark-jump))))
+        (portal-fake-native-title target "  Example\nA  ")
+        (should (equal (car (portal-web-bookmark-make-record)) "Example A"))
+        ;; C-x r m saves it as any bookmark, and Command-D starts from its title.
+        (bookmark-set "Plain")
+        (portal-web-test--type (key-binding (kbd "s-d")) "RET")
+        (portal-fake-native-title target nil)
+        (portal-web-test--type (key-binding (kbd "s-d")) "C-a D o c s SPC RET")
+        (should (equal (bookmark-all-names) '("Docs example.com" "Example A" "Plain")))
+        (dolist (name (bookmark-all-names))
+          (should (equal (bookmark-location name) "https://example.com/a"))
+          (should (equal (bookmark-type-from-full-record (bookmark-get-bookmark name)) "Web")))
+        ;; A buffer without a page has nothing to bookmark, and nor does a hosted app.
+        (with-temp-buffer
+          (should-error (portal-web-bookmark-make-record) :type 'user-error))
+        (cl-letf (((symbol-function 'portal-start-server) #'ignore)
+                  ((symbol-function 'portal-server-url) (lambda () "http://127.0.0.1:1/token")))
+          (portal-hello)
+          (should-error (bookmark-set "Hello") :type 'user-error)
+          (should-error (call-interactively #'portal-web-bookmark-set) :type 'user-error))
+        (should-not (bookmark-get-bookmark "Hello" t))
+        (should (buffer-live-p buffer))))))
+
+(ert-deftest portal-web-bookmark-jumps-open-a-new-web-buffer-where-asked ()
+  (portal-web-test--environment
+    (portal-web-test--bookmarks
+      (portal-open-url "https://example.com/a")
+      (portal-fake-native-title (portal-view-target) "Example")
+      (bookmark-set "Example")
+      (let ((first (current-buffer)))
+        ;; From any buffer, a jump opens a new web buffer, here.
+        (switch-to-buffer "*scratch*")
+        (setq portal-fake-native-log nil)
+        (bookmark-jump "Example")
+        (portal-view-sync)
+        (should (eq major-mode 'portal-web-mode))
+        (should-not (eq (current-buffer) first))
+        (should (equal (buffer-name) "*portal: example.com*<2>"))
+        (should (eq (window-buffer) (current-buffer)))
+        (should (one-window-p))
+        (should (equal (portal-fake-native-calls 'portal--web-load)
+                       `((,(portal-view-target) "https://example.com/a"))))
+        (should (plist-get (portal-web-test--state) :visible))
+        ;; In another window, it leaves this one as it was.
+        (switch-to-buffer "*scratch*")
+        (let ((origin (selected-window)))
+          (bookmark-jump-other-window "Example")
+          (portal-view-sync)
+          (should-not (eq (selected-window) origin))
+          (should (eq (window-buffer origin) (get-buffer "*scratch*")))
+          (should (equal (buffer-name (window-buffer)) "*portal: example.com*<3>"))
+          (should (plist-get (portal-web-test--state) :visible)))
+        (delete-other-windows)
+        ;; Shift-B opens one from a web buffer, also in a new buffer.
+        (switch-to-buffer first)
+        (portal-web-test--type (key-binding "B") "E x a RET")
+        (should (equal (buffer-name) "*portal: example.com*<4>"))
+        (should (= (length (portal-view-buffers 'web)) 4))
+        ;; A bookmark whose URL a web view cannot load opens nothing.
+        (bookmark-store "Bad" '((location . "javascript:alert(1)")
+                                (handler . portal-web-bookmark-jump))
+                        nil)
+        (should-error (bookmark-jump "Bad") :type 'user-error)
+        (should (= (length (portal-view-buffers 'web)) 4))))))
+
+(ert-deftest portal-web-bookmark-load-loads-in-this-buffer ()
+  (portal-web-test--environment
+    (portal-web-test--bookmarks
+      (bookmark-store "Docs" '((location . "https://docs.example.org/guide")
+                               (handler . portal-web-bookmark-jump))
+                      nil)
+      (bookmark-store "Notes" '((filename . "/tmp/notes.txt") (position . 1)) nil)
+      (portal-open-url "https://example.com/a")
+      (let ((buffer (current-buffer))
+            (target (portal-view-target))
+            shown)
+        ;; The picker offers web pages' bookmarks only, as bookmarks.
+        (cl-letf* ((read (symbol-function 'completing-read))
+                   ((symbol-function 'completing-read)
+                    (lambda (prompt table &rest arguments)
+                      (setq shown (list (all-completions "" table)
+                                        (completion-metadata-get
+                                         (completion-metadata "" table nil) 'category)
+                                        (funcall (completion-metadata-get
+                                                  (completion-metadata "" table nil)
+                                                  'annotation-function)
+                                                 "Docs")))
+                      (apply read prompt table arguments))))
+          (setq portal-fake-native-log nil)
+          (portal-web-test--type (key-binding "b") "d o c TAB RET"))
+        (should (equal shown '(("Docs") bookmark "  https://docs.example.org/guide")))
+        ;; The page loads in this buffer, which takes its name.
+        (should (eq (current-buffer) buffer))
+        (should (equal (portal-view-target) target))
+        (should (equal (buffer-name) "*portal: docs.example.org*"))
+        (should (equal (portal-fake-native-calls 'portal--web-load)
+                       `((,target "https://docs.example.org/guide"))))
+        (should (= (length (portal-view-buffers 'web)) 1))
+        ;; A hosted app's buffer opens it in a new buffer instead.
+        (cl-letf (((symbol-function 'portal-start-server) #'ignore)
+                  ((symbol-function 'portal-server-url) (lambda () "http://127.0.0.1:1/token")))
+          (portal-hello)
+          (let ((hosted (current-buffer)))
+            (portal-web-bookmark-load "Docs")
+            (portal-view-sync)
+            (should-not (eq (current-buffer) hosted))
+            (should (equal (buffer-name) "*portal: docs.example.org*<2>"))
+            (should (equal (plist-get (portal-web-test--state) :url)
+                           "https://docs.example.org/guide"))))
+        ;; With no web bookmarks, the picker says how to make one.
+        (bookmark-delete "Docs")
+        (should-error (portal-web-bookmark-open (portal-web-bookmark--read "Open: "))
+                      :type 'user-error)))))
+
+(ert-deftest portal-web-address-bar-suggests-bookmarks-by-title-or-url ()
+  (portal-web-test--environment
+    (portal-web-test--bookmarks
+      (bookmark-store "Emacs manual" '((location . "https://www.gnu.org/software/emacs/manual/")
+                                       (handler . portal-web-bookmark-jump))
+                      nil)
+      (bookmark-store "Notes" '((filename . "/tmp/notes.txt") (position . 1)) nil)
+      (portal-open-url "https://example.com/")
+      (let ((target (portal-view-target)))
+        (dolist (keys '("m a n u a l TAB RET" "g n u . o r g TAB RET"))
+          (setq portal-fake-native-log nil)
+          (portal-web-test--type #'portal-web-load-url keys)
+          (should (equal (portal-fake-native-calls 'portal--web-load)
+                         `((,target "https://www.gnu.org/software/emacs/manual/")))))
+        ;; Only web pages' bookmarks are suggestions, grouped as bookmarks.
+        (let (table)
+          (cl-letf (((symbol-function 'completing-read)
+                     (lambda (_prompt collection &rest _)
+                       (setq table collection)
+                       "x")))
+            (portal-web-read-url "URL: "))
+          (let* ((candidates (all-completions "" table))
+                 (metadata (completion-metadata "" table nil)))
+            (should (equal (mapcar #'substring-no-properties candidates)
+                           '("Emacs manual  https://www.gnu.org/software/emacs/manual/")))
+            (should (equal (get-text-property 0 'portal-web-url (car candidates))
+                           "https://www.gnu.org/software/emacs/manual/"))
+            (should (eq (completion-metadata-get metadata 'category) 'portal-web-url))
+            (should (equal (funcall (completion-metadata-get metadata 'group-function)
+                                    (car candidates) nil)
+                           "Bookmark"))))))))
 
 (provide 'portal-web-tests)
 ;;; portal-web-tests.el ends here
