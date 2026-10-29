@@ -90,5 +90,38 @@ if (window.opener) window.opener.postMessage('hello', '*');
         (setq unread-command-events nil)
         (delete-directory directory t)))))
 
+(ert-deftest portal-web-gui-bookmarks-open-their-page-where-asked ()
+  :tags '(:gui)
+  (portal-test--with-web
+    (let ((bookmark-default-file (make-temp-name
+                                  (expand-file-name "portal-bookmarks-" temporary-file-directory)))
+          (bookmark-alist nil)
+          (bookmark-bookmarks-timestamp nil)
+          (bookmark-save-flag nil)
+          (bookmark-current-bookmark nil)
+          (bookmark-automatically-show-annotations nil)
+          (display-buffer-alist nil))
+      (bookmark-store "Saved page"
+                      '((location . "data:text/html,<title>Bookmarked</title><p>Kept")
+                        (handler . portal-web-bookmark-jump))
+                      nil)
+      ;; The handler opens the view before bookmark.el shows its buffer.
+      (switch-to-buffer "*scratch*")
+      (bookmark-jump "Saved page")
+      (should (eq major-mode 'portal-web-mode))
+      (portal-test--wait-for-page "Bookmarked" portal-web--target)
+      (should (portal-test--shown portal-web--target (selected-window)))
+      ;; A page's bookmark takes its title.
+      (should (equal (car (portal-web-bookmark-make-record)) "Bookmarked"))
+      ;; In another window, it leaves this one as it was.
+      (switch-to-buffer "*scratch*")
+      (let ((origin (selected-window)))
+        (bookmark-jump-other-window "Saved page")
+        (should-not (eq (selected-window) origin))
+        (should (eq (window-buffer origin) (get-buffer "*scratch*")))
+        (portal-test--wait-for-page "Bookmarked" portal-web--target)
+        (should (portal-test--shown portal-web--target (selected-window))))
+      (should-not (file-exists-p bookmark-default-file)))))
+
 (provide 'portal-web-gui-tests)
 ;;; portal-web-gui-tests.el ends here

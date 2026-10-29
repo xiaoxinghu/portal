@@ -197,6 +197,11 @@ Send its `opened' record, as the native module does, and return its target."
     (portal-fake-native-send (format "opened %s %s\n" target opener))
     target))
 
+(defun portal-fake-native-title (target title)
+  "Give web view TARGET's page TITLE, as WebKit reports it, or nil for none."
+  (puthash target (plist-put (portal-fake-native--view target) :title title)
+           portal-fake-native--views))
+
 (defun portal-fake-native-commit (target url)
   "Have window TARGET's page go to URL, and send its `web' record."
   (puthash target (plist-put (portal-fake-native--view target) :url url)

@@ -13,6 +13,7 @@
 ;; reports how they go over the same queue, which Emacs reports in turn.
 
 (require 'browse-url)
+(require 'delsel)
 (require 'json)
 (require 'seq)
 (require 'url-parse)
@@ -31,6 +32,15 @@
 (declare-function portal--web-download-directory "portal-web" (directory))
 (declare-function portal--web-find "portal-web" (target text backward case-sensitive))
 (declare-function portal--web-zoom "portal-web" (host percent))
+
+;; Bookmarks of web pages: `portal-web-bookmark.el' loads when first used,
+;; however this file was loaded, as by an autoloaded command.
+(autoload 'portal-web-bookmark-make-record "portal-web-bookmark")
+(autoload 'portal-web-bookmark--suggestions "portal-web-bookmark")
+(autoload 'portal-web-bookmark-set "portal-web-bookmark" nil t)
+(autoload 'portal-web-bookmark-load "portal-web-bookmark" nil t)
+(autoload 'portal-web-bookmark-open "portal-web-bookmark" nil t)
+(defvar bookmark-make-record-function)
 
 (defun portal-web--appearance-changed (_symbol value operation _where)
   "Check appearance VALUE and show every web view in it, on OPERATION `set'."
@@ -106,22 +116,33 @@ queues commands through `unread-command-events'.")
   "Major mode for a buffer presenting a web view.
 RET or a click enters the page; `portal-input-escape-key' returns to Emacs.
 A chord the page does not use reaches Emacs, which runs it in this buffer.
-g or Command-R loads the page again, Command-L loads another URL, and
-l and r or Command-[ and Command-] go back and forward, whether Emacs
-or the page owns the keyboard, unless the page uses those Command keys
-itself.  C-s or Command-F finds text in the page, and
-Command-G and Command-Shift-G find it again; + or Command-= zooms in,
-- or Command-- zooms out and 0 or Command-0 resets, for every page from
-the same site.  The mode line's light is lit while the page has the
-keyboard and dimmed while Emacs has it.  q hides the view while the page
-keeps running, and killing the buffer closes it."
+g or Command-R loads the page again, Command-L loads another URL or
+searches the web, Command-T does so in a new buffer, and l and r or
+Command-[ and Command-] go back and forward, whether Emacs or the page
+owns the keyboard, unless the page uses those Command keys itself.
+Command-D bookmarks the page, b or Command-B loads a bookmarked page
+here, and B or Command-Shift-B opens one in a new buffer; `bookmark-jump'
+and the other bookmark commands open them too.  C-s or Command-F finds
+text in the page, and Command-G and Command-Shift-G find it again;
++ or Command-= zooms in, - or Command-- zooms out and 0 or Command-0
+resets, for every page from the same site.  The mode line's light is
+lit while the page has the keyboard and dimmed while Emacs has it.
+q hides the view while the page keeps running, and killing the buffer
+closes it."
   (setq-local cursor-type nil)
+  (setq-local bookmark-make-record-function #'portal-web-bookmark-make-record)
   (portal-input-mode 1))
 (keymap-set portal-web-mode-map "g" #'portal-web-reload)
 (keymap-set portal-web-mode-map "l" #'portal-web-back)
 (keymap-set portal-web-mode-map "r" #'portal-web-forward)
 (keymap-set portal-web-mode-map "s-r" #'portal-web-reload)
 (keymap-set portal-web-mode-map "s-l" #'portal-web-load-url)
+(keymap-set portal-web-mode-map "s-t" #'portal-open-url)
+(keymap-set portal-web-mode-map "s-d" #'portal-web-bookmark-set)
+(keymap-set portal-web-mode-map "b" #'portal-web-bookmark-load)
+(keymap-set portal-web-mode-map "s-b" #'portal-web-bookmark-load)
+(keymap-set portal-web-mode-map "B" #'portal-web-bookmark-open)
+(keymap-set portal-web-mode-map "s-B" #'portal-web-bookmark-open)
 (keymap-set portal-web-mode-map "s-[" #'portal-web-back)
 (keymap-set portal-web-mode-map "s-]" #'portal-web-forward)
 (keymap-set portal-web-mode-map "C-s" #'portal-web-find)
@@ -200,16 +221,14 @@ A window that a page opened loads the page it shows."
 
 (defun portal-web-load-url (url)
   "Load URL in this buffer's web view, as a browser's address bar does.
-The minibuffer starts from the page on screen.  The buffer takes the
-page's name, and `portal-web-reload' loads URL from then on.  A hosted
-app never leaves the app host, so its buffer opens URL in a new buffer,
-as `portal-open-url' does."
+Interactively, read it with `portal-web-read-url', starting from the page
+on screen.  The buffer takes the page's name, and `portal-web-reload'
+loads URL from then on.  A hosted app never leaves the app host, so its
+buffer opens URL in a new buffer, as `portal-open-url' does."
   (interactive
    (progn
      (unless portal-web--target (user-error "No web view in this buffer"))
-     (list (read-string "Load URL: "
-                        (or (plist-get (portal--inspect portal-web--target) :url)
-                            portal-web--url "https://")))))
+     (list (portal-web-read-url "Load URL or search: " (portal-web--current-url)))))
   (unless portal-web--target (user-error "No web view in this buffer"))
   (portal-web--check-url url)
   (if portal-web--hosted-path
@@ -220,6 +239,121 @@ as `portal-open-url' does."
     (let ((name (format "*portal: %s*" (portal-web--page-name url))))
       (unless (string-prefix-p name (buffer-name))
         (rename-buffer name t)))))
+
+;; The omnibox: the minibuffer as a browser's address bar.
+
+(defcustom portal-web-search-url "https://www.google.com/search?q=%s"
+  "The URL that searches the web for what the address bar reads.
+Its one %s becomes the words read, each percent-encoded, joined by +."
+  :type 'string
+  :group 'portal)
+
+(defvar portal-web-omnibox-sources '(("Bookmark" . portal-web-bookmark--suggestions))
+  "Where the address bar's suggestions come from, as (GROUP . FUNCTION).
+FUNCTION returns a list of (STRING . URL) pairs, shown under the heading
+GROUP in that order.  STRING is what completion matches, such as a page's
+title and URL, and must be unique.")
+
+(defun portal-web--current-url ()
+  "Return the URL of this buffer's page, or nil when it has none."
+  (and portal-web--target
+       (or (plist-get (portal--inspect portal-web--target) :url) portal-web--url)))
+
+(defun portal-web--address (input)
+  "Return the URL that address bar INPUT names, or nil if INPUT is a search.
+A URL with a scheme stands as typed.  A host, such as example.com,
+localhost:3000 or 192.168.1.1, and a host with a path, such as
+en.wikipedia.org/wiki/Emacs, gain https://, or http:// for localhost."
+  (cond ((string-match-p "\\`[[:alpha:]][[:alnum:]+.-]*://\\|\\`\\(?:about\\|data\\|file\\):" input)
+         input)
+        ((string-match-p "\\`localhost\\(?:[:/]\\|\\'\\)" input)
+         (concat "http://" (string-replace " " "%20" input)))
+        ((string-match-p (concat "\\`[[:alnum:]_-]+\\(?:\\(?:\\.[[:alnum:]_-]+\\)+\\(?::[0-9]+\\)?"
+                                 "\\|:[0-9]+\\)\\(?:[/?#].*\\)?\\'")
+                         input)
+         (concat "https://" (string-replace " " "%20" input)))))
+
+(defun portal-web--search-url (input)
+  "Return the URL that searches the web for the words in INPUT."
+  (format portal-web-search-url (mapconcat #'url-hexify-string (split-string input) "+")))
+
+(defun portal-web--resolve (input candidates)
+  "Return the URL that address bar INPUT asks for, given CANDIDATES.
+That is a chosen candidate's URL, the URL INPUT names, or a search."
+  (let ((input (string-trim input)))
+    (when (string-empty-p input) (user-error "Enter a URL or words to search for"))
+    (or (cdr (assoc input candidates))
+        (get-text-property 0 'portal-web-url input)
+        (portal-web--address input)
+        (portal-web--search-url input))))
+
+(defun portal-web--select-input ()
+  "Select the minibuffer's input, as a browser selects its address bar's URL.
+Until another command deselects it, the next key decides what happens to it:
+see `portal-web--selected-input-command'."
+  (when (> (point-max) (minibuffer-prompt-end))
+    ;; Without Transient Mark mode, the selection lasts as a shifted one does.
+    (unless transient-mark-mode
+      (setq-local transient-mark-mode (cons 'only nil)))
+    (goto-char (point-max))
+    (push-mark (minibuffer-prompt-end) t t)
+    (add-hook 'pre-command-hook #'portal-web--selected-input-command nil t)))
+
+(defun portal-web--selected-input-command ()
+  "Apply the command about to run to the selected input, once.
+Typing or yanking replaces it, and deleting or killing clears it, as in
+`delete-selection-mode'.  Left and Right deselect it, with the cursor at
+its start or end.  Any other command deselects it and runs as usual, so
+RET with the input still selected loads it."
+  (remove-hook 'pre-command-hook #'portal-web--selected-input-command t)
+  (when (region-active-p)
+    (cond ((and (symbolp this-command) (get this-command 'delete-selection))
+           (let ((delete-selection-mode t))
+             (delete-selection-pre-hook)))
+          ((or (memq this-command '(delete-backward-char delete-forward-char delete-char
+                                    backward-delete-char-untabify kill-line kill-whole-line))
+               (member (this-command-keys-vector) '([?\d] [backspace] [deletechar] [delete])))
+           (delete-region (region-beginning) (region-end))
+           (setq this-command 'ignore))
+          ((memq this-command '(left-char backward-char))
+           (goto-char (region-beginning))
+           (setq this-command 'ignore))
+          ((memq this-command '(right-char forward-char))
+           (goto-char (region-end))
+           (setq this-command 'ignore)))
+    (deactivate-mark)))
+
+;; Match any part of a suggestion, its title or URL, without extra packages.
+(add-to-list 'completion-category-defaults '(portal-web-url (styles basic substring)))
+
+(defun portal-web-read-url (prompt &optional current)
+  "Read a URL with PROMPT, as a browser's address bar does, and return it.
+The minibuffer starts with CURRENT, the page on screen, selected: typing
+replaces it, Backspace clears it, and Left or Right edits it.  RET with
+it selected loads it again.  Suggestions from `portal-web-omnibox-sources',
+such as bookmarks, match their title or URL.  A suggestion gives its URL;
+otherwise input that looks like a URL gives that URL, and other input
+searches the web with `portal-web-search-url'."
+  (let* ((groups (mapcar (lambda (source)
+                           (cons (car source) (funcall (cdr source))))
+                         portal-web-omnibox-sources))
+         (candidates (apply #'append (mapcar #'cdr groups)))
+         (table (lambda (string predicate action)
+                  (if (eq action 'metadata)
+                      `(metadata
+                        (category . portal-web-url)
+                        (display-sort-function . identity)
+                        (cycle-sort-function . identity)
+                        (group-function
+                         . ,(lambda (candidate transform)
+                              (if transform
+                                  candidate
+                                (car (seq-find (lambda (group) (assoc candidate (cdr group)))
+                                               groups))))))
+                    (complete-with-action action candidates string predicate))))
+         (input (minibuffer-with-setup-hook #'portal-web--select-input
+                  (completing-read prompt table nil nil current nil current))))
+    (portal-web--resolve input candidates)))
 
 (defun portal-web--selected ()
   "Return the target of the selected pane's web view, or signal a user error."
@@ -420,9 +554,27 @@ It moves to the previous level in `portal-web-zoom-steps'."
             "RET or a click enters the page. The configured escape returns to Emacs.\n"
             "See M-x customize-option RET portal-input-escape-key for that key.\n"
             "g loads the page again. q hides it; killing the buffer closes it.\n"
-            "Command-L loads another URL; l and r go back and forward.\n"
+            "Command-L loads another URL or searches; Command-T opens one in a new buffer.\n"
+            "l and r go back and forward.\n"
+            "Command-D bookmarks the page; b loads a bookmark here, B in a new buffer.\n"
             "C-s finds text in the page; + and - zoom, and 0 resets.\n"
             "This buffer has one live view, which follows its selected pane.\n")))
+
+(defun portal-web--create (name open &optional show)
+  "Return a new web buffer called *portal: NAME*, whose view OPEN opens.
+No pane shows the buffer yet, so its view stays hidden until one does,
+as a hidden view does.  Then SHOW, if non-nil, is called with the
+buffer, even when OPEN signals once the view is open, as when a hosted
+app's host cannot start.  If the view cannot open, the buffer is killed."
+  (let ((buffer (generate-new-buffer (format "*portal: %s*" name))))
+    (unwind-protect
+        (with-current-buffer buffer
+          (portal-web--start-buffer)
+          (funcall open))
+      (if (and (buffer-live-p buffer) (buffer-local-value 'portal-web--target buffer))
+          (when show (funcall show buffer))
+        (kill-buffer buffer)))
+    buffer))
 
 (defun portal-web--visit (buffer name open)
   "Select web BUFFER and reload it, or, when BUFFER is nil, open a new one.
@@ -430,25 +582,22 @@ The new buffer is called *portal: NAME*, and OPEN opens its view.  If the
 view cannot open, the new buffer is killed."
   (if buffer
       (progn (switch-to-buffer buffer) (portal-web-reload))
-    (let ((buffer (generate-new-buffer (format "*portal: %s*" name))))
-      (unwind-protect
-          (progn
-            (switch-to-buffer buffer)
-            (portal-web--start-buffer)
-            (redisplay t)
-            (funcall open)
-            (message "Web view opened. RET enters; %s returns to Emacs; q hides the view."
-                     portal-input-escape-key))
-        (unless (and (buffer-live-p buffer) (buffer-local-value 'portal-web--target buffer))
-          (kill-buffer buffer))))))
+    (portal-web--create name open
+                        (lambda (buffer)
+                          (switch-to-buffer buffer)
+                          ;; Place the view now rather than at the next redisplay.
+                          (portal-view-sync)))
+    (message "Web view opened. RET enters; %s returns to Emacs; q hides the view."
+             portal-input-escape-key)))
 
 ;;;###autoload
 (defun portal-open-url (url)
   "Open URL in a web view, in a new buffer named after its page.
 Click the page or press RET to interact; `portal-input-escape-key'
 returns control to Emacs.  HTTP(S), file, data and about
-URLs are supported."
-  (interactive (list (read-string "Open URL: " "https://")))
+URLs are supported.  Interactively, read it with `portal-web-read-url',
+starting from the page on screen in a web buffer, as a browser opens a tab."
+  (interactive (list (portal-web-read-url "Open URL or search: " (portal-web--current-url))))
   (portal-web--check-url url)
   (portal-web--visit nil (portal-web--page-name url)
                      (lambda () (portal-web-open url))))

@@ -10,7 +10,7 @@ Run shell examples from the repository root, not `docs/`.
 | --- | --- |
 | Install Portal, build its native part, upgrade it or fix installation problems | [Install Portal](install.md) |
 | Move between Emacs and a native view | [Keyboard ownership](keyboard.md) |
-| Open HTML, URLs or a saved Markdown preview | [Web views and previews](web-views.md) |
+| Open HTML, URLs, bookmarks or a saved Markdown preview | [Web views and previews](web-views.md) |
 | Draw and save offline | [Local Excalidraw drawings](excalidraw.md) |
 | Run shells, switch terminals or use a quick terminal | [Terminals and optional Consult/Embark adapters](terminals.md) |
 | Present a command in a panel or set a global shortcut | [Launchers and global shortcuts](launcher.md) |
