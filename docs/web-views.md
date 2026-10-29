@@ -86,8 +86,8 @@ In a web buffer:
 - Command-D (`portal-web-bookmark-set`) bookmarks the page, reading a name
   that starts as the page's title, or its host without one. A bookmark of the
   same name is replaced.
-- `b` or Command-B (`portal-web-bookmark-load`) loads a bookmarked page in this
-  buffer.
+- `b` or Command-Option-B (`portal-web-bookmark-load`) loads a bookmarked page
+  in this buffer.
 - `B` or Command-Shift-B (`portal-web-bookmark-open`) opens one in a new
   buffer; `M-x portal-web-bookmark-open` does so from any buffer.
 

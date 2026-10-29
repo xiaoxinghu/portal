@@ -148,7 +148,7 @@ page's history survives hiding and redisplay; killing the buffer releases it.
 
 `s-l` reads another URL or a search for this buffer, and `s-t` for a new
 buffer ([address bar](web-views.md#address-bar)). `s-d` bookmarks the page,
-`b` and `s-b` load a bookmarked page in this buffer, and `B` and `s-B` open
+`b` and `M-s-b` load a bookmarked page in this buffer, and `B` and `s-B` open
 one in a new buffer ([bookmarks](web-views.md#bookmarks)).
 
 `C-s` and `s-f` find text in the page, and `s-g` and `s-G` find it again;
