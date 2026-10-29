@@ -120,12 +120,12 @@ g or Command-R loads the page again, Command-L loads another URL or
 searches the web, Command-T does so in a new buffer, and l and r or
 Command-[ and Command-] go back and forward, whether Emacs or the page
 owns the keyboard, unless the page uses those Command keys itself.
-Command-D bookmarks the page, b or Command-B loads a bookmarked page
-here, and B or Command-Shift-B opens one in a new buffer; `bookmark-jump'
-and the other bookmark commands open them too.  C-s or Command-F finds
-text in the page, and Command-G and Command-Shift-G find it again;
-+ or Command-= zooms in, - or Command-- zooms out and 0 or Command-0
-resets, for every page from the same site.  The mode line's light is
+Command-D bookmarks the page, b or Command-Option-B loads a bookmarked
+page here, and B or Command-Shift-B opens one in a new buffer;
+`bookmark-jump' and the other bookmark commands open them too.  C-s or
+Command-F finds text in the page, and Command-G and Command-Shift-G find
+it again; + or Command-= zooms in, - or Command-- zooms out and 0 or
+Command-0 resets, for every page from the same site.  The mode line's light is
 lit while the page has the keyboard and dimmed while Emacs has it.
 q hides the view while the page keeps running, and killing the buffer
 closes it."
@@ -140,7 +140,7 @@ closes it."
 (keymap-set portal-web-mode-map "s-t" #'portal-open-url)
 (keymap-set portal-web-mode-map "s-d" #'portal-web-bookmark-set)
 (keymap-set portal-web-mode-map "b" #'portal-web-bookmark-load)
-(keymap-set portal-web-mode-map "s-b" #'portal-web-bookmark-load)
+(keymap-set portal-web-mode-map "M-s-b" #'portal-web-bookmark-load)
 (keymap-set portal-web-mode-map "B" #'portal-web-bookmark-open)
 (keymap-set portal-web-mode-map "s-B" #'portal-web-bookmark-open)
 (keymap-set portal-web-mode-map "s-[" #'portal-web-back)

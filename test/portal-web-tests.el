@@ -1251,6 +1251,9 @@ address bar's selection and completion run as they do for a person."
              (portal-open-url "https://example.com/a")
              (cl-assert (eq (keymap-lookup nil "s-d") 'portal-web-bookmark-set))
              (cl-assert (eq (keymap-lookup nil "b") 'portal-web-bookmark-load))
+             (cl-assert (eq (keymap-lookup nil "M-s-b") 'portal-web-bookmark-load))
+             ;; Command-B stays the user's, often `consult-buffer'.
+             (cl-assert (not (keymap-lookup portal-web-mode-map "s-b")))
              (cl-assert (eq (keymap-lookup nil "B") 'portal-web-bookmark-open))
              (portal-web-bookmark-set "Saved")
              (cl-assert (equal (bookmark-location "Saved") "https://example.com/a"))
