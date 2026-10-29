@@ -106,9 +106,10 @@ queues commands through `unread-command-events'.")
   "Major mode for a buffer presenting a web view.
 RET or a click enters the page; `portal-input-escape-key' returns to Emacs.
 A chord the page does not use reaches Emacs, which runs it in this buffer.
-g or Command-R loads the page again, and l and r go back and forward,
-whether Emacs or the page owns the keyboard, unless the page uses
-Command-R itself.  C-s or Command-F finds text in the page, and
+g or Command-R loads the page again, Command-L loads another URL, and
+l and r or Command-[ and Command-] go back and forward, whether Emacs
+or the page owns the keyboard, unless the page uses those Command keys
+itself.  C-s or Command-F finds text in the page, and
 Command-G and Command-Shift-G find it again; + or Command-= zooms in,
 - or Command-- zooms out and 0 or Command-0 resets, for every page from
 the same site.  The mode line's light is lit while the page has the
@@ -120,6 +121,9 @@ keeps running, and killing the buffer closes it."
 (keymap-set portal-web-mode-map "l" #'portal-web-back)
 (keymap-set portal-web-mode-map "r" #'portal-web-forward)
 (keymap-set portal-web-mode-map "s-r" #'portal-web-reload)
+(keymap-set portal-web-mode-map "s-l" #'portal-web-load-url)
+(keymap-set portal-web-mode-map "s-[" #'portal-web-back)
+(keymap-set portal-web-mode-map "s-]" #'portal-web-forward)
 (keymap-set portal-web-mode-map "C-s" #'portal-web-find)
 (keymap-set portal-web-mode-map "C-r" #'portal-web-find-backward)
 (keymap-set portal-web-mode-map "s-f" #'portal-web-find)
@@ -193,6 +197,29 @@ A window that a page opened loads the page it shows."
                       (or portal-web--url
                           (plist-get (portal--inspect portal-web--target) :url)
                           (user-error "This window shows no page yet")))))
+
+(defun portal-web-load-url (url)
+  "Load URL in this buffer's web view, as a browser's address bar does.
+The minibuffer starts from the page on screen.  The buffer takes the
+page's name, and `portal-web-reload' loads URL from then on.  A hosted
+app never leaves the app host, so its buffer opens URL in a new buffer,
+as `portal-open-url' does."
+  (interactive
+   (progn
+     (unless portal-web--target (user-error "No web view in this buffer"))
+     (list (read-string "Load URL: "
+                        (or (plist-get (portal--inspect portal-web--target) :url)
+                            portal-web--url "https://")))))
+  (unless portal-web--target (user-error "No web view in this buffer"))
+  (portal-web--check-url url)
+  (if portal-web--hosted-path
+      (portal-open-url url)
+    (portal--web-load portal-web--target url)
+    (setq portal-web--url url
+          portal-web--preview nil)
+    (let ((name (format "*portal: %s*" (portal-web--page-name url))))
+      (unless (string-prefix-p name (buffer-name))
+        (rename-buffer name t)))))
 
 (defun portal-web--selected ()
   "Return the target of the selected pane's web view, or signal a user error."
@@ -393,6 +420,7 @@ It moves to the previous level in `portal-web-zoom-steps'."
             "RET or a click enters the page. The configured escape returns to Emacs.\n"
             "See M-x customize-option RET portal-input-escape-key for that key.\n"
             "g loads the page again. q hides it; killing the buffer closes it.\n"
+            "Command-L loads another URL; l and r go back and forward.\n"
             "C-s finds text in the page; + and - zoom, and 0 resets.\n"
             "This buffer has one live view, which follows its selected pane.\n")))
 

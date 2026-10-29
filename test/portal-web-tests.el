@@ -447,14 +447,66 @@
       (call-interactively (key-binding "l"))
       (call-interactively (key-binding "r"))
       (portal-web-back)
+      (call-interactively (key-binding (kbd "s-[")))
+      (call-interactively (key-binding (kbd "s-]")))
       (should (equal (portal-fake-native-calls 'portal--web-go)
-                     `((,target "back") (,target "forward") (,target "back"))))
+                     `((,target "back") (,target "forward") (,target "back")
+                       (,target "back") (,target "forward"))))
       ;; A pane showing another buffer has no view to act on.
       (set-window-buffer other (get-buffer "*scratch*"))
       (select-window other)
       (portal-view-sync)
       (should-error (portal-web-back) :type 'user-error)
-      (should (= (length (portal-fake-native-calls 'portal--web-go)) 3)))))
+      (should (= (length (portal-fake-native-calls 'portal--web-go)) 5)))))
+
+(ert-deftest portal-web-load-url-loads-in-this-view-as-an-address-bar-does ()
+  (portal-web-test--environment
+    (let ((file (make-temp-file "portal-web-" nil ".html" "<p>Hi</p>")))
+      (unwind-protect
+          (progn
+            (portal-render-html file)
+            (let ((target (portal-view-target))
+                  (buffer (current-buffer))
+                  prompted)
+              (setq portal-fake-native-log nil)
+              ;; The minibuffer starts from the page on screen.
+              (cl-letf (((symbol-function 'read-string)
+                         (lambda (_prompt initial &rest _)
+                           (setq prompted initial)
+                           "https://example.com/a")))
+                (call-interactively (key-binding (kbd "s-l"))))
+              (should (equal prompted (browse-url-file-url file)))
+              (should (equal (portal-view-target) target))
+              (should (eq (current-buffer) buffer))
+              (should (equal (buffer-name) "*portal: example.com*"))
+              (should (equal (portal-fake-native-calls 'portal--web-load)
+                             `((,target "https://example.com/a"))))
+              ;; g reloads the new page, and previewing the file opens it afresh.
+              (call-interactively (key-binding "g"))
+              (should (equal (plist-get (portal-web-test--state) :url) "https://example.com/a"))
+              (portal-render-html file)
+              (should-not (eq (current-buffer) buffer))
+              (should (= (length (portal-view-buffers 'web)) 2))
+              ;; A URL a web view cannot load changes nothing.
+              (switch-to-buffer buffer)
+              (portal-view-sync)
+              (setq portal-fake-native-log nil)
+              (should-error (portal-web-load-url "example.com") :type 'user-error)
+              (should-not (portal-fake-native-calls 'portal--web-load))))
+        (delete-file file)))
+    ;; A hosted app keeps its page and opens the URL in a new buffer.
+    (cl-letf (((symbol-function 'portal-start-server) #'ignore)
+              ((symbol-function 'portal-server-url) (lambda () "http://127.0.0.1:1/token")))
+      (switch-to-buffer (generate-new-buffer "client"))
+      (let ((target (portal-web-open-hosted "/hello")))
+        (portal-web-load-url "https://example.org/")
+        (should (equal (buffer-name) "*portal: example.org*"))
+        (should-not (equal (portal-view-target) target))
+        (should (equal (plist-get (portal-web-test--state target) :url)
+                       "http://127.0.0.1:1/token/hello"))))
+    ;; A buffer without a view has nothing to load.
+    (with-temp-buffer
+      (should-error (portal-web-load-url "https://example.com/") :type 'user-error))))
 
 ;; Finding text and zooming.
 

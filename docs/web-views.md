@@ -23,6 +23,13 @@ To open a local HTML file programmatically:
 In a web buffer, `g` reloads and `q` (`quit-window`) hides the still-running
 page. Killing the buffer closes it.
 
+Command-L (`portal-web-load-url`) loads another URL in the same buffer, as a
+browser's address bar does: the minibuffer starts from the page on screen, the
+buffer takes the new page's name and `g` reloads it from then on. A hosted
+app's buffer, such as a Markdown preview, opens the URL in a new buffer instead.
+`l` or Command-[ (`portal-web-back`) and `r` or Command-] (`portal-web-forward`)
+move through the view's history.
+
 ## Find and zoom
 
 `C-s` or Command-F (`portal-web-find`) reads text in the minibuffer and finds
@@ -90,7 +97,7 @@ Relative links resolve from the displayed document's folder; local absolute
 paths and `file:` URLs also work. Following a Markdown link renames the buffer
 after that file: `g` rereads it, and `portal-render-markdown` on that file finds
 this preview.
-`l` and `r` in the buffer, `portal-web-back` and `portal-web-forward`, navigate previously shown
+`l` and `r` or Command-[ and Command-] in the buffer, `portal-web-back` and `portal-web-forward`, navigate previously shown
 documents and restore reading positions. Following a new link after going back
 discards forward pages, as in a browser; opening files in Emacs or websites does not.
 
