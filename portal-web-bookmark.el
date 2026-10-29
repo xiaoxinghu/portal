@@ -116,13 +116,5 @@ carries the URL as its `portal-web-url' property."
                     url)))
           (portal-web-bookmark--records)))
 
-(add-to-list 'portal-web-omnibox-sources '("Bookmark" . portal-web-bookmark--suggestions))
-
-(keymap-set portal-web-mode-map "s-d" #'portal-web-bookmark-set)
-(keymap-set portal-web-mode-map "b" #'portal-web-bookmark-load)
-(keymap-set portal-web-mode-map "s-b" #'portal-web-bookmark-load)
-(keymap-set portal-web-mode-map "B" #'portal-web-bookmark-open)
-(keymap-set portal-web-mode-map "s-B" #'portal-web-bookmark-open)
-
 (provide 'portal-web-bookmark)
 ;;; portal-web-bookmark.el ends here

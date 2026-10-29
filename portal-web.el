@@ -32,7 +32,14 @@
 (declare-function portal--web-download-directory "portal-web" (directory))
 (declare-function portal--web-find "portal-web" (target text backward case-sensitive))
 (declare-function portal--web-zoom "portal-web" (host percent))
-(declare-function portal-web-bookmark-make-record "portal-web-bookmark" ())
+
+;; Bookmarks of web pages: `portal-web-bookmark.el' loads when first used,
+;; however this file was loaded, as by an autoloaded command.
+(autoload 'portal-web-bookmark-make-record "portal-web-bookmark")
+(autoload 'portal-web-bookmark--suggestions "portal-web-bookmark")
+(autoload 'portal-web-bookmark-set "portal-web-bookmark" nil t)
+(autoload 'portal-web-bookmark-load "portal-web-bookmark" nil t)
+(autoload 'portal-web-bookmark-open "portal-web-bookmark" nil t)
 (defvar bookmark-make-record-function)
 
 (defun portal-web--appearance-changed (_symbol value operation _where)
@@ -131,6 +138,11 @@ closes it."
 (keymap-set portal-web-mode-map "s-r" #'portal-web-reload)
 (keymap-set portal-web-mode-map "s-l" #'portal-web-load-url)
 (keymap-set portal-web-mode-map "s-t" #'portal-open-url)
+(keymap-set portal-web-mode-map "s-d" #'portal-web-bookmark-set)
+(keymap-set portal-web-mode-map "b" #'portal-web-bookmark-load)
+(keymap-set portal-web-mode-map "s-b" #'portal-web-bookmark-load)
+(keymap-set portal-web-mode-map "B" #'portal-web-bookmark-open)
+(keymap-set portal-web-mode-map "s-B" #'portal-web-bookmark-open)
 (keymap-set portal-web-mode-map "s-[" #'portal-web-back)
 (keymap-set portal-web-mode-map "s-]" #'portal-web-forward)
 (keymap-set portal-web-mode-map "C-s" #'portal-web-find)
@@ -236,7 +248,7 @@ Its one %s becomes the words read, each percent-encoded, joined by +."
   :type 'string
   :group 'portal)
 
-(defvar portal-web-omnibox-sources nil
+(defvar portal-web-omnibox-sources '(("Bookmark" . portal-web-bookmark--suggestions))
   "Where the address bar's suggestions come from, as (GROUP . FUNCTION).
 FUNCTION returns a list of (STRING . URL) pairs, shown under the heading
 GROUP in that order.  STRING is what completion matches, such as a page's

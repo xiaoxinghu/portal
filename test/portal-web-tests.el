@@ -1233,5 +1233,36 @@ address bar's selection and completion run as they do for a person."
                                     (car candidates) t)
                            (car candidates)))))))))
 
+;; A fresh Emacs, with nothing to keep, is the only way to load less.
+(ert-deftest portal-web-bookmarks-work-when-only-the-web-feature-loaded ()
+  ;; An autoloaded command, such as `portal-open-url', loads `portal-web'
+  ;; alone, not the package root that loads every feature.
+  (let* ((root (file-name-directory (locate-library "portal")))
+         (fake (symbol-file 'portal-fake-native-reset))
+         (form
+          `(progn
+             (setq load-path (cons ,root load-path)
+                   bookmark-default-file (make-temp-name
+                                          (expand-file-name "portal-bookmarks-" temporary-file-directory))
+                   bookmark-save-flag nil)
+             (load ,fake nil t)
+             (require 'portal-web)
+             (cl-assert (not (featurep 'portal-web-bookmark)))
+             (portal-open-url "https://example.com/a")
+             (cl-assert (eq (keymap-lookup nil "s-d") 'portal-web-bookmark-set))
+             (cl-assert (eq (keymap-lookup nil "b") 'portal-web-bookmark-load))
+             (cl-assert (eq (keymap-lookup nil "B") 'portal-web-bookmark-open))
+             (portal-web-bookmark-set "Saved")
+             (cl-assert (equal (bookmark-location "Saved") "https://example.com/a"))
+             (cl-assert (equal (cdr (assoc "Bookmark" (mapcar (lambda (source)
+                                                                (cons (car source) (funcall (cdr source))))
+                                                              portal-web-omnibox-sources)))
+                               '(("Saved  https://example.com/a" . "https://example.com/a")))))))
+    (with-temp-buffer
+      (let ((status (call-process (expand-file-name invocation-name invocation-directory)
+                                  nil t nil "--batch" "-Q" "--eval" (prin1-to-string form))))
+        (ert-info ((buffer-string))
+          (should (eq status 0)))))))
+
 (provide 'portal-web-tests)
 ;;; portal-web-tests.el ends here
