@@ -102,6 +102,28 @@ They go in a bookmark file of their own, which is never saved."
         (should (equal (buffer-name) "*portal: docs.example.org*<2>"))
         (should (plist-get (portal--inspect (portal-view-target)) :visible))))))
 
+(ert-deftest portal-web-consult-buffer-narrows-to-web-pages ()
+  (portal-web-consult-test--environment
+    (let* ((origin (current-buffer))
+           (docs (progn (portal-open-url "https://docs.example.org/") (current-buffer)))
+           (news (progn (portal-open-url "https://news.example.org/") (current-buffer)))
+           (terminal (portal-completion-test--open "one/app")))
+      (switch-to-buffer origin)
+      ;; w narrows to web buffers only, beside their URLs.
+      (pcase-let ((`(,all ,web) (portal-completion-test--type
+                                 #'consult-buffer "<f11> w SPC <f11> docs RET"
+                                 #'portal-completion-test--shown)))
+        (should (memq terminal all))
+        (should (seq-set-equal-p web (list docs news))))
+      (should (eq (current-buffer) docs))
+      (should (equal (substring-no-properties (portal-web-consult--annotation news))
+                     "  https://news.example.org/"))
+      ;; The adapter adds its source once and removes it.
+      (portal-web-consult-mode)
+      (should (= (cl-count 'portal-web-consult-source consult-buffer-sources) 1))
+      (portal-web-consult-mode -1)
+      (should-not (memq 'portal-web-consult-source consult-buffer-sources)))))
+
 (ert-deftest portal-web-consult-address-bar-under-vertico ()
   (portal-web-consult-test--environment
     (portal-open-url "https://example.com/page")

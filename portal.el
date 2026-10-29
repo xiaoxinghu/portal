@@ -44,7 +44,7 @@ can still be enabled or disabled with `portal-terminal-consult-mode'."
   :group 'portal-terminal)
 
 (defcustom portal-web-consult-auto-enable t
-  "Whether loading Portal and Consult enables their web bookmark integration.
+  "Whether loading Portal and Consult enables their web page integration.
 Set this to nil before loading either package to opt out.  The integration
 can still be enabled or disabled with `portal-web-consult-mode'."
   :type 'boolean
