@@ -1228,7 +1228,10 @@ address bar's selection and completion run as they do for a person."
             (should (eq (completion-metadata-get metadata 'category) 'portal-web-url))
             (should (equal (funcall (completion-metadata-get metadata 'group-function)
                                     (car candidates) nil)
-                           "Bookmark"))))))))
+                           "Bookmark"))
+            (should (equal (funcall (completion-metadata-get metadata 'group-function)
+                                    (car candidates) t)
+                           (car candidates)))))))))
 
 (provide 'portal-web-tests)
 ;;; portal-web-tests.el ends here

@@ -334,9 +334,10 @@ searches the web with `portal-web-search-url'."
                         (cycle-sort-function . identity)
                         (group-function
                          . ,(lambda (candidate transform)
-                              (or transform
-                                  (car (seq-find (lambda (group) (assoc candidate (cdr group)))
-                                                 groups))))))
+                              (if transform
+                                  candidate
+                                (car (seq-find (lambda (group) (assoc candidate (cdr group)))
+                                               groups))))))
                     (complete-with-action action candidates string predicate))))
          (input (minibuffer-with-setup-hook #'portal-web--select-input
                   (completing-read prompt table nil nil current nil current))))
