@@ -148,9 +148,10 @@ closes it."
 (keymap-set portal-web-mode-map "s-B" #'portal-web-bookmark-open)
 (keymap-set portal-web-mode-map "s-[" #'portal-web-back)
 (keymap-set portal-web-mode-map "s-]" #'portal-web-forward)
-;; Command-P and the File menu's Print Buffer print the page, not its text.
-(keymap-set portal-web-mode-map "<remap> <print-buffer>" #'portal-web-print)
-(keymap-set portal-web-mode-map "<remap> <ns-print-buffer>" #'portal-web-print)
+;; Command-P and the File menu's Print items print the page, not its text.
+;; Remapping applies to keys and menus, not to M-x.
+(dolist (command '(ns-print-buffer print-buffer ps-print-buffer ps-print-buffer-with-faces))
+  (keymap-set portal-web-mode-map (format "<remap> <%s>" command) #'portal-web-print))
 (keymap-set portal-web-mode-map "C-s" #'portal-web-find)
 (keymap-set portal-web-mode-map "C-r" #'portal-web-find-backward)
 (keymap-set portal-web-mode-map "s-f" #'portal-web-find)
@@ -551,7 +552,7 @@ It moves to the previous level in `portal-web-zoom-steps'."
 The system's print panel shows on the page's frame, to choose a printer
 and settings, then print or cancel; its PDF menu saves a PDF too.  The
 page must be on screen, and hiding it cancels the panel.  In a web
-buffer, Command-P and `print-buffer' run this."
+buffer, Command-P and the File menu's Print Buffer run this."
   (interactive)
   (unless portal-web--target (user-error "No web view in this buffer"))
   (portal--web-print portal-web--target))

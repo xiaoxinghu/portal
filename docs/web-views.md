@@ -133,8 +133,10 @@ print panel slides down from the page's frame, to choose a printer, copies,
 pages, paper and scaling, preview the pages, then print or cancel. Its PDF
 menu saves or shares a PDF instead. The panel keeps the printer and
 settings chosen from one print to the next. The File menu's Print Buffer
-and `M-x print-buffer` do the same in a web buffer, instead of printing the
-buffer's text. The page must be on screen; hiding or killing its buffer
+items do the same in a web buffer, instead of printing the buffer's text.
+`M-x portal-web-print` does too; `M-x print-buffer` still prints the text,
+as Emacs applies key remapping only to keys and menus. The page must be on
+screen; hiding or killing its buffer
 cancels the panel. The first time the panel opens, macOS's printing system
 may ask for permission once.
 

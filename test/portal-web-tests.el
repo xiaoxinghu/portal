@@ -427,9 +427,12 @@
   (portal-web-test--environment
     (portal-open-url "https://example.com/")
     (let ((target (portal-view-target)))
-      ;; Command-P runs `ns-print-buffer', and the File menu `print-buffer'.
-      (dolist (command '(ns-print-buffer print-buffer))
-        (should (eq (command-remapping command) #'portal-web-print)))
+      ;; Command-P and the File menu's Print Buffer items print the page.
+      (require 'menu-bar)
+      (dolist (keys (list (kbd "s-p") [menu-bar file print print-buffer]
+                          [menu-bar file print ps-print-buffer-faces]
+                          [menu-bar file print ps-print-buffer]))
+        (should (eq (key-binding keys) #'portal-web-print)))
       (call-interactively #'portal-web-print)
       (should (equal (portal-fake-native-calls 'portal--web-print) `((,target))))
       (with-temp-buffer
