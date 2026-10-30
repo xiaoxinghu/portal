@@ -154,6 +154,14 @@ enum Core {
         borrow(target) { portal_web_found($0, token, found) }
     }
 
+    /// Printing TARGET's page to FILE ended: complete without an ERROR.
+    static func printed(_ target: String, file: String, error: String?) {
+        borrowing(error.map { [target, file, $0] } ?? [target, file]) { strings in
+            guard strings.count == 3 else { return portal_web_printed(strings[0], strings[1], nil) }
+            withUnsafePointer(to: strings[2]) { portal_web_printed(strings[0], strings[1], $0) }
+        }
+    }
+
     enum Permission { case deny, grant, ask }
 
     /// What the page in TARGET may do when a frame from FRAME, in a page

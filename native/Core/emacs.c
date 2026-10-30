@@ -545,6 +545,21 @@ LISP_FUNCTION(Fweb_find)
     return result;
 }
 
+LISP_FUNCTION(Fweb_print)
+{
+    portal_text target = {0}, file = {0}, error = {0};
+    emacs_value result = NULL;
+    bool to_file = nargs > 1 && env->is_not_nil(env, args[1]);
+    if (read_text(env, args[0], &target) && (!to_file || read_text(env, args[1], &file))) {
+        portal_string borrowed = borrow(file);
+        result = done(env, portal_web_views_print(borrow(target), to_file ? &borrowed : NULL, &error),
+                      &error);
+    }
+    free(target.data);
+    free(file.data);
+    return result;
+}
+
 LISP_FUNCTION(Fweb_zoom)
 {
     portal_text host = {0}, error = {0};
@@ -753,6 +768,9 @@ static const struct export {
      "Save web views' downloads in DIRECTORY, an absolute path, from now on."},
     {"portal--web-find", 4, 4, Fweb_find, NULL,
      "Find TEXT in web view TARGET's page, BACKWARD or forward, CASE-SENSITIVE or not."},
+    {"portal--web-print", 1, 2, Fweb_print, NULL,
+     "Print web view TARGET's page in the system's print panel, or to FILE, an absolute path, "
+     "as a PDF."},
     {"portal--web-zoom", 2, 2, Fweb_zoom, NULL,
      "Show every web view's pages from HOST, or \"\" for pages without one, at PERCENT."},
     {"portal--web-appearance", 1, 1, Fweb_appearance, NULL,

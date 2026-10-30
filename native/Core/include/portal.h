@@ -229,6 +229,16 @@ bool portal_web_find(portal_view *web, portal_string text, bool backward, bool c
    itself out again for its smaller or larger viewport, as a browser's zoom
    does.  A new view starts at 1. */
 bool portal_web_set_zoom(portal_view *web, double factor, portal_text *error);
+/* Print WEB's page.  With a null FILE, show the system's print panel for
+   it, as a browser does, on the frame WEB is attached to, which the core
+   has checked: the user chooses a printer and settings, and prints or
+   cancels, and the platform reports nothing.  Detaching or destroying WEB
+   cancels a panel still open.  Otherwise print the page, as printing it on
+   paper of the user's default size would lay it out, to FILE, an absolute
+   path, as a PDF of those pages, replacing any file there, showing no
+   panel, whether or not WEB is attached.  That printing finishes after this
+   call returns: report it with portal_web_printed and FILE. */
+bool portal_web_print(portal_view *web, const portal_string *file, portal_text *error);
 
 /* Terminal views.  The core implements the terminal Lisp functions with
    these primitives, each on one terminal, and keeps Portal's rules: it checks
@@ -583,6 +593,10 @@ void portal_web_failed(portal_string target, uint64_t token, portal_string messa
 /* The find that portal_web_find started in TARGET with TOKEN finished:
    FOUND says whether the page had a match. */
 void portal_web_found(portal_string target, uint64_t token, bool found);
+/* The printing that portal_web_print started in TARGET to FILE ended: FILE
+   is complete, for a null ERROR, or printing failed and ERROR says why.
+   The core tells Emacs over TARGET's messages, unless the view is gone. */
+void portal_web_printed(portal_string target, portal_string file, const portal_string *error);
 /* Capture devices a page may ask to use, as flags. */
 enum {
     PORTAL_MEDIA_CAMERA = 1,

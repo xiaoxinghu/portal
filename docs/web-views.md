@@ -126,6 +126,33 @@ Emacs keeps them between sessions.
 The Command keys work while the page has the keyboard too, unless the page
 uses them itself.
 
+## Print
+
+Command-P (`portal-web-print`) prints the page as Safari does: the system's
+print panel slides down from the page's frame, to choose a printer, copies,
+pages, paper and scaling, preview the pages, then print or cancel. Its PDF
+menu saves or shares a PDF instead. The panel keeps the printer and
+settings chosen from one print to the next. The File menu's Print Buffer
+items do the same in a web buffer, instead of printing the buffer's text.
+`M-x portal-web-print` does too; `M-x print-buffer` still prints the text,
+as Emacs applies key remapping only to keys and menus. The page must be on
+screen; hiding or killing its buffer
+cancels the panel. The first time the panel opens, macOS's printing system
+may ask for permission once.
+
+`M-x portal-web-print-to-pdf` saves the page as a PDF without a panel, laid
+out in pages on paper of the default size, as printing it would be. It
+reads the file, named after the page's title; a directory gets that name,
+and an existing file is replaced. The page may be hidden. The echo area
+says once the file is written, or why it could not be. From Lisp:
+
+```elisp
+(portal-web-print-to-pdf "~/Documents/page.pdf")
+```
+
+Printing uses the page's print styles. Markdown previews print light, even
+in dark appearance.
+
 ## Markdown previews
 
 Run `M-x portal-render-markdown` in a Markdown file buffer to preview it;

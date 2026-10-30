@@ -389,6 +389,56 @@
                                            "Portal has no download directory"))))))
         (setopt portal-web-download-directory original)))))
 
+(ert-deftest portal-web-prints-pages-to-pdf-files-and-says-how-it-went ()
+  (portal-web-test--environment
+    (let (said)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format &rest arguments)
+                   (push (apply #'format-message format arguments) said))))
+        (portal-open-url "https://example.com/")
+        (let ((target (portal-view-target))
+              (default-directory "/tmp/"))
+          ;; Relative files are the buffer's; a directory gets the page's title.
+          (portal-web-print-to-pdf "page.pdf")
+          (portal-fake-native-title target "A/B: notes")
+          (portal-web-print-to-pdf "~/")
+          (portal-fake-native-title target nil)
+          (portal-web-print-to-pdf "/tmp/")
+          (should (equal (portal-fake-native-calls 'portal--web-print)
+                         `((,target "/tmp/page.pdf")
+                           (,target ,(expand-file-name "~/A-B- notes.pdf"))
+                           (,target "/tmp/example.com.pdf"))))
+          (setq said nil)
+          (portal-fake-native-queue
+           target
+           (format "{\"type\":\"print\",\"state\":\"finished\",\"file\":%S}"
+                   (expand-file-name "~/page.pdf"))
+           "{\"type\":\"print\",\"state\":\"failed\",\"file\":\"/tmp/page.pdf\",\"message\":\"No room\"}")
+          (with-current-buffer "*scratch*"
+            (portal-fake-native-send (format "bridge %s\n" target)))
+          (should (equal (reverse said)
+                         '("Printed the page to ~/page.pdf"
+                           "Could not print the page to /tmp/page.pdf: No room"))))
+        (with-temp-buffer
+          (should (equal (should-error (portal-web-print-to-pdf "/tmp/page.pdf"))
+                         '(user-error "No web view in this buffer"))))))))
+
+(ert-deftest portal-web-command-p-prints-the-page-in-the-print-panel ()
+  (portal-web-test--environment
+    (portal-open-url "https://example.com/")
+    (let ((target (portal-view-target)))
+      ;; Command-P and the File menu's Print Buffer items print the page.
+      (require 'menu-bar)
+      (dolist (keys (list (kbd "s-p") [menu-bar file print print-buffer]
+                          [menu-bar file print ps-print-buffer-faces]
+                          [menu-bar file print ps-print-buffer]))
+        (should (eq (key-binding keys) #'portal-web-print)))
+      (call-interactively #'portal-web-print)
+      (should (equal (portal-fake-native-calls 'portal--web-print) `((,target))))
+      (with-temp-buffer
+        (should (equal (should-error (portal-web-print))
+                       '(user-error "No web view in this buffer")))))))
+
 (defun portal-web-test--wait (predicate)
   "Allow asynchronous process work until PREDICATE succeeds."
   (let ((deadline (+ (float-time) 5)))

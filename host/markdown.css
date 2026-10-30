@@ -92,3 +92,11 @@ hr {
 .task-list-item-checkbox {
 	margin-right: 0.5em;
 }
+/* Print light whatever the appearance: printing drops backgrounds, which
+   would leave dark text colours' light text on white paper.  WebKit prints
+   in light appearance already; this keeps previews light if it does not. */
+@media print {
+	:root {
+		color-scheme: light;
+	}
+}

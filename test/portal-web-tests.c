@@ -903,6 +903,64 @@ static void test_finding(void)
     free(closed);
 }
 
+/* Emacs prints a page to a file it names, and hears how printing ended
+   over the view's messages, as for downloads. */
+static void test_printing(void)
+{
+    portal_text error = {0};
+    char *web = open_web(false);
+    struct portal_fake_calls before = portal_fake_calls();
+    const char *const relative[] = {"", "page.pdf", "~/page.pdf"};
+    for (size_t i = 0; i < sizeof relative / sizeof *relative; i++) {
+        char expected[128];
+        snprintf(expected, sizeof expected, "A page prints to an absolute path, not %s", relative[i]);
+        portal_string file = text(relative[i]);
+        CHECK(!portal_web_views_print(text(web), &file, &error));
+        CHECK(says(&error, expected));
+    }
+    static const char nul[] = "A page prints to an absolute path, not /tmp/a\0b";
+    portal_string nul_file = {"/tmp/a\0b", 8}, file = text("/tmp/page.pdf");
+    CHECK(!portal_web_views_print(text(web), &nul_file, &error));
+    CHECK(said(&error, nul, sizeof nul - 1));
+    CHECK(!portal_web_views_print(text("web:0"), &file, &error));
+    CHECK(says(&error, "No Portal view web:0"));
+    /* The print panel needs the page on screen. */
+    CHECK(!portal_web_views_print(text(web), NULL, &error));
+    CHECK(says(&error, "Show the page to print it"));
+    CHECK(same_calls(portal_fake_calls(), before));
+    CHECK(portal_views_place(text(web), (portal_edges) {0, 0, 100, 100}, text("frame"), &error));
+    CHECK(portal_web_views_print(text(web), NULL, &error));
+    CHECK(shows(web, "\"printed\":\"panel\"", NULL));
+    CHECK(portal_views_hide(text(web), &error));
+    CHECK(!portal_web_views_print(text(web), NULL, &error));
+    CHECK(says(&error, "Show the page to print it"));
+
+    /* Any page prints to a file, on screen or not. */
+    CHECK(portal_web_views_print(text(web), &file, &error));
+    CHECK(portal_fake_calls().printed == before.printed + 2);
+    CHECK(shows(web, "\"printed\":\"/tmp/page.pdf\"", NULL));
+    CHECK(receives(web, "[]"));
+    portal_web_printed(text(web), text("/tmp/page.pdf"), NULL);
+    portal_string why = text("No room");
+    portal_web_printed(text(web), text("/tmp/other.pdf"), &why);
+    CHECK(sent(web, "bridge %s\n"));
+    CHECK(receives(web, "[{\"type\":\"print\",\"state\":\"finished\",\"file\":\"/tmp/page.pdf\"},"
+                        "{\"type\":\"print\",\"state\":\"failed\",\"file\":\"/tmp/other.pdf\","
+                        "\"message\":\"No room\"}]"));
+
+    /* The platform's refusal is Emacs's error. */
+    char *broken = open_view("web", &error, "broken", "WebKit is gone", NULL);
+    CHECK(!portal_web_views_print(text(broken), &file, &error));
+    CHECK(says(&error, "WebKit is gone"));
+    close_view(broken);
+
+    char *closed = strdup(web);
+    close_view(web);
+    portal_web_printed(text(closed), text("/tmp/page.pdf"), NULL);
+    CHECK(sent(closed, ""));
+    free(closed);
+}
+
 /* Each host's pages show at its level, in every view, whatever loads them. */
 static void test_zoom_per_host(void)
 {
@@ -1076,6 +1134,7 @@ int main(void)
     test_windows_that_do_not_open();
     test_downloads();
     test_finding();
+    test_printing();
     test_zoom_per_host();
     test_camera_and_microphone();
     CHECK(!portal_fake_calls().misused);

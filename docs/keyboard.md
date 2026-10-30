@@ -153,8 +153,9 @@ one in a new buffer ([bookmarks](web-views.md#bookmarks)).
 
 `C-s` and `s-f` find text in the page, and `s-g` and `s-G` find it again;
 `+`, `-` and `0`, or `s-=`, `s--` and `s-0`, zoom its site
-([find and zoom](web-views.md#find-and-zoom)). The Command chords reach Emacs
-from inside the page too, as Command-R does.
+([find and zoom](web-views.md#find-and-zoom)), and `s-p` prints it in the
+system's print panel ([print](web-views.md#print)). The Command chords reach
+Emacs from inside the page too, as Command-R does.
 
 A terminal's native bindings can claim a chord its program would otherwise
 get, such as a Control chord (see [the input bridge](terminal-input-bridge.md)).

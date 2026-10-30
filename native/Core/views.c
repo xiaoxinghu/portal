@@ -57,6 +57,12 @@ portal_view *portal_views_find(portal_string target, int kind, portal_text *erro
     return view ? view->native : NULL;
 }
 
+bool portal_views_attached(portal_string target)
+{
+    struct view *view = find(target, PORTAL_ANY_KIND, NULL);
+    return view && view->attached;
+}
+
 struct portal_input *portal_views_input(portal_string target)
 {
     struct view *view = find(target, PORTAL_ANY_KIND, NULL);
