@@ -8,15 +8,20 @@
 	--code: light-dark(#f3f5f8, #202631);
 	background: light-dark(#ffffff, #15191f);
 	color: light-dark(#222831, #e2e7ef);
+	/* Prose stays near the readable line length; tables and code blocks may
+	   widen to the window, up to where their rows get hard to follow. */
+	--prose: 50rem;
+	--wide: 110rem;
 }
 body {
 	margin: 0;
 }
 main {
-	max-width: 50rem;
+	max-width: var(--wide);
 	margin: auto;
 	padding: 2rem clamp(1rem, 4vw, 3rem) 4rem;
-	overflow-wrap: anywhere;
+	/* Not anywhere: WebKit would let table columns shrink to one character. */
+	overflow-wrap: break-word;
 }
 h1,
 h2,
@@ -58,7 +63,6 @@ pre code {
 	font-size: 1em;
 }
 blockquote {
-	margin-left: 0;
 	padding-left: 1rem;
 	border-left: 0.25rem solid var(--border);
 	color: var(--muted);
@@ -91,6 +95,18 @@ hr {
 }
 .task-list-item-checkbox {
 	margin-right: 0.5em;
+}
+main > * {
+	box-sizing: border-box;
+	max-width: var(--prose);
+	margin-inline: auto;
+}
+/* A table or code block that fits lines up with the prose; a wider one grows
+   evenly to both sides, and scrolls once it reaches the window. */
+main > :is(table, pre) {
+	width: max-content;
+	min-width: min(100%, var(--prose));
+	max-width: 100%;
 }
 /* Print light whatever the appearance: printing drops backgrounds, which
    would leave dark text colours' light text on white paper.  WebKit prints

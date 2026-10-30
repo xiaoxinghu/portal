@@ -88,6 +88,8 @@ test("saved files render as sanitised HTML and are reread on each request", asyn
 		"&lt;img",
 		"color-scheme: light dark",
 		"@media print",
+		// anywhere would let WebKit squeeze table columns to one character.
+		"overflow-wrap: break-word",
 	]) {
 		expect(page).toContain(text);
 	}
