@@ -305,5 +305,35 @@ The folder is `portal-markdown-gui--directory'."
       (setq portal-web-appearance original)
       (modify-frame-parameters nil `((ns-appearance . ,frame-appearance))))))
 
+;; Printing lays the page out on paper.  Whether it prints light is WebKit's
+;; and the stylesheet's, which host/markdown.test.ts checks has a print rule.
+(ert-deftest portal-markdown-gui-prints-to-pdf-pages ()
+  :tags '(:gui)
+  (portal-markdown-gui--documents
+    (let ((shown (portal-markdown-gui--file "shown.pdf"))
+          (hidden (portal-markdown-gui--file "hidden.pdf"))
+          (start (with-current-buffer (messages-buffer) (point-max)))
+          (buffer (current-buffer)))
+      (portal-web-print-to-pdf shown)
+      (portal-test--wait-for-message
+       (concat "^Printed the page to " (regexp-quote (abbreviate-file-name shown)) "$") start)
+      ;; A hidden page prints too.
+      (quit-window)
+      (with-current-buffer buffer (portal-web-print-to-pdf hidden))
+      (portal-test--wait-for-message
+       (concat "^Printed the page to " (regexp-quote (abbreviate-file-name hidden)) "$") start)
+      (dolist (file (list shown hidden))
+        (let ((pdf (with-temp-buffer
+                     (set-buffer-multibyte nil)
+                     (insert-file-contents-literally file)
+                     (buffer-string))))
+          (should (string-prefix-p "%PDF-" pdf))
+          ;; 150 paragraphs fill more than one page.
+          (should (> (let ((count 0) (from 0))
+                       (while (string-match "/Type */Page\\_>" pdf from)
+                         (setq count (1+ count) from (match-end 0)))
+                       count)
+                     1)))))))
+
 (provide 'portal-markdown-gui-tests)
 ;;; portal-markdown-gui-tests.el ends here

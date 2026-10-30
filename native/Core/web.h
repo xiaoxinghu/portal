@@ -48,6 +48,14 @@ bool portal_web_views_find(portal_string target, portal_string text, bool backwa
    own, and it and the views after it keep their size until their next
    page; the level stays set either way. */
 bool portal_web_views_zoom(portal_string host, int64_t percent, portal_text *error);
+/* Print web view TARGET's page, as a browser does: with a null FILE, in
+   the system's print panel on the frame the view is attached to, which it
+   must be; the user chooses a printer and settings, and prints or cancels.
+   Otherwise print it to FILE, an absolute path, as a PDF, with no panel.
+   When printing to a file ends, Emacs gets a "print" message on TARGET's
+   bridge, as for downloads: its "state", "finished" or "failed", its
+   "file", and for a failure the "message" saying why. */
+bool portal_web_views_print(portal_string target, const portal_string *file, portal_text *error);
 /* Pass the JSON object JSON to hosted web view TARGET's app over its bridge. */
 bool portal_web_views_send(portal_string target, portal_string json, portal_text *error);
 /* Return, as a JSON array, the messages waiting for Emacs on web view
@@ -80,6 +88,9 @@ bool portal_views_each_web(bool (*visit)(portal_view *native, struct portal_web_
    lifecycle call. */
 portal_view *portal_views_find_web(portal_string target, struct portal_web_state **state,
                                    portal_text *error);
+/* For web.c, from views.c: whether TARGET names an open view attached to a
+   frame. */
+bool portal_views_attached(portal_string target);
 /* For web.c, from views.c: open a web view for the window the page in
    OPENER asked for with REQUEST, created with portal_web_create_window.
    Set *TARGET to its target, valid while it is open, and *STATE to its

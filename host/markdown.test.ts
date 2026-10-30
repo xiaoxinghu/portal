@@ -87,6 +87,7 @@ test("saved files render as sanitised HTML and are reread on each request", asyn
 		"&lt;script&gt;",
 		"&lt;img",
 		"color-scheme: light dark",
+		"@media print",
 	]) {
 		expect(page).toContain(text);
 	}

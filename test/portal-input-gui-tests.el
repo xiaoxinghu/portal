@@ -130,6 +130,45 @@ from that thread."
       ;; Once the text is found, the page has the keyboard back.
       (should (portal-input--action "focused" target)))))
 
+(ert-deftest portal-input-gui-web-command-p-shows-the-print-panel ()
+  :tags '(:gui)
+  (portal-test--with-web
+    (select-frame-set-input-focus (selected-frame))
+    (should (portal-view--with-frame-title (selected-frame) #'portal-test-native-target-frame))
+    (unwind-protect
+        (progn
+          (portal-open-url "data:text/html,<title>Print ready</title><p>apple pie</p><input autofocus spellcheck=false>")
+          (portal-test--wait-for-page "Print ready")
+          (let ((target (portal-view-target))
+                (buffer (current-buffer)))
+            ;; Command-P reaches Emacs from the page, as in a browser.
+            (portal-integration-test--focus-web (selected-window) target)
+            (portal-test-native-key 35 portal-input-gui--command "p")
+            (let ((event (aref (with-timeout (5 (ert-fail "Command-P did not reach Emacs"))
+                                 (read-key-sequence-vector nil))
+                               0)))
+              (should (eq (car-safe event) 'portal-input-key))
+              (portal-input--dispatch event))
+            (let ((sheet nil))
+              (portal-terminal-test--wait (lambda () (setq sheet (portal-test--sheet))))
+              (should (member "Cancel" (plist-get sheet :buttons))))
+            (portal-test--sheet "Cancel")
+            (portal-test--no-sheet)
+            ;; Hiding the page takes its panel down.
+            (portal-web-print)
+            (portal-terminal-test--wait #'portal-test--sheet)
+            (quit-window)
+            (redisplay t)
+            (portal-test--no-sheet)
+            ;; So does closing it.
+            (switch-to-buffer buffer)
+            (redisplay t)
+            (portal-web-print)
+            (portal-terminal-test--wait #'portal-test--sheet)
+            (kill-buffer buffer)
+            (portal-test--no-sheet)))
+      (portal-test-native-target-frame nil))))
+
 (ert-deftest portal-input-gui-web-page-focusing-a-field-leaves-emacs-the-keyboard ()
   :tags '(:gui)
   (portal-test--with-web

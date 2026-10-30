@@ -318,6 +318,13 @@ public func portalWebSetZoom(_ web: OpaquePointer, _ factor: Double,
     return perform(error) { try session(web, as: WebSession.self).zoom(factor) } != nil
 }
 
+@_cdecl("portal_web_print")
+public func portalWebPrint(_ web: OpaquePointer, _ file: UnsafePointer<portal_string>?,
+                           _ error: UnsafeMutablePointer<portal_text>) -> Bool {
+    let web = native(web), file = file.map { String(copying: $0.pointee) }
+    return perform(error) { try session(web, as: WebSession.self).printPage(to: file) } != nil
+}
+
 @_cdecl("portal_terminal_list_themes")
 public func portalTerminalListThemes(_ names: UnsafeMutablePointer<UnsafeMutablePointer<portal_text>?>,
                                      _ count: UnsafeMutablePointer<Int>,

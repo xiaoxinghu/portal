@@ -61,6 +61,11 @@
    done.  Only the latest find in a view reports to Emacs, so a result that
    arrives after the user has typed on never answers the newer find.
 
+   Printing.  A page on screen prints as in a browser, in the system's
+   print panel on its frame.  Any page prints to a PDF file Lisp names, with
+   no panel: the platform reports when it is done, and the core tells Emacs
+   over the view's messages, as it does for downloads.
+
    Generations.  Each commit starts a new generation.  A message the core
    posts to a page carries the generation it went to as its token, so a
    failed delivery that the platform reports after the page has gone is
@@ -784,6 +789,19 @@ bool portal_web_views_find(portal_string target, portal_string text, bool backwa
     return true;
 }
 
+bool portal_web_views_print(portal_string target, const portal_string *file, portal_text *error)
+{
+    struct portal_web_state *web;
+    portal_view *native = portal_views_find_web(target, &web, error);
+    if (!native)
+        return false;
+    if (!file && !portal_views_attached(target))
+        return fail_with(error, "Show the page to print it");
+    if (file && (!file->length || file->data[0] != '/' || memchr(file->data, 0, file->length)))
+        return fail(error, "A page prints to an absolute path, not ", *file);
+    return portal_web_print(native, file, error);
+}
+
 bool portal_web_views_load(portal_string target, portal_string url, portal_text *error)
 {
     struct portal_web_state *web;
@@ -966,6 +984,27 @@ void portal_web_found(portal_string target, uint64_t token, bool found)
         portal_string matched = literal(found ? "1" : "0");
         portal_channel_send(literal("found"), target, &matched, 1);
     }
+}
+
+void portal_web_printed(portal_string target, portal_string file, const portal_string *error)
+{
+    struct portal_web_state *web;
+    if (!find(target, &web))
+        return;
+    static const char head[] = "{\"type\":\"print\",\"state\":";
+    struct json json = {0};
+    put(&json, head, sizeof head - 1);
+    put_string(&json, literal(error ? "failed" : "finished"));
+    put(&json, ",\"file\":", 8);
+    put_string(&json, file);
+    if (error) {
+        put(&json, ",\"message\":", 11);
+        put_string(&json, *error);
+    }
+    put(&json, "}", 1);
+    if (!json.failed)
+        queue(web, target, false, json.data, json.length);
+    free(json.data);
 }
 
 portal_permission portal_web_media(portal_string target, portal_string origin,

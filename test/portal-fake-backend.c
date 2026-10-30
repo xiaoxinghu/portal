@@ -628,6 +628,24 @@ bool portal_web_find(portal_view *web, portal_string text, bool backward, bool c
     return true;
 }
 
+/* A page records the file it last printed to in "printed", or "panel" for
+   the print panel; tests report the result as a platform does.  A web view
+   created with :broken refuses, as for appearances. */
+bool portal_web_print(portal_view *web, const portal_string *file, portal_text *error)
+{
+    if (!usable(web, PORTAL_WEB, error) || refused(error))
+        return false;
+    const struct property *broken = get(web, "broken");
+    if (broken && broken->kind == STRING)
+        return fail(error, "%.*s", (int) broken->string.length, broken->string.data);
+    calls.printed++;
+    if (file)
+        set_string(web, "printed", file->data, file->length);
+    else
+        set_string(web, "printed", "panel", 5);
+    return true;
+}
+
 /* A web view describes its "zoom" in percent once the core has set one.  A
    web view created with :broken refuses, as for appearances. */
 bool portal_web_set_zoom(portal_view *web, double factor, portal_text *error)

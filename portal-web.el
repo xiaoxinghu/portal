@@ -10,7 +10,8 @@
 ;; links to other local files to Emacs, which visits them in another pane.
 ;; Its view reports the pages it shows, and those links, over the bridge.
 ;; Every web view saves downloads in `portal-web-download-directory' and
-;; reports how they go over the same queue, which Emacs reports in turn.
+;; reports how they go over the same queue, which Emacs reports in turn, as
+;; it does for pages printed to PDF files.
 
 (require 'browse-url)
 (require 'delsel)
@@ -32,6 +33,7 @@
 (declare-function portal--web-download-directory "portal-web" (directory))
 (declare-function portal--web-find "portal-web" (target text backward case-sensitive))
 (declare-function portal--web-zoom "portal-web" (host percent))
+(declare-function portal--web-print "portal-web" (target &optional file))
 
 ;; Bookmarks of web pages: `portal-web-bookmark.el' loads when first used,
 ;; however this file was loaded, as by an autoloaded command.
@@ -125,7 +127,8 @@ page here, and B or Command-Shift-B opens one in a new buffer;
 `bookmark-jump' and the other bookmark commands open them too.  C-s or
 Command-F finds text in the page, and Command-G and Command-Shift-G find
 it again; + or Command-= zooms in, - or Command-- zooms out and 0 or
-Command-0 resets, for every page from the same site.  The mode line's light is
+Command-0 resets, for every page from the same site.  Command-P prints the
+page in the system's print panel.  The mode line's light is
 lit while the page has the keyboard and dimmed while Emacs has it.
 q hides the view while the page keeps running, and killing the buffer
 closes it."
@@ -145,6 +148,9 @@ closes it."
 (keymap-set portal-web-mode-map "s-B" #'portal-web-bookmark-open)
 (keymap-set portal-web-mode-map "s-[" #'portal-web-back)
 (keymap-set portal-web-mode-map "s-]" #'portal-web-forward)
+;; Command-P and the File menu's Print Buffer print the page, not its text.
+(keymap-set portal-web-mode-map "<remap> <print-buffer>" #'portal-web-print)
+(keymap-set portal-web-mode-map "<remap> <ns-print-buffer>" #'portal-web-print)
 (keymap-set portal-web-mode-map "C-s" #'portal-web-find)
 (keymap-set portal-web-mode-map "C-r" #'portal-web-find-backward)
 (keymap-set portal-web-mode-map "s-f" #'portal-web-find)
@@ -528,6 +534,50 @@ It moves to the previous level in `portal-web-zoom-steps'."
   (interactive)
   (portal-web--zoom (lambda (_current) 100)))
 
+;; Printing.
+
+(defun portal-web--pdf-name ()
+  "Name a PDF of this buffer's page after its title, or its buffer."
+  (let ((title (plist-get (portal--inspect portal-web--target) :title)))
+    (concat (string-trim (replace-regexp-in-string
+                          "[/:\0]+" "-" (if (and title (not (string-blank-p title)))
+                                             title
+                                           (string-remove-suffix
+                                            "*" (string-remove-prefix "*portal: " (buffer-name))))))
+            ".pdf")))
+
+(defun portal-web-print ()
+  "Print this buffer's page, as a browser does.
+The system's print panel shows on the page's frame, to choose a printer
+and settings, then print or cancel; its PDF menu saves a PDF too.  The
+page must be on screen, and hiding it cancels the panel.  In a web
+buffer, Command-P and `print-buffer' run this."
+  (interactive)
+  (unless portal-web--target (user-error "No web view in this buffer"))
+  (portal--web-print portal-web--target))
+
+(defun portal-web-print-to-pdf (file)
+  "Print this buffer's page to FILE, a PDF, without a print panel.
+The page is laid out on paper of the default size, in pages, as printing
+it would be, and FILE is replaced.  The echo area says once FILE is
+written, or why it could not be.  Interactively, read FILE, named after
+the page's title; a directory gets that name."
+  (interactive
+   (progn (unless portal-web--target (user-error "No web view in this buffer"))
+          (list (read-file-name "Print page to PDF: " nil nil nil (portal-web--pdf-name)))))
+  (unless portal-web--target (user-error "No web view in this buffer"))
+  (let ((file (expand-file-name file)))
+    (when (file-directory-p file)
+      (setq file (expand-file-name (portal-web--pdf-name) file)))
+    (portal--web-print portal-web--target file)))
+
+(defun portal-web--printed (message)
+  "Say how printing to the file that bridge MESSAGE names ended."
+  (let ((file (abbreviate-file-name (plist-get message :file))))
+    (pcase (plist-get message :state)
+      ("finished" (message "Printed the page to %s" file))
+      ("failed" (message "Could not print the page to %s: %s" file (plist-get message :message))))))
+
 (defun portal-web--find (variable value)
   "Return the web buffer whose buffer-local VARIABLE is VALUE, or nil."
   (seq-find (lambda (buffer) (equal (buffer-local-value variable buffer) value))
@@ -873,13 +923,15 @@ The app receives it through `window.portalBridge.receive'."
   "Pass each message waiting on TARGET's bridge to `portal-web-bridge-function'.
 The view's own messages are handled here instead: \"page\" reports each
 page it commits, \"follow\" each click on a link to a local file, and
-\"download\" how each download goes, in any web view.
+\"download\" how each download goes and \"print\" how printing to a file
+ended, in any web view.
 Receiving the messages lets the next ones send a new record."
   (mapc (lambda (message)
           (pcase (plist-get message :type)
             ("page" (portal-web--page (plist-get message :url)))
             ("follow" (portal-web--queue 'portal-web-follow target (plist-get message :url)))
             ("download" (portal-web--download message))
+            ("print" (portal-web--printed message))
             (_ (when portal-web-bridge-function (funcall portal-web-bridge-function message)))))
         (json-parse-string (portal--web-receive target) :object-type 'plist)))
 

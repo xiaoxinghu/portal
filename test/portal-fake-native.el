@@ -132,6 +132,14 @@ The selected frame is kept."
   (when (equal text "") (error "Nothing to find"))
   t)
 
+(defun portal--web-print (target &optional file)
+  (apply #'portal-fake-native--call 'portal--web-print target (and file (list file)))
+  (unless (string-prefix-p "web:" target) (error "No Portal view %s" target))
+  (portal-fake-native--view target)
+  (when (and file (not (file-name-absolute-p file)))
+    (error "A page prints to an absolute path, not %s" file))
+  t)
+
 (defun portal--web-zoom (host percent)
   (portal-fake-native--call 'portal--web-zoom host percent)
   (unless (and (stringp host) (integerp percent)) (signal 'wrong-type-argument (list host percent)))

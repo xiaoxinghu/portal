@@ -19,6 +19,7 @@ struct portal_fake_calls {
     size_t listed, themed, entered; /* Theme lists, themes applied, and Enters tried. */
     size_t appeared; /* Web appearances set. */
     size_t found, zoomed; /* Finds started in pages, and web zooms set. */
+    size_t printed;       /* Pages printed, to files or in the print panel. */
 };
 struct portal_fake_calls portal_fake_calls(void);
 

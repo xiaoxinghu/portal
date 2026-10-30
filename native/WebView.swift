@@ -378,12 +378,16 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
     private weak var shownIn: NSWindow?
     /// Whether the view has closed, so no dialog can show.
     private var closed = false
+    /// The print panel the page last showed, which hiding or closing it
+    /// cancels if it still shows.
+    fileprivate weak var printing: PrintJob?
 
     /// The page is shown in WINDOW, or, with nil, about to be parked: its
     /// dialog follows it, and waits while it is hidden.
     func shown(in window: NSWindow?) {
         shownIn = window
         if let window { dialogs.first?.show(on: window) } else { dialogs.first?.hide() }
+        if window == nil { printing?.cancel() }
     }
 
     /// Show NEXT, the page's dialog, as a sheet on the page's frame, now or
@@ -410,6 +414,7 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
     /// WebKit requires an answer to every one.
     func dismissDialogs() {
         closed = true
+        printing?.cancel()
         for dialog in dialogs { dialog.answer(false) }
     }
 
@@ -836,6 +841,87 @@ private final class IdentityDialog: NSObject, PageQuestion {
     }
 }
 
+/// Printing a page: in the system's print panel, as a sheet on the page's
+/// frame, as a browser prints, or to a PDF file with no panel. AppKit lays
+/// the page out on paper and prints it. A job lives until AppKit says it
+/// ran.
+@MainActor
+private final class PrintJob: NSObject {
+    private static var running: Set<PrintJob> = []
+    private let target: String
+    /// The PDF printed to, or nil for the panel's choice.
+    private let file: URL?
+    /// The panel's sheet, and the frame it is on, while it shows.
+    private weak var panel: NSWindow?
+    private weak var window: NSWindow?
+
+    private init(target: String, file: URL?) {
+        self.target = target
+        self.file = file
+    }
+
+    /// Show the print panel for PAGE on its frame's window, keeping the
+    /// user's printer and settings from one print to the next.
+    static func panel(for page: WebPage) throws -> PrintJob {
+        guard let window = page.window else { throw NativeError.message("The page is in no window") }
+        guard window.attachedSheet == nil else { throw NativeError.message("Close the frame's sheet to print") }
+        let operation = page.printOperation(with: NSPrintInfo.shared)
+        operation.printPanel.options.formUnion([.showsCopies, .showsPageRange, .showsPaperSize,
+                                                .showsOrientation, .showsScaling, .showsPreview])
+        let job = PrintJob(target: page.target, file: nil)
+        job.run(operation, page: page, window: window)
+        job.window = window
+        job.panel = window.attachedSheet
+        return job
+    }
+
+    /// Print PAGE to FILE as a PDF, without panels.
+    static func run(_ page: WebPage, to file: URL) throws {
+        guard let window = page.window else { throw NativeError.message("The page is in no window") }
+        let info = NSPrintInfo.shared.copy() as! NSPrintInfo
+        info.jobDisposition = .save
+        info.dictionary()[NSPrintInfo.AttributeKey.jobSavingURL] = file
+        let operation = page.printOperation(with: info)
+        operation.showsPrintPanel = false
+        operation.showsProgressPanel = false
+        PrintJob(target: page.target, file: file).run(operation, page: page, window: window)
+    }
+
+    private func run(_ operation: NSPrintOperation, page: WebPage, window: NSWindow) {
+        if let title = page.title, !title.isEmpty { operation.jobTitle = title }
+        // WebKit's printing view keeps a zero frame otherwise, and AppKit
+        // stops on it (developer.apple.com/forums/thread/811901).
+        operation.view?.frame = page.bounds.isEmpty ? operation.printInfo.imageablePageBounds : page.bounds
+        PrintJob.running.insert(self)
+        // Run without a window, WebKit is reported to print blank pages or
+        // none. Without a panel, AppKit runs it on a thread of its own.
+        operation.runModal(for: window, delegate: self,
+                           didRun: #selector(printOperationDidRun(_:success:contextInfo:)), contextInfo: nil)
+    }
+
+    /// Take the panel down, if it still shows, as if cancelled.
+    func cancel() {
+        guard let panel, let window, window.attachedSheet === panel else { return }
+        window.endSheet(panel, returnCode: .cancel)
+    }
+
+    /// AppKit says so on the thread it printed on, its own without a panel.
+    @objc nonisolated private func printOperationDidRun(_ operation: NSPrintOperation, success: Bool,
+                                                        contextInfo: UnsafeMutableRawPointer?) {
+        DispatchQueue.main.async { MainActor.assumeIsolated { self.ran(success: success) } }
+    }
+
+    private func ran(success: Bool) {
+        PrintJob.running.remove(self)
+        panel = nil
+        if let window { PageDialog.returnKeyboard(to: window) }
+        // The panel shows the user how printing went.
+        guard let file else { return }
+        let saved = success && FileManager.default.fileExists(atPath: file.path)
+        Core.printed(target, file: file.path, error: saved ? nil : "Printing the page failed")
+    }
+}
+
 /// A page's request for a new window: WebKit's configuration for it, and the
 /// page made from it once the core opens the window (`portal_web_create_window`).
 @MainActor
@@ -1028,6 +1114,12 @@ final class WebSession: PortalView {
     }
 
     func zoom(_ factor: Double) { page.pageZoom = factor }
+
+    /// Print the page in the print panel, or to FILE as a PDF.
+    func printPage(to file: String?) throws {
+        guard let file else { return page.printing = try PrintJob.panel(for: page) }
+        try PrintJob.run(page, to: URL(fileURLWithPath: file))
+    }
 
     func describe() -> [(String, ViewValue)] {
         var state: [(String, ViewValue)] = [("loading", .flag(page.isLoading)),
