@@ -54,7 +54,9 @@ export LIBRARY_PATH="$(/usr/libexec/PlistBuddy -c Print:LSEnvironment:LIBRARY_PA
   but not its field.
 - A page is hidden to WebKit while other apps' windows cover its frame, even
   with the keyboard in it, and WebKit refuses it fullscreen then. Wait for
-  `document.visibilityState` to be `visible` before relying on it.
+  `document.visibilityState` to be `visible` before relying on it. Where
+  WebKit refuses fullscreen outright, as on GitHub's macOS runners, the
+  fullscreen tests skip; run them in the VM.
 - Isolate fixtures. Clean up buffers, processes, files and registrations, even
   after failure. Leave user configuration and existing sessions untouched.
 - CTest runs suites in parallel. Keep each one to its own temporary files and
