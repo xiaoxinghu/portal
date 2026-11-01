@@ -333,6 +333,7 @@ so that no fullscreen window outlives the test."
              window.keys = [];
              document.addEventListener('keydown', (e) => keys.push(e.key), true);
              return true;")
+           (portal-input-gui--page-visible)
            ,@body)
        (setq unread-command-events nil)
        (when-let* ((target (portal-view-target))
@@ -340,6 +341,27 @@ so that no fullscreen window outlives the test."
          (portal-input-gui--key-window-js "await document.exitFullscreen(); return true;")
          (portal-terminal-test--wait
           (lambda () (not (plist-get (portal--inspect target) :fullscreen))))))))
+
+(defun portal-input-gui--page-visible ()
+  "Wait until WebKit shows the selected pane's page as visible.
+WebKit refuses fullscreen to a hidden page.  A page is hidden while other
+apps' windows cover its frame, which having the keyboard does not prevent,
+so hide those apps if the page stays hidden."
+  (let ((visible (lambda (seconds)
+                   (let ((deadline (+ (float-time) seconds)))
+                     (while (and (not (equal (portal-excalidraw-gui--js
+                                              "return document.visibilityState;")
+                                             "visible"))
+                                 (< (float-time) deadline))
+                       (accept-process-output nil 0.02)
+                       (redisplay t))
+                     (equal (portal-excalidraw-gui--js "return document.visibilityState;")
+                            "visible")))))
+    (unless (funcall visible 1)
+      (ns-hide-others)
+      (unless (funcall visible 10)
+        (ert-fail (format "The page stayed hidden, with the keyboard in %s"
+                          (portal-test-responder)))))))
 
 (defun portal-input-gui--fullscreen (fullscreen)
   "Wait until the selected pane's page is FULLSCREEN, and its window has the keyboard.
