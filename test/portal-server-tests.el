@@ -68,8 +68,10 @@
         ;; The old child's exit must leave the replacement server usable.
         (should (string-match-p "HTTP/1.1 200" (portal-server-test--get "/hello")))
         (signal-process second 'SIGKILL)
-        (portal-server-test--wait (lambda () (not (portal-server-url))))
-        (should-not portal--server-process)
+        ;; The URL goes once the child is dead; the process once its
+        ;; sentinel has run, later.
+        (portal-server-test--wait (lambda () (not portal--server-process)))
+        (should-not (portal-server-url))
         (let ((third (portal-start-server)))
           (should-not (eq second third))
           (portal-server-test--wait #'portal-server-url)

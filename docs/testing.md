@@ -52,6 +52,9 @@ export LIBRARY_PATH="$(/usr/libexec/PlistBuddy -c Print:LSEnvironment:LIBRARY_PA
 - After giving a web view the keyboard, wait until its page has focus before
   typing. WebKit tells the page asynchronously; an earlier key reaches the page
   but not its field.
+- A page is hidden to WebKit while other apps' windows cover its frame, even
+  with the keyboard in it, and WebKit refuses it fullscreen then. Wait for
+  `document.visibilityState` to be `visible` before relying on it.
 - Isolate fixtures. Clean up buffers, processes, files and registrations, even
   after failure. Leave user configuration and existing sessions untouched.
 - CTest runs suites in parallel. Keep each one to its own temporary files and
