@@ -32,9 +32,20 @@ its field.  Wait for that, as a person's next key would."
   (select-window window)
   (portal-input-focus)
   (should (portal-input--action "focused" target))
-  (portal-terminal-test--wait
-   (lambda () (portal-excalidraw-gui--js
-               "return document.hasFocus() && document.activeElement === document.querySelector('input');"))))
+  (let ((focused (lambda ()
+                   (portal-excalidraw-gui--js
+                    "return document.hasFocus() && document.activeElement === document.querySelector('input');")))
+        (deadline (+ (float-time) 10)))
+    (while (and (not (funcall focused)) (< (float-time) deadline))
+      (accept-process-output nil 0.02)
+      (redisplay t))
+    (unless (funcall focused)
+      (ert-fail
+       (format "The page's field never had focus: page %S, view %S, keyboard in %s, sheet %S"
+               (portal-excalidraw-gui--js
+                "return {hasFocus: document.hasFocus(), active: document.activeElement?.tagName ?? null, visibility: document.visibilityState};")
+               (portal--inspect target) (portal-test-responder)
+               (ignore-errors (portal-test--sheet)))))))
 
 (ert-deftest portal-integration-focus-and-cleanup-in-either-startup-order ()
   :tags '(:gui :expensive)
