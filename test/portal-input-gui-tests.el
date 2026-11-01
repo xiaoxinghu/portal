@@ -314,7 +314,8 @@ page to or from its fullscreen window."
 
 (defmacro portal-input-gui--fullscreen-page (&rest body)
   "Run BODY with an app-host page whose button fills it and goes fullscreen.
-The page records each key press in `keys'.  Leave fullscreen afterwards,
+The page records each key press in `keys'.  Its `goFullscreen' asks for
+fullscreen, recording in `refused' why WebKit refused, if it did.  Leave fullscreen afterwards,
 so that no fullscreen window outlives the test."
   (declare (indent 0))
   `(portal-test--with-web
@@ -328,7 +329,10 @@ so that no fullscreen window outlives the test."
            (portal-excalidraw-gui--js
             "const button = document.createElement('button');
              button.style.cssText = 'position:fixed;inset:0;width:100%;height:100%';
-             button.onclick = () => document.documentElement.requestFullscreen();
+             window.refused = null;
+             window.goFullscreen = () => document.documentElement.requestFullscreen()
+               .catch((e) => { if (e.name === 'InvalidStateError') refused = e.message; });
+             button.onclick = goFullscreen;
              document.body.append(button);
              window.keys = [];
              document.addEventListener('keydown', (e) => keys.push(e.key), true);
@@ -366,14 +370,24 @@ so hide those apps if the page stays hidden."
 (defun portal-input-gui--fullscreen (fullscreen)
   "Wait until the selected pane's page is FULLSCREEN, and its window has the keyboard.
 Fullscreen, that is WebKit's window, done entering, with the page focused
-in it; otherwise the page is back in its pane in the key window."
+in it; otherwise the page is back in its pane in the key window.
+Skip the test where WebKit refused fullscreen outright, as on GitHub's
+macOS runners.  Ask the page only then: running a script in it meanwhile
+would spend the click that asked for fullscreen."
   (let ((target (portal-view-target)))
-    (portal-terminal-test--wait
-     (lambda ()
-       (and (equal (plist-get (portal--inspect target) :fullscreen) (and fullscreen "in"))
-            (eq (portal-input-gui--key-window-js
-                 "return !!document.fullscreenElement && document.hasFocus();")
-                fullscreen))))))
+    (condition-case failure
+        (portal-terminal-test--wait
+         (lambda ()
+           (and (equal (plist-get (portal--inspect target) :fullscreen) (and fullscreen "in"))
+                (eq (portal-input-gui--key-window-js
+                     "return !!document.fullscreenElement && document.hasFocus();")
+                    fullscreen))))
+      (ert-test-failed
+       (let ((refused (and fullscreen (portal-input-gui--key-window-js
+                                       "return window.refused ?? null;"))))
+         (if (stringp refused)
+             (ert-skip (format "WebKit refuses fullscreen here: %s" refused))
+           (signal (car failure) (cdr failure))))))))
 
 (defun portal-input-gui--emacs-got-nothing ()
   "Check that no key reached Emacs."
@@ -432,7 +446,7 @@ in it; otherwise the page is back in its pane in the key window."
       ;; A script, here Emacs's, can make the page fullscreen while Emacs
       ;; has the keyboard.  Keys in fullscreen are still the page's.
       (should-not (portal-input--action "focused"))
-      (portal-excalidraw-gui--js "document.documentElement.requestFullscreen(); return true;")
+      (portal-excalidraw-gui--js "goFullscreen(); return true;")
       (portal-input-gui--fullscreen t)
       (portal-test-native-key 7 0 "x")
       (portal-input-gui--typed "x")
@@ -451,7 +465,7 @@ in it; otherwise the page is back in its pane in the key window."
       (portal-integration-test--emacs-input)
       ;; Hidden while fullscreen, it is hidden once back.
       (delete-other-windows)
-      (portal-excalidraw-gui--js "document.documentElement.requestFullscreen(); return true;")
+      (portal-excalidraw-gui--js "goFullscreen(); return true;")
       (portal-input-gui--fullscreen t)
       (let ((buffer (current-buffer)))
         (switch-to-buffer "*scratch*")

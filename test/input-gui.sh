@@ -17,4 +17,8 @@ exec sh "$root/test/gui-ert.sh" \
              (list (quote and)
                    "^portal-input-gui-"
                    (let ((focus (getenv "PORTAL_INPUT_SELECTOR")))
-                     (if (equal focus "") t focus))))'
+                     (if (equal focus "") t focus)))
+             (quote (portal-input-gui-web-fullscreen-keeps-the-keyboard-and-escape-leaves-it
+                     portal-input-gui-web-fullscreen-page-closes-with-its-buffer
+                     portal-input-gui-web-fullscreen-page-keeps-the-keyboard-in-another-frame
+                     portal-input-gui-web-fullscreen-returns-to-where-emacs-put-the-page)))'
