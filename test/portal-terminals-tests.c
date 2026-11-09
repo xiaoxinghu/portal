@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* The core's terminal rules, native/Core/terminals.c, with the fake
    platform: option checks before creation, the theme catalog and applying a
-   theme to every terminal, paste and Enter, reading text, what a terminal
+   theme or a text size to every terminal, paste and Enter, reading text, what a terminal
    describes, and the records that announce its changes.  The fake counts the
    primitives the core calls, and any call naming a destroyed view or a view
    of the wrong kind.  Records go to a real pipe, which the tests read as
@@ -36,6 +36,12 @@ static portal_option string_option(const char *name, const char *value)
 static portal_option flag_option(const char *name, bool flag)
 {
     return (portal_option) {.name = text(name), .flag = flag};
+}
+
+static portal_option integer_option(const char *name, int64_t integer)
+{
+    return (portal_option) {.name = text(name), .is_integer = true, .integer = integer,
+                            .flag = true};
 }
 
 /* Open a terminal with COUNT OPTIONS; return its target to free, or NULL
@@ -89,6 +95,18 @@ static void test_options_are_checked_before_creation(void)
          3,
          "Unknown terminal theme: Gamma"},
         {{directory, flag_option("directory", false)}, 2, "A terminal view needs a :directory"},
+        {{directory, integer_option("theme", 3)}, 2, "Option :theme must be a string"},
+        {{directory, string_option("points", "14")}, 2, "Option :points must be an integer"},
+        {{directory, flag_option("points", true)}, 2, "Option :points must be an integer"},
+        {{directory, integer_option("points", 5)},
+         2,
+         "A terminal's text size must be from 6 to 72 points, not 5"},
+        {{directory, integer_option("points", 73)},
+         2,
+         "A terminal's text size must be from 6 to 72 points, not 73"},
+        {{directory, integer_option("points", 14), integer_option("points", -1)},
+         3,
+         "A terminal's text size must be from 6 to 72 points, not -1"},
     };
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
         portal_text error = {0};
@@ -112,6 +130,17 @@ static void test_options_are_checked_before_creation(void)
                 "\"quick\":true", "\"name\":\"x\"", NULL));
     /* Without a theme there is nothing to look up. */
     CHECK(portal_fake_calls().listed == before.listed);
+    close_view(target);
+
+    /* A size in range, or none, passes as given. */
+    const portal_option sized[] = {directory, integer_option("points", 6),
+                                   integer_option("points", 72)};
+    target = open_terminal(sized, 3, &error);
+    CHECK(target && shows(target, "\"points\":72", NULL));
+    close_view(target);
+    const portal_option unsized[] = {directory, flag_option("points", false)};
+    target = open_terminal(unsized, 2, &error);
+    CHECK(target && shows(target, "\"points\":false", NULL));
     close_view(target);
 
     const portal_option argv[] = {directory, string_option("argv", "[\"/bin/ls\",\"-l\"]")};
@@ -238,6 +267,68 @@ static void test_a_rejected_theme_stops_at_that_terminal(void)
     CHECK(shows(third, "\"theme\":\"Beta\"", NULL));
     close_view(first);
     close_view(third);
+    CHECK(!portal_fake_calls().misused);
+}
+
+static void test_a_text_size_reaches_every_terminal(void)
+{
+    portal_text error = {0};
+    /* A size is checked even with no terminal open. */
+    CHECK(!portal_terminals_text_size(5, &error));
+    CHECK(says(&error, "A terminal's text size must be from 6 to 72 points, not 5"));
+    CHECK(portal_terminals_text_size(14, &error));
+
+    char *web = open_view("web", &error, NULL);
+    char *first = open_in("/"), *second = open_in("/"), *third = open_in("/");
+    struct portal_fake_calls before = portal_fake_calls();
+    CHECK(portal_terminals_text_size(20, &error));
+    CHECK(portal_fake_calls().sized == before.sized + 3);
+    CHECK(shows(first, "\"points\":20", NULL));
+    CHECK(shows(second, "\"points\":20", NULL));
+    CHECK(shows(third, "\"points\":20", NULL));
+    char *state = inspect(web);
+    CHECK(state && !strstr(state, "\"points\""));
+    free(state);
+
+    /* The limits are sizes; beyond them, no terminal is touched. */
+    CHECK(portal_terminals_text_size(6, &error));
+    CHECK(portal_terminals_text_size(72, &error));
+    before = portal_fake_calls();
+    CHECK(!portal_terminals_text_size(73, &error));
+    CHECK(says(&error, "A terminal's text size must be from 6 to 72 points, not 73"));
+    CHECK(!portal_terminals_text_size(INT64_MIN, &error));
+    CHECK(portal_fake_calls().sized == before.sized);
+    CHECK(shows(second, "\"points\":72", NULL));
+
+    /* A rejecting terminal stops it there, as for a theme. */
+    const portal_option broken[] = {string_option("directory", "/"),
+                                    string_option("broken", "Metal is gone")};
+    char *fourth = open_terminal(broken, 2, &error), *fifth = open_in("/");
+    CHECK(fourth && fifth);
+    CHECK(!portal_terminals_text_size(30, &error));
+    CHECK(says(&error, "Metal is gone"));
+    CHECK(shows(third, "\"points\":30", NULL));
+    state = inspect(fifth);
+    CHECK(state && !strstr(state, "\"points\""));
+    free(state);
+    close_view(fourth);
+    close_view(fifth);
+
+    /* A closed terminal is not resized, and a refusing platform changes nothing. */
+    close_view(second);
+    before = portal_fake_calls();
+    CHECK(portal_terminals_text_size(16, &error));
+    CHECK(portal_fake_calls().sized == before.sized + 2);
+    portal_fake_refuse(true);
+    before = portal_fake_calls();
+    CHECK(!portal_terminals_text_size(18, &error));
+    CHECK(says(&error, "The fake refuses to run view primitives"));
+    portal_fake_refuse(false);
+    CHECK(same_calls(portal_fake_calls(), before));
+    CHECK(shows(first, "\"points\":16", NULL));
+    close_view(first);
+    close_view(third);
+    close_view(web);
     CHECK(!portal_fake_calls().misused);
 }
 
@@ -374,6 +465,7 @@ int main(void)
     test_the_theme_catalog_is_sorted();
     test_a_theme_reaches_every_terminal();
     test_a_rejected_theme_stops_at_that_terminal();
+    test_a_text_size_reaches_every_terminal();
     test_paste_then_enter();
     test_targets_must_name_open_terminals();
     test_a_terminal_describes_itself();

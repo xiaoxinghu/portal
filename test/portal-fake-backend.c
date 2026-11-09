@@ -287,9 +287,11 @@ bool portal_view_create(portal_kind kind, portal_string target, const portal_opt
     }
     for (size_t i = 0; i < count; i++) {
         struct property *entry = property(view, options[i].name.data, options[i].name.length);
-        entry->kind = options[i].is_string ? STRING : FLAG;
+        entry->kind = options[i].is_string ? STRING : options[i].is_integer ? INTEGER : FLAG;
         if (options[i].is_string)
             entry->string = copy(options[i].string.data, options[i].string.length);
+        else if (options[i].is_integer)
+            entry->integer = options[i].integer;
         else
             entry->flag = options[i].flag;
     }
@@ -559,6 +561,15 @@ bool portal_terminal_apply_theme(portal_view *terminal, const portal_string *nam
         set_string(terminal, "theme", name->data, name->length);
     else
         set_flag(terminal, "theme", false);
+    return true;
+}
+
+bool portal_terminal_set_text_size(portal_view *terminal, int64_t points, portal_text *error)
+{
+    if (!working(terminal, error))
+        return false;
+    calls.sized++;
+    set_integer(terminal, "points", points);
     return true;
 }
 

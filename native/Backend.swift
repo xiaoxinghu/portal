@@ -174,7 +174,7 @@ public func portalViewCreate(_ kind: portal_kind, _ target: portal_string,
     var values: [String: ViewOption] = [:]
     for option in UnsafeBufferPointer(start: options, count: count) {
         values[String(copying: option.name)] = option.is_string ? .string(String(copying: option.string))
-            : .flag(option.flag)
+            : option.is_integer ? .integer(Int(option.integer)) : .flag(option.flag)
     }
     let options = ViewOptions(values: values)
     let type: any PortalView.Type = kind == PORTAL_TERMINAL ? TerminalSession.self : WebSession.self
@@ -342,6 +342,13 @@ public func portalTerminalApplyTheme(_ terminal: OpaquePointer, _ name: UnsafePo
                                      _ error: UnsafeMutablePointer<portal_text>) -> Bool {
     let terminal = native(terminal), name = name.map { String(copying: $0.pointee) }
     return perform(error) { try session(terminal, as: TerminalSession.self).applyTheme(name) } != nil
+}
+
+@_cdecl("portal_terminal_set_text_size")
+public func portalTerminalSetTextSize(_ terminal: OpaquePointer, _ points: Int64,
+                                      _ error: UnsafeMutablePointer<portal_text>) -> Bool {
+    let terminal = native(terminal)
+    return perform(error) { try session(terminal, as: TerminalSession.self).setTextSize(Int(points)) } != nil
 }
 
 @_cdecl("portal_terminal_paste_text")

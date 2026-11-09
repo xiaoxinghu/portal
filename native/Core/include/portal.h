@@ -64,13 +64,18 @@ typedef struct portal_text {
     size_t length;
 } portal_text;
 
-/* One entry of portal--open's options plist, such as :directory "~/" or
-   :quick t.  Entries keep the plist's order; a later duplicate name wins. */
+/* One entry of portal--open's options plist, such as :directory "~/",
+   :points 14 or :quick t.  Entries keep the plist's order; a later duplicate
+   name wins. */
 typedef struct portal_option {
     portal_string name; /* Without the leading colon. */
     bool is_string;
     portal_string string; /* When IS_STRING. */
-    bool flag;            /* Otherwise: true for t, false for nil. */
+    bool is_integer;
+    int64_t integer; /* When IS_INTEGER. */
+    /* False for nil, true for t and for an integer, so that any non-nil
+       value that is not a string counts as true, as in Lisp. */
+    bool flag;
 } portal_option;
 
 /* A rectangle in a frame, in Emacs's frame pixels, as
@@ -250,9 +255,10 @@ bool portal_web_print(portal_view *web, const portal_string *file, portal_text *
    program name or path and literal arguments to run through the user's
    interactive login shell, a string or false, mutually exclusive with
    :command; :theme, a name the platform lists, or false for the default;
-   and :quick, a flag. The shell loads startup files and resolves the program;
-   no Lisp environment snapshot is passed to the platform.  A terminal starts
-   at PORTAL_TERMINAL_POINTS.
+   :points, the size of its text, an integer from PORTAL_TERMINAL_MIN_POINTS
+   to PORTAL_TERMINAL_MAX_POINTS, or false for PORTAL_TERMINAL_POINTS; and
+   :quick, a flag. The shell loads startup files and resolves the program;
+   no Lisp environment snapshot is passed to the platform.
 
    A terminal describes itself with "ready", whether its engine can draw and
    take input; "title", which the running program may set, "" until it does;
@@ -260,7 +266,8 @@ bool portal_web_print(portal_view *web, const portal_string *file, portal_text *
    host, "" until it does; "program", the executable of the process group in
    the foreground of its pty, the shell at a prompt and the program while one
    runs, "" until known and once its process has ended; "columns" and "rows",
-   its grid, 0 until known; and "exited", whether its process has ended.
+   its grid, 0 until known; "points", the size of its text, 0 until known;
+   and "exited", whether its process has ended.
    Nothing announces that a shell started a program, so a platform samples
    "program" at each report and about once a second.  Report each change of
    title, working directory, program or exit with portal_terminal_changed,
@@ -278,6 +285,11 @@ bool portal_terminal_list_themes(portal_text **names, size_t *count, portal_text
    null NAME, to TERMINAL.  The default may follow the system's appearance. */
 bool portal_terminal_apply_theme(portal_view *terminal, const portal_string *name,
                                  portal_text *error);
+/* Show TERMINAL's text at POINTS, which the core has checked is from
+   PORTAL_TERMINAL_MIN_POINTS to PORTAL_TERMINAL_MAX_POINTS, from now on,
+   whatever theme it is given later.  Its grid reflows, which it describes
+   as new "columns" and "rows". */
+bool portal_terminal_set_text_size(portal_view *terminal, int64_t points, portal_text *error);
 /* Paste TEXT as the user's paste, bracketed if the running program asked. */
 bool portal_terminal_paste_text(portal_view *terminal, portal_string text, portal_text *error);
 /* Press and release the Enter key. */
@@ -285,8 +297,13 @@ bool portal_terminal_press_enter(portal_view *terminal, portal_text *error);
 /* Read all of TERMINAL's text, its scrollback and screen.  macOS reads it by
    selecting everything, and leaves that selection active. */
 bool portal_terminal_read_text(portal_view *terminal, portal_text *text, portal_text *error);
-/* The font size a terminal starts at, in points. */
-enum { PORTAL_TERMINAL_POINTS = 14 };
+/* The size of a terminal's text, in points: the one it starts at without
+   :points, and the smallest and largest the core accepts. */
+enum {
+    PORTAL_TERMINAL_POINTS = 14,
+    PORTAL_TERMINAL_MIN_POINTS = 6,
+    PORTAL_TERMINAL_MAX_POINTS = 72,
+};
 
 /* Input, for a view of any kind.  The core decides what each key press in a
    view does (native/Core/input.c): the view's app gets it, one of the view's

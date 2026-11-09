@@ -315,6 +315,7 @@ Configure in Lisp after loading `portal.el` (changes apply to running terminals)
 
 ```elisp
 (setq portal-terminal-theme "Dracula") ; nil follows system light/dark appearance
+(setq portal-terminal-text-size 16)    ; points, from 6 to 72; the default is 14
 ```
 
 `portal-terminal-theme` takes an exact, case-sensitive name from
@@ -322,6 +323,16 @@ Configure in Lisp after loading `portal.el` (changes apply to running terminals)
 Portal in your init file. Changes recolor running terminals, including hidden
 ones, and apply to new ones without restarting shells. `nil` restores Alabaster
 (light) and Afterglow (dark). Named themes ignore system appearance changes.
+
+`portal-terminal-text-size` is the size of every terminal's text, in points:
+one size for all of them, unlike Ghostty's own keys, which change one
+terminal. Changes resize running terminals, reflowing their grids, and apply
+to new ones, without restarting shells; anything but an integer from 6 to 72
+is refused and leaves the size as it was. Command-= or Command-+, Command--
+and Command-0 step it by a point or reset it to 14, from inside a terminal or
+with Emacs focus, and say the new size ([keys](keyboard.md#terminal-commands)).
+With `savehist-mode` on, the size chosen is kept from one Emacs session to
+the next without saving it in Customize.
 
 Command chords run in the terminal buffer using its keymaps. Minibuffer
 interaction finishes before focus returns to the selected terminal. Ordinary

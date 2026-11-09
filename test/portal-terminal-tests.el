@@ -1,6 +1,7 @@
 ;;; portal-terminal-tests.el --- Real native terminal checks -*- lexical-binding: t; -*-
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
+(require 'cl-lib)
 (require 'ert)
 (require 'json)
 (require 'portal-terminal)
@@ -155,6 +156,62 @@
                 (should (member (plist-get (portal-terminal-test--colors first) :background)
                                 '("f7f7f7" "212121")))))))
       (setq portal-terminal-theme original))))
+
+(ert-deftest portal-terminal-text-size-live-and-new-sessions ()
+  :tags '(:gui)
+  (skip-unless (eq window-system 'ns))
+  (let ((original portal-terminal-text-size))
+    (unwind-protect
+        (progn
+          (setq portal-terminal-text-size 14)
+          (portal-terminal-test--session
+            (let* ((first (portal-view-target))
+                   (pid (plist-get (portal-terminal-test--colors first) :pid)))
+              ;; Two terminals side by side, each showing its grid.
+              (portal-terminal-split-right)
+              (let* ((second (portal-view-target))
+                     (targets (list first second))
+                     (columns nil))
+                (portal-terminal-test--wait
+                 (lambda ()
+                   (cl-every (lambda (id) (> (or (plist-get (portal-terminal-test--state id)
+                                                            :columns)
+                                                 0)
+                                              0))
+                             targets)))
+                (setq columns (mapcar (lambda (id) (plist-get (portal-terminal-test--state id)
+                                                              :columns))
+                                      targets))
+                (should (equal (mapcar (lambda (id) (plist-get (portal-terminal-test--state id)
+                                                               :points))
+                                       targets)
+                               '(14 14)))
+                ;; A larger size reflows both grids to fewer columns.
+                (setopt portal-terminal-text-size 20)
+                (portal-terminal-test--wait
+                 (lambda ()
+                   (cl-every (lambda (id before)
+                               (let ((state (portal-terminal-test--state id)))
+                                 (and (equal (plist-get state :points) 20)
+                                      (< 0 (plist-get state :columns) before))))
+                             targets columns)))
+                ;; The first shell survives it, and a theme keeps the size.
+                (should (equal (plist-get (portal-terminal-test--colors first) :pid) pid))
+                (let ((theme portal-terminal-theme))
+                  (unwind-protect
+                      (progn
+                        (setopt portal-terminal-theme "Dracula")
+                        (should (equal (plist-get (portal-terminal-test--state first) :points) 20)))
+                    (setopt portal-terminal-theme theme)))
+                (should (equal (plist-get (portal-terminal-test--state first) :points) 20))
+                ;; A new terminal starts at the size.
+                (portal-terminal-new)
+                (should (equal (plist-get (portal-terminal-test--state (portal-view-target))
+                                          :points)
+                               20))
+                (should-error (setq portal-terminal-text-size 3))
+                (should (equal portal-terminal-text-size 20))))))
+      (setq portal-terminal-text-size original))))
 
 (ert-deftest portal-terminal-real-shell-survives-hiding-and-resizes ()
   :tags '(:gui)

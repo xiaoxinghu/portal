@@ -19,7 +19,10 @@ reach Emacs:
 | `RET`, or a click, while Emacs owns a Portal buffer | Enter the app |
 
 `s-x` and other Emacs Command bindings work inside terminals; `C-x b` works
-on pages that leave Control-X unused. Terminal programs get every Control and
+on pages that leave Control-X unused. Command-= and Command-+, Command-- and
+Command-0 reach Emacs from inside a terminal too, which binds them to make
+every terminal's text larger, smaller or its default size
+([terminal commands](#terminal-commands)). Terminal programs get every Control and
 Option chord: tmux keeps `C-b`. Pages get first claim on chords, as in a browser.
 Plain keys never reach Emacs while the app has the keyboard. Emacs, which
 also binds single keys, gets them once you return to it; see
@@ -157,10 +160,6 @@ one in a new buffer ([bookmarks](web-views.md#bookmarks)).
 system's print panel ([print](web-views.md#print)). The Command chords reach
 Emacs from inside the page too, as Command-R does.
 
-A terminal's native bindings can claim a chord its program would otherwise
-get, such as a Control chord (see [the input bridge](terminal-input-bridge.md)).
-macOS's own shortcuts, such as Command-Space, still come first.
-
 Click a page or press `RET` to interact. Entering by click also selects its
 Emacs pane, keeping selection and keyboard focus aligned. Back in Emacs, `q`
 hides the web view and `g` reloads. The mode line and minibuffer remain available.
@@ -174,5 +173,20 @@ Escape leaves fullscreen, as in Safari, and the page returns to its pane, or
 wherever Emacs has put its buffer meanwhile. It has the keyboard again if it
 had it before, as it does after a click on that button; otherwise Emacs keeps
 the keyboard.
+
+## Terminal commands
+
+In Portal terminal buffers, `RET` enters the terminal and `C-c C-k` ends its
+shell. `s-=` and `s-+` run `portal-terminal-text-size-increase`, `s--`
+`portal-terminal-text-size-decrease`, and `s-0`
+`portal-terminal-text-size-reset`: one point larger, one point smaller, or
+back to 14 points, in every terminal at once
+([text size](terminals.md#appearance-and-native-bindings)). Being Command
+chords, they reach Emacs from inside Ghostty as well as with Emacs focus.
+Plain `+`, `-` and `0` stay unbound.
+
+A terminal's native bindings can claim a chord its program would otherwise
+get, such as a Control chord (see [the input bridge](terminal-input-bridge.md)).
+macOS's own shortcuts, such as Command-Space, still come first.
 
 Restart Emacs after rebuilding the native module to try these controls.
