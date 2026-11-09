@@ -18,9 +18,14 @@ enum Views {
         let items = options.values.map { name, value in
             switch value {
             case .string(let text):
-                portal_option(name: borrow(name), is_string: true, string: borrow(text), flag: false)
+                portal_option(name: borrow(name), is_string: true, string: borrow(text),
+                              is_integer: false, integer: 0, flag: false)
+            case .integer(let integer):
+                portal_option(name: borrow(name), is_string: false, string: borrow(""),
+                              is_integer: true, integer: Int64(integer), flag: true)
             case .flag(let flag):
-                portal_option(name: borrow(name), is_string: false, string: borrow(""), flag: flag)
+                portal_option(name: borrow(name), is_string: false, string: borrow(""),
+                              is_integer: false, integer: 0, flag: flag)
             }
         }
         let kind = borrow(kind)

@@ -66,7 +66,7 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     var program = ""
     private var programTimer: Timer?
 
-    init(directory: String, command: String?, theme: TerminalTheme) {
+    init(directory: String, command: String?, theme: TerminalTheme, points: Int) {
         super.init(frame: .zero)
         delegate = self
         configuration = TerminalSurfaceOptions(
@@ -80,7 +80,7 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
             builder.withFontThicken(false)
             // Every exit takes that path: none counts as a failed launch.
             builder.withCustom("abnormal-command-exit-runtime", "0")
-            builder.withFontSize(Float(PORTAL_TERMINAL_POINTS))
+            builder.withFontSize(Float(points))
         }
     }
 
@@ -186,7 +186,8 @@ final class TerminalSession: PortalView {
         }
         self.target = target
         let terminal = HostedTerminal(directory: directory, command: try terminalCommand(options, directory: directory),
-                                      theme: try Terminals.theme(named: options.string("theme")))
+                                      theme: try Terminals.theme(named: options.string("theme")),
+                                      points: try options.integer("points") ?? Int(PORTAL_TERMINAL_POINTS))
         if let issue = terminal.controller?.lastConfigurationIssue { throw NativeError.message(issue) }
         self.terminal = terminal
         input = NativeInput(target: target, view: terminal, host: NativeView.parking) { [weak terminal] in
@@ -224,6 +225,7 @@ final class TerminalSession: PortalView {
          ("progress", .string(terminal.progress)),
          ("columns", .integer(Int(terminal.grid?.columns ?? 0))),
          ("rows", .integer(Int(terminal.grid?.rows ?? 0))),
+         ("points", .integer(Int(terminal.fontSize ?? 0))),
          ("layer", .string(terminal.layer.map { NSStringFromClass(type(of: $0)) } ?? ""))]
     }
 
@@ -234,6 +236,14 @@ final class TerminalSession: PortalView {
         guard let controller = terminal.controller, controller.theme != theme else { return }
         guard controller.setTheme(theme) else {
             throw NativeError.message(controller.lastConfigurationIssue ?? "Could not apply terminal theme")
+        }
+    }
+
+    /// Ghostty's own size binding, which marks the size as chosen, so a
+    /// later theme, which reloads the configuration, keeps it.
+    func setTextSize(_ points: Int) throws {
+        guard terminal.performBindingAction("set_font_size:\(points)") else {
+            throw NativeError.message("No terminal accepting text size changes")
         }
     }
 
@@ -270,9 +280,9 @@ final class TerminalSession: PortalView {
     /// Its title, working directory, program or exit changed; the core tells Emacs.
     func changed() { Core.terminalChanged(target) }
 
-    /// The core decides what each key does, including text size shortcuts.
-    /// Ghostty gets the rest, which never includes a Super chord: the core
-    /// hands those to Emacs or to the view's shortcuts.
+    /// The core decides what each key does. Ghostty gets the rest, which
+    /// never includes a Super chord: the core hands those to Emacs, which
+    /// binds the text size keys, or to the view's shortcuts.
     func handleKeyEvent(_ event: NSEvent) -> Bool {
         if input.handleKeyEvent(event) { return true }
         switch event.type {

@@ -12,8 +12,10 @@
 
 /* Check a terminal's OPTIONS before the platform creates it: :directory must
    be a string; :command, :argv and :theme a string or nil;
-   :command and :argv mutually exclusive; and :theme a name the platform
-   lists. A later duplicate option wins, and other options pass. */
+   :command and :argv mutually exclusive; :theme a name the platform
+   lists; and :points nil or an integer from PORTAL_TERMINAL_MIN_POINTS to
+   PORTAL_TERMINAL_MAX_POINTS.  A later duplicate option wins, and other
+   options pass. */
 bool portal_terminals_check(const portal_option *options, size_t count, portal_text *error);
 
 /* The platform's theme names as a sorted JSON array of strings. */
@@ -24,6 +26,12 @@ bool portal_terminals_themes(portal_text *json, portal_text *error);
    rejects the theme, the error is its own, the terminals before it keep the
    new theme, and it and those after it keep their old one. */
 bool portal_terminals_theme(const portal_string *name, portal_text *error);
+
+/* Show every open terminal's text at POINTS, oldest first.  A size outside
+   PORTAL_TERMINAL_MIN_POINTS to PORTAL_TERMINAL_MAX_POINTS changes none.  If
+   a terminal rejects it, the error is its own, the terminals before it keep
+   the new size, and it and those after it keep their old one. */
+bool portal_terminals_text_size(int64_t points, portal_text *error);
 
 /* Paste TEXT into TARGET, then press Enter as a separate key if ENTER.  If
    the paste fails, Enter is not pressed. */

@@ -6,7 +6,7 @@ The native module exports these 18 functions:
 
 - **Lifecycle**, for every view kind: `portal--open`, `portal--place`, `portal--hide`, `portal--close`, `portal--inspect`, and `portal--channel` for the notification pipe.
 - **Web:** `portal--web-load`, `portal--web-go`, `portal--web-appearance`, `portal--web-download-directory`, and the bridge's `portal--web-send` and `portal--web-receive`.
-- **Terminal:** `portal--terminal-paste`, `portal--terminal-text`, `portal--terminal-theme`, `portal--terminal-themes` and `portal--terminal-bindings`.
+- **Terminal:** `portal--terminal-paste`, `portal--terminal-text`, `portal--terminal-theme`, `portal--terminal-themes`, `portal--terminal-text-size` and `portal--terminal-bindings`.
 - **Input:** `portal--input`.
 
 ## Considered Options

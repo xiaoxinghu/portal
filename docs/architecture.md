@@ -81,16 +81,19 @@ retry placement or close.
 ## Terminal rules and metadata
 
 The core owns terminal rules in `native/Core/terminals.c`. The platform supplies
-five terminal or engine primitives: list themes, apply a named or default theme,
-paste text, press Enter, and read all text. Before creation, the
-core validates options: `:directory` must be a string; `:command`, `:argv` and
-`:theme` a string or nil; `:command` and `:argv` mutually exclusive; and `:theme`
-a platform-listed name. The adapter decodes `:argv` into literal arguments and
+six terminal or engine primitives: list themes, apply a named or default theme,
+set the text size, paste text, press Enter, and read all text. Before creation,
+the core validates options: `:directory` must be a string; `:command`, `:argv` and
+`:theme` a string or nil; `:command` and `:argv` mutually exclusive; `:theme`
+a platform-listed name; and `:points` nil or an integer from 6 to 72. The adapter decodes `:argv` into literal arguments and
 executes them through the user's interactive login shell. The core likewise
 validates theme names before applying them to all open terminals, oldest first;
 unknown names change none. If a terminal rejects a theme, it supplies the error:
 earlier terminals keep the new theme; it and later terminals keep the old one.
 `portal--terminal-themes` returns platform names sorted by code point.
+`portal--terminal-text-size` checks a size the same way, before resizing all
+open terminals by the same rules; macOS sets it with Ghostty's
+`set_font_size` binding, which a later theme keeps.
 `portal--terminal-paste` pastes and, with ENTER, presses Enter separately only
 on success. Enter has its own primitive because input replays real native events
 without synthetic keys. Reading text on macOS selects all, leaving the selection
@@ -98,7 +101,7 @@ active. The macOS platform owns Ghostty types, binding strings such as
 `select_all`, and the system-appearance default theme.
 
 Every platform reports a terminal's `:ready`, `:title`, `:pwd`, `:program`,
-`:columns`, `:rows` and `:exited`. `:title` and `:pwd` hold values last set and
+`:columns`, `:rows`, `:points` and `:exited`. `:title` and `:pwd` hold values last set and
 reported by the running program, initially `""`; Ghostty forwards only
 percent-decoded working directories reported from this host. `:program` is the
 executable of the pty's foreground process group, `""` until known and once the
@@ -109,7 +112,7 @@ layer class, and input-owned `:focused`. Process exit leaves the view, last outp
 and buffer open until Lisp closes them; nothing restarts the shell. Closing
 (destroying) the view ends the process. As with every kind, the core never passes
 closed terminals to the platform: stale targets fail with "No Portal view TARGET",
-and themes reach only open terminals.
+and themes and text sizes reach only open terminals.
 
 The platform reports title, working-directory, program and exit changes through
 `portal_terminal_changed`. The core sends one `terminal TARGET` record until

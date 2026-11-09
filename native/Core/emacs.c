@@ -158,7 +158,8 @@ static void free_options(struct options *options)
     free(options->items);
 }
 
-/* Read a plist of keywords to strings, t or nil, such as (:directory "~/" :quick t). */
+/* Read a plist of keywords to strings, integers, t or nil, such as
+   (:directory "~/" :points 14 :quick t). */
 static bool read_options(emacs_env *env, emacs_value plist, struct options *options)
 {
     emacs_value length = env->funcall(env, symbol(env, "proper-list-p"), 1, &plist);
@@ -203,8 +204,14 @@ static bool read_options(emacs_env *env, emacs_value plist, struct options *opti
                 return false;
             option->is_string = true;
             option->string = borrow(*string);
+        } else if (env->eq(env, env->type_of(env, value), symbol(env, "integer"))) {
+            option->integer = env->extract_integer(env, value);
+            if (!returning(env))
+                return false;
+            option->is_integer = true;
+            option->flag = true;
         } else {
-            signal_error(env, "Option %s must be a string, t or nil", key);
+            signal_error(env, "Option %s must be a string, an integer, t or nil", key);
             return false;
         }
     }
@@ -516,6 +523,15 @@ LISP_FUNCTION(Fterminal_theme)
     return result;
 }
 
+LISP_FUNCTION(Fterminal_text_size)
+{
+    int64_t points = env->extract_integer(env, args[0]);
+    portal_text error = {0};
+    if (!returning(env))
+        return NULL;
+    return done(env, portal_terminals_text_size(points, &error), &error);
+}
+
 LISP_FUNCTION(Fweb_appearance)
 {
     portal_text name = {0}, error = {0};
@@ -777,6 +793,8 @@ static const struct export {
      "Show every web view in APPEARANCE, \"light\" or \"dark\"; nil follows the system's."},
     {"portal--terminal-theme", 1, 1, Fterminal_theme, NULL,
      "Apply named THEME to all terminals; nil restores system appearance defaults."},
+    {"portal--terminal-text-size", 1, 1, Fterminal_text_size, NULL,
+     "Show every terminal's text at POINTS, an integer from 6 to 72."},
     {"portal--terminal-themes", 0, 0, STRINGS_FUNCTION(terminal_themes, RESULT_JSON),
      "Return the available terminal theme names."},
     {"portal--terminal-paste", 2, 3, Fterminal_paste, NULL,

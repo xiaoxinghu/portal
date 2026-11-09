@@ -339,6 +339,16 @@ module does."
 
 (defun portal--terminal-bindings (_json) t)
 (defun portal--terminal-theme (_theme) t)
+(defun portal--terminal-text-size (points)
+  "Show every terminal at POINTS: each one's state gets :points."
+  (portal-fake-native--call 'portal--terminal-text-size points)
+  (unless (and (integerp points) (<= 6 points 72))
+    (error "A terminal's text size must be from 6 to 72 points, not %S" points))
+  (maphash (lambda (target view)
+             (when (string-prefix-p "terminal:" target)
+               (puthash target (plist-put view :points points) portal-fake-native--views)))
+           portal-fake-native--views)
+  t)
 (defun portal--web-appearance (appearance)
   (portal-fake-native--call 'portal--web-appearance appearance)
   t)
