@@ -210,7 +210,7 @@
                                           :points)
                                20))
                 (should-error (setq portal-terminal-text-size 3))
-                (should (equal portal-terminal-text-size 20)))))))
+                (should (equal portal-terminal-text-size 20))))))
       (setq portal-terminal-text-size original))))
 
 (ert-deftest portal-terminal-real-shell-survives-hiding-and-resizes ()
