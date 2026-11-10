@@ -51,6 +51,7 @@ feature ships today; see the user guides for current behavior.
 1. [One Portal view per buffer](adr/0001-one-portal-view-per-buffer.md)
 2. [Shared view/native interface](adr/0002-portal-view-native-seam.md)
 3. [Platform interface primitives](adr/0003-platform-interface-primitives.md)
+4. [A page owns its state](adr/0004-a-page-owns-its-state.md)
 
 ### Design records
 
