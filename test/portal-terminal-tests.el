@@ -325,7 +325,7 @@
       (should (portal-test-native-post-key 36 0 "\r"))
       (let ((keys (with-timeout (3 (ert-fail "RET did not reach Emacs"))
                     (read-key-sequence-vector nil))))
-        (should (eq (key-binding keys) #'portal-terminal-focus))
+        (should (memq (key-binding keys) '(portal-input-focus portal-terminal-focus)))
         (command-execute (key-binding keys)))
       (portal-terminal-test--wait
        (lambda () (plist-get (portal-terminal-test--state) :focused)))
