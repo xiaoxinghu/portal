@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 
-/// A value from the options plist passed to `portal--open`: a string, an
-/// integer, t or nil.
+/// A value from the options plist passed to `portal--open`: a string, a
+/// number, t or nil.
 enum ViewOption: Sendable {
     case string(String)
-    case integer(Int)
+    case number(Double)
     case flag(Bool)
 }
 
@@ -17,16 +17,16 @@ struct ViewOptions: Sendable {
         switch values[key] {
         case nil, .flag(false): return nil
         case .string(let value): return value
-        case .integer, .flag(true): throw NativeError.message("Option :\(key) must be a string")
+        case .number, .flag(true): throw NativeError.message("Option :\(key) must be a string")
         }
     }
 
-    /// An integer option; nil when absent or nil.
-    func integer(_ key: String) throws -> Int? {
+    /// A number option; nil when absent or nil.
+    func number(_ key: String) throws -> Double? {
         switch values[key] {
         case nil, .flag(false): return nil
-        case .integer(let value): return value
-        case .string, .flag(true): throw NativeError.message("Option :\(key) must be an integer")
+        case .number(let value): return value
+        case .string, .flag(true): throw NativeError.message("Option :\(key) must be a number")
         }
     }
 
@@ -44,6 +44,7 @@ enum ViewValue: Sendable {
     case flag(Bool)
     case integer(Int)
     case integers([Int])
+    case number(Double)
     case string(String)
 }
 

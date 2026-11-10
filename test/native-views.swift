@@ -19,13 +19,13 @@ enum Views {
             switch value {
             case .string(let text):
                 portal_option(name: borrow(name), is_string: true, string: borrow(text),
-                              is_integer: false, integer: 0, flag: false)
-            case .integer(let integer):
+                              is_number: false, number: 0, flag: false)
+            case .number(let number):
                 portal_option(name: borrow(name), is_string: false, string: borrow(""),
-                              is_integer: true, integer: Int64(integer), flag: true)
+                              is_number: true, number: number, flag: true)
             case .flag(let flag):
                 portal_option(name: borrow(name), is_string: false, string: borrow(""),
-                              is_integer: false, integer: 0, flag: flag)
+                              is_number: false, number: 0, flag: flag)
             }
         }
         let kind = borrow(kind)

@@ -19,9 +19,8 @@ reach Emacs:
 | `RET`, or a click, while Emacs owns a Portal buffer | Enter the app |
 
 `s-x` and other Emacs Command bindings work inside terminals; `C-x b` works
-on pages that leave Control-X unused. Command-= and Command-+, Command-- and
-Command-0 reach Emacs from inside a terminal too, which binds them to make
-every terminal's text larger, smaller or its default size
+on pages that leave Control-X unused. Command-=, Command-- and Command-0 reach
+Emacs from inside a terminal too, where they zoom that terminal's text
 ([terminal commands](#terminal-commands)). Terminal programs get every Control and
 Option chord: tmux keeps `C-b`. Pages get first claim on chords, as in a browser.
 Plain keys never reach Emacs while the app has the keyboard. Emacs, which
@@ -177,13 +176,14 @@ the keyboard.
 ## Terminal commands
 
 In Portal terminal buffers, `RET` enters the terminal and `C-c C-k` ends its
-shell. `s-=` and `s-+` run `portal-terminal-text-size-increase`, `s--`
-`portal-terminal-text-size-decrease`, and `s-0`
-`portal-terminal-text-size-reset`: one point larger, one point smaller, or
-back to 14 points, in every terminal at once
-([text size](terminals.md#appearance-and-native-bindings)). Being Command
-chords, they reach Emacs from inside Ghostty as well as with Emacs focus.
-Plain `+`, `-` and `0` stay unbound.
+shell. Portal binds no text size keys: a terminal's text is the size of Emacs
+text ([text size](terminals.md#appearance-and-native-bindings)), so Emacs's
+own commands change it. `text-scale-adjust`, on `s-=`, `s-+`, `s--` and `s-0`
+as well as `C-x C-=`, zooms one terminal, and being Command chords, those
+reach Emacs from inside Ghostty as well as with Emacs focus.
+`global-text-scale-adjust`, on `C-x C-M-=`, changes every frame's font and
+every terminal with it. To give the base font a key of its own, bind
+`global-text-scale-adjust` in your configuration.
 
 A terminal's native bindings can claim a chord its program would otherwise
 get, such as a Control chord (see [the input bridge](terminal-input-bridge.md)).

@@ -14,7 +14,7 @@ final class TerminalSession: PortalView {
     func paste(_ text: String) throws {}
     func pressEnter() throws {}
     func text() throws -> String { "" }
-    func setTextSize(_ points: Int) throws {}
+    func setTextSize(_ points: Double) throws {}
     func copy() throws {}
     func paste() throws {}
 }

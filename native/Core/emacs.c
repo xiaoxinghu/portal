@@ -158,8 +158,19 @@ static void free_options(struct options *options)
     free(options->items);
 }
 
-/* Read a plist of keywords to strings, integers, t or nil, such as
-   (:directory "~/" :points 14 :quick t). */
+/* VALUE, a Lisp number, as a double; false, with a wrong-type-argument
+   signalled, if it is not a number. */
+static bool read_number(emacs_env *env, emacs_value value, double *number)
+{
+    emacs_value real = env->funcall(env, symbol(env, "float"), 1, &value);
+    if (!returning(env))
+        return false;
+    *number = env->extract_float(env, real);
+    return returning(env);
+}
+
+/* Read a plist of keywords to strings, numbers, t or nil, such as
+   (:directory "~/" :points 14.5 :quick t). */
 static bool read_options(emacs_env *env, emacs_value plist, struct options *options)
 {
     emacs_value length = env->funcall(env, symbol(env, "proper-list-p"), 1, &plist);
@@ -204,14 +215,14 @@ static bool read_options(emacs_env *env, emacs_value plist, struct options *opti
                 return false;
             option->is_string = true;
             option->string = borrow(*string);
-        } else if (env->eq(env, env->type_of(env, value), symbol(env, "integer"))) {
-            option->integer = env->extract_integer(env, value);
-            if (!returning(env))
+        } else if (env->eq(env, env->type_of(env, value), symbol(env, "integer"))
+                   || env->eq(env, env->type_of(env, value), symbol(env, "float"))) {
+            if (!read_number(env, value, &option->number))
                 return false;
-            option->is_integer = true;
+            option->is_number = true;
             option->flag = true;
         } else {
-            signal_error(env, "Option %s must be a string, an integer, t or nil", key);
+            signal_error(env, "Option %s must be a string, a number, t or nil", key);
             return false;
         }
     }
@@ -525,11 +536,13 @@ LISP_FUNCTION(Fterminal_theme)
 
 LISP_FUNCTION(Fterminal_text_size)
 {
-    int64_t points = env->extract_integer(env, args[0]);
-    portal_text error = {0};
-    if (!returning(env))
-        return NULL;
-    return done(env, portal_terminals_text_size(points, &error), &error);
+    portal_text target = {0}, error = {0};
+    emacs_value result = NULL;
+    double points;
+    if (read_text(env, args[0], &target) && read_number(env, args[1], &points))
+        result = done(env, portal_terminals_text_size(borrow(target), points, &error), &error);
+    free(target.data);
+    return result;
 }
 
 LISP_FUNCTION(Fweb_appearance)
@@ -793,8 +806,8 @@ static const struct export {
      "Show every web view in APPEARANCE, \"light\" or \"dark\"; nil follows the system's."},
     {"portal--terminal-theme", 1, 1, Fterminal_theme, NULL,
      "Apply named THEME to all terminals; nil restores system appearance defaults."},
-    {"portal--terminal-text-size", 1, 1, Fterminal_text_size, NULL,
-     "Show every terminal's text at POINTS, an integer from 6 to 72."},
+    {"portal--terminal-text-size", 2, 2, Fterminal_text_size, NULL,
+     "Show TARGET's text at POINTS, a number, clamped to 6 to 72."},
     {"portal--terminal-themes", 0, 0, STRINGS_FUNCTION(terminal_themes, RESULT_JSON),
      "Return the available terminal theme names."},
     {"portal--terminal-paste", 2, 3, Fterminal_paste, NULL,

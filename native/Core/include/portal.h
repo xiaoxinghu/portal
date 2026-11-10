@@ -71,9 +71,9 @@ typedef struct portal_option {
     portal_string name; /* Without the leading colon. */
     bool is_string;
     portal_string string; /* When IS_STRING. */
-    bool is_integer;
-    int64_t integer; /* When IS_INTEGER. */
-    /* False for nil, true for t and for an integer, so that any non-nil
+    bool is_number;
+    double number; /* When IS_NUMBER. */
+    /* False for nil, true for t and for a number, so that any non-nil
        value that is not a string counts as true, as in Lisp. */
     bool flag;
 } portal_option;
@@ -255,8 +255,8 @@ bool portal_web_print(portal_view *web, const portal_string *file, portal_text *
    program name or path and literal arguments to run through the user's
    interactive login shell, a string or false, mutually exclusive with
    :command; :theme, a name the platform lists, or false for the default;
-   :points, the size of its text, an integer from PORTAL_TERMINAL_MIN_POINTS
-   to PORTAL_TERMINAL_MAX_POINTS, or false for PORTAL_TERMINAL_POINTS; and
+   :points, the size of its text, a number, which the platform passes
+   through portal_terminal_points, or false for PORTAL_TERMINAL_POINTS; and
    :quick, a flag. The shell loads startup files and resolves the program;
    no Lisp environment snapshot is passed to the platform.
 
@@ -266,7 +266,8 @@ bool portal_web_print(portal_view *web, const portal_string *file, portal_text *
    host, "" until it does; "program", the executable of the process group in
    the foreground of its pty, the shell at a prompt and the program while one
    runs, "" until known and once its process has ended; "columns" and "rows",
-   its grid, 0 until known; "points", the size of its text, 0 until known;
+   its grid, 0 until known; "points", the size of its text, a number that
+   may be fractional, 0 until known;
    and "exited", whether its process has ended.
    Nothing announces that a shell started a program, so a platform samples
    "program" at each report and about once a second.  Report each change of
@@ -285,11 +286,12 @@ bool portal_terminal_list_themes(portal_text **names, size_t *count, portal_text
    null NAME, to TERMINAL.  The default may follow the system's appearance. */
 bool portal_terminal_apply_theme(portal_view *terminal, const portal_string *name,
                                  portal_text *error);
-/* Show TERMINAL's text at POINTS, which the core has checked is from
-   PORTAL_TERMINAL_MIN_POINTS to PORTAL_TERMINAL_MAX_POINTS, from now on,
-   whatever theme it is given later.  Its grid reflows, which it describes
-   as new "columns" and "rows". */
-bool portal_terminal_set_text_size(portal_view *terminal, int64_t points, portal_text *error);
+/* Show TERMINAL's text at POINTS, which may be fractional and which the
+   core has clamped to PORTAL_TERMINAL_MIN_POINTS to
+   PORTAL_TERMINAL_MAX_POINTS, from now on, whatever theme it is given
+   later.  Its grid reflows, which it describes as new "columns" and
+   "rows". */
+bool portal_terminal_set_text_size(portal_view *terminal, double points, portal_text *error);
 /* Paste TEXT as the user's paste, bracketed if the running program asked. */
 bool portal_terminal_paste_text(portal_view *terminal, portal_string text, portal_text *error);
 /* Press and release the Enter key. */
@@ -298,7 +300,7 @@ bool portal_terminal_press_enter(portal_view *terminal, portal_text *error);
    selecting everything, and leaves that selection active. */
 bool portal_terminal_read_text(portal_view *terminal, portal_text *text, portal_text *error);
 /* The size of a terminal's text, in points: the one it starts at without
-   :points, and the smallest and largest the core accepts. */
+   :points, and the smallest and largest it is shown at. */
 enum {
     PORTAL_TERMINAL_POINTS = 14,
     PORTAL_TERMINAL_MIN_POINTS = 6,
@@ -448,6 +450,11 @@ void portal_hotkey_released(uint64_t hotkey);
    program that retitles itself constantly never floods the pipe.  The core
    ignores a call for a target that names no open terminal. */
 void portal_terminal_changed(portal_string target);
+/* POINTS, a terminal's text size from Lisp, clamped to
+   PORTAL_TERMINAL_MIN_POINTS to PORTAL_TERMINAL_MAX_POINTS: the size a new
+   terminal starts at.  Lisp derives sizes from Emacs's fonts, so one out of
+   range is shown at the nearest limit, not refused; NaN is the smallest. */
+double portal_terminal_points(double points);
 
 /* Modifier keys, as Emacs names them.  Which keys are Meta and Super is the
    platform's business: on macOS, Option and Command. */

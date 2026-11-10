@@ -355,64 +355,101 @@ Return the view's target."
           (should (equal portal-terminal-theme "Dracula")))
       (setq portal-terminal-theme original))))
 
-(ert-deftest portal-view-terminal-text-size-is-a-size-in-points ()
-  (let ((original portal-terminal-text-size))
-    (unwind-protect
-        (portal-view-test--environment
-          (setq portal-terminal-text-size 16)
-          (dolist (bad '(3 5 73 "14" 14.0 nil))
-            (should-error (setq portal-terminal-text-size bad))
-            (should (equal portal-terminal-text-size 16)))
-          ;; A new terminal starts at the size, and a change reaches it live.
-          (portal-terminal)
-          (let ((target (portal-view-target)))
-            (should (equal (plist-get (plist-get (portal--inspect target) :options) :points) 16))
-            (setopt portal-terminal-text-size 20)
-            (should (equal (plist-get (portal--inspect target) :points) 20))
-            ;; The commands step a point, stop at the limits and reset, and
-            ;; say the size.
-            (cl-letf* ((said nil)
-                       ((symbol-function 'message)
-                        (lambda (format &rest arguments)
-                          (push (apply #'format-message format arguments) said))))
-              (portal-terminal-text-size-increase)
-              (should (= portal-terminal-text-size 21))
-              (should (equal (plist-get (portal--inspect target) :points) 21))
-              (portal-terminal-text-size-decrease)
-              (portal-terminal-text-size-decrease)
-              (should (= portal-terminal-text-size 19))
-              (portal-terminal-text-size-reset)
-              (should (= portal-terminal-text-size 14))
-              (should (equal (plist-get (portal--inspect target) :points) 14))
-              (setq portal-terminal-text-size 72)
-              (portal-terminal-text-size-increase)
-              (should (= portal-terminal-text-size 72))
-              (setq portal-terminal-text-size 6)
-              (portal-terminal-text-size-decrease)
-              (should (= portal-terminal-text-size 6))
-              (portal-terminal-text-size-increase)
-              (should (equal (car said) "Terminal text size 7 points")))
-            ;; Command-=, Command-+, Command-- and Command-0 run them.
-            (should (eq (keymap-lookup portal-terminal-mode-map "s-=")
-                        #'portal-terminal-text-size-increase))
-            (should (eq (keymap-lookup portal-terminal-mode-map "s-+")
-                        #'portal-terminal-text-size-increase))
-            (should (eq (keymap-lookup portal-terminal-mode-map "s--")
-                        #'portal-terminal-text-size-decrease))
-            (should (eq (keymap-lookup portal-terminal-mode-map "s-0")
-                        #'portal-terminal-text-size-reset))
-            (should-not (keymap-lookup portal-terminal-mode-map "+"))
-            ;; Another terminal starts at the size now.
-            (portal-terminal t)
-            (should-not (equal (portal-view-target) target))
-            (should (equal (plist-get (plist-get (portal--inspect (portal-view-target)) :options)
-                                      :points)
-                           7))))
-      (setq portal-terminal-text-size original))))
+;; Batch Emacs's frames are text terminals, where the `default' face has a
+;; nominal height of 1, but its attribute can still be set per frame.  Making
+;; or selecting a frame on another terminal sets it back to 1 in every frame,
+;; so tests set it again after making one, and never select it.
+(defmacro portal-view-test--with-default-height (height &rest body)
+  "Run BODY with the `default' face HEIGHT tenths of a point high in every frame."
+  (declare (indent 1))
+  `(let ((heights (mapcar (lambda (frame) (cons frame (face-attribute 'default :height frame)))
+                          (frame-list))))
+     (unwind-protect
+         (progn (set-face-attribute 'default nil :height ,height) ,@body)
+       (dolist (entry heights)
+         (when (frame-live-p (car entry))
+           (set-face-attribute 'default (car entry) :height (cdr entry)))))))
 
-(ert-deftest portal-view-terminal-text-size-is-kept-by-savehist ()
-  (require 'savehist)
-  (should (memq 'portal-terminal-text-size savehist-additional-variables)))
+(defun portal-view-test--points (target)
+  "The text size the fake shows TARGET's terminal at, or nil."
+  (plist-get (portal--inspect target) :points))
+
+(defun portal-view-test--sized (target)
+  "The sizes sent to TARGET's terminal, oldest first."
+  (mapcar #'cadr (cl-remove-if-not (lambda (call) (equal (car call) target))
+                                   (portal-fake-native-calls 'portal--terminal-text-size))))
+
+(ert-deftest portal-view-terminal-text-size-is-emacs-text-size ()
+  (portal-view-test--with-default-height 170
+    (with-temp-buffer
+      (should (equal (portal-terminal--text-size (current-buffer) (selected-frame)) 17.0))
+      ;; The buffer's own zoom, by `text-scale-mode-step' to its amount.
+      (text-scale-set 2)
+      (should (< (abs (- (portal-terminal--text-size (current-buffer) (selected-frame)) 24.48))
+                 1e-9))
+      (text-scale-set 0)
+      (should (equal (portal-terminal--text-size (current-buffer) (selected-frame)) 17.0))
+      ;; The face's height in that frame.
+      (portal-fake-native-with-frame other
+        (set-face-attribute 'default (selected-frame) :height 170)
+        (set-face-attribute 'default other :height 300)
+        (should (equal (portal-terminal--text-size (current-buffer) other) 30.0))
+        (should (equal (portal-terminal--text-size (current-buffer) (selected-frame)) 17.0))))))
+
+(ert-deftest portal-view-terminal-text-size-follows-the-buffer-and-its-frame ()
+  (portal-view-test--with-default-height 170
+    (portal-view-test--environment
+      ;; A new terminal opens at the size of Emacs text.
+      (portal-terminal)
+      (let ((first (current-buffer)) (first-id (portal-view-target)))
+        (should (equal (plist-get (plist-get (portal--inspect first-id) :options) :points) 17.0))
+        (split-window-right)
+        (other-window 1)
+        (portal-terminal-new)
+        (let ((second (current-buffer)) (second-id (portal-view-target)))
+          (portal-view-sync)
+          (run-hook-with-args 'window-state-change-functions (selected-frame))
+          ;; Nothing changed, so nothing is sent.
+          (should-not (portal-fake-native-calls 'portal--terminal-text-size))
+          ;; Zooming one terminal's buffer sizes that terminal alone.
+          (text-scale-increase 1)
+          (should (equal (portal-view-test--sized second-id) '(20.4)))
+          (should (equal (portal-view-test--points second-id) 20.4))
+          (should-not (portal-view-test--sized first-id))
+          (text-scale-set 0)
+          (should (equal (portal-view-test--sized second-id) '(20.4 17.0)))
+          ;; A size beyond what a terminal shows is clamped.
+          (text-scale-set 12)
+          (should (equal (portal-view-test--points second-id) 72))
+          (text-scale-set 0)
+          ;; A change of the frame's font sizes every shown terminal.
+          (set-face-attribute 'default (selected-frame) :height 300)
+          (run-hook-with-args 'window-state-change-functions (selected-frame))
+          (should (equal (portal-view-test--points first-id) 30.0))
+          (should (equal (portal-view-test--points second-id) 30.0))
+          ;; A hidden terminal keeps its size until it is shown.
+          (with-selected-window (get-buffer-window first)
+            (switch-to-buffer (get-buffer-create "*scratch*")))
+          (portal-view-sync)
+          (set-face-attribute 'default (selected-frame) :height 200)
+          (run-hook-with-args 'window-state-change-functions (selected-frame))
+          (should (equal (portal-view-test--points second-id) 20.0))
+          (should (equal (portal-view-test--points first-id) 30.0))
+          (with-current-buffer first (text-scale-increase 1))
+          (should (equal (portal-view-test--points first-id) 30.0))
+          ;; A terminal shown in another frame takes that frame's size.
+          (portal-fake-native-with-frame other
+            (set-face-attribute 'default (selected-frame) :height 200)
+            (set-face-attribute 'default other :height 140)
+            (set-window-buffer (frame-first-window other) first)
+            (portal-view-sync)
+            (run-hook-with-args 'window-state-change-functions other)
+            (should (eq (plist-get (portal--inspect first-id) :frame) other))
+            (should (< (abs (- (portal-view-test--points first-id) 16.8)) 1e-9))
+            (should (equal (portal-view-test--points second-id) 20.0)))
+          (should (eq second (window-buffer))))))
+    ;; With the last terminal gone, nothing follows sizes.
+    (should-not (memq #'portal-terminal--resize-shown window-state-change-functions))))
 
 (ert-deftest portal-view-terminal-buffers-follow-the-view-lifecycle ()
   (portal-view-test--environment

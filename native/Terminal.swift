@@ -66,7 +66,7 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     var program = ""
     private var programTimer: Timer?
 
-    init(directory: String, command: String?, theme: TerminalTheme, points: Int) {
+    init(directory: String, command: String?, theme: TerminalTheme, points: Double) {
         super.init(frame: .zero)
         delegate = self
         configuration = TerminalSurfaceOptions(
@@ -187,7 +187,8 @@ final class TerminalSession: PortalView {
         self.target = target
         let terminal = HostedTerminal(directory: directory, command: try terminalCommand(options, directory: directory),
                                       theme: try Terminals.theme(named: options.string("theme")),
-                                      points: try options.integer("points") ?? Int(PORTAL_TERMINAL_POINTS))
+                                      points: portal_terminal_points(try options.number("points")
+                                                                         ?? Double(PORTAL_TERMINAL_POINTS)))
         if let issue = terminal.controller?.lastConfigurationIssue { throw NativeError.message(issue) }
         self.terminal = terminal
         input = NativeInput(target: target, view: terminal, host: NativeView.parking) { [weak terminal] in
@@ -225,7 +226,8 @@ final class TerminalSession: PortalView {
          ("progress", .string(terminal.progress)),
          ("columns", .integer(Int(terminal.grid?.columns ?? 0))),
          ("rows", .integer(Int(terminal.grid?.rows ?? 0))),
-         ("points", .integer(Int(terminal.fontSize ?? 0))),
+         // Ghostty keeps a size as a Float; hundredths are what Lisp sent.
+         ("points", .number((Double(terminal.fontSize ?? 0) * 100).rounded() / 100)),
          ("layer", .string(terminal.layer.map { NSStringFromClass(type(of: $0)) } ?? ""))]
     }
 
@@ -241,8 +243,8 @@ final class TerminalSession: PortalView {
 
     /// Ghostty's own size binding, which marks the size as chosen, so a
     /// later theme, which reloads the configuration, keeps it.
-    func setTextSize(_ points: Int) throws {
-        guard terminal.performBindingAction("set_font_size:\(points)") else {
+    func setTextSize(_ points: Double) throws {
+        guard terminal.performBindingAction("set_font_size:" + String(format: "%g", points)) else {
             throw NativeError.message("No terminal accepting text size changes")
         }
     }
@@ -281,8 +283,9 @@ final class TerminalSession: PortalView {
     func changed() { Core.terminalChanged(target) }
 
     /// The core decides what each key does. Ghostty gets the rest, which
-    /// never includes a Super chord: the core hands those to Emacs, which
-    /// binds the text size keys, or to the view's shortcuts.
+    /// never includes a Super chord: the core hands those to Emacs, where
+    /// Command-= is `text-scale-adjust` in this buffer, or to the view's
+    /// shortcuts.
     func handleKeyEvent(_ event: NSEvent) -> Bool {
         if input.handleKeyEvent(event) { return true }
         switch event.type {

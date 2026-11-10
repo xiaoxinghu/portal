@@ -79,10 +79,17 @@ The selected frame is kept."
        (when (frame-live-p ,frame) (delete-frame ,frame))
        (delete-process portal-fake-native--tty))))
 
+(defun portal-fake-native--points (points)
+  "POINTS clamped to a terminal's sizes, as the native module does."
+  (max 6 (min 72 points)))
+
 (defun portal--open (kind options)
   (portal-fake-native--call 'portal--open kind options)
-  (let ((target (format "%s:%d" kind (cl-incf portal-fake-native--next-id))))
-    (puthash target (list :options options :frame nil :edges nil :visible nil)
+  (let ((target (format "%s:%d" kind (cl-incf portal-fake-native--next-id)))
+        (points (plist-get options :points)))
+    (puthash target (append (list :options options :frame nil :edges nil :visible nil)
+                            (and (equal kind "terminal") (numberp points)
+                                 (list :points (portal-fake-native--points points))))
              portal-fake-native--views)
     target))
 
@@ -339,14 +346,13 @@ module does."
 
 (defun portal--terminal-bindings (_json) t)
 (defun portal--terminal-theme (_theme) t)
-(defun portal--terminal-text-size (points)
-  "Show every terminal at POINTS: each one's state gets :points."
-  (portal-fake-native--call 'portal--terminal-text-size points)
-  (unless (and (integerp points) (<= 6 points 72))
-    (error "A terminal's text size must be from 6 to 72 points, not %S" points))
-  (maphash (lambda (target view)
-             (when (string-prefix-p "terminal:" target)
-               (puthash target (plist-put view :points points) portal-fake-native--views)))
+(defun portal--terminal-text-size (target points)
+  "Show TARGET's text at POINTS, clamped: its state gets :points."
+  (portal-fake-native--call 'portal--terminal-text-size target points)
+  (unless (string-prefix-p "terminal:" target) (error "No Portal view %s" target))
+  (unless (numberp points) (signal 'wrong-type-argument (list 'numberp points)))
+  (puthash target (plist-put (portal-fake-native--view target)
+                             :points (portal-fake-native--points points))
            portal-fake-native--views)
   t)
 (defun portal--web-appearance (appearance)

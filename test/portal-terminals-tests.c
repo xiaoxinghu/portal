@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* The core's terminal rules, native/Core/terminals.c, with the fake
    platform: option checks before creation, the theme catalog and applying a
-   theme or a text size to every terminal, paste and Enter, reading text, what a terminal
-   describes, and the records that announce its changes.  The fake counts the
+   theme to every terminal, a text size to one, paste and Enter, reading
+   text, what a terminal describes, and the records that announce its changes.  The fake counts the
    primitives the core calls, and any call naming a destroyed view or a view
    of the wrong kind.  Records go to a real pipe, which the tests read as
    Emacs would. */
@@ -38,9 +38,9 @@ static portal_option flag_option(const char *name, bool flag)
     return (portal_option) {.name = text(name), .flag = flag};
 }
 
-static portal_option integer_option(const char *name, int64_t integer)
+static portal_option number_option(const char *name, double number)
 {
-    return (portal_option) {.name = text(name), .is_integer = true, .integer = integer,
+    return (portal_option) {.name = text(name), .is_number = true, .number = number,
                             .flag = true};
 }
 
@@ -95,18 +95,12 @@ static void test_options_are_checked_before_creation(void)
          3,
          "Unknown terminal theme: Gamma"},
         {{directory, flag_option("directory", false)}, 2, "A terminal view needs a :directory"},
-        {{directory, integer_option("theme", 3)}, 2, "Option :theme must be a string"},
-        {{directory, string_option("points", "14")}, 2, "Option :points must be an integer"},
-        {{directory, flag_option("points", true)}, 2, "Option :points must be an integer"},
-        {{directory, integer_option("points", 5)},
-         2,
-         "A terminal's text size must be from 6 to 72 points, not 5"},
-        {{directory, integer_option("points", 73)},
-         2,
-         "A terminal's text size must be from 6 to 72 points, not 73"},
-        {{directory, integer_option("points", 14), integer_option("points", -1)},
+        {{directory, number_option("theme", 3)}, 2, "Option :theme must be a string"},
+        {{directory, string_option("points", "14")}, 2, "Option :points must be a number"},
+        {{directory, flag_option("points", true)}, 2, "Option :points must be a number"},
+        {{directory, number_option("points", 14), string_option("points", "14")},
          3,
-         "A terminal's text size must be from 6 to 72 points, not -1"},
+         "Option :points must be a number"},
     };
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
         portal_text error = {0};
@@ -132,10 +126,15 @@ static void test_options_are_checked_before_creation(void)
     CHECK(portal_fake_calls().listed == before.listed);
     close_view(target);
 
-    /* A size in range, or none, passes as given. */
-    const portal_option sized[] = {directory, integer_option("points", 6),
-                                   integer_option("points", 72)};
+    /* A size passes as given, fractions too; the platform clamps it with
+       portal_terminal_points, as the fake does. */
+    const portal_option sized[] = {directory, number_option("points", 6),
+                                   number_option("points", 24.48)};
     target = open_terminal(sized, 3, &error);
+    CHECK(target && shows(target, "\"points\":24.48", NULL));
+    close_view(target);
+    const portal_option large[] = {directory, number_option("points", 300)};
+    target = open_terminal(large, 2, &error);
     CHECK(target && shows(target, "\"points\":72", NULL));
     close_view(target);
     const portal_option unsized[] = {directory, flag_option("points", false)};
@@ -270,65 +269,47 @@ static void test_a_rejected_theme_stops_at_that_terminal(void)
     CHECK(!portal_fake_calls().misused);
 }
 
-static void test_a_text_size_reaches_every_terminal(void)
+static void test_points_are_clamped(void)
+{
+    CHECK(portal_terminal_points(14) == 14);
+    CHECK(portal_terminal_points(24.48) == 24.48);
+    CHECK(portal_terminal_points(6) == 6);
+    CHECK(portal_terminal_points(72) == 72);
+    CHECK(portal_terminal_points(5.99) == 6);
+    CHECK(portal_terminal_points(72.01) == 72);
+    CHECK(portal_terminal_points(-1) == 6);
+    CHECK(portal_terminal_points(1.0 / 0.0) == 72);
+    CHECK(portal_terminal_points(-1.0 / 0.0) == 6);
+    CHECK(portal_terminal_points(0.0 / 0.0) == 6);
+}
+
+static void test_a_text_size_reaches_one_terminal(void)
 {
     portal_text error = {0};
-    /* A size is checked even with no terminal open. */
-    CHECK(!portal_terminals_text_size(5, &error));
-    CHECK(says(&error, "A terminal's text size must be from 6 to 72 points, not 5"));
-    CHECK(portal_terminals_text_size(14, &error));
-
-    char *web = open_view("web", &error, NULL);
-    char *first = open_in("/"), *second = open_in("/"), *third = open_in("/");
+    char *first = open_in("/"), *second = open_in("/");
     struct portal_fake_calls before = portal_fake_calls();
-    CHECK(portal_terminals_text_size(20, &error));
-    CHECK(portal_fake_calls().sized == before.sized + 3);
-    CHECK(shows(first, "\"points\":20", NULL));
-    CHECK(shows(second, "\"points\":20", NULL));
-    CHECK(shows(third, "\"points\":20", NULL));
-    char *state = inspect(web);
+    CHECK(portal_terminals_text_size(text(first), 24.48, &error));
+    CHECK(portal_fake_calls().sized == before.sized + 1);
+    CHECK(shows(first, "\"points\":24.48", NULL));
+    char *state = inspect(second);
     CHECK(state && !strstr(state, "\"points\""));
     free(state);
 
-    /* The limits are sizes; beyond them, no terminal is touched. */
-    CHECK(portal_terminals_text_size(6, &error));
-    CHECK(portal_terminals_text_size(72, &error));
-    before = portal_fake_calls();
-    CHECK(!portal_terminals_text_size(73, &error));
-    CHECK(says(&error, "A terminal's text size must be from 6 to 72 points, not 73"));
-    CHECK(!portal_terminals_text_size(INT64_MIN, &error));
-    CHECK(portal_fake_calls().sized == before.sized);
+    /* A size out of range is shown at the nearest limit, not refused. */
+    CHECK(portal_terminals_text_size(text(second), 300, &error));
     CHECK(shows(second, "\"points\":72", NULL));
+    CHECK(portal_terminals_text_size(text(second), 2.5, &error));
+    CHECK(shows(second, "\"points\":6", NULL));
+    CHECK(shows(first, "\"points\":24.48", NULL));
 
-    /* A rejecting terminal stops it there, as for a theme. */
-    const portal_option broken[] = {string_option("directory", "/"),
-                                    string_option("broken", "Metal is gone")};
-    char *fourth = open_terminal(broken, 2, &error), *fifth = open_in("/");
-    CHECK(fourth && fifth);
-    CHECK(!portal_terminals_text_size(30, &error));
-    CHECK(says(&error, "Metal is gone"));
-    CHECK(shows(third, "\"points\":30", NULL));
-    state = inspect(fifth);
-    CHECK(state && !strstr(state, "\"points\""));
-    free(state);
-    close_view(fourth);
-    close_view(fifth);
-
-    /* A closed terminal is not resized, and a refusing platform changes nothing. */
-    close_view(second);
-    before = portal_fake_calls();
-    CHECK(portal_terminals_text_size(16, &error));
-    CHECK(portal_fake_calls().sized == before.sized + 2);
+    /* The platform's refusal is the error. */
     portal_fake_refuse(true);
-    before = portal_fake_calls();
-    CHECK(!portal_terminals_text_size(18, &error));
+    CHECK(!portal_terminals_text_size(text(first), 18, &error));
     CHECK(says(&error, "The fake refuses to run view primitives"));
     portal_fake_refuse(false);
-    CHECK(same_calls(portal_fake_calls(), before));
-    CHECK(shows(first, "\"points\":16", NULL));
+    CHECK(shows(first, "\"points\":24.48", NULL));
     close_view(first);
-    close_view(third);
-    close_view(web);
+    close_view(second);
     CHECK(!portal_fake_calls().misused);
 }
 
@@ -386,6 +367,8 @@ static void test_targets_must_name_open_terminals(void)
         CHECK(!portal_terminals_paste(text(targets[i]), text("x"), true, &error));
         CHECK(says(&error, message));
         CHECK(!portal_terminals_text(text(targets[i]), &scrollback, &error));
+        CHECK(says(&error, message));
+        CHECK(!portal_terminals_text_size(text(targets[i]), 14, &error));
         CHECK(says(&error, message));
     }
     CHECK(same_calls(portal_fake_calls(), before));
@@ -465,7 +448,8 @@ int main(void)
     test_the_theme_catalog_is_sorted();
     test_a_theme_reaches_every_terminal();
     test_a_rejected_theme_stops_at_that_terminal();
-    test_a_text_size_reaches_every_terminal();
+    test_points_are_clamped();
+    test_a_text_size_reaches_one_terminal();
     test_paste_then_enter();
     test_targets_must_name_open_terminals();
     test_a_terminal_describes_itself();
