@@ -106,13 +106,22 @@ loading them, or `M-x portal-web-consult-mode`.
 `C-s` or Command-F (`portal-web-find`) reads text in the minibuffer and finds
 it in the page, after the page's selection; `C-r` (`portal-web-find-backward`)
 finds it before. WebKit selects and highlights the match, wrapping around the
-page's ends. While the minibuffer reads, `C-s` and `C-r` move to the next and
-previous match without leaving it, and `RET` stays on the match shown; empty
-input finds the last text again. Afterwards Command-G and Command-Shift-G
-(`portal-web-find-next` and `portal-web-find-previous`) move between matches.
+page's ends. While the minibuffer reads, `C-s` or Command-G and `C-r` or
+Command-Shift-G move to the next and previous match without leaving it, as a
+browser's find bar does, and `RET` stays on the match shown; empty input finds
+the last text again. Text found this way is the last text even if you leave
+with `C-g`. Afterwards Command-G and Command-Shift-G (`portal-web-find-next`
+and `portal-web-find-previous`) move between matches.
 Case matters as in isearch: when `case-fold-search` is off, or the text has an
-upper-case letter. The page never takes the keyboard while finding; a page
-without a match says so in the echo area.
+upper-case letter. The page never takes the keyboard while finding.
+
+Each find says in the echo area, or beside the text being read, which match it
+is of how many, as isearch's count does: `3/12 sh`, `Wrapped 1/12 sh` when it
+went past the page's last match to its first, or its first to its last going
+backward. WebKit counts the matches in every frame, up to 1000: past that the
+count reads `1000+`. A page without a match says `No match for "sh"`. Where
+the system's WebKit cannot count, the echo area shows the text alone once it is
+found.
 
 `+` or Command-= (`portal-web-zoom-in`) and `-` or Command-- (`portal-web-zoom-out`)
 step through `portal-web-zoom-steps`, and `0` or Command-0
