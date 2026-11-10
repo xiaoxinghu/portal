@@ -499,13 +499,13 @@ would spend the click that asked for fullscreen."
             (should (portal-test-native-click 50 50))
             (portal-input-gui--fullscreen t)
             (setq unread-command-events nil)
-            ;; Emacs shows the page in another frame meanwhile, and gives it
-            ;; the keyboard there.
+            ;; Emacs shows the page in another frame meanwhile, and takes it
+            ;; there with the keyboard, as RET does.
             (select-frame frame)
             (switch-to-buffer buffer)
             (redisplay t)
-            (should (equal (portal-view-target) target))
             (portal-input-focus)
+            (should (equal (portal-view-target) target))
             (should (portal-input--action "focused"))
             (let* ((owners nil)
                    (watch (lambda (_symbol value operation _where)

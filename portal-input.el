@@ -34,6 +34,8 @@
 (defvar portal-input-mode-map
   (let ((map (make-sparse-keymap)))
     (keymap-set map "RET" #'portal-input-focus)
+    ;; A click reaches Emacs only on a pane without the view: its placard.
+    (keymap-set map "<mouse-1>" #'portal-input-focus)
     (keymap-set map "s-." #'portal-input-unfocus)
     map)
   "Keys of a Portal view's buffer while Emacs has the keyboard.")
@@ -338,7 +340,8 @@ dimmed while Emacs has it, and the whole mode line takes
       (portal--input target action (or serial 0)))))
 
 (defun portal-input-focus ()
-  "Give the selected Portal view keyboard focus."
+  "Bring this buffer's Portal view to the selected pane and focus it.
+RET or a click in a pane showing the buffer without its view runs this."
   (interactive)
   (portal-view-focus))
 

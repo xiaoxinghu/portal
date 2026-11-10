@@ -130,16 +130,20 @@ process.  A terminal whose program has exited is killed without asking."
   :group 'portal-terminal)
 
 (define-derived-mode portal-terminal-mode special-mode "Ghostty"
-  "A real native Ghostty surface occupies this buffer's displayed pane.
-RET focuses Ghostty.  The shell gets typing and Control and Meta chords; a
-Super chord reaches Emacs, which runs it in this buffer.
+  "A real native Ghostty surface occupies one pane showing this buffer.
+RET or a click focuses Ghostty.  The shell gets typing and Control and
+Meta chords; a Super chord reaches Emacs, which runs it in this buffer.
 The terminal's text is the size of Emacs text in the frame that shows it,
 and zooms with this buffer: `text-scale-adjust', on Command-= and
 Command-- from inside Ghostty too, zooms this terminal alone.
-`portal-input-escape-key' always returns focus to Emacs.  Scrollback
-belongs to Ghostty.  The mode line's light is lit while Ghostty has the
-keyboard and dimmed while Emacs has it, and :exited follows it once the
-program has exited."
+`portal-input-escape-key' always returns focus to Emacs; customize it
+to choose another key.  Scrollback belongs to Ghostty.  The mode line's
+light is lit while Ghostty has the keyboard and dimmed while Emacs has
+it, and :exited follows it once the program has exited.
+The terminal stays in its pane, whichever pane is selected.  Another
+pane showing this buffer says the terminal is elsewhere, and RET or a
+click there brings it to that pane; switching to this buffer in a pane
+brings it too.  \\[portal-terminal-close] ends the shell and keeps the buffer."
   (setq-local cursor-type nil)
   (add-hook 'text-scale-mode-hook #'portal-terminal--text-scaled nil t)
   (add-hook 'kill-buffer-hook #'portal-terminal--dismiss-quick nil t)
@@ -311,12 +315,7 @@ QUICK-ROOT, or to the project of `default-directory', where it starts."
                   portal-terminal--project project
                   portal-terminal--quick-root quick-root
                   portal-terminal--last-buffer previous)
-            (let ((inhibit-read-only t))
-              (insert "Native Ghostty terminal\n\n"
-                      "RET or a click focuses Ghostty. The configured escape returns to Emacs.\n"
-                      "See M-x customize-option RET portal-input-escape-key for that key.\n"
-                      "Super chords, such as your s- bindings, reach Emacs from Ghostty.\n"
-                      "This buffer has one live view, which follows its selected pane.\n")))
+            (portal-view-placard "terminal" "This terminal has ended."))
           (if quick-root
               (portal-terminal-quick--display buffer)
             (if elsewhere

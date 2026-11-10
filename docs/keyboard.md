@@ -160,7 +160,9 @@ system's print panel ([print](web-views.md#print)). The Command chords reach
 Emacs from inside the page too, as Command-R does.
 
 Click a page or press `RET` to interact. Entering by click also selects its
-Emacs pane, keeping selection and keyboard focus aligned. Back in Emacs, `q`
+Emacs pane, keeping selection and keyboard focus aligned. In another pane
+showing the same buffer, which says the page is showing elsewhere, `RET` or a
+click brings the page to that pane first. Back in Emacs, `q`
 hides the web view and `g` reloads. The mode line and minibuffer remain available.
 
 ### Fullscreen pages

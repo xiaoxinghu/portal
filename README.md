@@ -6,8 +6,8 @@
 
 Portal puts native WebKit pages and Ghostty terminals inside macOS Emacs panes.
 For Emacs users who want a real terminal or a local document preview alongside
-editing, each buffer has one native view that follows it across splits, resizing
-and frames. Hidden pages and terminal sessions keep running.
+editing, each buffer has one native view that stays in its pane across splits
+and follows the buffer to other panes and frames. Hidden pages and terminal sessions keep running.
 
 The bundled app host provides Markdown previews and an offline Excalidraw
 editor. Optional launchers present your own Emacs commands in

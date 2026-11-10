@@ -131,7 +131,11 @@ Command-0 resets, for every page from the same site.  Command-P prints the
 page in the system's print panel.  The mode line's light is
 lit while the page has the keyboard and dimmed while Emacs has it.
 q hides the view while the page keeps running, and killing the buffer
-closes it."
+closes it.  The page stays in its pane, whichever pane is selected.
+Another pane showing this buffer says the page is elsewhere: RET or a
+click there brings it to that pane, and switching to this buffer in a
+pane brings it too.  The keys above work there as well, on the page
+where it is."
   (setq-local cursor-type nil)
   (setq-local bookmark-make-record-function #'portal-web-bookmark-make-record)
   (portal-input-mode 1))
@@ -363,14 +367,16 @@ searches the web with `portal-web-search-url'."
     (portal-web--resolve input candidates)))
 
 (defun portal-web--selected ()
-  "Return the target of the selected pane's web view, or signal a user error."
-  (let ((target (portal-view-target)))
+  "Return the target of this buffer's web view, or signal a user error.
+The view may be in another pane than the selected one, which then shows
+the buffer's placard: commands act on the view where it is."
+  (let ((target portal-view--target))
     (unless (and target (string-prefix-p "web:" target))
-      (user-error "Select a Portal web view"))
+      (user-error "No web view in this buffer"))
     target))
 
 (defun portal-web--go (step)
-  "Move the selected pane's web view through its history by STEP.
+  "Move this buffer's web view through its history by STEP.
 STEP is \"back\" or \"forward\"; with no page to go to, nothing changes."
   (portal--web-go (portal-web--selected) step))
 
@@ -410,7 +416,7 @@ letter and `search-upper-case' is on."
             (or (not search-upper-case) (isearch-no-upper-case-p text nil)))))
 
 (defun portal-web--search (text backward)
-  "Find TEXT in the selected pane's web view, BACKWARD or forward."
+  "Find TEXT in this buffer's web view, BACKWARD or forward."
   (portal--web-find (portal-web--selected) text backward (portal-web--case-sensitive text))
   (with-current-buffer (window-buffer)
     (setq portal-web--finding text)))
@@ -504,7 +510,7 @@ kept from one Emacs session to the next.")
     (or (and url (url-host (url-generic-parse-url url))) "")))
 
 (defun portal-web--zoom (choose)
-  "Zoom the selected pane's site to the level CHOOSE returns.
+  "Zoom this buffer's page's site to the level CHOOSE returns.
 CHOOSE gets the site's level now, in percent."
   (let* ((target (portal-web--selected))
          (host (portal-web--host target))
@@ -598,18 +604,9 @@ the page's title; a directory gets that name."
       (_ url))))
 
 (defun portal-web--start-buffer ()
-  "Put the current buffer, new, in `portal-web-mode', with its help text."
+  "Put the current buffer, new, in `portal-web-mode', with its placard."
   (portal-web-mode)
-  (let ((inhibit-read-only t))
-    (insert "Web view\n\n"
-            "RET or a click enters the page. The configured escape returns to Emacs.\n"
-            "See M-x customize-option RET portal-input-escape-key for that key.\n"
-            "g loads the page again. q hides it; killing the buffer closes it.\n"
-            "Command-L loads another URL or searches; Command-T opens one in a new buffer.\n"
-            "l and r go back and forward.\n"
-            "Command-D bookmarks the page; b loads a bookmark here, B in a new buffer.\n"
-            "C-s finds text in the page; + and - zoom, and 0 resets.\n"
-            "This buffer has one live view, which follows its selected pane.\n")))
+  (portal-view-placard "page" "This page is closed."))
 
 (defun portal-web--create (name open &optional show)
   "Return a new web buffer called *portal: NAME*, whose view OPEN opens.

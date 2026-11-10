@@ -115,9 +115,9 @@
       (should-error (portal-open-url url) :type 'user-error))
     (should (= (length (portal-fake-native-calls 'portal--open)) 3))))
 
-(ert-deftest portal-web-view-appears-only-in-the-selected-pane ()
+(ert-deftest portal-web-view-stays-in-its-pane-and-the-placard-reaches-it ()
   (portal-web-test--environment
-    (portal-open-url "about:blank")
+    (portal-open-url "https://example.com/")
     (let* ((target (portal-view-target))
            (origin (selected-window))
            (other (split-window-right)))
@@ -127,13 +127,30 @@
       (should-not (portal-view-target other))
       (should (equal (plist-get (portal-web-test--state target) :edges)
                      (window-inside-pixel-edges origin)))
+      ;; Selecting the other pane leaves the page where it is.
       (select-window other)
       (portal-view-sync)
+      (should (equal (portal-view-target origin) target))
+      (should-not (portal-view-target other))
+      (should (= (length (portal-fake-native-calls 'portal--open)) 1))
+      ;; The keys in the placard act on the page where it is.
+      (setq portal-fake-native-log nil)
+      (call-interactively (key-binding "g"))
+      (call-interactively (key-binding "l"))
+      (call-interactively (key-binding "+"))
+      (should (equal (reverse portal-fake-native-log)
+                     `((portal--web-load ,target "https://example.com/")
+                       (portal--web-go ,target "back")
+                       (portal--web-zoom "example.com" 115))))
+      (should (equal (portal-view-target origin) target))
+      (call-interactively (key-binding "0"))
+      ;; RET there brings the page.
+      (call-interactively (key-binding (kbd "RET")))
       (should (equal (portal-view-target other) target))
       (should-not (portal-view-target origin))
       (should (equal (plist-get (portal-web-test--state target) :edges)
                      (window-inside-pixel-edges other)))
-      (should (= (length (portal-fake-native-calls 'portal--open)) 1)))))
+      (should-not (portal-fake-native-calls 'portal--open)))))
 
 (ert-deftest portal-web-render-html-reuses-its-buffer-and-g-reloads ()
   (portal-web-test--environment

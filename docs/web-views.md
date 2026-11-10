@@ -224,10 +224,12 @@ Web views are Portal views of the web kind. Remote pages use
 local pages use `loadFileURL` with containing-directory read access for relative
 scripts, styles and images. JavaScript is enabled by default.
 
-- Each web buffer has one view in its selected pane
-  ([ADR 0001](adr/0001-one-portal-view-per-buffer.md)); other panes showing
-  that buffer show only text. Use two buffers for side-by-side pages.
-- Views belong to no frame: showing the buffer elsewhere moves its page.
+- Each web buffer has one view, which stays in its pane whichever pane is
+  selected ([ADR 0001](adr/0001-one-portal-view-per-buffer.md)). Other panes
+  showing that buffer say the page is showing elsewhere: `RET` or a click
+  there brings it, and the buffer's keys, such as `g`, act on the page where
+  it is. Use two buffers for side-by-side pages.
+- Views belong to no frame: switching to the buffer elsewhere moves its page.
   Deleting a frame only hides its views.
 - Hiding with `q` or another buffer preserves the page's navigation, DOM, scroll
   position and form state. Cookies use WebKit's default store, except hosted

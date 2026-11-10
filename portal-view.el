@@ -1,8 +1,11 @@
 ;;; portal-view.el --- The shared Portal view lifecycle -*- lexical-binding: t; -*-
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
-;; A buffer has at most one Portal view.  The view appears in the selected pane
-;; that shows the buffer, in any frame, and is hidden, not ended, while no pane
+;; A buffer has at most one Portal view.  The view stays in the pane it is in
+;; while that pane shows the buffer, whichever pane is selected, and moves only
+;; when the pane goes, when the buffer is switched into the selected pane, or
+;; when RET or a click takes it; other panes showing the buffer show its text,
+;; a placard saying where the view is.  It is hidden, not ended, while no pane
 ;; shows it (docs/adr/0001).  This file makes every native lifecycle call,
 ;; addressing each view by its native target, such as "terminal:1"
 ;; (docs/adr/0002).  It also owns the one pipe that carries every native
@@ -48,6 +51,17 @@ It is non-nil exactly while the buffer is in `portal-view--buffers'.")
 (defvar-local portal-view--geometry nil
   "The placement last sent to the native view, or nil while it is hidden.
 The form is (FRAME FRAME-PIXEL-HEIGHT EDGES).")
+(defvar portal-view--live-windows nil
+  "The live windows of every frame at the last `portal-view-sync'.
+A selected pane among them that did not show a buffer then, and shows it
+now, had the buffer switched into it; a pane not among them came from a
+split, or a new frame, since.")
+(defvar-local portal-view--showing nil
+  "The windows that showed this buffer when its view was last placed.")
+(defvar-local portal-view--closed-text nil
+  "What this buffer says once its view has closed, or nil.
+It is non-nil exactly while the buffer's text is a placard, written by
+`portal-view-placard'.")
 
 (defun portal-view--unsupported ()
   "Why this Emacs and its selected frame cannot run native views, or nil.
@@ -181,9 +195,10 @@ The native module finds FRAME's window by this title."
 (defun portal-view-open (kind options)
   "Open a Portal view of KIND for the current buffer and return its target.
 KIND is a symbol, `terminal' or `web'.  OPTIONS is a plist for that kind.
-The view follows the selected pane showing the buffer, in any frame, is
-hidden while no pane shows it, and ends when the buffer is killed or
-changes major mode."
+The view appears in a pane showing the buffer, in any frame, and stays
+in that pane while it shows the buffer: see `portal-view--sync-buffer'
+for when it moves.  It is hidden while no pane shows the buffer, and ends
+when the buffer is killed or changes major mode."
   (when portal-view--target (error "This buffer already has a Portal view"))
   (portal-view--load)
   (portal-view-adopt (portal--open (symbol-name kind) options)))
@@ -215,17 +230,41 @@ the buffer cannot take it, as when it has a view already, it is closed."
     (setq portal-view--buffers (delq (current-buffer) portal-view--buffers)
           portal-view--target nil
           portal-view--window nil
-          portal-view--geometry nil)
+          portal-view--geometry nil
+          portal-view--showing nil)
     (remove-hook 'kill-buffer-hook #'portal-view-close t)
     (remove-hook 'change-major-mode-hook #'portal-view-close t)
-    (unless portal-view--buffers (portal-view--hooks nil))
+    (unless portal-view--buffers
+      (portal-view--hooks nil)
+      (setq portal-view--live-windows nil))
     (portal--close target)
+    ;; The placard would say the view is in another pane.
+    (when-let* ((text portal-view--closed-text))
+      (setq portal-view--closed-text nil)
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert text "\n")))
     (run-hooks 'portal-view-close-hook)))
+
+(defun portal-view-placard (noun closed)
+  "Make the current buffer's text a placard for its view, a NOUN.
+NOUN names what the view shows, such as \"terminal\" or \"page\".  The
+view covers the text in the pane that has it, so the placard is read in
+the other panes showing the buffer: it says the view is in another pane
+and how to bring it here, as a browser's picture in picture leaves a
+placard where its video was.  Once the view closes, the text becomes
+CLOSED, a sentence such as \"This terminal has ended.\"."
+  (let ((inhibit-read-only t))
+    (erase-buffer)
+    (insert (format "This %s is showing in another pane.\nRET or a click brings it here.\n"
+                    noun)))
+  (setq portal-view--closed-text closed))
 
 (defun portal-view-target (&optional window)
   "Return the target of the Portal view shown in WINDOW, or nil.
 WINDOW defaults to the selected window.  Other windows showing the same
-buffer show only its text, so they have no target."
+buffer show only its text, a placard, so they have no target; the
+buffer's own view, wherever it is, is `portal-view--target' there."
   (let ((window (or window (selected-window))))
     (with-current-buffer (window-buffer window)
       (and (eq window portal-view--window) portal-view--target))))
@@ -251,14 +290,25 @@ to, so that a buffer previewed there, such as by Consult, shows its view."
 
 (defun portal-view--sync-buffer (buffer)
   "Place BUFFER's view in its chosen window, or hide it when no window shows it.
-The chosen window is the selected pane, then the view's current window,
-then any other window showing BUFFER, in any frame.  Placing the view in
-another frame moves it there.  Nothing is sent when nothing moved."
+The view stays in its window while that window shows BUFFER, whichever
+window is selected.  It moves to the selected pane when BUFFER was
+switched into it: the pane shows BUFFER now, was live at the last
+`portal-view-sync' and did not show BUFFER then, as after
+`switch-to-buffer' or a preview from the minibuffer.  A pane a split
+made since never takes the view this way.  When its window goes or shows
+another buffer, the view goes to the selected pane if that shows BUFFER,
+else to the first window showing it, in any frame.  Placing the view in
+another frame moves it there.  Nothing is sent when nothing moved.
+`portal-view-focus' takes the view into the selected pane as well."
   (with-current-buffer buffer
     (let* ((windows (get-buffer-window-list buffer nil t))
            (selected (portal-view--selected-pane))
-           (window (cond ((memq selected windows) selected)
+           (window (cond ((and (memq selected windows)
+                               (memq selected portal-view--live-windows)
+                               (not (memq selected portal-view--showing)))
+                          selected)
                          ((memq portal-view--window windows) portal-view--window)
+                         ((memq selected windows) selected)
                          (t (car windows))))
            (frame (and window (window-frame window)))
            (geometry (and window (list frame (frame-pixel-height frame)
@@ -270,19 +320,29 @@ another frame moves it there.  Nothing is sent when nothing moved."
                      (portal--place portal-view--target (nth 2 geometry) title)))
           (portal--hide portal-view--target))
         (setq portal-view--geometry geometry))
-      (setq portal-view--window window))))
+      (setq portal-view--window window
+            portal-view--showing windows))))
 
 (defun portal-view-sync (&optional _frame)
   "Place or hide each Portal view to match the windows showing its buffer.
 Window change hooks call this with the frame that changed, but a change in
-one frame can move a view out of another, so every view is synced.  Call it
-directly where the hooks do not run, such as in batch Emacs."
-  (mapc #'portal-view--sync-buffer (portal-view-buffers)))
+one frame can move a view out of another, so every view is synced.  Then
+it records the live windows, against which the next sync tells a pane a
+buffer was switched into from one a split made.  Call it directly where
+the hooks do not run, such as in batch Emacs."
+  (mapc #'portal-view--sync-buffer (portal-view-buffers))
+  (setq portal-view--live-windows
+        (and portal-view--buffers (window-list-1 nil 'nomini t))))
 
 (defun portal-view-focus ()
-  "Give the current buffer's Portal view keyboard focus."
+  "Bring the current buffer's Portal view here and give it keyboard focus.
+When the selected pane shows the buffer without its view, as a placard,
+the view moves there first, from wherever it is."
   (unless portal-view--target (user-error "No Portal view in this buffer"))
   (redisplay t)
+  (let ((pane (portal-view--selected-pane)))
+    (when (eq (window-buffer pane) (current-buffer))
+      (setq portal-view--window pane)))
   (portal-view--sync-buffer (current-buffer))
   (unless (portal--input portal-view--target "focus")
     (user-error "No visible Portal view to focus")))
@@ -295,7 +355,15 @@ The next sync places each one wherever its buffer is still shown."
       (when (eq frame (car portal-view--geometry))
         (portal--hide portal-view--target)
         (setq portal-view--geometry nil
-              portal-view--window nil)))))
+              portal-view--window nil))
+      (setq portal-view--showing (portal-view--outside frame portal-view--showing))))
+  (setq portal-view--live-windows (portal-view--outside frame portal-view--live-windows)))
+
+(defun portal-view--outside (frame windows)
+  "Return the live WINDOWS that are not in FRAME."
+  (cl-remove-if-not (lambda (window)
+                      (and (window-live-p window) (not (eq (window-frame window) frame))))
+                    windows))
 
 (defun portal-view--close-all ()
   "End every Portal view, for Emacs shutdown."

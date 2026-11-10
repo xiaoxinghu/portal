@@ -11,6 +11,7 @@
                                 (bound-and-true-p byte-compile-current-file)
                                 buffer-file-name))))
 (require 'portal-terminal)
+(require 'portal-web)
 
 ;; Tests kill live shells without asking; the prompt has its own tests.
 (setq portal-terminal-confirm-kill nil)
@@ -82,7 +83,7 @@ Return the view's target."
       (should-not (portal-input--focused-p))
       (should-not (or portal-input--tint (assq 'mode-line-active face-remapping-alist))))))
 
-(ert-deftest portal-view-split-keeps-one-view-in-the-selected-pane ()
+(ert-deftest portal-view-split-keeps-one-view-in-its-pane ()
   (portal-view-test--environment
     (let* ((target (portal-view-test--open "view"))
            (origin (selected-window))
@@ -90,29 +91,85 @@ Return the view's target."
       (should (eq (window-buffer other) (current-buffer)))
       (portal-view-sync)
       (should (portal-view-test--shown target origin))
+      ;; The new pane came from the split: selecting it leaves the view.
+      (select-window other)
+      (portal-view-sync)
+      (should (portal-view-test--shown target origin))
+      (should-not (portal-view-target other))
       (should (= (length (portal-fake-native-calls 'portal--open)) 1)))))
 
-(ert-deftest portal-view-follows-the-selected-pane-showing-its-buffer ()
+(ert-deftest portal-view-stays-in-its-pane-whichever-pane-is-selected ()
   (portal-view-test--environment
     (let* ((target (portal-view-test--open "view"))
            (origin (selected-window))
            (other (split-window-right))
            (unrelated (split-window-below)))
       (set-window-buffer unrelated (get-buffer "*scratch*"))
-      (select-window other)
       (portal-view-sync)
-      (should (portal-view-test--shown target other))
-      ;; A selected pane showing another buffer leaves the view where it was.
-      (select-window unrelated)
-      (portal-view-sync)
-      (should (portal-view-test--shown target other))
-      (select-window origin)
-      (portal-view-sync)
-      (should (portal-view-test--shown target origin))
+      (dolist (window (list other unrelated origin other))
+        (select-window window)
+        (portal-view-sync)
+        (should (portal-view-test--shown target origin)))
       ;; ORIGIN comes after OTHER in window order from UNRELATED; it still stays.
       (select-window unrelated)
       (should (equal (get-buffer-window-list (window-buffer origin)) (list other origin)))
       (portal-view-sync)
+      (should (portal-view-test--shown target origin)))))
+
+(ert-deftest portal-view-comes-to-a-pane-its-buffer-is-switched-into ()
+  (portal-view-test--environment
+    (let* ((target (portal-view-test--open "view"))
+           (buffer (current-buffer))
+           (origin (selected-window))
+           (other (split-window-right)))
+      (select-window other)
+      (switch-to-buffer "*scratch*")
+      (portal-view-sync)
+      (should (portal-view-test--shown target origin))
+      ;; The pane showed another buffer at the last sync: the view comes.
+      (switch-to-buffer buffer)
+      (portal-view-sync)
+      (should (portal-view-test--shown target other))
+      ;; Selecting the pane it left, which still shows the buffer, does not
+      ;; bring it back.
+      (select-window origin)
+      (portal-view-sync)
+      (should (portal-view-test--shown target other))
+      (should (= (length (portal-fake-native-calls 'portal--open)) 1)))))
+
+(ert-deftest portal-view-goes-to-the-pane-left-when-its-pane-is-deleted ()
+  (portal-view-test--environment
+    (let* ((target (portal-view-test--open "view"))
+           (origin (selected-window))
+           (other (split-window-right))
+           (unrelated (split-window-below)))
+      (set-window-buffer unrelated (get-buffer "*scratch*"))
+      (select-window unrelated)
+      (portal-view-sync)
+      (should (portal-view-test--shown target origin))
+      ;; The selected pane shows another buffer, so the view goes to the one
+      ;; pane left that shows its own.
+      (delete-window origin)
+      (portal-view-sync)
+      (should (portal-view-test--shown target other))
+      (should (eq (selected-window) unrelated)))))
+
+(ert-deftest portal-view-focus-takes-the-view-into-the-selected-pane ()
+  (portal-view-test--environment
+    (let* ((target (portal-view-test--open "view"))
+           (origin (selected-window))
+           (other (split-window-right)))
+      (select-window other)
+      (portal-view-sync)
+      (should (portal-view-test--shown target origin))
+      (portal-view-focus)
+      (should (portal-view-test--shown target other))
+      (should (plist-get (portal--inspect target) :focused))
+      ;; It stays there, and the pane it left can take it back.
+      (select-window origin)
+      (portal-view-sync)
+      (should (portal-view-test--shown target other))
+      (portal-view-focus)
       (should (portal-view-test--shown target origin)))))
 
 (ert-deftest portal-view-quit-window-hides-without-ending ()
@@ -143,7 +200,7 @@ Return the view's target."
       (set-window-buffer other buffer)
       (portal-view-sync)
       (should (portal-view-test--shown target other))
-      ;; Then shown in the selected pane as well: the view follows selection.
+      ;; Then switched into the selected pane as well: the view comes there.
       (switch-to-buffer buffer)
       (portal-view-sync)
       (should (portal-view-test--shown target (selected-window))))))
@@ -212,17 +269,24 @@ Return the view's target."
         (set-window-buffer remote buffer)
         (portal-view-sync)
         (should (portal-view-test--shown target origin))
-        ;; Selecting that frame moves the view there in one placement.
+        ;; Selecting that frame leaves the view where it is.
+        (select-frame other)
+        (portal-view-sync)
+        (should (portal-view-test--shown target origin))
+        ;; Switching the buffer into that frame's pane moves the view there,
+        ;; in one placement.
+        (switch-to-buffer "*scratch*")
+        (portal-view-sync)
         (let ((portal-fake-native-log nil))
-          (select-frame other)
+          (switch-to-buffer buffer)
           (portal-view-sync)
           (should (portal-view-test--shown target remote))
           (should (equal (mapcar #'car portal-fake-native-log) '(portal--place))))
         (should (equal (frame-parameter other 'title)
                        (frame-parameter (selected-frame) 'title)))
-        ;; Back in the first frame, the selected pane wins again.
+        ;; Back in the first frame, a take brings it back.
         (select-frame (window-frame origin))
-        (portal-view-sync)
+        (portal-view-focus)
         (should (portal-view-test--shown target origin))
         ;; With only the other frame showing it, the view goes there, unselected.
         (switch-to-buffer "*scratch*")
@@ -459,14 +523,23 @@ Return the view's target."
       (should (eq major-mode 'portal-terminal-mode))
       (should (equal (plist-get (plist-get (portal--inspect target) :options) :quick) nil))
       (should (equal (portal-input--target) target))
-      (let ((other (split-window-right)))
+      (let ((origin (selected-window))
+            (other (split-window-right)))
         (portal-view-sync)
         (should (portal-view-test--shown target))
         (should-not (portal-input--target other))
+        ;; Selecting the other pane leaves the terminal; RET there takes it.
         (select-window other)
         (portal-view-sync)
+        (should (portal-view-test--shown target origin))
+        (should-not (portal-input--target))
+        (call-interactively (keymap-lookup portal-terminal-mode-map "RET"))
         (should (portal-view-test--shown target other))
         (should (equal (portal-input--target) target))
+        ;; A click in the pane it left brings it back.
+        (select-window origin)
+        (call-interactively (key-binding [mouse-1]))
+        (should (portal-view-test--shown target origin))
         (delete-window other))
       (quit-window)
       (portal-view-sync)
@@ -480,6 +553,30 @@ Return the view's target."
       (should-not (portal--inspect target))
       (should (buffer-live-p buffer))
       (should-error (portal-terminal-focus) :type 'user-error))))
+
+;;; Placards
+
+(ert-deftest portal-view-placard-says-where-the-view-is-until-it-closes ()
+  (portal-view-test--environment
+    (portal-terminal)
+    (let ((buffer (current-buffer)))
+      (should (equal (buffer-string) (concat "This terminal is showing in another pane.\n"
+                                             "RET or a click brings it here.\n")))
+      ;; C-c C-k ends the shell, keeping the buffer, which says so.
+      (call-interactively (keymap-lookup portal-terminal-mode-map "C-c C-k"))
+      (should (buffer-live-p buffer))
+      (should (equal (buffer-string) "This terminal has ended.\n")))
+    (portal-open-url "about:blank")
+    (should (equal (buffer-string) (concat "This page is showing in another pane.\n"
+                                           "RET or a click brings it here.\n")))
+    (portal-view-close)
+    (should (equal (buffer-string) "This page is closed.\n"))
+    ;; A buffer without a placard keeps its own text when its view closes.
+    (switch-to-buffer (generate-new-buffer "own"))
+    (insert "own text")
+    (portal-view-open 'terminal nil)
+    (portal-view-close)
+    (should (equal (buffer-string) "own text"))))
 
 ;;; Records
 

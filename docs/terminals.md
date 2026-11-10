@@ -123,10 +123,13 @@ access inside terminals:
 These are Emacs operations: terminal buffers replace tmux windows, Emacs windows
 replace panes. Emacs handles splits, buffers and switching; terminals have no
 tab/split keys. Run tmux inside a terminal to retain `C-b`. There are no saved
-per-terminal pane layouts or tmux copy mode. Each buffer has one Portal view
-in its selected pane; other panes showing it display only buffer text
-([ADR 0001](adr/0001-one-portal-view-per-buffer.md)). Views belong to no frame:
-showing a terminal elsewhere moves its view, shell and scrollback. Selection,
+per-terminal pane layouts or tmux copy mode. Each buffer has one Portal view,
+which stays in its pane whichever pane is selected; other panes showing the
+buffer say the terminal is showing elsewhere, and `RET` or a click there brings
+it ([ADR 0001](adr/0001-one-portal-view-per-buffer.md)). Splitting a terminal
+leaves it where it was, so the new pane is free for another buffer. Views
+belong to no frame: switching to a terminal elsewhere moves its view, shell and
+scrollback. After `C-c C-k` the buffer stays and says the terminal has ended. Selection,
 numbering and cycling cover every terminal. Different buffers can display and
 run simultaneously.
 
