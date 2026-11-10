@@ -190,14 +190,17 @@
                            targets)))
               (setq columns (mapcar (lambda (id) (plist-get (portal-terminal-test--state id) :columns))
                                     targets))
-              ;; The frame's font, as take-preset sets it, sizes both and
-              ;; reflows their grids to fewer columns.
-              (set-face-attribute 'default frame :height 300)
+              ;; The frame's font, as take-preset sets it, keeping the
+              ;; frame's size, sizes both and reflows their grids to fewer
+              ;; columns.
+              (let ((frame-inhibit-implied-resize t))
+                (set-face-attribute 'default frame :height 300))
+              (portal-terminal-test--wait
+               (lambda () (cl-every (lambda (id) (portal-terminal-test--points-p id 30)) targets)))
               (portal-terminal-test--wait
                (lambda ()
                  (cl-every (lambda (id before)
-                             (and (portal-terminal-test--points-p id 30)
-                                  (< 0 (plist-get (portal-terminal-test--state id) :columns) before)))
+                             (< 0 (plist-get (portal-terminal-test--state id) :columns) before))
                            targets columns)))
               ;; The first shell survives it, and a theme keeps the size.
               (should (equal (plist-get (portal-terminal-test--colors first) :pid) pid))
@@ -220,16 +223,21 @@
               (portal-terminal-test--wait (lambda () (portal-terminal-test--points-p first 14)))
               (should (portal-terminal-test--points-p second 36))
               ;; Emacs's command for every frame's font sizes every terminal.
+              ;; It sets every frame to one height, a step above the
+              ;; selected frame's.
               (let ((global-text-scale-adjust--default-height nil)
                     (last-command-event nil))
-                (global-text-scale-adjust 1))
+                (with-selected-frame frame (global-text-scale-adjust 1)))
               (let ((points (/ (face-attribute 'default :height frame) 10.0)))
                 (should (> points 30))
+                (should (= (face-attribute 'default :height other) (* points 10)))
                 (portal-terminal-test--wait
                  (lambda () (and (portal-terminal-test--points-p first points)
                                  (portal-terminal-test--points-p second (* points 1.2)))))))))
       (when (frame-live-p other) (delete-frame other))
-      (set-face-attribute 'default nil :height height))))
+      ;; Keeping the frame's size, which the tests after this one expect.
+      (let ((frame-inhibit-implied-resize t))
+        (set-face-attribute 'default nil :height height)))))
 
 (ert-deftest portal-terminal-real-shell-survives-hiding-and-resizes ()
   :tags '(:gui)
