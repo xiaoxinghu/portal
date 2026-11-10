@@ -18,8 +18,8 @@ saves it. Existing `.excalidraw` files opened with `C-x C-f` or Dired enter
   Bare Escape remains available for drawing/text editing.
 - Each drawing buffer has one Excalidraw hosted web view: it opens immediately
   and loads when the app host is ready. Switching buffers hides it, preserving
-  contents, selection and undo history. In splits, it follows the selected
-  window showing that buffer. Independent drawings can appear together.
+  contents, selection and undo history. In splits, it stays in its pane;
+  `RET` or a click in another pane showing the buffer brings it there. Independent drawings can appear together.
 - Drawings use standard Excalidraw JSON with embedded images. Emacs owns saving,
   modified indicators, backup settings, auto-save and overwrite checks.
   Save/close prompts include untitled modified drawings.

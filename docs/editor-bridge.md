@@ -72,7 +72,8 @@ picker; Emacs owns opening and saving drawings.
 
 `portal-excalidraw-mode` calls `(portal-web-open-hosted "/excalidraw/")`:
 the view appears immediately and loads when the app host is ready. Like every
-Portal view, it follows the buffer's selected pane. Hiding preserves page state
+Portal view, it stays in its pane, and `RET` or a click in another pane
+showing the buffer brings it there. Hiding preserves page state
 and undo history; killing the buffer or changing major mode closes the view.
 
 The page reports `ready`, then Emacs sends `load` with the buffer's JSON.

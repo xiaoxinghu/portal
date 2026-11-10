@@ -274,8 +274,10 @@ VoiceOver to announce new text.
 Rectangles use Emacs frame pixels from the content area's top left, as reported
 by `window-inside-pixel-edges`. On macOS these are AppKit points; the platform
 only flips y. On window changes, `portal-view.el` picks one window per view,
-across frames: the selected window if it shows the buffer, then the view's current
-window, then any other showing the buffer. Without one, it hides the view. Cached
+across frames: the view's current window while it shows the buffer, unless
+the buffer was just switched into the selected pane; else the selected window
+if it shows the buffer, then any other showing it
+([ADR 0001](adr/0001-one-portal-view-per-buffer.md)). Without one, it hides the view. Cached
 geometry avoids seam calls when nothing moves. Each placement briefly renames
 the frame so Swift can find its native window; frame information is never cached.
 Cross-frame placement moves the view in one call.
