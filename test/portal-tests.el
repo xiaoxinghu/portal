@@ -510,6 +510,22 @@ return true;" constraints)))
   "Wait for the echo area to show TEXT."
   (portal-terminal-test--wait (lambda () (equal (current-message) text))))
 
+(defconst portal-test--gap-page
+  (concat "data:text/html,<title>Gap</title><input autofocus spellcheck=false>"
+          "<p id=a>apple a</p><p id=b>apple b</p><div style='height:3000px'></div>"
+          "<p id=c>apple c</p><p id=d>apple d</p><div style='height:3000px'></div>"
+          "<p id=e>apple e</p>")
+  "A page whose five matches of apple are on either side of long gaps.")
+
+(defun portal-test--wait-for-match (id)
+  "Wait until the page's selection is a match in its paragraph with ID."
+  (portal-terminal-test--wait
+   (lambda ()
+     (equal (portal-excalidraw-gui--js
+             "const s = getSelection();
+              return s.rangeCount && s.toString() ? s.anchorNode.parentElement.id : '';")
+            id))))
+
 (defun portal-test--find (keys)
   "Run `portal-web-find', typing KEYS in its minibuffer."
   (let ((unread-command-events (listify-key-sequence (kbd keys))))
@@ -556,6 +572,39 @@ return true;" constraints)))
         ;; The page never took the keyboard.
         (should-not (portal-input--action "focused"))
         (portal-integration-test--emacs-input)))))
+
+(ert-deftest portal-web-find-starts-from-what-is-on-screen ()
+  :tags '(:gui)
+  (portal-test--with-web
+    (portal-test--with-page-scripts
+      (let ((portal-web-find-history nil))
+        (portal-open-url portal-test--gap-page)
+        (portal-test--wait-for-page "Gap")
+        ;; Scrolled past the first matches, a find selects the first in view,
+        ;; and says where it is among them all.
+        (portal-excalidraw-gui--js "document.getElementById('c').scrollIntoView(); return true;")
+        (portal-test--find "apple RET")
+        (portal-test--wait-for-match "c")
+        (portal-test--wait-for-echo "3/5 apple")
+        (portal-web-find-next)
+        (portal-test--wait-for-match "d")
+        (portal-test--wait-for-echo "4/5 apple")
+        ;; A reload is a new page: the next find starts from the top of its
+        ;; view, and finding did not wrap to get there.
+        (portal-excalidraw-gui--js "window.before = true; return true;")
+        (portal-web-reload)
+        (portal-terminal-test--wait
+         (lambda () (equal (portal-excalidraw-gui--js "return window.before ? 'old' : document.title;")
+                           "Gap")))
+        (portal-excalidraw-gui--js "scrollTo(0, 0); return true;")
+        (portal-web-find-next)
+        (portal-test--wait-for-match "a")
+        (portal-test--wait-for-echo "1/5 apple")
+        ;; Going backward starts from the bottom of the view.
+        (portal-excalidraw-gui--js "document.getElementById('d').scrollIntoView(); return true;")
+        (portal-web-find-previous)
+        (portal-test--wait-for-match "d")
+        (portal-test--wait-for-echo "4/5 apple")))))
 
 (ert-deftest portal-web-zoom-lays-the-page-out-again-and-stays-with-its-site ()
   :tags '(:gui)

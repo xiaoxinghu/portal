@@ -489,15 +489,20 @@ applications never changes a page.")
 
 (defun portal-web-find (&optional backward)
   "Find text in this buffer's page, reading it in the minibuffer.
-RET finds the text after the page's selection, or before it with
-BACKWARD, wrapping around, and the page highlights the match.  While
-reading, \\<portal-web-find-minibuffer-map>\\[portal-web-find-next] or Command-G and \\[portal-web-find-previous] or Command-Shift-G move to the
+RET finds the text from what is on screen, as isearch starts from point:
+after the page's selection while it is in view, else from the top of the
+view, or with BACKWARD before the selection, else up from the bottom of
+the view, wrapping around.  The page selects the match and lights every
+match until a command that is not a find command, C-g or Escape, or RET
+or a click into the page; the selection stays.  While reading,
+\\<portal-web-find-minibuffer-map>\\[portal-web-find-next] or Command-G and \\[portal-web-find-previous] or Command-Shift-G move to the
 next and previous match, and RET then stays on the match shown.  The echo
-area says which match it is of how many, as isearch's count does, and
-when finding wrapped around the page.  Empty input finds the last text
-again.  Case matters as in isearch: while `case-fold-search' is off, or
-when the text has an upper-case letter.  The page never takes the
-keyboard, so Emacs keeps it once the text is found."
+area says how many matches there are, which one this is when the page
+can tell, as isearch's count does, and when finding wrapped around the
+page.  Empty input finds the last text again.  Case matters as in
+isearch: while `case-fold-search' is off, or when the text has an
+upper-case letter.  The page never takes the keyboard, so Emacs keeps it
+once the text is found."
   (interactive)
   (portal-web--selected)
   (let* ((last (car portal-web-find-history))
