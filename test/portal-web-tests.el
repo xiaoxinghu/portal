@@ -579,15 +579,18 @@
 
 (defmacro portal-web-test--reading (input &rest body)
   "Run BODY with the minibuffer reading INPUT, a function.
-INPUT runs in a minibuffer, where it may type and run commands, and its
-value is what the minibuffer returns.  Batch Emacs reads the minibuffer
-from standard input, so this stands in for it."
+INPUT runs in a minibuffer with the reading's keymap, where it may type
+and run commands, and its value is what the minibuffer returns.  Batch
+Emacs reads the minibuffer from standard input, so this stands in for it."
   (declare (indent 1))
   `(cl-letf (((symbol-function 'read-from-minibuffer)
-              (lambda (_prompt _initial _map _read history &rest _)
+              (lambda (_prompt _initial map _read history &rest _)
                 (let ((text (with-current-buffer (window-buffer (minibuffer-window))
-                              (let ((inhibit-read-only t))
+                              (let ((inhibit-read-only t)
+                                    (keymap (current-local-map)))
+                                (use-local-map map)
                                 (unwind-protect (funcall ,input)
+                                  (use-local-map keymap)
                                   (erase-buffer))))))
                   (unless (string-empty-p text) (add-to-history history text))
                   text))))
@@ -636,6 +639,38 @@ They go there newest first: batch Emacs has no echo area to read."
         (call-interactively (key-binding (kbd "C-r"))))
       (should (equal (portal-fake-native-calls 'portal--web-find)
                      `((,target "pear" nil nil) (,target "pears" t nil))))
+      ;; Command-G and Command-Shift-G in the minibuffer move as C-s and C-r
+      ;; do, whatever the user's own Command-G.
+      (setq portal-fake-native-log nil)
+      (let ((global (make-sparse-keymap)))
+        (set-keymap-parent global global-map)
+        (keymap-set global "s-g" #'ignore)
+        (use-global-map global)
+        (unwind-protect
+            (portal-web-test--reading (lambda ()
+                                        (insert "plum")
+                                        (call-interactively (key-binding (kbd "s-g")))
+                                        (call-interactively (key-binding (kbd "s-G")))
+                                        (minibuffer-contents))
+              (portal-web-find))
+          (use-global-map global-map)))
+      (should (equal (portal-fake-native-calls 'portal--web-find)
+                     `((,target "plum" nil nil) (,target "plum" t nil))))
+      ;; Text found while reading is the last text, even when the reading
+      ;; is cancelled.
+      (setq portal-fake-native-log nil)
+      (should (eq (condition-case nil
+                      (portal-web-test--reading (lambda ()
+                                                  (insert "fig")
+                                                  (call-interactively (key-binding (kbd "s-g")))
+                                                  (signal 'quit nil))
+                        (portal-web-find))
+                    (quit 'quit))
+                  'quit))
+      (call-interactively (key-binding (kbd "s-g")))
+      (should (equal (portal-fake-native-calls 'portal--web-find)
+                     `((,target "fig" nil nil) (,target "fig" nil nil))))
+      (setq portal-web-find-history (list "pears"))
       ;; Empty input finds the last text; C-s in an empty minibuffer brings it back.
       (setq portal-fake-native-log nil)
       (portal-web-test--reading (lambda () "")
@@ -664,17 +699,35 @@ They go there newest first: batch Emacs has no echo area to read."
         (call-interactively (key-binding (kbd "s-g"))))
       (should (equal (portal-fake-native-calls 'portal--web-find) `((,target "kiwi" nil nil)))))))
 
-(ert-deftest portal-web-find-says-when-the-page-has-no-match ()
+(ert-deftest portal-web-find-says-which-match-of-how-many ()
   (portal-web-test--environment
     (portal-open-url "https://example.com")
     (let ((target (portal-view-target))
           (portal-web-find-history nil))
-      (portal-web-test--reading (lambda () "kiwi") (portal-web-find))
-      (portal-web-test--messages
-        (portal-fake-native-send (format "found %s 1\n" target))
-        (should-not portal-web-test--messages)
-        (portal-fake-native-send (format "found %s 0\n" target))
-        (should (equal portal-web-test--messages '("No match for \"kiwi\""))))
+      (cl-flet ((found (fields)
+                  (portal-web-test--messages
+                    (portal-fake-native-send (format "found %s %s\n" target fields))
+                    ;; Shown once the process filter is done.
+                    (should-not portal-web-test--messages)
+                    (accept-process-output nil 0.01)
+                    (pop portal-web-test--messages))))
+        (portal-web-test--reading (lambda () "sh") (portal-web-find))
+        (should (equal (found "1 3 12") "3/12 sh"))
+        ;; Back to an earlier match going forward, the page wrapped.
+        (should (equal (found "1 12 12") "12/12 sh"))
+        (should (equal (found "1 1 12") "Wrapped 1/12 sh"))
+        (should (equal (found "1 2 12") "2/12 sh"))
+        ;; Going backward, to a later one.
+        (portal-web-find-previous)
+        (should (equal (found "1 1 12") "1/12 sh"))
+        (should (equal (found "1 12 12") "Wrapped 12/12 sh"))
+        ;; Found where the page cannot count, or over the most it counts.
+        (should (equal (found "1 0 -1") "sh"))
+        (should (equal (found "1 0 1001") "1000+ sh"))
+        (should (equal (found "0 0 0") "No match for \"sh\""))
+        ;; Other text starts afresh.
+        (portal-web-test--reading (lambda () "kiwi") (portal-web-find))
+        (should (equal (found "1 1 2") "1/2 kiwi")))
       ;; Another pane with no view has nothing to find in.
       (select-window (split-window-right))
       (switch-to-buffer "*scratch*")

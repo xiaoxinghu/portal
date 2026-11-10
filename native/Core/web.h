@@ -34,9 +34,9 @@ bool portal_web_views_download_directory(portal_string directory, portal_text *e
 /* Find TEXT, which must not be empty, in web view TARGET's page: the next
    match, or the previous one if BACKWARD, wrapping around, and ignoring
    case unless CASE_SENSITIVE.  The page highlights it.  When finding ends,
-   Emacs gets the record "found TARGET 1", or "found TARGET 0" for no match,
-   unless TARGET has started another find since: only the latest one
-   reports. */
+   Emacs gets the record "found TARGET FOUND INDEX COUNT": FOUND is 1, or 0
+   for no match, and INDEX and COUNT are portal_web_found's, unless TARGET
+   has started another find since: only the latest one reports. */
 bool portal_web_views_find(portal_string target, portal_string text, bool backward,
                            bool case_sensitive, portal_text *error);
 /* Show the pages from HOST at PERCENT of their size, from 25 to 500, in

@@ -506,6 +506,10 @@ return true;" constraints)))
   "Whether VALUE, a number of CSS pixels, is EXPECTED to the nearest pixel."
   (<= (abs (- value expected)) 1))
 
+(defun portal-test--wait-for-echo (text)
+  "Wait for the echo area to show TEXT."
+  (portal-terminal-test--wait (lambda () (equal (current-message) text))))
+
 (defun portal-test--find (keys)
   "Run `portal-web-find', typing KEYS in its minibuffer."
   (let ((unread-command-events (listify-key-sequence (kbd keys))))
@@ -525,12 +529,30 @@ return true;" constraints)))
         (portal-test--wait-for-selection "apple@13")
         (portal-web-find-previous)
         (portal-test--wait-for-selection "apple@0")
+        ;; The echo area says which match of how many, and when it wrapped.
+        (portal-test--wait-for-echo "1/3 apple")
+        (portal-web-find-next)
+        (portal-test--wait-for-echo "2/3 apple")
+        (portal-web-find-next)
+        (portal-test--wait-for-selection "Apple@19")
+        (portal-test--wait-for-echo "3/3 apple")
+        (portal-web-find-next)
+        (portal-test--wait-for-selection "apple@0")
+        (portal-test--wait-for-echo "Wrapped 1/3 apple")
+        ;; Command-G and Command-Shift-G move in the minibuffer too.
+        (portal-test--find "apple s-g s-g s-G RET")
+        (portal-test--wait-for-selection "apple@13")
         ;; An upper-case letter makes case matter.
         (portal-test--find "Apple RET")
         (portal-test--wait-for-selection "Apple@19")
+        (portal-test--wait-for-echo "1/1 Apple")
         (portal-test--find "zzz RET")
-        (portal-terminal-test--wait
-         (lambda () (equal (current-message) "No match for \"zzz\"")))
+        (portal-test--wait-for-echo "No match for \"zzz\"")
+        ;; The page counts so many matches and no more.
+        (portal-open-url "data:text/html,<title>Many</title><script>document.write('ab '.repeat(1100))</script>")
+        (portal-test--wait-for-page "Many")
+        (portal-test--find "ab RET")
+        (portal-test--wait-for-echo "1000+ ab")
         ;; The page never took the keyboard.
         (should-not (portal-input--action "focused"))
         (portal-integration-test--emacs-input)))))

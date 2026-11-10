@@ -225,8 +225,8 @@ bool portal_web_create_window(portal_view *opener, portal_string target, void *r
    in page does, and highlight the match its way: the next match after the
    page's selection, or the previous one when BACKWARD, wrapping around the
    page's ends, and ignoring case unless CASE_SENSITIVE.  Leave the keyboard
-   where it is.  Finding finishes after this call returns: report whether it
-   matched with portal_web_found and TOKEN. */
+   where it is.  Finding finishes after this call returns: report how it
+   went with portal_web_found and TOKEN. */
 bool portal_web_find(portal_view *web, portal_string text, bool backward, bool case_sensitive,
                      uint64_t token, portal_text *error);
 /* Show WEB's pages at FACTOR times their size, such as 1.5, from now on,
@@ -614,9 +614,14 @@ void portal_web_committed(portal_string target, portal_string url);
    portal_web_post sent with TOKEN.  MESSAGE says what, for the app's buffer;
    a delivery to a page that has since gone is ignored. */
 void portal_web_failed(portal_string target, uint64_t token, portal_string message);
-/* The find that portal_web_find started in TARGET with TOKEN finished:
-   FOUND says whether the page had a match. */
-void portal_web_found(portal_string target, uint64_t token, bool found);
+/* The most matches a platform counts for portal_web_found. */
+#define PORTAL_WEB_FIND_MAX 1000
+/* The find that portal_web_find started in TARGET with TOKEN finished.
+   INDEX is the 1-based position of the selected match among the page's
+   matches, or 0 for no match or when the platform cannot tell.  COUNT is the
+   number of matches, 0 for none: -1 when the platform cannot count them, and
+   PORTAL_WEB_FIND_MAX + 1 when there are more than PORTAL_WEB_FIND_MAX. */
+void portal_web_found(portal_string target, uint64_t token, int64_t index, int64_t count);
 /* The printing that portal_web_print started in TARGET to FILE ended: FILE
    is complete, for a null ERROR, or printing failed and ERROR says why.
    The core tells Emacs over TARGET's messages, unless the view is gone. */

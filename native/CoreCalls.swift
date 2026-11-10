@@ -149,9 +149,10 @@ enum Core {
         borrowing([target, message]) { portal_web_failed($0[0], token, $0[1]) }
     }
 
-    /// The find started in TARGET with TOKEN finished, FOUND or not.
-    static func found(_ target: String, token: UInt64, found: Bool) {
-        borrow(target) { portal_web_found($0, token, found) }
+    /// The find started in TARGET with TOKEN finished: the match at INDEX,
+    /// from 1, of COUNT (`portal_web_found`).
+    static func found(_ target: String, token: UInt64, index: Int64, count: Int64) {
+        borrow(target) { portal_web_found($0, token, index, count) }
     }
 
     /// Printing TARGET's page to FILE ended: complete without an ERROR.
