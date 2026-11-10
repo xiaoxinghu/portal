@@ -58,8 +58,11 @@
    not kept: the page may ask again.
 
    Finding.  The platform finds text its own way and reports when it is
-   done.  Only the latest find in a view reports to Emacs, so a result that
-   arrives after the user has typed on never answers the newer find.
+   done, with where the match is among how many it counted, and the core
+   adds the page's generation, so Emacs knows a match on an earlier page
+   from one on this.  Only the latest find in a view reports to Emacs, so a
+   result that arrives after the user has typed on never answers the newer
+   find.
 
    Printing.  A page on screen prints as in a browser, in the system's
    print panel on its frame.  Any page prints to a PDF file Lisp names, with
@@ -72,6 +75,7 @@
    ignored.  A call for a closed view finds no target and is ignored too. */
 #define _POSIX_C_SOURCE 200809L
 
+#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -977,13 +981,24 @@ void portal_web_failed(portal_string target, uint64_t token, portal_string messa
         queue_own(web, target, "error", "message", message);
 }
 
-void portal_web_found(portal_string target, uint64_t token, bool found)
+void portal_web_found(portal_string target, uint64_t token, int64_t index, int64_t count)
 {
     struct portal_web_state *web;
-    if (find(target, &web) && token == web->finds) {
-        portal_string matched = literal(found ? "1" : "0");
-        portal_channel_send(literal("found"), target, &matched, 1);
-    }
+    if (!find(target, &web) || token != web->finds)
+        return;
+    if (index < 0 || !count)
+        index = 0;
+    if (count < -1)
+        count = -1;
+    if (count > PORTAL_WEB_FIND_MAX)
+        count = PORTAL_WEB_FIND_MAX + 1;
+    char position[24], total[24], page[24];
+    snprintf(position, sizeof position, "%" PRId64, index);
+    snprintf(total, sizeof total, "%" PRId64, count);
+    snprintf(page, sizeof page, "%" PRIu64, web->generation);
+    portal_string fields[] = {literal(count ? "1" : "0"), literal(position), literal(total),
+                              literal(page)};
+    portal_channel_send(literal("found"), target, fields, 4);
 }
 
 void portal_web_printed(portal_string target, portal_string file, const portal_string *error)

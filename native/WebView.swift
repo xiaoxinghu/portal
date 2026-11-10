@@ -367,7 +367,71 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         if let offered { answer(offered, used: seen) }
+        finding.removeAll()
         Core.failed(target, token: 0, message: "The page's web process stopped.")
+    }
+
+    /// The finds WebKit has yet to report, oldest first, by their text and
+    /// token, while the page finds with WebKit's own find in page.
+    private var finding: [(text: String, token: UInt64)] = []
+    private var reportsFinds = false
+
+    /// Find TEXT as WebKit's own find in page does, which Safari's find bar
+    /// uses: it selects the match, shows its find indicator, counts the
+    /// matches in every frame and says which one it selected, and leaves the
+    /// keyboard where it is. Without it, the public find, which says only
+    /// whether it matched.
+    func find(_ text: String, backward: Bool, caseSensitive: Bool, token: UInt64) {
+        // WKWebViewPrivate.h, with _WKFindOptions.h's values.
+        let findString = NSSelectorFromString("_findString:options:maxCount:")
+        let setDelegate = NSSelectorFromString("_setFindDelegate:")
+        guard responds(to: findString), responds(to: setDelegate) else {
+            let configuration = WKFindConfiguration()
+            configuration.backwards = backward
+            configuration.caseSensitive = caseSensitive
+            configuration.wraps = true
+            return find(text, configuration: configuration) { [target = target] result in
+                Core.found(target, token: token, index: 0, count: result.matchFound ? -1 : 0)
+            }
+        }
+        if !reportsFinds {
+            reportsFinds = true
+            perform(setDelegate, with: self)
+        }
+        let caseInsensitive: UInt = 1 << 0, backwards: UInt = 1 << 3, wrapAround: UInt = 1 << 4
+        let showFindIndicator: UInt = 1 << 6, determineMatchIndex: UInt = 1 << 9
+        var options = wrapAround | showFindIndicator | determineMatchIndex
+        if !caseSensitive { options |= caseInsensitive }
+        if backward { options |= backwards }
+        finding.append((text, token))
+        typealias FindString = @convention(c) (AnyObject, Selector, NSString, UInt, UInt) -> Void
+        unsafeBitCast(method(for: findString), to: FindString.self)(self, findString, text as NSString, options,
+                                                                    UInt(PORTAL_WEB_FIND_MAX))
+    }
+
+    /// WebKit found MATCHES of TEXT, the one at INDEX selected, counting from
+    /// 0, or -1 when it cannot tell. Over the most it was asked to count,
+    /// MATCHES is more than that, and the index is no use. (_WKFindDelegate.h)
+    @objc(_webView:didFindMatches:forString:withMatchIndex:)
+    private func didFind(_ webView: WKWebView, matches: UInt, text: String, index: Int) {
+        if matches > UInt(PORTAL_WEB_FIND_MAX) {
+            return found(text, index: 0, count: Int64(PORTAL_WEB_FIND_MAX) + 1)
+        }
+        let count = Int64(matches)
+        found(text, index: index >= 0 && index < count ? Int64(index) + 1 : 0, count: count)
+    }
+
+    @objc(_webView:didFailToFindString:)
+    private func didFail(_ webView: WKWebView, text: String) { found(text, index: 0, count: 0) }
+
+    /// WebKit reports each find once, in the order they started: the latest
+    /// one for TEXT is the earliest still waiting, and any before it went
+    /// unreported, which the core drops anyway.
+    private func found(_ text: String, index: Int64, count: Int64) {
+        guard let at = finding.firstIndex(where: { $0.text == text }) else { return }
+        let token = finding[at].token
+        finding.removeFirst(at + 1)
+        Core.found(target, token: token, index: index, count: count)
     }
 
     /// The questions the page waits on, in the order it asked: JavaScript's
@@ -1101,16 +1165,8 @@ final class WebSession: PortalView {
 
     func show(_ appearance: portal_appearance) { page.show(appearance) }
 
-    /// WebKit's own find in page selects the match and shows its find
-    /// indicator, and leaves the keyboard where it is.
     func find(_ text: String, backward: Bool, caseSensitive: Bool, token: UInt64) {
-        let configuration = WKFindConfiguration()
-        configuration.backwards = backward
-        configuration.caseSensitive = caseSensitive
-        configuration.wraps = true
-        page.find(text, configuration: configuration) { [target = page.target] result in
-            Core.found(target, token: token, found: result.matchFound)
-        }
+        page.find(text, backward: backward, caseSensitive: caseSensitive, token: token)
     }
 
     func zoom(_ factor: Double) { page.pageZoom = factor }

@@ -141,6 +141,17 @@ Escape twice:
 To reach a Space leader without leaving the app, give it a chord too, such
 as `(evil-set-leader 'normal (kbd "s-'"))`.
 
+In normal state, `/`, `?`, `n` and `N` search the buffer's own text, of which
+a web page's buffer has none. To find in the page with them instead, as Vimium
+does in a browser, bind them beside `i`. They apply while Emacs has the
+keyboard; in insert state the keys type into the page.
+
+```elisp
+(evil-define-key 'normal portal-web-mode-map
+  "/" #'portal-web-find "?" #'portal-web-find-backward
+  "n" #'portal-web-find-next "N" #'portal-web-find-previous)
+```
+
 ## Web page commands
 
 In Portal web buffers, `g` and `s-r` run `portal-web-reload`, and `l` and `r`
@@ -153,7 +164,8 @@ buffer ([address bar](web-views.md#address-bar)). `s-d` bookmarks the page,
 `b` and `M-s-b` load a bookmarked page in this buffer, and `B` and `s-B` open
 one in a new buffer ([bookmarks](web-views.md#bookmarks)).
 
-`C-s` and `s-f` find text in the page, and `s-g` and `s-G` find it again;
+`C-s` and `s-f` find text in the page, and `s-g` and `s-G` find it again,
+in the prompt too, counting the matches;
 `+`, `-` and `0`, or `s-=`, `s--` and `s-0`, zoom its site
 ([find and zoom](web-views.md#find-and-zoom)), and `s-p` prints it in the
 system's print panel ([print](web-views.md#print)). The Command chords reach

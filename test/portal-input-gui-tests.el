@@ -130,6 +130,24 @@ from that thread."
       ;; Once the text is found, the page has the keyboard back.
       (should (portal-input--action "focused" target)))))
 
+(ert-deftest portal-input-gui-web-command-g-finds-again-while-the-page-has-the-keyboard ()
+  :tags '(:gui)
+  (portal-test--with-web
+    (select-frame-set-input-focus (selected-frame))
+    (portal-open-url "data:text/html,<title>Find again</title><input autofocus spellcheck=false><p>apple apple apple</p>")
+    (portal-test--wait-for-page "Find again")
+    (let ((target (portal-view-target))
+          (portal-web-find-history (list "apple")))
+      ;; Command-G and Command-Shift-G reach Emacs from the page, which
+      ;; keeps the keyboard, and the echo area counts.
+      (dolist (step `((5 ,portal-input-gui--command "g" "1/3 apple")
+                      (5 ,portal-input-gui--command "g" "2/3 apple")
+                      (5 ,(logior portal-input-gui--command (ash 1 17)) "G" "1/3 apple")))
+        (portal-integration-test--focus-web (selected-window) target)
+        (apply #'portal-test-native-key (butlast step))
+        (portal-input-gui--dispatch)
+        (portal-test--wait-for-echo (car (last step)))))))
+
 (ert-deftest portal-input-gui-web-command-p-shows-the-print-panel ()
   :tags '(:gui)
   (portal-test--with-web

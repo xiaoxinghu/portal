@@ -175,8 +175,15 @@ every open page from that host at its level, and on each page commit applies
 the new page's host's level, so navigation and new views follow the site.
 Pages without a host share `""`. `portal--web-find` asks the platform to find
 text its own way, with a token; only the latest find's result reaches Emacs,
-as a `found TARGET 1` or `found TARGET 0` record. The platform supplies two
-primitives for these: find text, and set a view's zoom factor.
+as a `found TARGET FOUND INDEX COUNT PAGE` record: FOUND is `1` or `0`, INDEX
+the selected match's position from 1, 0 when unknown, COUNT the matches, -1
+when the platform cannot count and 1001 past `PORTAL_WEB_FIND_MAX`, and PAGE
+the page's generation, which every commit changes, reloads included: Emacs
+says a find wrapped only against a match on the same page. On macOS
+the count comes from WebKit's private find, which Safari's find bar uses,
+behind a `responds(to:)` check, and otherwise from the public find, which
+only says whether it matched. The platform supplies two primitives for
+these: find text, and set a view's zoom factor.
 
 The core decides whether a page may use the camera or microphone. The
 platform reports each request with `portal_web_media`: the origins of the

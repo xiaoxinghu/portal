@@ -126,7 +126,8 @@ Command-D bookmarks the page, b or Command-Option-B loads a bookmarked
 page here, and B or Command-Shift-B opens one in a new buffer;
 `bookmark-jump' and the other bookmark commands open them too.  C-s or
 Command-F finds text in the page, and Command-G and Command-Shift-G find
-it again; + or Command-= zooms in, - or Command-- zooms out and 0 or
+it again, in the prompt too, saying which match of how many it is; + or
+Command-= zooms in, - or Command-- zooms out and 0 or
 Command-0 resets, for every page from the same site.  Command-P prints the
 page in the system's print panel.  The mode line's light is
 lit while the page has the keyboard and dimmed while Emacs has it.
@@ -395,6 +396,12 @@ STEP is \"back\" or \"forward\"; with no page to go to, nothing changes."
 
 (defvar portal-web-find-history nil "Texts found in web views, newest first.")
 (defvar-local portal-web--finding nil "The text this buffer's view looked for last.")
+(defvar-local portal-web--finding-backward nil
+  "Whether this buffer's view looked for `portal-web--finding' backward.")
+(defvar-local portal-web--found-at nil
+  "Where this buffer's view last found a match, as (PAGE TEXT INDEX).
+PAGE is the generation of the page found in, which each new page, even a
+reload of the same one, changes: a match on an earlier page is not the last.")
 (defvar portal-web--find-window nil
   "The pane whose web view `portal-web-find' reads text for, while it reads.")
 (defvar portal-web--found nil
@@ -405,6 +412,8 @@ STEP is \"back\" or \"forward\"; with no page to go to, nothing changes."
     (set-keymap-parent map minibuffer-local-map)
     (keymap-set map "C-s" #'portal-web-find-next)
     (keymap-set map "C-r" #'portal-web-find-previous)
+    (keymap-set map "s-g" #'portal-web-find-next)
+    (keymap-set map "s-G" #'portal-web-find-previous)
     map)
   "Keys of the minibuffer that `portal-web-find' reads text in.")
 
@@ -419,14 +428,17 @@ letter and `search-upper-case' is on."
   "Find TEXT in this buffer's web view, BACKWARD or forward."
   (portal--web-find (portal-web--selected) text backward (portal-web--case-sensitive text))
   (with-current-buffer (window-buffer)
-    (setq portal-web--finding text)))
+    (setq portal-web--finding text
+          portal-web--finding-backward backward)))
 
 (defun portal-web-find (&optional backward)
   "Find text in this buffer's page, reading it in the minibuffer.
 RET finds the text after the page's selection, or before it with
 BACKWARD, wrapping around, and the page highlights the match.  While
-reading, \\<portal-web-find-minibuffer-map>\\[portal-web-find-next] and \\[portal-web-find-previous] move to the next and previous match,
-and RET then stays on the match shown.  Empty input finds the last text
+reading, \\<portal-web-find-minibuffer-map>\\[portal-web-find-next] or Command-G and \\[portal-web-find-previous] or Command-Shift-G move to the
+next and previous match, and RET then stays on the match shown.  The echo
+area says which match it is of how many, as isearch's count does, and
+when finding wrapped around the page.  Empty input finds the last text
 again.  Case matters as in isearch: while `case-fold-search' is off, or
 when the text has an upper-case letter.  The page never takes the
 keyboard, so Emacs keeps it once the text is found."
@@ -460,6 +472,8 @@ With no text found yet, read one as `portal-web-find' does."
           (insert (setq text (or (car portal-web-find-history) (user-error "Nothing to find")))))
         (with-selected-window portal-web--find-window
           (portal-web--search text backward))
+        ;; Found now, so it is the last text even if the reading is cancelled.
+        (add-to-history 'portal-web-find-history text)
         (setq portal-web--found text))
     (if-let* ((text (car portal-web-find-history)))
         (portal-web--search text backward)
@@ -471,11 +485,44 @@ This is `portal-web-find-next' going backward."
   (interactive)
   (portal-web-find-next t))
 
-;; The view's latest find ended without a match.
+;; The view's latest find ended: FOUND is "1" or "0", and the match is at
+;; INDEX, from 1 or 0 when unknown, of COUNT, -1 when uncounted, or
+;; `portal-web-find-max' + 1 when over the most the page counts, on the
+;; page of generation PAGE.
+(defconst portal-web-find-max 1000 "The most matches a page counts.")
+
+(defun portal-web--find-message (page text found index count)
+  "What the echo area says of a find of TEXT, as its found record has it.
+Update the match last found in this buffer, on PAGE, from FOUND, INDEX
+and COUNT."
+  (let ((last portal-web--found-at))
+    (setq portal-web--found-at (and found (> index 0) (list page text index)))
+    (cond
+     ((not found) (format "No match for %S" text))
+     ((< count 0) text)
+     (t (concat (and (> index 0) (equal (butlast last) (list page text))
+                     (if portal-web--finding-backward (> index (nth 2 last)) (< index (nth 2 last)))
+                     "Wrapped ")
+                (and (> index 0) (format "%d/" index))
+                (if (> count portal-web-find-max)
+                    (format "%d+" portal-web-find-max)
+                  (number-to-string count))
+                " " text)))))
+
+(defun portal-web--say (text)
+  "Show TEXT in the echo area, or beside `portal-web-find''s minibuffer."
+  (let ((minibuffer (and portal-web--find-window (active-minibuffer-window))))
+    (if minibuffer
+        (with-current-buffer (window-buffer minibuffer) (minibuffer-message "%s" text))
+      (message "%s" text))))
+
 (setf (alist-get "found" portal-view-record-handlers nil nil #'equal)
-      (lambda (_target found)
-        (unless (equal found "1")
-          (message "No match for %S" portal-web--finding))))
+      (lambda (_target found index count page)
+        ;; From the command loop, not the process filter, where
+        ;; `minibuffer-message' does not belong.
+        (run-at-time 0 nil #'portal-web--say
+                     (portal-web--find-message page portal-web--finding (equal found "1")
+                                               (string-to-number index) (string-to-number count)))))
 
 ;; Zoom, remembered per site.
 
