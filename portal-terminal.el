@@ -2,6 +2,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 (require 'cl-lib)
+(require 'face-remap)
 (require 'json)
 (require 'seq)
 
@@ -13,7 +14,7 @@
 (require 'portal-project)
 
 (declare-function portal--terminal-theme "portal-terminal" (theme))
-(declare-function portal--terminal-text-size "portal-terminal" (points))
+(declare-function portal--terminal-text-size "portal-terminal" (target points))
 (declare-function portal--terminal-themes "portal-terminal" ())
 (declare-function portal--inspect "portal-view" (target))
 
@@ -65,60 +66,59 @@ the name is validated when the native module is available."
   (portal-view--load)
   (portal--terminal-themes))
 
-(defconst portal-terminal--text-sizes '(6 14 72)
-  "The smallest, the default and the largest terminal text size, in points.")
+;; A terminal's text is the size of Emacs text: that of its buffer's text in
+;; the frame that shows its view.  Portal has no size of its own.
+(defvar-local portal-terminal--points nil
+  "The text size last sent to this buffer's terminal, in points, or nil.")
 
-(defun portal-terminal--text-size-changed (_symbol value operation _where)
-  "Validate and apply text size VALUE to running terminals on OPERATION."
-  (when (eq operation 'set)
-    (pcase-let ((`(,smallest ,_ ,largest) portal-terminal--text-sizes))
-      (unless (and (integerp value) (<= smallest value largest))
-        (error "Terminal text size must be an integer from %d to %d points"
-               smallest largest)))
-    (when (fboundp 'portal--terminal-text-size)
-      (portal--terminal-text-size value))))
+(defun portal-terminal--text-size (buffer frame)
+  "Return the size of BUFFER's text in FRAME, in points.
+That is the height of the `default' face in FRAME, times BUFFER's text
+scale while `text-scale-mode' is on in it: the size Emacs would show the
+buffer's own text at.  This is the size of a terminal's text, so the
+base font, per frame or for all, and `text-scale-adjust' in a terminal's
+buffer both size it."
+  (* (/ (face-attribute 'default :height frame t) 10.0)
+     (if (buffer-local-value 'text-scale-mode buffer)
+         (expt (buffer-local-value 'text-scale-mode-step buffer)
+               (buffer-local-value 'text-scale-mode-amount buffer))
+       1)))
 
-(defcustom portal-terminal-text-size 14
-  "Size of the text in all Portal terminals, in points, from 6 to 72.
-Every terminal shows the same size, unlike Ghostty's own font size keys,
-which change one terminal: terminals are panes of one Emacs frame.
-Changes with `setq', Customize or the text size commands apply to running
-and future terminals without restarting their shells.  May be set before
-loading Portal.  With `savehist-mode' on, the size is kept from one Emacs
-session to the next without saving it in Customize.  See
-`portal-terminal-text-size-increase'."
-  :type 'integer
-  :group 'portal-terminal)
-(add-variable-watcher 'portal-terminal-text-size #'portal-terminal--text-size-changed)
-(defvar savehist-additional-variables)
-(with-eval-after-load 'savehist
-  (add-to-list 'savehist-additional-variables 'portal-terminal-text-size))
+(defun portal-terminal--resize (buffer frame)
+  "Size terminal BUFFER's text for FRAME, unless that is the size it has.
+The native module clamps a size to what a terminal can show."
+  (with-current-buffer buffer
+    (let ((points (portal-terminal--text-size buffer frame)))
+      (unless (equal points portal-terminal--points)
+        ;; Recorded first, so that a terminal refusing a size reports it
+        ;; once, not on every window change.
+        (setq portal-terminal--points points)
+        (portal--terminal-text-size portal-view--target points)))))
 
-(defun portal-terminal--text-size (choose)
-  "Set the terminals' text size to what CHOOSE returns, within the limits.
-CHOOSE gets the size now, in points."
-  (pcase-let ((`(,smallest ,_ ,largest) portal-terminal--text-sizes))
-    (setq portal-terminal-text-size
-          (max smallest (min largest (funcall choose portal-terminal-text-size))))
-    (message "Terminal text size %d points" portal-terminal-text-size)))
+(defun portal-terminal--resize-shown (&optional _frame)
+  "Size each shown terminal for the frame of the window that has its view.
+This follows a change of the `default' face, which changes window sizes,
+and a view moving to another frame.  It is on
+`window-state-change-functions' while terminals exist, after
+`portal-view-sync' has placed the views.  A hidden terminal keeps its
+size until it is shown."
+  (dolist (buffer (portal-view-buffers 'terminal))
+    (let ((window (buffer-local-value 'portal-view--window buffer)))
+      (when (window-live-p window)
+        (portal-terminal--resize buffer (window-frame window))))))
 
-(defun portal-terminal-text-size-increase ()
-  "Make the text in every terminal one point larger.
-See `portal-terminal-text-size'."
-  (interactive)
-  (portal-terminal--text-size #'1+))
+(defun portal-terminal--text-scaled ()
+  "Size this terminal for its buffer's new text scale, if its view is shown.
+On `text-scale-mode-hook' in terminal buffers."
+  (when (and portal-view--target (window-live-p portal-view--window))
+    (portal-terminal--resize (current-buffer) (window-frame portal-view--window))))
 
-(defun portal-terminal-text-size-decrease ()
-  "Make the text in every terminal one point smaller.
-See `portal-terminal-text-size'."
-  (interactive)
-  (portal-terminal--text-size #'1-))
-
-(defun portal-terminal-text-size-reset ()
-  "Show the text in every terminal at its default size, 14 points.
-See `portal-terminal-text-size'."
-  (interactive)
-  (portal-terminal--text-size (lambda (_points) (cadr portal-terminal--text-sizes))))
+(defun portal-terminal--view-closed ()
+  "Stop following text sizes once no terminal is left.
+On `portal-view-close-hook'."
+  (unless (portal-view-buffers 'terminal)
+    (remove-hook 'window-state-change-functions #'portal-terminal--resize-shown)))
+(add-hook 'portal-view-close-hook #'portal-terminal--view-closed)
 
 (defcustom portal-terminal-confirm-kill t
   "Whether killing a terminal buffer whose program is still running asks first.
@@ -132,14 +132,16 @@ process.  A terminal whose program has exited is killed without asking."
 (define-derived-mode portal-terminal-mode special-mode "Ghostty"
   "A real native Ghostty surface occupies this buffer's displayed pane.
 RET focuses Ghostty.  The shell gets typing and Control and Meta chords; a
-Super chord reaches Emacs, which runs it in this buffer.  Among them,
-Command-= or Command-+ makes every terminal's text larger, Command--
-smaller, and Command-0 brings it back to its default size.
+Super chord reaches Emacs, which runs it in this buffer.
+The terminal's text is the size of Emacs text in the frame that shows it,
+and zooms with this buffer: `text-scale-adjust', on Command-= and
+Command-- from inside Ghostty too, zooms this terminal alone.
 `portal-input-escape-key' always returns focus to Emacs.  Scrollback
 belongs to Ghostty.  The mode line's light is lit while Ghostty has the
 keyboard and dimmed while Emacs has it, and :exited follows it once the
 program has exited."
   (setq-local cursor-type nil)
+  (add-hook 'text-scale-mode-hook #'portal-terminal--text-scaled nil t)
   (add-hook 'kill-buffer-hook #'portal-terminal--dismiss-quick nil t)
   (add-hook 'kill-buffer-query-functions #'portal-terminal--kill-query nil t)
   (portal-input-mode 1)
@@ -150,10 +152,6 @@ program has exited."
         '("" portal-input-mode-line-process (portal-terminal--exited ":exited"))))
 (keymap-set portal-terminal-mode-map "RET" #'portal-terminal-focus)
 (keymap-set portal-terminal-mode-map "C-c C-k" #'portal-terminal-close)
-(dolist (key '("s-=" "s-+"))
-  (keymap-set portal-terminal-mode-map key #'portal-terminal-text-size-increase))
-(keymap-set portal-terminal-mode-map "s--" #'portal-terminal-text-size-decrease)
-(keymap-set portal-terminal-mode-map "s-0" #'portal-terminal-text-size-reset)
 
 (defun portal-terminal-buffers (&optional project quick)
   "Return the live terminal buffers, in creation order.
@@ -318,7 +316,6 @@ QUICK-ROOT, or to the project of `default-directory', where it starts."
                       "RET or a click focuses Ghostty. The configured escape returns to Emacs.\n"
                       "See M-x customize-option RET portal-input-escape-key for that key.\n"
                       "Super chords, such as your s- bindings, reach Emacs from Ghostty.\n"
-                      "Command-= and Command-- change every terminal's text size, Command-0 resets it.\n"
                       "This buffer has one live view, which follows its selected pane.\n")))
           (if quick-root
               (portal-terminal-quick--display buffer)
@@ -327,6 +324,11 @@ QUICK-ROOT, or to the project of `default-directory', where it starts."
               (switch-to-buffer buffer)))
           (redisplay t)
           (with-current-buffer buffer
+            ;; It opens at the size for the frame showing it, so it never
+            ;; shows another size first.
+            (setq portal-terminal--points
+                  (portal-terminal--text-size
+                   buffer (window-frame (or (get-buffer-window buffer t) (selected-window)))))
             ;; A change made while the view opened sent no record, having no
             ;; target yet, so read the facts once; later changes send records.
             (portal-terminal--changed
@@ -334,8 +336,9 @@ QUICK-ROOT, or to the project of `default-directory', where it starts."
                                                :command command
                                                :argv argv
                                                :theme portal-terminal-theme
-                                               :points portal-terminal-text-size
+                                               :points portal-terminal--points
                                                :quick (and quick-root t))))
+            (add-hook 'window-state-change-functions #'portal-terminal--resize-shown 90)
             (portal-terminal-focus))
           (setq ready t))
       (unless ready

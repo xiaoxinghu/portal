@@ -13,6 +13,7 @@
 (declare-function portal--inspect "portal-view" (target))
 (declare-function portal--close "portal-view" (target))
 (declare-function portal-test-native-key "test-terminal-input" (code flags text &optional windowless))
+(defvar global-text-scale-adjust--default-height)
 (declare-function portal-test-native-post-key "test-terminal-input" (code flags text &optional windowless))
 
 (defvar portal-terminal-test--target nil
@@ -157,61 +158,86 @@
                                 '("f7f7f7" "212121")))))))
       (setq portal-terminal-theme original))))
 
-(ert-deftest portal-terminal-text-size-live-and-new-sessions ()
+(defun portal-terminal-test--points-p (target points)
+  "Whether TARGET's terminal shows its text at POINTS, to a hundredth."
+  (let ((shown (plist-get (portal-terminal-test--state target) :points)))
+    (and (numberp shown) (< (abs (- shown points)) 0.01))))
+
+(ert-deftest portal-terminal-text-size-follows-emacs ()
   :tags '(:gui)
   (skip-unless (eq window-system 'ns))
-  (let ((original portal-terminal-text-size))
+  (let* ((frame (selected-frame))
+         (height (face-attribute 'default :height frame))
+         (other nil))
     (unwind-protect
-        (progn
-          (setq portal-terminal-text-size 14)
-          (portal-terminal-test--session
-            (let* ((first (portal-view-target))
-                   (pid (plist-get (portal-terminal-test--colors first) :pid)))
-              ;; Two terminals side by side, each showing its grid.
-              (portal-terminal-split-right)
-              (let* ((second (portal-view-target))
-                     (targets (list first second))
-                     (columns nil))
+        (portal-terminal-test--session
+          (let* ((first (portal-view-target))
+                 (first-buffer (current-buffer))
+                 (pid (plist-get (portal-terminal-test--colors first) :pid)))
+            ;; It opened at the size of Emacs text in this frame.
+            (should (portal-terminal-test--points-p first (/ height 10.0)))
+            ;; Two terminals side by side, each showing its grid.
+            (portal-terminal-split-right)
+            (let* ((second (portal-view-target))
+                   (second-buffer (current-buffer))
+                   (targets (list first second))
+                   (columns nil))
+              (portal-terminal-test--wait
+               (lambda ()
+                 (cl-every (lambda (id) (> (or (plist-get (portal-terminal-test--state id) :columns)
+                                               0)
+                                            0))
+                           targets)))
+              (setq columns (mapcar (lambda (id) (plist-get (portal-terminal-test--state id) :columns))
+                                    targets))
+              ;; The frame's font, as take-preset sets it, keeping the
+              ;; frame's size, sizes both and reflows their grids to fewer
+              ;; columns.
+              (let ((frame-inhibit-implied-resize t))
+                (set-face-attribute 'default frame :height 300))
+              (portal-terminal-test--wait
+               (lambda () (cl-every (lambda (id) (portal-terminal-test--points-p id 30)) targets)))
+              (portal-terminal-test--wait
+               (lambda ()
+                 (cl-every (lambda (id before)
+                             (< 0 (plist-get (portal-terminal-test--state id) :columns) before))
+                           targets columns)))
+              ;; The first shell survives it, and a theme keeps the size.
+              (should (equal (plist-get (portal-terminal-test--colors first) :pid) pid))
+              (let ((theme portal-terminal-theme))
+                (unwind-protect
+                    (progn
+                      (setopt portal-terminal-theme "Dracula")
+                      (should (portal-terminal-test--points-p first 30)))
+                  (setopt portal-terminal-theme theme)))
+              ;; Zooming one buffer zooms its terminal alone.
+              (with-current-buffer second-buffer (text-scale-increase 1))
+              (portal-terminal-test--wait (lambda () (portal-terminal-test--points-p second 36)))
+              (should (portal-terminal-test--points-p first 30))
+              ;; A terminal shown in another frame takes that frame's size.
+              (setq other (make-frame))
+              (set-face-attribute 'default other :height 140)
+              (set-window-buffer (get-buffer-window first-buffer frame)
+                                 (get-buffer-create "*scratch*"))
+              (with-selected-frame other (switch-to-buffer first-buffer))
+              (portal-terminal-test--wait (lambda () (portal-terminal-test--points-p first 14)))
+              (should (portal-terminal-test--points-p second 36))
+              ;; Emacs's command for every frame's font sizes every terminal.
+              ;; It sets every frame to one height, a step above the
+              ;; selected frame's.
+              (let ((global-text-scale-adjust--default-height nil)
+                    (last-command-event nil))
+                (with-selected-frame frame (global-text-scale-adjust 1)))
+              (let ((points (/ (face-attribute 'default :height frame) 10.0)))
+                (should (> points 30))
+                (should (= (face-attribute 'default :height other) (* points 10)))
                 (portal-terminal-test--wait
-                 (lambda ()
-                   (cl-every (lambda (id) (> (or (plist-get (portal-terminal-test--state id)
-                                                            :columns)
-                                                 0)
-                                              0))
-                             targets)))
-                (setq columns (mapcar (lambda (id) (plist-get (portal-terminal-test--state id)
-                                                              :columns))
-                                      targets))
-                (should (equal (mapcar (lambda (id) (plist-get (portal-terminal-test--state id)
-                                                               :points))
-                                       targets)
-                               '(14 14)))
-                ;; A larger size reflows both grids to fewer columns.
-                (setopt portal-terminal-text-size 20)
-                (portal-terminal-test--wait
-                 (lambda ()
-                   (cl-every (lambda (id before)
-                               (let ((state (portal-terminal-test--state id)))
-                                 (and (equal (plist-get state :points) 20)
-                                      (< 0 (plist-get state :columns) before))))
-                             targets columns)))
-                ;; The first shell survives it, and a theme keeps the size.
-                (should (equal (plist-get (portal-terminal-test--colors first) :pid) pid))
-                (let ((theme portal-terminal-theme))
-                  (unwind-protect
-                      (progn
-                        (setopt portal-terminal-theme "Dracula")
-                        (should (equal (plist-get (portal-terminal-test--state first) :points) 20)))
-                    (setopt portal-terminal-theme theme)))
-                (should (equal (plist-get (portal-terminal-test--state first) :points) 20))
-                ;; A new terminal starts at the size.
-                (portal-terminal-new)
-                (should (equal (plist-get (portal-terminal-test--state (portal-view-target))
-                                          :points)
-                               20))
-                (should-error (setq portal-terminal-text-size 3))
-                (should (equal portal-terminal-text-size 20))))))
-      (setq portal-terminal-text-size original))))
+                 (lambda () (and (portal-terminal-test--points-p first points)
+                                 (portal-terminal-test--points-p second (* points 1.2)))))))))
+      (when (frame-live-p other) (delete-frame other))
+      ;; Keeping the frame's size, which the tests after this one expect.
+      (let ((frame-inhibit-implied-resize t))
+        (set-face-attribute 'default nil :height height)))))
 
 (ert-deftest portal-terminal-real-shell-survives-hiding-and-resizes ()
   :tags '(:gui)

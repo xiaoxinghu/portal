@@ -315,7 +315,6 @@ Configure in Lisp after loading `portal.el` (changes apply to running terminals)
 
 ```elisp
 (setq portal-terminal-theme "Dracula") ; nil follows system light/dark appearance
-(setq portal-terminal-text-size 16)    ; points, from 6 to 72; the default is 14
 ```
 
 `portal-terminal-theme` takes an exact, case-sensitive name from
@@ -324,15 +323,27 @@ Portal in your init file. Changes recolor running terminals, including hidden
 ones, and apply to new ones without restarting shells. `nil` restores Alabaster
 (light) and Afterglow (dark). Named themes ignore system appearance changes.
 
-`portal-terminal-text-size` is the size of every terminal's text, in points:
-one size for all of them, unlike Ghostty's own keys, which change one
-terminal. Changes resize running terminals, reflowing their grids, and apply
-to new ones, without restarting shells; anything but an integer from 6 to 72
-is refused and leaves the size as it was. Command-= or Command-+, Command--
-and Command-0 step it by a point or reset it to 14, from inside a terminal or
-with Emacs focus, and say the new size ([keys](keyboard.md#terminal-commands)).
-With `savehist-mode` on, the size chosen is kept from one Emacs session to
-the next without saving it in Customize.
+A terminal's text is the size of Emacs text: the height of the `default`
+face in the frame that shows it, times its buffer's text scale. Portal has
+no size setting of its own. Whatever changes the base font changes the
+terminals with it, reflowing their grids without restarting shells:
+`global-text-scale-adjust` (`C-x C-M-=`, `C-x C-M--`, `C-x C-M-0`) for every
+frame, `set-face-attribute` on one frame, `set-frame-font`, or a theme. A
+terminal in a frame with a larger font is larger, and one shown in another
+frame takes that frame's size. `text-scale-adjust` zooms one terminal, as it
+zooms any buffer: `C-x C-=`, `C-x C--` and `C-x C-0`, or Command-=, Command--
+and Command-0, which reach Emacs from inside Ghostty too
+([keys](keyboard.md#terminal-commands)). The mode line shows the usual text
+scale lighter, such as `+1`. Sizes may be fractional, and a terminal shows
+nothing smaller than 6 points or larger than 72. A hidden terminal takes its
+size when it is shown again.
+
+To keep terminals a step smaller than the rest of Emacs text, zoom each
+new one out:
+
+```elisp
+(add-hook 'portal-terminal-mode-hook (lambda () (text-scale-set -1)))
+```
 
 Command chords run in the terminal buffer using its keymaps. Minibuffer
 interaction finishes before focus returns to the selected terminal. Ordinary

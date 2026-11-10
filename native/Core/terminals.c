@@ -4,7 +4,8 @@
    to check a terminal's options before the platform creates it.  The
    platform owns the terminal engine, its process and its theme catalog, and
    reports changes to what a terminal describes.  The core keeps no theme or
-   text size: Lisp holds the settings and passes them to each new terminal. */
+   text size: Lisp holds the theme and works out each terminal's size, and
+   passes them to each new terminal. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -56,16 +57,12 @@ static bool known(portal_string name, portal_text *error)
     return found || fail(error, "Unknown terminal theme: ", name);
 }
 
-/* Whether POINTS is a size the core accepts for a terminal's text; if not,
-   set *ERROR. */
-static bool in_range(int64_t points, portal_text *error)
+double portal_terminal_points(double points)
 {
-    if (points >= PORTAL_TERMINAL_MIN_POINTS && points <= PORTAL_TERMINAL_MAX_POINTS)
-        return true;
-    char message[96];
-    snprintf(message, sizeof message, "A terminal's text size must be from %d to %d points, not %lld",
-             PORTAL_TERMINAL_MIN_POINTS, PORTAL_TERMINAL_MAX_POINTS, (long long) points);
-    return fail_with(error, message);
+    /* NaN fails both comparisons. */
+    return points > PORTAL_TERMINAL_MAX_POINTS ? PORTAL_TERMINAL_MAX_POINTS
+        : points >= PORTAL_TERMINAL_MIN_POINTS ? points
+                                               : PORTAL_TERMINAL_MIN_POINTS;
 }
 
 bool portal_terminals_check(const portal_option *options, size_t count, portal_text *error)
@@ -87,10 +84,8 @@ bool portal_terminals_check(const portal_option *options, size_t count, portal_t
     if (command && command->is_string && argv && argv->is_string)
         return fail_with(error, "A terminal view accepts either :command or :argv");
     const portal_option *points = option(options, count, "points");
-    if (points && points->is_integer && !in_range(points->integer, error))
-        return false;
-    if (points && !points->is_integer && (points->is_string || points->flag))
-        return fail_with(error, "Option :points must be an integer");
+    if (points && !points->is_number && (points->is_string || points->flag))
+        return fail_with(error, "Option :points must be a number");
     const portal_option *theme = option(options, count, "theme");
     return !theme || !theme->is_string || known(theme->string, error);
 }
@@ -166,24 +161,11 @@ bool portal_terminals_theme(const portal_string *name, portal_text *error)
     return portal_views_each(PORTAL_TERMINAL, apply, &theme);
 }
 
-struct text_size {
-    int64_t points;
-    portal_text *error;
-};
-
-static bool resize(portal_view *terminal, void *context)
+bool portal_terminals_text_size(portal_string target, double points, portal_text *error)
 {
-    struct text_size *size = context;
-    return portal_terminal_set_text_size(terminal, size->points, size->error);
-}
-
-bool portal_terminals_text_size(int64_t points, portal_text *error)
-{
-    /* Check the size before touching any terminal, even with none open. */
-    if (!in_range(points, error))
-        return false;
-    struct text_size size = {points, error};
-    return portal_views_each(PORTAL_TERMINAL, resize, &size);
+    portal_view *terminal = portal_views_find(target, PORTAL_TERMINAL, error);
+    return terminal
+        && portal_terminal_set_text_size(terminal, portal_terminal_points(points), error);
 }
 
 bool portal_terminals_paste(portal_string target, portal_string text, bool enter,
