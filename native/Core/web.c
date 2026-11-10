@@ -59,10 +59,12 @@
 
    Finding.  The platform finds text its own way and reports when it is
    done, with where the match is among how many it counted, and the core
-   adds the page's generation, so Emacs knows a match on an earlier page
-   from one on this.  Only the latest find in a view reports to Emacs, so a
-   result that arrives after the user has typed on never answers the newer
-   find.
+   adds the generation of the page the find went to, so Emacs knows a
+   match on an earlier page from one on this.  Only the latest find in a
+   view reports to Emacs, so a result that arrives after the user has typed
+   on never answers the newer find, and a result for a page that has since
+   gone is dropped: it is about a page Emacs can no longer see
+   (docs/adr/0004).
 
    Printing.  A page on screen prints as in a browser, in the system's
    print panel on its frame.  Any page prints to a PDF file Lisp names, with
@@ -102,6 +104,7 @@ struct portal_web_state {
     portal_text page;            /* The URL committed last, or no data. */
     uint64_t generation;         /* 1 + pages committed: the token of posts now. */
     uint64_t finds;              /* The token of the latest find, or 0. */
+    uint64_t finding;            /* The generation that find went to. */
     int64_t zoom;                /* The level its pages show at now, in percent. */
     struct message *first, *last; /* Waiting messages, oldest first. */
     bool announced;              /* Whether a bridge record went out for them. */
@@ -785,12 +788,21 @@ bool portal_web_views_find(portal_string target, portal_string text, bool backwa
         return fail_with(error, "Nothing to find");
     /* The latest find from now, so that its result counts even if the
        platform reports it at once. */
-    uint64_t token = ++web->finds;
+    uint64_t token = ++web->finds, previous = web->finding;
+    web->finding = web->generation;
     if (!portal_web_find(native, text, backward, case_sensitive, token, error)) {
         web->finds--;
+        web->finding = previous;
         return false;
     }
     return true;
+}
+
+bool portal_web_views_find_done(portal_string target, portal_text *error)
+{
+    struct portal_web_state *web;
+    portal_view *native = portal_views_find_web(target, &web, error);
+    return native && portal_web_find_done(native, error);
 }
 
 bool portal_web_views_print(portal_string target, const portal_string *file, portal_text *error)
@@ -984,7 +996,7 @@ void portal_web_failed(portal_string target, uint64_t token, portal_string messa
 void portal_web_found(portal_string target, uint64_t token, int64_t index, int64_t count)
 {
     struct portal_web_state *web;
-    if (!find(target, &web) || token != web->finds)
+    if (!find(target, &web) || token != web->finds || web->finding != web->generation)
         return;
     if (index < 0 || !count)
         index = 0;
@@ -995,7 +1007,7 @@ void portal_web_found(portal_string target, uint64_t token, int64_t index, int64
     char position[24], total[24], page[24];
     snprintf(position, sizeof position, "%" PRId64, index);
     snprintf(total, sizeof total, "%" PRId64, count);
-    snprintf(page, sizeof page, "%" PRIu64, web->generation);
+    snprintf(page, sizeof page, "%" PRIu64, web->finding);
     portal_string fields[] = {literal(count ? "1" : "0"), literal(position), literal(total),
                               literal(page)};
     portal_channel_send(literal("found"), target, fields, 4);

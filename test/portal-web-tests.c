@@ -911,11 +911,35 @@ static void test_finding(void)
     CHECK(portal_web_views_find(text(web), text("pear"), false, false, &error));
     portal_web_found(text(web), 4, 1, 2);
     CHECK(sent(web, "found %s 1 1 2 3\n"));
+    /* A result for a page that has gone since is dropped: it is about a
+       page Emacs no longer sees, even the same URL reloaded. */
+    CHECK(portal_web_views_find(text(web), text("pear"), false, false, &error));
+    portal_web_committed(text(web), text("https://example.com/"));
+    portal_web_found(text(web), 5, 2, 2);
+    CHECK(sent(web, ""));
+    /* The next find goes to the new page, and names it. */
+    CHECK(portal_web_views_find(text(web), text("pear"), false, false, &error));
+    portal_web_found(text(web), 6, 1, 2);
+    CHECK(sent(web, "found %s 1 1 2 4\n"));
+
+    /* Finding done reaches the page; another kind of view has no finding. */
+    CHECK(portal_web_views_find_done(text(web), &error));
+    CHECK(shows(web, "\"find-done\":1", NULL));
+    char message[64];
+    char *terminal = open_view("terminal", &error, "directory", "/tmp", NULL);
+    CHECK(terminal != NULL);
+    snprintf(message, sizeof message, "No Portal view %s", terminal);
+    CHECK(!portal_web_views_find_done(text(terminal), &error));
+    CHECK(says(&error, message));
+    close_view(terminal);
 
     char *closed = strdup(web);
     close_view(web);
-    portal_web_found(text(closed), 4, 1, 1);
+    portal_web_found(text(closed), 6, 1, 1);
     CHECK(sent(closed, ""));
+    snprintf(message, sizeof message, "No Portal view %s", closed);
+    CHECK(!portal_web_views_find_done(text(closed), &error));
+    CHECK(says(&error, message));
     free(closed);
 }
 

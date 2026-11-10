@@ -324,6 +324,7 @@ STRINGS(web_send, portal_web_views_send(a[0], a[1], error))
 STRINGS(web_receive, portal_web_views_receive(a[0], result, error))
 STRINGS(web_go, portal_web_views_go(a[0], a[1], error))
 STRINGS(web_download_directory, portal_web_views_download_directory(a[0], error))
+STRINGS(web_find_done, portal_web_views_find_done(a[0], error))
 STRINGS(terminal_themes, portal_terminals_themes(result, error))
 STRINGS(terminal_text, portal_terminals_text(a[0], result, error))
 STRINGS(launcher_detach, portal_launcher_detach(error))
@@ -797,6 +798,8 @@ static const struct export {
      "Save web views' downloads in DIRECTORY, an absolute path, from now on."},
     {"portal--web-find", 4, 4, Fweb_find, NULL,
      "Find TEXT in web view TARGET's page, BACKWARD or forward, CASE-SENSITIVE or not."},
+    {"portal--web-find-done", 1, 1, STRINGS_FUNCTION(web_find_done, RESULT_T),
+     "Stop showing what finding showed in web view TARGET's page, keeping its selection."},
     {"portal--web-print", 1, 2, Fweb_print, NULL,
      "Print web view TARGET's page in the system's print panel, or to FILE, an absolute path, "
      "as a PDF."},

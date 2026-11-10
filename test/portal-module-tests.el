@@ -335,6 +335,10 @@
     (should-error (portal--web-find web 'apple nil nil) :type 'wrong-type-argument)
     (should (equal (should-error (portal--web-find web "" nil nil))
                    '(error "Nothing to find")))
+    ;; Finding done reaches the page.
+    (should (eq (portal--web-find-done web) t))
+    (should (equal (plist-get (portal--inspect web) :find-done) 1))
+    (should-error (portal--web-find-done 'web) :type 'wrong-type-argument)
     ;; A page with no host yet shows at the level of "".
     (unwind-protect
         (progn
