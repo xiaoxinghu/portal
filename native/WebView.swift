@@ -360,32 +360,93 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
         record(error)
     }
 
-    /// Every page the view commits, including after back and forward.
+    /// Every page the view commits, including after back and forward, and
+    /// one restored from WebKit's page cache.
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        keepSelection()
         if let url { Core.committed(target, url: url.absoluteString) }
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         if let offered { answer(offered, used: seen) }
-        finding.removeAll()
         Core.failed(target, token: 0, message: "The page's web process stopped.")
     }
 
-    /// The finds WebKit has yet to report, oldest first, by their text and
-    /// token, while the page finds with WebKit's own find in page.
-    private var finding: [(text: String, token: UInt64)] = []
-    private var reportsFinds = false
+    /// WebKit's `WKPageSetMaintainsInactiveSelection`, an exported C call of
+    /// its WKPage API, if this WebKit has it.
+    private static let maintainsInactiveSelection: (@convention(c) (OpaquePointer, Bool) -> Void)? = {
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "WKPageSetMaintainsInactiveSelection")
+        else { return nil }
+        return unsafeBitCast(symbol, to: (@convention(c) (OpaquePointer, Bool) -> Void).self)
+    }()
+
+    /// The page keeps its selection when it gives up the keyboard
+    /// (docs/adr/0004). WebKit clears it then, unless the page maintains an
+    /// inactive selection, and with the page holding the keyboard every
+    /// command Emacs runs from it, Command-G included, passes the keyboard
+    /// to Emacs and back: since a find starts after the selection, each one
+    /// found the first match again. The setting is lost on navigation, so
+    /// each commit sets it. Without WebKit's calls, the page loses its
+    /// selection as before.
+    private func keepSelection() {
+        let pageRef = NSSelectorFromString("_pageRefForTransitionToWKWebView")
+        guard let set = Self.maintainsInactiveSelection, responds(to: pageRef) else { return }
+        typealias PageRef = @convention(c) (AnyObject, Selector) -> OpaquePointer?
+        guard let page = unsafeBitCast(method(for: pageRef), to: PageRef.self)(self, pageRef) else { return }
+        set(page, true)
+    }
+
+    /// The world of the scripts that find with, out of the page's reach.
+    private static let findWorld = WKContentWorld.world(name: "portal-find")
+
+    /// Where a find starts, as isearch's point is always on screen: from a
+    /// selection that is in view, collapsed to its end going forward or its
+    /// start going backward; otherwise from a caret at the start of the
+    /// first line of text in view, or the end of the last going backward.
+    /// A selection inside an image's Live Text shows the page only its
+    /// figure, with no rects: it stays as it is while the figure is in
+    /// view, and WebKit goes on from it.
+    private static let startInView = """
+        const selection = getSelection(), width = innerWidth, height = innerHeight;
+        const shown = (rect) => rect.bottom > 0 && rect.top < height && rect.right > 0 && rect.left < width;
+        if (selection.rangeCount) {
+          const range = selection.getRangeAt(0);
+          if (range.getClientRects().length) {
+            if (shown(range.getBoundingClientRect())) {
+              backward ? selection.collapseToStart() : selection.collapseToEnd();
+              return;
+            }
+          } else {
+            const node = selection.anchorNode;
+            const element = node && (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement);
+            if (element && shown(element.getBoundingClientRect())) return;
+          }
+        }
+        for (let y = backward ? height - 2 : 2; y > 0 && y < height; y += backward ? -8 : 8) {
+          const caret = document.caretRangeFromPoint(width / 2, y);
+          if (!caret || caret.startContainer.nodeType !== Node.TEXT_NODE) continue;
+          const rect = caret.getBoundingClientRect();
+          if (!rect.height || rect.bottom <= 0 || rect.top >= height) continue;
+          selection.removeAllRanges();
+          selection.addRange(caret);
+          selection.modify("move", backward ? "forward" : "backward", "lineboundary");
+          return;
+        }
+        """
 
     /// Find TEXT as WebKit's own find in page does, which Safari's find bar
-    /// uses: it selects the match, shows its find indicator, counts the
-    /// matches in every frame and says which one it selected, and leaves the
-    /// keyboard where it is. Without it, the public find, which says only
-    /// whether it matched.
+    /// uses: from what is on screen (`startInView`), it selects the match,
+    /// lights every match until finding is done (`findDone`), shows its find
+    /// indicator, and leaves the keyboard where it is. Then it reports how
+    /// many matches the page has, and which one is selected when it can
+    /// tell (`report`). Without WebKit's calls for it, the public find,
+    /// which says only whether it matched. A page that runs no scripts, as
+    /// a PDF, finds from its selection.
     func find(_ text: String, backward: Bool, caseSensitive: Bool, token: UInt64) {
         // WKWebViewPrivate.h, with _WKFindOptions.h's values.
         let findString = NSSelectorFromString("_findString:options:maxCount:")
-        let setDelegate = NSSelectorFromString("_setFindDelegate:")
-        guard responds(to: findString), responds(to: setDelegate) else {
+        guard responds(to: findString), responds(to: Self.findMatches), responds(to: Self.selectedRange),
+              responds(to: Self.firstRect) else {
             let configuration = WKFindConfiguration()
             configuration.backwards = backward
             configuration.caseSensitive = caseSensitive
@@ -394,44 +455,107 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
                 Core.found(target, token: token, index: 0, count: result.matchFound ? -1 : 0)
             }
         }
-        if !reportsFinds {
-            reportsFinds = true
-            perform(setDelegate, with: self)
-        }
         let caseInsensitive: UInt = 1 << 0, backwards: UInt = 1 << 3, wrapAround: UInt = 1 << 4
-        let showFindIndicator: UInt = 1 << 6, determineMatchIndex: UInt = 1 << 9
-        var options = wrapAround | showFindIndicator | determineMatchIndex
+        let showFindIndicator: UInt = 1 << 6, showHighlight: UInt = 1 << 7
+        var options = wrapAround | showFindIndicator | showHighlight
         if !caseSensitive { options |= caseInsensitive }
         if backward { options |= backwards }
-        finding.append((text, token))
-        typealias FindString = @convention(c) (AnyObject, Selector, NSString, UInt, UInt) -> Void
-        unsafeBitCast(method(for: findString), to: FindString.self)(self, findString, text as NSString, options,
-                                                                    UInt(PORTAL_WEB_FIND_MAX))
-    }
-
-    /// WebKit found MATCHES of TEXT, the one at INDEX selected, counting from
-    /// 0, or -1 when it cannot tell. Over the most it was asked to count,
-    /// MATCHES is more than that, and the index is no use. (_WKFindDelegate.h)
-    @objc(_webView:didFindMatches:forString:withMatchIndex:)
-    private func didFind(_ webView: WKWebView, matches: UInt, text: String, index: Int) {
-        if matches > UInt(PORTAL_WEB_FIND_MAX) {
-            return found(text, index: 0, count: Int64(PORTAL_WEB_FIND_MAX) + 1)
+        callAsyncJavaScript(Self.startInView, arguments: ["backward": backward], in: nil,
+                            in: Self.findWorld) { [weak self] _ in
+            guard let self else { return }
+            typealias FindString = @convention(c) (AnyObject, Selector, NSString, UInt, UInt) -> Void
+            unsafeBitCast(self.method(for: findString), to: FindString.self)(self, findString, text as NSString,
+                                                                             options, UInt(PORTAL_WEB_FIND_MAX))
+            self.report(text, caseSensitive: caseSensitive, token: token)
         }
-        let count = Int64(matches)
-        found(text, index: index >= 0 && index < count ? Int64(index) + 1 : 0, count: count)
     }
 
-    @objc(_webView:didFailToFindString:)
-    private func didFail(_ webView: WKWebView, text: String) { found(text, index: 0, count: 0) }
+    // The calls of the system find bar's client, NSTextFinderClient's.
+    private static let findMatches =
+        NSSelectorFromString("findMatchesForString:relativeToMatch:findOptions:maxResults:resultCollector:")
+    private static let selectedRange = NSSelectorFromString("selectedRangeWithCompletionHandler:")
+    private static let firstRect = NSSelectorFromString("firstRectForCharacterRange:completionHandler:")
 
-    /// WebKit reports each find once, in the order they started: the latest
-    /// one for TEXT is the earliest still waiting, and any before it went
-    /// unreported, which the core drops anyway.
-    private func found(_ text: String, index: Int64, count: Int64) {
-        guard let at = finding.firstIndex(where: { $0.text == text }) else { return }
-        let token = finding[at].token
-        finding.removeFirst(at + 1)
-        Core.found(target, token: token, index: index, count: count)
+    /// Report the find of TEXT that `find` just started: how many matches
+    /// the page has, and where the selected one is among them, in WebKit's
+    /// order, which is the order finding goes in: the main frame's in the
+    /// document's order, then each subframe's. WebKit's own match index is a
+    /// counter, not the selection's place, so the place comes from the list
+    /// of matches, located by the selection's rect: only a main frame's
+    /// match is found that way, and for any other, as one in Live Text, the
+    /// place is unknown. WebKit runs these after the find, in the order
+    /// asked. Asking for the list ends WebKit's reports to a find delegate
+    /// for the view's life, so finding never relies on those.
+    private func report(_ text: String, caseSensitive: Bool, token: UInt64) {
+        let max = Int(PORTAL_WEB_FIND_MAX)
+        typealias Collector = @convention(block) (NSArray, Bool) -> Void
+        let collector: Collector = { [weak self] matches, _ in
+            MainActor.assumeIsolated {
+                guard let page = self else { return }
+                if matches.count > max {
+                    return Core.found(page.target, token: token, index: 0, count: Int64(max) + 1)
+                }
+                guard matches.count > 0 else { return Core.found(page.target, token: token, index: 0, count: 0) }
+                let rects = matches.map { match -> NSRect in
+                    let rects = ((match as AnyObject).value(forKey: "textRects") as? [NSValue] ?? []).map(\.rectValue)
+                    return rects.dropFirst().reduce(rects.first ?? .null) { $0.union($1) }
+                }
+                page.selection { [weak page] selected in
+                    guard let page else { return }
+                    let tolerance = Swift.max(2, 2 * page.pageZoom)
+                    let at = selected.map { selected in
+                        rects.indices.filter { rects[$0].insetBy(dx: -tolerance, dy: -tolerance).contains(selected) }
+                    } ?? []
+                    Core.found(page.target, token: token, index: at.count == 1 ? Int64(at[0]) + 1 : 0,
+                               count: Int64(rects.count))
+                }
+            }
+        }
+        // findOptions: 4 ignores case.
+        typealias FindMatches = @convention(c) (AnyObject, Selector, NSString, AnyObject?, UInt, UInt, AnyObject) -> Void
+        unsafeBitCast(method(for: Self.findMatches), to: FindMatches.self)(
+            self, Self.findMatches, text as NSString, nil, caseSensitive ? 0 : 4, UInt(max + 1),
+            collector as AnyObject)
+    }
+
+    /// The selection's rect in the page, from its top left, in view points
+    /// as WebKit's match rects are, or nil when it has none in view, as a
+    /// match inside Live Text has none.
+    private func selection(_ done: @escaping @MainActor (NSRect?) -> Void) {
+        typealias RectDone = @convention(block) (NSRect, NSRange) -> Void
+        typealias RangeDone = @convention(block) (NSRange) -> Void
+        let rangeDone: RangeDone = { [weak self] range in
+            MainActor.assumeIsolated {
+                guard let page = self, range.location != NSNotFound else { return done(nil) }
+                let rectDone: RectDone = { [weak page] screen, _ in
+                    MainActor.assumeIsolated {
+                        guard let page, let window = page.window, screen.width > 0 else { return done(nil) }
+                        var rect = page.convert(window.convertFromScreen(screen), from: nil)
+                        if !page.isFlipped { rect.origin.y = page.bounds.height - rect.maxY }
+                        guard rect.intersects(page.bounds) else { return done(nil) }
+                        page.evaluateJavaScript("[scrollX, scrollY]", in: nil, in: WebPage.findWorld) {
+                            [weak page] result in
+                            guard let page, case .success(let value) = result, let scroll = value as? [Double],
+                                  scroll.count == 2 else { return done(nil) }
+                            done(rect.offsetBy(dx: scroll[0] * page.pageZoom, dy: scroll[1] * page.pageZoom))
+                        }
+                    }
+                }
+                typealias FirstRect = @convention(c) (AnyObject, Selector, NSRange, AnyObject) -> Void
+                unsafeBitCast(page.method(for: WebPage.firstRect), to: FirstRect.self)(
+                    page, WebPage.firstRect, range, rectDone as AnyObject)
+            }
+        }
+        typealias SelectedRange = @convention(c) (AnyObject, Selector, AnyObject) -> Void
+        unsafeBitCast(method(for: Self.selectedRange), to: SelectedRange.self)(self, Self.selectedRange,
+                                                                               rangeDone as AnyObject)
+    }
+
+    /// Finding is done for now: the matches go dark and WebKit's find
+    /// indicator goes, and the selection stays for the next find.
+    func findDone() {
+        let hide = NSSelectorFromString("_hideFindUI")
+        if responds(to: hide) { perform(hide) }
     }
 
     /// The questions the page waits on, in the order it asked: JavaScript's
@@ -1168,6 +1292,8 @@ final class WebSession: PortalView {
     func find(_ text: String, backward: Bool, caseSensitive: Bool, token: UInt64) {
         page.find(text, backward: backward, caseSensitive: caseSensitive, token: token)
     }
+
+    func findDone() { page.findDone() }
 
     func zoom(_ factor: Double) { page.pageZoom = factor }
 

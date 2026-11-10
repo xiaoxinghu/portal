@@ -32,6 +32,7 @@
 (declare-function portal--close "portal-view" (target))
 (declare-function portal--web-download-directory "portal-web" (directory))
 (declare-function portal--web-find "portal-web" (target text backward case-sensitive))
+(declare-function portal--web-find-done "portal-web" (target))
 (declare-function portal--web-zoom "portal-web" (host percent))
 (declare-function portal--web-print "portal-web" (target &optional file))
 
@@ -392,7 +393,9 @@ STEP is \"back\" or \"forward\"; with no page to go to, nothing changes."
   (portal-web--go "forward"))
 
 ;; Finding text in the page.  WebKit finds and highlights; Emacs keeps the
-;; keyboard, and the minibuffer reads the text.
+;; keyboard, and the minibuffer reads the text.  As in isearch, finding
+;; starts from what is on screen and lights every match until a command
+;; that is not a find command ends the find session.
 
 (defvar portal-web-find-history nil "Texts found in web views, newest first.")
 (defvar-local portal-web--finding nil "The text this buffer's view looked for last.")
@@ -426,10 +429,63 @@ letter and `search-upper-case' is on."
 
 (defun portal-web--search (text backward)
   "Find TEXT in this buffer's web view, BACKWARD or forward."
-  (portal--web-find (portal-web--selected) text backward (portal-web--case-sensitive text))
+  (let ((target (portal-web--selected)))
+    (portal--web-find target text backward (portal-web--case-sensitive text))
+    (portal-web--find-start (window-buffer) target))
   (with-current-buffer (window-buffer)
     (setq portal-web--finding text
           portal-web--finding-backward backward)))
+
+;; The find session: while it lasts, the page lights every match.  It
+;; ends as isearch's does, on the first command in its buffer that is not
+;; a find command, on C-g or Escape, and on a take, RET or a click that
+;; gives the page the keyboard.  A new page has no lights, so it needs no
+;; ending.  The selection stays where the last find left it, as point
+;; stays where isearch left it.
+
+(defvar portal-web--find-session nil
+  "The find session, as (BUFFER . TARGET), while one lasts.")
+
+(defconst portal-web--find-commands
+  '(portal-web-find portal-web-find-backward portal-web-find-next portal-web-find-previous)
+  "The commands that go on with a find session.")
+
+(defconst portal-web--find-keeping
+  '(portal-input--dispatch handle-switch-frame handle-select-window)
+  "Commands that neither go on with a find session nor end it.
+A chord the page hands Emacs counts as the command it runs, not as
+`portal-input--dispatch', and moving focus between frames or
+applications never changes a page.")
+
+(defun portal-web--find-start (buffer target)
+  "Start a find session in BUFFER for its view TARGET, or go on with it."
+  (unless (equal portal-web--find-session (cons buffer target))
+    (portal-web--find-end)
+    (setq portal-web--find-session (cons buffer target))
+    (add-hook 'pre-command-hook #'portal-web--find-command)))
+
+(defun portal-web--find-end ()
+  "End the find session, if one lasts: the page's matches go dark."
+  (when-let* ((session portal-web--find-session))
+    (setq portal-web--find-session nil)
+    (remove-hook 'pre-command-hook #'portal-web--find-command)
+    ;; A view that has closed has no lights left.
+    (ignore-errors (portal--web-find-done (cdr session)))))
+
+(defun portal-web--find-ends (command)
+  "End the find session if COMMAND, about to run, ends it."
+  (when-let* ((session portal-web--find-session))
+    (unless (or (memq command portal-web--find-commands)
+                (memq command portal-web--find-keeping)
+                (and (buffer-live-p (car session))
+                     (not (eq (current-buffer) (car session)))
+                     (not (eq command 'portal-input--select))))
+      (portal-web--find-end))))
+
+(defun portal-web--find-command ()
+  "End the find session if the command about to run ends it."
+  (portal-web--find-ends this-command))
+(add-hook 'portal-input--command-functions #'portal-web--find-ends)
 
 (defun portal-web-find (&optional backward)
   "Find text in this buffer's page, reading it in the minibuffer.
@@ -447,9 +503,13 @@ keyboard, so Emacs keeps it once the text is found."
   (let* ((last (car portal-web-find-history))
          (portal-web--find-window (selected-window))
          (portal-web--found nil)
-         (text (read-from-minibuffer (format-prompt (if backward "Find backward" "Find") last)
-                                     nil portal-web-find-minibuffer-map nil
-                                     'portal-web-find-history last)))
+         (text (condition-case nil
+                   (read-from-minibuffer (format-prompt (if backward "Find backward" "Find") last)
+                                         nil portal-web-find-minibuffer-map nil
+                                         'portal-web-find-history last)
+                 ;; C-g or Escape ends the find session, as in isearch.
+                 (quit (portal-web--find-end)
+                       (signal 'quit nil)))))
     (when (string-empty-p text)
       (setq text (or last (user-error "Nothing to find"))))
     (unless (equal text portal-web--found)

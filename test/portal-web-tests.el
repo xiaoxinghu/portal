@@ -723,6 +723,11 @@ They go there newest first: batch Emacs has no echo area to read."
         (should (equal (found "1 12 12 1") "Wrapped 12/12 sh"))
         ;; Found where the page cannot count, or over the most it counts.
         (should (equal (found "1 0 -1 1") "sh"))
+        ;; Where the page cannot tell which match it is, only the count,
+        ;; and then nothing wrapped.
+        (should (equal (found "1 5 23 1") "5/23 sh"))
+        (should (equal (found "1 0 23 1") "23 sh"))
+        (should (equal (found "1 1 23 1") "1/23 sh"))
         (should (equal (found "1 0 1001 1") "1000+ sh"))
         (should (equal (found "0 0 0 1") "No match for \"sh\""))
         ;; Other text starts afresh.
@@ -739,6 +744,67 @@ They go there newest first: batch Emacs has no echo area to read."
       (switch-to-buffer "*scratch*")
       (portal-view-sync)
       (should-error (portal-web-find-next) :type 'user-error))))
+
+(ert-deftest portal-web-find-lights-matches-until-another-command ()
+  (portal-web-test--environment
+    (portal-open-url "https://example.com")
+    (let ((target (portal-view-target))
+          (portal-web-find-history nil))
+      (cl-letf (((symbol-function 'portal--input) (lambda (&rest _) t))
+                ((symbol-function 'portal-input-focus) #'ignore))
+        (cl-flet ((command (name)
+                    ;; As the command loop starts NAME in the current buffer.
+                    (let ((this-command name)) (run-hooks 'pre-command-hook)))
+                  (handed (command)
+                    ;; As a chord the page does not use runs COMMAND.
+                    (let ((this-command 'portal-input--dispatch))
+                      (run-hooks 'pre-command-hook)
+                      (portal-input--run target 1 (kbd "s-g") command)))
+                  (ended ()
+                    (prog1 (portal-fake-native-calls 'portal--web-find-done)
+                      (setq portal-fake-native-log nil))))
+          (setq portal-fake-native-log nil)
+          ;; Find commands go on with the session, a chord handed over as
+          ;; the find command it runs too, and so does moving focus.
+          (portal-web-test--reading (lambda () "apple") (portal-web-find))
+          (command 'portal-web-find-next)
+          (portal-web-find-next)
+          (command 'portal-web-find-previous)
+          (handed #'portal-web-find-next)
+          (command 'handle-switch-frame)
+          ;; A command in another buffer is not one in this.
+          (with-temp-buffer (command 'self-insert-command))
+          (should-not (ended))
+          ;; Any other command ends it, once, and the lights go.
+          (command 'scroll-up-command)
+          (command 'scroll-up-command)
+          (should (equal (ended) `((,target))))
+          ;; A chord handed over that runs another command ends it.
+          (portal-web-find-next)
+          (handed #'ignore)
+          (should (equal (ended) `((,target))))
+          ;; So do C-g and Escape, in the buffer and while reading.
+          (dolist (quit '(keyboard-quit keyboard-escape-quit))
+            (portal-web-find-next)
+            (command quit)
+            (should (equal (ended) `((,target)))))
+          (portal-web-find-next)
+          (should (eq (condition-case nil
+                          (portal-web-test--reading (lambda () (signal 'quit nil))
+                            (portal-web-find))
+                        (quit 'quit))
+                      'quit))
+          (should (equal (ended) `((,target))))
+          ;; And a take: RET, or a click into the page from another pane.
+          (portal-web-find-next)
+          (command 'portal-input-focus)
+          (should (equal (ended) `((,target))))
+          (portal-web-find-next)
+          (with-temp-buffer (command 'portal-input--select))
+          (should (equal (ended) `((,target))))
+          ;; With no session, commands leave the page alone.
+          (command 'scroll-up-command)
+          (should-not (ended)))))))
 
 (ert-deftest portal-web-zoom-steps-and-remembers-each-site ()
   (portal-web-test--environment

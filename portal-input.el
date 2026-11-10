@@ -439,6 +439,13 @@ current buffer's keymaps, as if typed there, and return it with its command."
           ('portal-input-escape (cons keys #'portal-input-unfocus))
           (_ (cons keys (key-binding keys t))))))))
 
+(defvar portal-input--command-functions nil
+  "Functions called with each command a view hands Emacs, before it runs.
+A chord the view does not use runs its command from
+`portal-input--dispatch', which is the command the command loop sees, so
+`pre-command-hook' never learns which command it is: this does.  Each
+function runs in the buffer of the view's pane.")
+
 (defun portal-input--run (target serial trigger binding)
   "Run the command TRIGGER starts from TARGET, preserving input ownership
 through SERIAL.  BINDING is a native binding's command or prefix map, or nil
@@ -461,6 +468,7 @@ for a chord the view did not use, read with the current buffer's keymaps."
                 (setq command (or (command-remapping command) command))
                 (let ((last-command-event (aref keys (1- (length keys))))
                       (this-command command) (real-this-command command))
+                  (run-hook-with-args 'portal-input--command-functions command)
                   (command-execute command 'record)))
                (t (message "%s is undefined" (key-description keys)))))
           (quit (message "Portal command cancelled"))
