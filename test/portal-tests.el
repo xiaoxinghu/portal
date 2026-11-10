@@ -475,6 +475,10 @@ return true;" constraints)))
       (portal-test--wait-for-page "Visible")
       (let ((buffer (current-buffer))
             (target (portal-view-target)))
+        ;; WebKit tells the page it is visible a little after it is placed.
+        (portal-terminal-test--wait
+         (lambda () (equal (portal-excalidraw-gui--js "return document.visibilityState;")
+                           "visible")))
         (portal-excalidraw-gui--js
          "window.hiddenSeen = false;
           document.addEventListener('visibilitychange', () => {
