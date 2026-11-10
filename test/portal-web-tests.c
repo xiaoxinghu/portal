@@ -877,14 +877,14 @@ static void test_finding(void)
     CHECK(shows(web, "\"finds\":\"apple forward nocase\"", "\"find\":1", NULL));
     CHECK(sent(web, ""));
     portal_web_found(text(web), 1, 3, 12);
-    CHECK(sent(web, "found %s 1 3 12\n"));
+    CHECK(sent(web, "found %s 1 3 12 1\n"));
     /* Found with no count, and more matches than a platform counts. */
     portal_web_found(text(web), 1, 0, -1);
-    CHECK(sent(web, "found %s 1 0 -1\n"));
+    CHECK(sent(web, "found %s 1 0 -1 1\n"));
     portal_web_found(text(web), 1, 0, PORTAL_WEB_FIND_MAX + 1);
-    CHECK(sent(web, "found %s 1 0 1001\n"));
+    CHECK(sent(web, "found %s 1 0 1001 1\n"));
     portal_web_found(text(web), 1, 0, 4294967295);
-    CHECK(sent(web, "found %s 1 0 1001\n"));
+    CHECK(sent(web, "found %s 1 0 1001 1\n"));
 
     /* The user typed on before the first find finished. */
     CHECK(portal_web_views_find(text(web), text("Apple"), true, true, &error));
@@ -894,7 +894,7 @@ static void test_finding(void)
     portal_web_found(text(web), 2, 1, 4);
     CHECK(sent(web, ""));
     portal_web_found(text(web), 3, 0, 0);
-    CHECK(sent(web, "found %s 0 0 0\n"));
+    CHECK(sent(web, "found %s 0 0 0 1\n"));
 
     /* A find the platform refuses is no find: the one before stays latest. */
     portal_fake_refuse(true);
@@ -902,11 +902,19 @@ static void test_finding(void)
     CHECK(says(&error, "The fake refuses to run view primitives"));
     portal_fake_refuse(false);
     portal_web_found(text(web), 3, 2, 2);
-    CHECK(sent(web, "found %s 1 2 2\n"));
+    CHECK(sent(web, "found %s 1 2 2 1\n"));
+
+    /* Each page committed, even the same one again, is a new generation. */
+    portal_web_committed(text(web), text("https://example.com/"));
+    portal_web_committed(text(web), text("https://example.com/"));
+    CHECK(sent(web, ""));
+    CHECK(portal_web_views_find(text(web), text("pear"), false, false, &error));
+    portal_web_found(text(web), 4, 1, 2);
+    CHECK(sent(web, "found %s 1 1 2 3\n"));
 
     char *closed = strdup(web);
     close_view(web);
-    portal_web_found(text(closed), 3, 1, 1);
+    portal_web_found(text(closed), 4, 1, 1);
     CHECK(sent(closed, ""));
     free(closed);
 }
