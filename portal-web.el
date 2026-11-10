@@ -224,6 +224,8 @@ A hosted app loads from the app host, which starts first if needed.
 A window that a page opened loads the page it shows."
   (interactive)
   (unless portal-web--target (user-error "No web view in this buffer"))
+  ;; The page found in is gone, even at the same URL.
+  (setq portal-web--found-at nil)
   (if portal-web--hosted-path
       (portal-web--load-hosted)
     (portal--web-load portal-web--target
@@ -399,7 +401,8 @@ STEP is \"back\" or \"forward\"; with no page to go to, nothing changes."
 (defvar-local portal-web--finding-backward nil
   "Whether this buffer's view looked for `portal-web--finding' backward.")
 (defvar-local portal-web--found-at nil
-  "Where this buffer's view last found a match, as (TEXT . INDEX).")
+  "Where this buffer's view last found a match, as (URL TEXT INDEX).
+URL is the page's, so that a match on another page is never the last.")
 (defvar portal-web--find-window nil
   "The pane whose web view `portal-web-find' reads text for, while it reads.")
 (defvar portal-web--found nil
@@ -488,16 +491,17 @@ This is `portal-web-find-next' going backward."
 ;; `portal-web-find-max' + 1 when over the most the page counts.
 (defconst portal-web-find-max 1000 "The most matches a page counts.")
 
-(defun portal-web--find-message (text found index count)
+(defun portal-web--find-message (url text found index count)
   "What the echo area says of a find of TEXT, as its found record has it.
-Update the match last found in this buffer from FOUND, INDEX and COUNT."
+Update the match last found in this buffer, on the page at URL, from
+FOUND, INDEX and COUNT."
   (let ((last portal-web--found-at))
-    (setq portal-web--found-at (and found (> index 0) (cons text index)))
+    (setq portal-web--found-at (and found (> index 0) (list url text index)))
     (cond
      ((not found) (format "No match for %S" text))
      ((< count 0) text)
-     (t (concat (and (> index 0) (equal (car last) text)
-                     (if portal-web--finding-backward (> index (cdr last)) (< index (cdr last)))
+     (t (concat (and (> index 0) (equal (butlast last) (list url text))
+                     (if portal-web--finding-backward (> index (nth 2 last)) (< index (nth 2 last)))
                      "Wrapped ")
                 (and (> index 0) (format "%d/" index))
                 (if (> count portal-web-find-max)
@@ -513,11 +517,12 @@ Update the match last found in this buffer from FOUND, INDEX and COUNT."
       (message "%s" text))))
 
 (setf (alist-get "found" portal-view-record-handlers nil nil #'equal)
-      (lambda (_target found index count)
+      (lambda (target found index count)
         ;; From the command loop, not the process filter, where
         ;; `minibuffer-message' does not belong.
         (run-at-time 0 nil #'portal-web--say
-                     (portal-web--find-message portal-web--finding (equal found "1")
+                     (portal-web--find-message (plist-get (portal--inspect target) :url)
+                                               portal-web--finding (equal found "1")
                                                (string-to-number index) (string-to-number count)))))
 
 ;; Zoom, remembered per site.

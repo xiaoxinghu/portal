@@ -727,6 +727,15 @@ They go there newest first: batch Emacs has no echo area to read."
         (should (equal (found "0 0 0") "No match for \"sh\""))
         ;; Other text starts afresh.
         (portal-web-test--reading (lambda () "kiwi") (portal-web-find))
+        (should (equal (found "1 1 2") "1/2 kiwi"))
+        ;; So does another page, or the same one loaded again.
+        (should (equal (found "1 2 2") "2/2 kiwi"))
+        (portal-web-load-url "https://example.org/")
+        (portal-web-find-next)
+        (should (equal (found "1 1 2") "1/2 kiwi"))
+        (should (equal (found "1 2 2") "2/2 kiwi"))
+        (portal-web-reload)
+        (portal-web-find-next)
         (should (equal (found "1 1 2") "1/2 kiwi")))
       ;; Another pane with no view has nothing to find in.
       (select-window (split-window-right))
