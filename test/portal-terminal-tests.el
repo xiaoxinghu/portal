@@ -294,6 +294,46 @@
               (portal-terminal-test--wait (lambda () (not (process-attributes pid))))))
         (delete-directory directory t)))))
 
+(ert-deftest portal-terminal-stays-in-its-pane-until-taken ()
+  :tags '(:gui)
+  (skip-unless (fboundp 'portal-test-native-post-key))
+  (portal-terminal-test--session
+    (let ((origin (selected-window))
+          (initial (progn (portal-terminal-test--wait
+                           (lambda () (plist-get (portal-terminal-test--state) :ready)))
+                          (plist-get (portal-terminal-test--state) :columns)))
+          other columns)
+      ;; Emacs has the keyboard, as it does to read C-w v and C-w l.
+      (portal-input-unfocus)
+      (setq other (split-window-right))
+      (redisplay t)
+      (portal-terminal-test--wait
+       (lambda () (< (plist-get (portal-terminal-test--state) :columns) initial)))
+      (setq columns (plist-get (portal-terminal-test--state) :columns))
+      ;; Selecting the new pane leaves the terminal, its size and its pane.
+      (select-window other)
+      (redisplay t)
+      (sit-for 0.3)
+      (let ((state (portal-terminal-test--state)))
+        (should (equal (plist-get state :edges) (window-inside-pixel-edges origin)))
+        (should (equal (plist-get state :columns) columns))
+        (should-not (plist-get state :focused)))
+      (should-not (portal-view-target other))
+      (should-not (portal-input--focused-p))
+      (should (string-prefix-p "This terminal is showing in another pane.\n" (buffer-string)))
+      ;; RET in that pane's placard brings the terminal and focuses it.
+      (should (portal-test-native-post-key 36 0 "\r"))
+      (let ((keys (with-timeout (3 (ert-fail "RET did not reach Emacs"))
+                    (read-key-sequence-vector nil))))
+        (should (eq (key-binding keys) #'portal-terminal-focus))
+        (command-execute (key-binding keys)))
+      (portal-terminal-test--wait
+       (lambda () (plist-get (portal-terminal-test--state) :focused)))
+      (should (equal (plist-get (portal-terminal-test--state) :edges)
+                     (window-inside-pixel-edges other)))
+      (should (equal (portal-view-target other) portal-terminal-test--target))
+      (should-not (portal-view-target origin)))))
+
 (ert-deftest portal-terminal-follows-its-buffer-into-another-frame ()
   :tags '(:gui)
   (skip-unless (fboundp 'portal-test-native-key))
