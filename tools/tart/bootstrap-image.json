@@ -1,0 +1,18 @@
+{
+  "image_version": "bootstrap-2026-11-11",
+  "archive": "portal-base-2026-11-11.tvm",
+  "sha256": "41aa83f95410d175e270247a41c02b0c31ab57e7dd1f765281a644374b0b53dc",
+  "bytes": 33111038872,
+  "origin": "Manually prepared before the tools/tart scripts; no UTM import.",
+  "macos": "27.2.1",
+  "macos_build": "26B131",
+  "restore_verified": true,
+  "restore_checks": [
+    "automatic console login",
+    "SSH",
+    "Xcode first-launch status",
+    "Emacs native compilation"
+  ],
+  "gui_validation": "On working clone: full expensive GUI suite passed after an initial input focus failure; one multi-monitor test skipped.",
+  "first_run_requirement": "Resolve the Emacs local-network printer-discovery prompt in the viewer; choose Don’t Allow, then repeat GUI acceptance. This archive predates that decision."
+}
