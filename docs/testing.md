@@ -20,7 +20,14 @@ running checks from a shell. CLI launches do not inherit the app's environment:
 
 ```sh
 export LIBRARY_PATH="$(/usr/libexec/PlistBuddy -c Print:LSEnvironment:LIBRARY_PATH /Applications/Emacs.app/Contents/Info.plist)"
+export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
 ```
+
+`SDKROOT` also lets a Homebrew GCC built against Command Line Tools use the
+selected Xcode's SDK when the guest has no separate Command Line Tools install.
+For an SSH-only test account, set these in its `~/.zshenv` so non-interactive
+builds inherit them. Verify actual native compilation, not only
+`native-comp-available-p`, before saving a prepared VM.
 
 ## Writing tests
 
@@ -164,30 +171,94 @@ changes. Remove failed runs' directories when no longer needed.
 Keep at least 5 GiB free per fresh guest build. Leave host disk space for VM
 image growth.
 
-Guest preparation:
+Guest preparation (the runner works with any macOS VM reachable over SSH):
 
-- Use UTM Shared Network with a virtual display. Keep UTM running; background is
-  fine. Closing its console may suspend or stop the VM.
+- Use a virtual display and shared/NAT networking. With Tart, run
+  `tart run --no-graphics portal-test`: this hides the host viewer, while the
+  guest still has a graphical desktop. Keep that process running during tests.
 - Enable Remote Login. Install the host's SSH public key, verify the guest host
   key, and configure an SSH alias. Keep private keys on the host.
   Use the same account for SSH and the guest desktop.
 - Install Xcode with Swift 6.2 or newer. Select its developer directory and
   complete first-launch setup. Install Homebrew, then CMake, Ninja and Bun.
   Keep Homebrew tools under `/opt/homebrew/bin`.
-- Match the host's Homebrew Emacs cask: `d12frosted/emacs-plus/emacs-plus-app`,
-  build `31.1-349` here. Check the revision and native compilation against
-  [launcher prerequisites](launcher.md). Do not use a terminal-only formula.
-  This guest used tap commit `2d6afb2ec4869b8dc3098541696d0d9d362cc8f0` with
-  `HOMEBREW_NO_AUTO_UPDATE=1`. Homebrew updates/upgrades can change the build;
-  recheck the host/guest match before upgrading.
+- Match the host's graphical Emacs and its compiler libraries. Check the
+  revision and native compilation against [launcher prerequisites](launcher.md).
+  Do not use a terminal-only formula. Homebrew updates/upgrades can change the
+  build; recheck the host/guest match before upgrading.
 - Keep the guest desktop logged in and unlocked. Disable sleep, display sleep,
   screen saver and automatic logout. Keep display size and scale stable.
   The runner also holds a `caffeinate` assertion.
-- Verify GUI tests with UTM in the background. SSH access alone does not prove
+- Verify GUI tests with the VM viewer closed. SSH access alone does not prove
   AppKit, WebKit or Ghostty works.
 
 Default: launcher daily-use acceptance check, not the full GUI suite.
 Pass other graphical Emacs or standalone AppKit checks as needed.
+
+### Managing the Tart guest
+
+On an Apple Silicon Mac, install Tart with `brew install openai/tools/tart`.
+Create a fresh guest from Apple's installer, then configure it as above:
+
+```sh
+tart create portal-base --from-ipsw latest --disk-size 100
+tart set portal-base --cpu 4 --memory 8192 --display 1920x1200px --no-display-refit
+tart run portal-base
+```
+
+On macOS 26 or newer, `--disk-format asif` at creation uses Apple's sparse disk
+format. Keep the guest on a macOS version supported by the host. On a macOS 27
+host and guest, Tart's `--provisioning-opts` can create the account, enable
+automatic login and enable SSH on first boot; see `tart run --help`.
+
+After preparation, shut down macOS cleanly inside the guest. Preserve
+`portal-base` and create a working copy:
+
+```sh
+tart clone portal-base portal-test
+tart run --no-graphics --no-audio --no-clipboard portal-test
+```
+
+Keep one working VM between runs so the runner can reuse its build. Cloning a
+fresh VM for every suite loses that cache. APFS clones initially share disk
+blocks, with changed blocks consuming additional space.
+
+Point the `portal-vm` SSH alias at the working VM. This example uses the guest
+account `portal` and resolves Tart's current IP instead of hard-coding a DHCP
+address; adjust the executable path if Homebrew is installed elsewhere:
+
+```sshconfig
+Host portal-vm
+  HostName portal-tart
+  User portal
+  HostKeyAlias portal-tart
+  ProxyCommand /bin/sh -c 'exec /usr/bin/nc "$(/opt/homebrew/bin/tart ip portal-test)" 22'
+  BatchMode yes
+  ConnectTimeout 10
+  ServerAliveInterval 15
+  ServerAliveCountMax 3
+```
+
+Install the host's public key in the guest and verify its SSH host key before
+running tests. A stopped VM must be started before using the alias. Run
+`sh test/views-gui.sh` and `sh test/input-gui.sh` with the viewer closed to
+check native rendering and focus before relying on the environment. If macOS
+interrupts a fresh guest with a first-run dialog, resolve it in the viewer and
+repeat the affected suite with the viewer closed; a passing SSH check alone
+does not establish a working GUI session.
+
+Export the prepared, shut-down base to a backup destination:
+
+```sh
+tart export portal-base /path/to/backups/portal-base.tvm
+tart import /path/to/backups/portal-base.tvm portal-restored
+```
+
+Boot the restored copy and check it before relying on the archive. Keep a copy
+on another disk for protection against host disk loss. A local clone is useful
+for resetting test state, but is not an independent backup. Shut down the guest
+cleanly before cloning or exporting; do not copy a running disk image. Local
+VMs live under `~/.tart/vms/` by default.
 
 ## Every graphical suite
 
