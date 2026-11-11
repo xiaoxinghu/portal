@@ -12,3 +12,8 @@ node_modules/
 \#*#
 .#*
 *~
+
+# Local VM images and Apple restore installers
+*.tvm
+*.ipsw
+*.asif
