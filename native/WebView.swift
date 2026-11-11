@@ -370,6 +370,10 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         if let offered { answer(offered, used: seen) }
+        // Finds that were waiting on the page get no answer.
+        finding += 1
+        running = 0
+        runNext()
         Core.failed(target, token: 0, message: "The page's web process stopped.")
     }
 
@@ -480,14 +484,43 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
         if !caseSensitive { options |= caseInsensitive }
         if backward { options |= backwards }
         let finding = finding
-        callAsyncJavaScript(Self.startInView, arguments: ["backward": backward], in: nil,
-                            in: Self.findWorld) { [weak self] _ in
-            guard let self, self.finding == finding else { return }
-            typealias FindString = @convention(c) (AnyObject, Selector, NSString, UInt, UInt) -> Void
-            unsafeBitCast(self.method(for: findString), to: FindString.self)(self, findString, text as NSString,
-                                                                             options, UInt(PORTAL_WEB_FIND_MAX))
-            self.report(text, caseSensitive: caseSensitive, token: token)
+        queue { [weak self] done in
+            guard let self, self.finding == finding else { return done() }
+            callAsyncJavaScript(Self.startInView, arguments: ["backward": backward], in: nil,
+                                in: Self.findWorld) { [weak self] _ in
+                guard let self, self.finding == finding else { return done() }
+                typealias FindString = @convention(c) (AnyObject, Selector, NSString, UInt, UInt) -> Void
+                unsafeBitCast(self.method(for: findString), to: FindString.self)(
+                    self, findString, text as NSString, options, UInt(PORTAL_WEB_FIND_MAX))
+                self.report(text, caseSensitive: caseSensitive, token: token, done: done)
+            }
         }
+    }
+
+    /// The finds waiting their turn, oldest first, and the one running, by
+    /// its number, or 0. A find runs whole, from its start to its report,
+    /// before the next one starts: the list of one asked for while another's
+    /// find is on its way would take that find's answer.
+    private var waiting: [(@escaping () -> Void) -> Void] = []
+    private var running: UInt64 = 0
+    private var runs: UInt64 = 0
+
+    /// Run FIND in its turn; it calls the function it is given when done.
+    private func queue(_ find: @escaping (@escaping () -> Void) -> Void) {
+        waiting.append(find)
+        runNext()
+    }
+
+    private func runNext() {
+        guard running == 0, !waiting.isEmpty else { return }
+        runs += 1
+        let run = runs
+        running = run
+        waiting.removeFirst()({ [weak self] in
+            guard let self, self.running == run else { return }
+            self.running = 0
+            self.runNext()
+        })
     }
 
     /// The system find bar's client call, NSTextFinderClient's, that lists
@@ -510,9 +543,9 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
     /// list takes that answer, the selected match alone. Asking for the list
     /// ends WebKit's reports to a find delegate for the view's life, so
     /// finding never relies on those.
-    private func report(_ text: String, caseSensitive: Bool, token: UInt64) {
+    private func report(_ text: String, caseSensitive: Bool, token: UInt64, done: @escaping () -> Void) {
         callAsyncJavaScript(Self.selectionRect, in: nil, in: Self.findWorld) { [weak self] result in
-            guard let self else { return }
+            guard let self else { return done() }
             var selected: NSRect?
             if case .success(let value) = result, let rect = value as? [Double], rect.count == 4 {
                 let zoom = pageZoom
@@ -520,6 +553,7 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
                                   height: rect[3] * zoom)
             }
             matches(text, caseSensitive: caseSensitive) { [weak self] rects in
+                defer { done() }
                 guard let self else { return }
                 // WebKit lists no more than the most the core counts, so a
                 // full list may be longer.

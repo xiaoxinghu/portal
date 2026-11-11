@@ -596,6 +596,13 @@ Wait until it stays there: the page may reveal its focused field once."
           (portal--web-find-done target))
         (sit-for 0.5)
         (should (equal (portal-excalidraw-gui--js "return getSelection().toString();") ""))
+        ;; Finds sent at once run one after another, and the last says
+        ;; where it is among them all.
+        (dotimes (_ 3) (portal-web--search "apple" nil))
+        (portal-test--wait-for-match "c")
+        (portal-test--wait-for-echo "3/5 apple")
+        (portal-test--scroll-to "a")
+        (portal-excalidraw-gui--js "getSelection().removeAllRanges(); return true;")
         ;; Scrolled past the first matches, a find selects the first in view,
         ;; and says where it is among them all.
         (portal-test--scroll-to "c")
