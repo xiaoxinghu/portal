@@ -612,13 +612,21 @@ Wait until it stays there: the page may reveal its focused field once."
         (portal-web-find-next)
         (portal-test--wait-for-match "d")
         (portal-test--wait-for-echo "4/5 apple")
+        ;; Scrolled back up, finding starts from the top again, which is no
+        ;; wrapping around; going back from the first match is.
+        (portal-test--scroll-to "a")
+        (portal-web-find-next)
+        (portal-test--wait-for-match "a")
+        (portal-test--wait-for-echo "1/5 apple")
+        (portal-web-find-previous)
+        (portal-test--wait-for-match "e")
+        (portal-test--wait-for-echo "Wrapped 5/5 apple")
         ;; Going backward starts from the bottom of the view.
         (portal-test--scroll-to "a")
         (portal-web-find-previous)
         (portal-test--wait-for-match "b")
         (portal-test--wait-for-echo "2/5 apple")
-        ;; A reload is a new page: the next find starts from the top of its
-        ;; view, and finding did not wrap to get there.
+        ;; A reload is a new page: the next find starts from its view.
         (portal-excalidraw-gui--js "window.before = true; return true;")
         (portal-web-reload)
         (portal-terminal-test--wait

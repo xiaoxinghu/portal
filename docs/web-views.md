@@ -130,10 +130,10 @@ same one loaded again, has no lights, and its first find starts from its view.
 Each find says in the echo area, or beside the text being read, which match it
 is of how many, as isearch's count does: `3/12 sh`, `Wrapped 1/12 sh` when it
 went past the page's last match to its first, or its first to its last going
-backward. WebKit counts the matches in every frame, up to 1000: past that the
+backward, from where the find started. WebKit counts the matches in every frame, up to 1000: past that the
 count reads `1000+`. The match's number is shown only when Portal knows it:
 for a match in a frame within the page, or in an image's Live Text, it says
-the count alone, `12 sh`. A page without a match says `No match for "sh"`.
+the count alone, `12 sh`, and never says it wrapped. A page without a match says `No match for "sh"`.
 Where the system's WebKit cannot count, the echo area shows the text alone once
 it is found.
 

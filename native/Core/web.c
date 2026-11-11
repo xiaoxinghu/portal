@@ -993,7 +993,8 @@ void portal_web_failed(portal_string target, uint64_t token, portal_string messa
         queue_own(web, target, "error", "message", message);
 }
 
-void portal_web_found(portal_string target, uint64_t token, int64_t index, int64_t count)
+void portal_web_found(portal_string target, uint64_t token, int64_t index, int64_t count,
+                      int wrapped)
 {
     struct portal_web_state *web;
     if (!find(target, &web) || token != web->finds || web->finding != web->generation)
@@ -1002,15 +1003,21 @@ void portal_web_found(portal_string target, uint64_t token, int64_t index, int64
         index = 0;
     if (count < -1)
         count = -1;
-    if (count > PORTAL_WEB_FIND_MAX)
+    /* Past the count, which match it is is no use. */
+    if (count > PORTAL_WEB_FIND_MAX) {
         count = PORTAL_WEB_FIND_MAX + 1;
+        index = 0;
+    }
+    /* Whether a match wrapped means something only where it is known. */
+    if (!index || wrapped < 0 || wrapped > 1)
+        wrapped = -1;
     char position[24], total[24], page[24];
     snprintf(position, sizeof position, "%" PRId64, index);
     snprintf(total, sizeof total, "%" PRId64, count);
     snprintf(page, sizeof page, "%" PRIu64, web->finding);
     portal_string fields[] = {literal(count ? "1" : "0"), literal(position), literal(total),
-                              literal(page)};
-    portal_channel_send(literal("found"), target, fields, 4);
+                              literal(page), literal(wrapped < 0 ? "-1" : wrapped ? "1" : "0")};
+    portal_channel_send(literal("found"), target, fields, 5);
 }
 
 void portal_web_printed(portal_string target, portal_string file, const portal_string *error)

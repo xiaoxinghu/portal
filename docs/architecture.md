@@ -176,12 +176,14 @@ the new page's host's level, so navigation and new views follow the site.
 Pages without a host share `""`. `portal--web-find` asks the platform to find
 text its own way, with a token, and notes the page's generation; only the
 latest find's result reaches Emacs, and only while that page is still the
-view's, as a `found TARGET FOUND INDEX COUNT PAGE` record: FOUND is `1` or
-`0`, INDEX the selected match's position from 1, 0 when the platform cannot
-tell, COUNT the matches, -1 when the platform cannot count and 1001 past
-`PORTAL_WEB_FIND_MAX`, and PAGE that generation, which every commit changes,
-reloads included: Emacs says a find wrapped only against a match on the same
-page. `portal--web-find-done` ends finding in a page for now: the platform
+view's, as a `found TARGET FOUND INDEX COUNT PAGE WRAPPED` record: FOUND is
+`1` or `0`, INDEX the selected match's position from 1, 0 when the platform
+cannot tell, COUNT the matches, -1 when the platform cannot count and 1001
+past `PORTAL_WEB_FIND_MAX`, PAGE that generation, which every commit
+changes, reloads included, and WRAPPED `1` when finding went around the
+page's end to reach the match, `0` when not, and `-1` without an INDEX. The
+platform says whether a find wrapped, as only it knows where the find
+started: from what is on screen, not from the match before. `portal--web-find-done` ends finding in a page for now: the platform
 clears what it shows while finding, such as every match lit, and keeps the
 selection. The platform supplies three primitives for these: find text,
 finding done, and set a view's zoom factor.
@@ -201,7 +203,8 @@ is a counter that drifts from the selection, so the platform asks for the
 list of matches that the system find bar's client call returns, counts them,
 and locates the selection's rect among them: a main frame's match is found
 that way, a subframe's or one in Live Text is not, and its position is
-unknown. Asking for the list ends WebKit's find delegate reports for the
+unknown. The script that placed the start reports where it is, and a match
+before it, or after it going backward, wrapped. Asking for the list ends WebKit's find delegate reports for the
 view, so nothing relies on those. Without the private calls, the public find
 only says whether it matched.
 

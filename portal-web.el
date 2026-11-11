@@ -399,12 +399,6 @@ STEP is \"back\" or \"forward\"; with no page to go to, nothing changes."
 
 (defvar portal-web-find-history nil "Texts found in web views, newest first.")
 (defvar-local portal-web--finding nil "The text this buffer's view looked for last.")
-(defvar-local portal-web--finding-backward nil
-  "Whether this buffer's view looked for `portal-web--finding' backward.")
-(defvar-local portal-web--found-at nil
-  "Where this buffer's view last found a match, as (PAGE TEXT INDEX).
-PAGE is the generation of the page found in, which each new page, even a
-reload of the same one, changes: a match on an earlier page is not the last.")
 (defvar portal-web--find-window nil
   "The pane whose web view `portal-web-find' reads text for, while it reads.")
 (defvar portal-web--found nil
@@ -433,8 +427,7 @@ letter and `search-upper-case' is on."
     (portal--web-find target text backward (portal-web--case-sensitive text))
     (portal-web--find-start (window-buffer) target))
   (with-current-buffer (window-buffer)
-    (setq portal-web--finding text
-          portal-web--finding-backward backward)))
+    (setq portal-web--finding text)))
 
 ;; The find session: while it lasts, the page lights every match.  It
 ;; ends as isearch's does, on the first command in its buffer that is not
@@ -553,26 +546,24 @@ This is `portal-web-find-next' going backward."
 ;; The view's latest find ended: FOUND is "1" or "0", and the match is at
 ;; INDEX, from 1 or 0 when unknown, of COUNT, -1 when uncounted, or
 ;; `portal-web-find-max' + 1 when over the most the page counts, on the
-;; page of generation PAGE.
+;; page of generation PAGE; WRAPPED is "1" when finding went around the
+;; page's end to reach it, "0" when not, and "-1" when the page cannot
+;; tell.  The page says, since a find starts from what is on screen, not
+;; from the match before.
 (defconst portal-web-find-max 1000 "The most matches a page counts.")
 
-(defun portal-web--find-message (page text found index count)
+(defun portal-web--find-message (text found index count wrapped)
   "What the echo area says of a find of TEXT, as its found record has it.
-Update the match last found in this buffer, on PAGE, from FOUND, INDEX
-and COUNT."
-  (let ((last portal-web--found-at))
-    (setq portal-web--found-at (and found (> index 0) (list page text index)))
-    (cond
-     ((not found) (format "No match for %S" text))
-     ((< count 0) text)
-     (t (concat (and (> index 0) (equal (butlast last) (list page text))
-                     (if portal-web--finding-backward (> index (nth 2 last)) (< index (nth 2 last)))
-                     "Wrapped ")
-                (and (> index 0) (format "%d/" index))
-                (if (> count portal-web-find-max)
-                    (format "%d+" portal-web-find-max)
-                  (number-to-string count))
-                " " text)))))
+FOUND, INDEX, COUNT and WRAPPED are the record's."
+  (cond
+   ((not found) (format "No match for %S" text))
+   ((< count 0) text)
+   (t (concat (and (> index 0) wrapped "Wrapped ")
+              (and (> index 0) (format "%d/" index))
+              (if (> count portal-web-find-max)
+                  (format "%d+" portal-web-find-max)
+                (number-to-string count))
+              " " text))))
 
 (defun portal-web--say (text)
   "Show TEXT in the echo area, or beside `portal-web-find''s minibuffer."
@@ -582,12 +573,13 @@ and COUNT."
       (message "%s" text))))
 
 (setf (alist-get "found" portal-view-record-handlers nil nil #'equal)
-      (lambda (_target found index count page)
+      (lambda (_target found index count _page wrapped)
         ;; From the command loop, not the process filter, where
         ;; `minibuffer-message' does not belong.
         (run-at-time 0 nil #'portal-web--say
-                     (portal-web--find-message page portal-web--finding (equal found "1")
-                                               (string-to-number index) (string-to-number count)))))
+                     (portal-web--find-message portal-web--finding (equal found "1")
+                                               (string-to-number index) (string-to-number count)
+                                               (equal wrapped "1")))))
 
 ;; Zoom, remembered per site.
 

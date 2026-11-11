@@ -625,8 +625,12 @@ void portal_web_failed(portal_string target, uint64_t token, portal_string messa
    matches, or 0 for no match or when the platform cannot tell: never a
    guess, so that Emacs shows only a true position.  COUNT is the
    number of matches, 0 for none: -1 when the platform cannot count them, and
-   PORTAL_WEB_FIND_MAX + 1 when there are more than PORTAL_WEB_FIND_MAX. */
-void portal_web_found(portal_string target, uint64_t token, int64_t index, int64_t count);
+   PORTAL_WEB_FIND_MAX + 1 when there are more than PORTAL_WEB_FIND_MAX.
+   WRAPPED is 1 when finding went past the page's end to its start, or its
+   start to its end going backward, to reach the match, 0 when it did not,
+   and -1 when the platform cannot tell; it counts only with an INDEX. */
+void portal_web_found(portal_string target, uint64_t token, int64_t index, int64_t count,
+                      int wrapped);
 /* The printing that portal_web_print started in TARGET to FILE ended: FILE
    is complete, for a null ERROR, or printing failed and ERROR says why.
    The core tells Emacs over TARGET's messages, unless the view is gone. */

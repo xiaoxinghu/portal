@@ -712,33 +712,20 @@ They go there newest first: batch Emacs has no echo area to read."
                     (accept-process-output nil 0.01)
                     (pop portal-web-test--messages))))
         (portal-web-test--reading (lambda () "sh") (portal-web-find))
-        (should (equal (found "1 3 12 1") "3/12 sh"))
-        ;; Back to an earlier match going forward, the page wrapped.
-        (should (equal (found "1 12 12 1") "12/12 sh"))
-        (should (equal (found "1 1 12 1") "Wrapped 1/12 sh"))
-        (should (equal (found "1 2 12 1") "2/12 sh"))
-        ;; Going backward, to a later one.
-        (portal-web-find-previous)
-        (should (equal (found "1 1 12 1") "1/12 sh"))
-        (should (equal (found "1 12 12 1") "Wrapped 12/12 sh"))
+        (should (equal (found "1 3 12 1 0") "3/12 sh"))
+        ;; The page says when finding went around its end.
+        (should (equal (found "1 1 12 1 1") "Wrapped 1/12 sh"))
+        (should (equal (found "1 12 12 1 1") "Wrapped 12/12 sh"))
+        (should (equal (found "1 2 12 1 -1") "2/12 sh"))
         ;; Found where the page cannot count, or over the most it counts.
-        (should (equal (found "1 0 -1 1") "sh"))
-        ;; Where the page cannot tell which match it is, only the count,
-        ;; and then nothing wrapped.
-        (should (equal (found "1 5 23 1") "5/23 sh"))
-        (should (equal (found "1 0 23 1") "23 sh"))
-        (should (equal (found "1 1 23 1") "1/23 sh"))
-        (should (equal (found "1 0 1001 1") "1000+ sh"))
-        (should (equal (found "0 0 0 1") "No match for \"sh\""))
-        ;; Other text starts afresh.
+        (should (equal (found "1 0 -1 1 -1") "sh"))
+        (should (equal (found "1 0 1001 1 -1") "1000+ sh"))
+        (should (equal (found "0 0 0 1 -1") "No match for \"sh\""))
+        ;; Where the page cannot tell which match it is, only the count.
+        (should (equal (found "1 0 23 1 -1") "23 sh"))
+        ;; Other text shows as found.
         (portal-web-test--reading (lambda () "kiwi") (portal-web-find))
-        (should (equal (found "1 1 2 1") "1/2 kiwi"))
-        ;; So does a new page, even the same one loaded again.
-        (should (equal (found "1 2 2 1") "2/2 kiwi"))
-        (portal-web-find-next)
-        (should (equal (found "1 1 2 2") "1/2 kiwi"))
-        (should (equal (found "1 2 2 2") "2/2 kiwi"))
-        (should (equal (found "1 1 2 2") "Wrapped 1/2 kiwi")))
+        (should (equal (found "1 1 2 2 0") "1/2 kiwi")))
       ;; Another pane with no view has nothing to find in.
       (select-window (split-window-right))
       (switch-to-buffer "*scratch*")

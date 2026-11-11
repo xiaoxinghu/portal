@@ -150,9 +150,10 @@ enum Core {
     }
 
     /// The find started in TARGET with TOKEN finished: the match at INDEX,
-    /// from 1, of COUNT (`portal_web_found`).
-    static func found(_ target: String, token: UInt64, index: Int64, count: Int64) {
-        borrow(target) { portal_web_found($0, token, index, count) }
+    /// from 1, of COUNT, reached by WRAPPED around the page, or nil when
+    /// unknown (`portal_web_found`).
+    static func found(_ target: String, token: UInt64, index: Int64, count: Int64, wrapped: Bool? = nil) {
+        borrow(target) { portal_web_found($0, token, index, count, wrapped.map { $0 ? 1 : 0 } ?? -1) }
     }
 
     /// Printing TARGET's page to FILE ended: complete without an ERROR.
