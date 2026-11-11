@@ -629,6 +629,27 @@ Wait until it stays there: the page may reveal its focused field once."
         (portal-test--wait-for-match "d")
         (portal-test--wait-for-echo "4/5 apple")))))
 
+(ert-deftest portal-web-find-goes-on-through-a-frame-in-the-page ()
+  :tags '(:gui)
+  (portal-test--with-web
+    (portal-test--with-page-scripts
+      (let ((portal-web-find-history nil)
+            (selected "const s = document.querySelector('iframe').contentDocument.getSelection();
+                       return s.rangeCount && s.toString() ? s.anchorNode.parentElement.id : '';"))
+        (portal-open-url "data:text/html,<title>Framed</title><p id=a>apple a</p><iframe srcdoc='<p id=b>apple b</p><p id=c>apple c</p>'></iframe>")
+        (portal-test--wait-for-page "Framed")
+        (portal-test--find "apple RET")
+        (portal-test--wait-for-match "a")
+        (portal-test--wait-for-echo "1/3 apple")
+        ;; In the frame, finding goes on from the frame's match; Portal
+        ;; cannot tell which of them it is.
+        (portal-web-find-next)
+        (portal-terminal-test--wait (lambda () (equal (portal-excalidraw-gui--js selected) "b")))
+        (portal-test--wait-for-echo "3 apple")
+        (portal-web-find-next)
+        (portal-terminal-test--wait (lambda () (equal (portal-excalidraw-gui--js selected) "c")))
+        (portal-test--wait-for-echo "3 apple")))))
+
 (ert-deftest portal-web-zoom-lays-the-page-out-again-and-stays-with-its-site ()
   :tags '(:gui)
   (portal-test--with-web
