@@ -197,6 +197,10 @@ Pass other graphical Emacs or standalone AppKit checks as needed.
 
 ### Managing the Tart guest
 
+For a rebuild, use the [versioned VM recipe](test-vm.md) in `tools/tart/`.
+It stages the matching toolchain, creates a new guest, provisions its settings
+and checks native compilation. Keep images and staged binaries outside Git.
+
 On an Apple Silicon Mac, install Tart with `brew install openai/tools/tart`.
 Create a fresh guest from Apple's installer, then configure it as above:
 
@@ -243,7 +247,7 @@ Install the host's public key in the guest and verify its SSH host key before
 running tests. A stopped VM must be started before using the alias. Run
 `sh test/views-gui.sh` and `sh test/input-gui.sh` with the viewer closed to
 check native rendering and focus before relying on the environment. If macOS
-interrupts a fresh guest with a first-run dialog, resolve it in the viewer and
+interrupts a fresh guest with the [printer-discovery permission prompt](test-vm.md#resolve-the-first-print-permission-prompt), resolve it in the viewer and
 repeat the affected suite with the viewer closed; a passing SSH check alone
 does not establish a working GUI session.
 
