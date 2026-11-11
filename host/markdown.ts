@@ -55,13 +55,33 @@ const imageTypes: Record<string, string> = {
 	".webp": "image/webp",
 };
 
-// HTMLRewriter reads attribute values as written, and Bun writes these.
-const entities: Record<string, string> = {
-	"&amp;": "&",
-	"&lt;": "<",
-	"&gt;": ">",
-	"&quot;": '"',
-};
+// The named character references `decodeAttribute' knows: those Bun writes,
+// and &apos;. A Map, so a name such as `constructor' finds nothing.
+const namedReferences = new Map([
+	["amp", "&"],
+	["lt", "<"],
+	["gt", ">"],
+	["quot", '"'],
+	["apos", "'"],
+]);
+
+/** The attribute VALUE, as written in HTML, as a browser reads it.
+ * HTMLRewriter returns values as written: Bun's own output writes &#x27;,
+ * and raw HTML may use any numeric reference. Other named references, such
+ * as &eacute;, are rare in URLs and stay as written. */
+export function decodeAttribute(value: string): string {
+	return value.replace(
+		/&(?:#(\d+)|#[xX]([\da-fA-F]+)|([a-zA-Z]+));/g,
+		(reference, decimal?: string, hex?: string, name?: string) => {
+			if (name) return namedReferences.get(name) ?? reference;
+			const code = decimal ? Number(decimal) : Number.parseInt(hex ?? "", 16);
+			// As HTML does: NUL, surrogates and beyond Unicode read as U+FFFD.
+			const valid =
+				code > 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff);
+			return valid ? String.fromCodePoint(code) : "�";
+		},
+	);
+}
 
 /** The local file that HREF in the Markdown file at PATH names, with its
  * fragment, or null when HREF is a fragment or not a local file. */
@@ -104,12 +124,7 @@ function rewrite(
 	name: string,
 	target: (value: string) => string | null,
 ) {
-	const value = target(
-		(element.getAttribute(name) ?? "").replace(
-			/&(?:amp|lt|gt|quot);/g,
-			(entity) => entities[entity] ?? entity,
-		),
-	);
+	const value = target(decodeAttribute(element.getAttribute(name) ?? ""));
 	// HTMLRewriter escapes only quotes in the values it writes.
 	if (value !== null)
 		element.setAttribute(name, value.replaceAll("&", "&amp;"));

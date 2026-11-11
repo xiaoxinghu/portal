@@ -5,7 +5,7 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { respond } from "./app";
-import { imageSource, linkTarget } from "./markdown";
+import { decodeAttribute, imageSource, linkTarget } from "./markdown";
 
 const authority = "127.0.0.1:4321";
 const token = "0123456789abcdef0123456789abcdef";
@@ -139,10 +139,19 @@ test("local links open in the preview or in Emacs; others are left alone", async
 			"[up](../README.MD) [résumé](résumé.md) [amp](a&b.md) [missing](gone.md) " +
 			"[code](<src/main file.ts#L42-L50>) [image](img/pic.png) [dir](src/) " +
 			"[absolute](/tmp/abs.markdown#x) [file](file:///tmp/x%20y.ts#L3) " +
-			"[web](https://example.com/a.md) [mail](mailto:a@example.com)\n",
+			"[web](https://example.com/a.md) [mail](mailto:a@example.com) " +
+			// Bun writes the apostrophe as &#x27;.
+			"[quote](it's.md) " +
+			'<a href="raw&#32;file.md#a&#x26;b">raw</a> <a href="&#x27;q&apos;.txt">apos</a> ' +
+			'<a href="&eacute;.md">named</a>\n',
 	);
 	const page = await (await get(preview(file))).text();
 	const links: [string, string][] = [
+		["quote", preview(join(docs, "it's.md"))],
+		["raw", `${preview(join(docs, "raw file.md"))}#a&b`],
+		["apos", visit(join(docs, "'q'.txt"))],
+		// A named reference beyond the five stays as written.
+		["named", preview(join(docs, "&eacute;.md"))],
 		["same", "#top"],
 		["other", `${preview(join(docs, "other file.md"))}#next-steps`],
 		["up", preview(join(directory, "README.MD"))],
@@ -159,6 +168,21 @@ test("local links open in the preview or in Emacs; others are left alone", async
 	];
 	for (const [text, target] of links) {
 		expect([text, href(page, text)]).toEqual([text, target]);
+	}
+});
+
+test("attribute values decode as a browser reads them", () => {
+	const cases: [string, string][] = [
+		["a&amp;b&lt;&gt;&quot;&apos;", "a&b<>\"'"],
+		["&#32;&#x27;&#X41;&#128512;", " 'A😀"],
+		["&#0;&#xD800;&#x110000;&#99999999999;", "�".repeat(4)],
+		[
+			"&eacute; &constructor; &AMP; & ;&#; &#x;",
+			"&eacute; &constructor; &AMP; & ;&#; &#x;",
+		],
+	];
+	for (const [value, decoded] of cases) {
+		expect([value, decodeAttribute(value)]).toEqual([value, decoded]);
 	}
 });
 
@@ -188,7 +212,8 @@ test("local images load from the host, relative to the page", async () => {
 		file,
 		"# Pictures\n\n![relative](<img/a&b pic.PNG>) ![encoded](img/a%26b%20pic.PNG#x) " +
 			"![up](../top.svg) ![absolute](/tmp/abs.gif) ![file](file:///tmp/x%20y.jpg) " +
-			"![web](https://example.com/a.png) ![data](data:image/png;base64,AAAA)\n",
+			"![web](https://example.com/a.png) ![data](data:image/png;base64,AAAA)\n\n" +
+			'<img src="img/a&#38;b&#x20;pic.PNG" alt="raw">\n',
 	);
 	const response = await get(preview(file));
 	expect(response.headers.get("content-security-policy")).toContain(
@@ -203,6 +228,7 @@ test("local images load from the host, relative to the page", async () => {
 		["file", "image?path=%2Ftmp%2Fx%20y.jpg"],
 		["web", "https://example.com/a.png"],
 		["data", "data:image/png;base64,AAAA"],
+		["raw", source(pic)],
 	];
 	for (const [alt, target] of images) {
 		expect([alt, src(page, alt)]).toEqual([alt, target]);
