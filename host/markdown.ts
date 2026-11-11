@@ -180,11 +180,84 @@ function rewrite(
 		element.setAttribute(name, value.replaceAll("&", "&amp;"));
 }
 
+/** The positions, counting every `<p>` in HTML from 0, of the paragraphs that
+ * hold one image and nothing else, or one link holding one image: Pandoc's
+ * implicit figures. An image beside text, or one of several, stays inline.
+ * A paragraph without an end tag never counts: HTMLRewriter does not close
+ * one as a browser does, so what it holds is unknown. */
+export function figures(html: string): Set<number> {
+	type Paragraph = {
+		index: number;
+		alone: boolean;
+		image: boolean;
+		link: "none" | "open" | "closed";
+	};
+	const found = new Set<number>();
+	const open: Paragraph[] = [];
+	let count = 0;
+	new HTMLRewriter()
+		.on("p", {
+			element(p) {
+				// A paragraph inside another leaves the outer one not alone.
+				for (const outer of open) outer.alone = false;
+				const paragraph: Paragraph = {
+					index: count++,
+					alone: true,
+					image: false,
+					link: "none",
+				};
+				open.push(paragraph);
+				p.onEndTag(() => {
+					open.splice(open.indexOf(paragraph), 1);
+					if (paragraph.alone && paragraph.image) found.add(paragraph.index);
+				});
+			},
+			text(text) {
+				if (/\S/.test(text.text)) for (const p of open) p.alone = false;
+			},
+		})
+		.on("p *", {
+			element(element) {
+				const paragraph = open.at(-1);
+				if (!paragraph || element.tagName === "p") return;
+				if (element.tagName === "img" && !paragraph.image) {
+					paragraph.image = true;
+					// Linked inside the link; one after an empty link is not alone.
+					if (paragraph.link === "closed") paragraph.alone = false;
+					paragraph.link = "closed";
+				} else if (
+					element.tagName === "a" &&
+					!paragraph.image &&
+					paragraph.link === "none"
+				) {
+					paragraph.link = "open";
+					element.onEndTag(() => {
+						if (paragraph.link === "open") paragraph.link = "closed";
+					});
+				} else {
+					paragraph.alone = false;
+				}
+			},
+		})
+		.transform(html);
+	return found;
+}
+
 /** The rendered body of the Markdown file at PATH, with local paths made to
- * load in the preview and raw `<meta>` elements dropped: the page's Content
- * Security Policy blocks scripts in raw HTML, but not a refresh that leaves. */
+ * load in the preview, paragraphs that are `figures' given the class
+ * `figure', and raw `<meta>` elements dropped: the page's Content Security
+ * Policy blocks scripts in raw HTML, but not a refresh that leaves. */
 function rewriteBody(html: string, path: string): string {
+	const marked = figures(html);
+	let paragraphs = 0;
 	return new HTMLRewriter()
+		.on("p", {
+			element(p) {
+				if (!marked.has(paragraphs++)) return;
+				const classes = p.getAttribute("class")?.trim();
+				p.setAttribute("class", classes ? `${classes} figure` : "figure");
+			},
+		})
 		.on("meta", {
 			element(meta) {
 				meta.remove();

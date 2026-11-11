@@ -108,6 +108,18 @@ main > :is(table, pre) {
 	min-width: min(100%, var(--prose));
 	max-width: 100%;
 }
+/* Markdown cannot align, so diagrams and images that stand alone are
+   centered: a raw <svg> block, which shrinks to the window keeping its
+   aspect ratio, and a paragraph holding only an image (see `figures' in
+   markdown.ts). Images in text stay inline. */
+main > svg {
+	display: block;
+	max-width: 100%;
+	height: auto;
+}
+.figure {
+	text-align: center;
+}
 /* Print light whatever the appearance: printing drops backgrounds, which
    would leave dark text colours' light text on white paper.  WebKit prints
    in light appearance already; this keeps previews light if it does not. */
