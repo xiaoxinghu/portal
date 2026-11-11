@@ -590,6 +590,12 @@ Wait until it stays there: the page may reveal its focused field once."
       (let ((portal-web-find-history nil))
         (portal-open-url portal-test--gap-page)
         (portal-test--wait-for-page "Gap")
+        ;; A find that finding ended before it started does nothing.
+        (let ((target (portal-view-target)))
+          (portal--web-find target "apple" nil nil)
+          (portal--web-find-done target))
+        (sit-for 0.5)
+        (should (equal (portal-excalidraw-gui--js "return getSelection().toString();") ""))
         ;; Scrolled past the first matches, a find selects the first in view,
         ;; and says where it is among them all.
         (portal-test--scroll-to "c")

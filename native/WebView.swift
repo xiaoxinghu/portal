@@ -363,6 +363,7 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
     /// Every page the view commits, including after back and forward, and
     /// one restored from WebKit's page cache.
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        finding += 1
         keepSelection()
         if let url { Core.committed(target, url: url.absoluteString) }
     }
@@ -395,6 +396,11 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
         guard let page = unsafeBitCast(method(for: pageRef), to: PageRef.self)(self, pageRef) else { return }
         set(page, true)
     }
+
+    /// Which finding a find belongs to: each commit and each end of finding
+    /// starts another, so a find still waiting for its start never runs on
+    /// a new page, or lights the matches again once finding is done.
+    private var finding: UInt64 = 0
 
     /// The world of the scripts that find with, out of the page's reach.
     private static let findWorld = WKContentWorld.world(name: "portal-find")
@@ -473,9 +479,10 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
         var options = wrapAround | showFindIndicator | showHighlight
         if !caseSensitive { options |= caseInsensitive }
         if backward { options |= backwards }
+        let finding = finding
         callAsyncJavaScript(Self.startInView, arguments: ["backward": backward], in: nil,
                             in: Self.findWorld) { [weak self] _ in
-            guard let self else { return }
+            guard let self, self.finding == finding else { return }
             typealias FindString = @convention(c) (AnyObject, Selector, NSString, UInt, UInt) -> Void
             unsafeBitCast(self.method(for: findString), to: FindString.self)(self, findString, text as NSString,
                                                                              options, UInt(PORTAL_WEB_FIND_MAX))
@@ -557,6 +564,7 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
     /// Finding is done for now: the matches go dark and WebKit's find
     /// indicator goes, and the selection stays for the next find.
     func findDone() {
+        finding += 1
         let hide = NSSelectorFromString("_hideFindUI")
         if responds(to: hide) { perform(hide) }
     }
