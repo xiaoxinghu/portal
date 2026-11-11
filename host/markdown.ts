@@ -115,8 +115,16 @@ function rewrite(
 		element.setAttribute(name, value.replaceAll("&", "&amp;"));
 }
 
-function rewriteLocalPaths(html: string, path: string): string {
+/** The rendered body of the Markdown file at PATH, with local paths made to
+ * load in the preview and raw `<meta>` elements dropped: the page's Content
+ * Security Policy blocks scripts in raw HTML, but not a refresh that leaves. */
+function rewriteBody(html: string, path: string): string {
 	return new HTMLRewriter()
+		.on("meta", {
+			element(meta) {
+				meta.remove();
+			},
+		})
 		.on("a[href]", {
 			element(link) {
 				rewrite(link, "href", (href) => linkTarget(href, path));
@@ -177,10 +185,11 @@ export async function markdown(path: string | null): Promise<Response> {
 			tasklists: true,
 			strikethrough: true,
 			headings: { ids: true },
-			noHtmlBlocks: true,
-			noHtmlSpans: true,
+			// Raw HTML, such as inline <svg>, renders; GFM's tag filter
+			// escapes <script>, <style>, <iframe> and the like.
+			tagFilter: true,
 		});
-		return page(basename(path), rewriteLocalPaths(body, path));
+		return page(basename(path), rewriteBody(body, path));
 	} catch (error) {
 		const code = (error as NodeJS.ErrnoException).code;
 		if (code === "ENOENT" || code === "ENOTDIR") {
