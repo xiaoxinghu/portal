@@ -637,6 +637,24 @@ Wait until it stays there: the page may reveal its focused field once."
         (portal-test--wait-for-match "d")
         (portal-test--wait-for-echo "4/5 apple")))))
 
+(ert-deftest portal-web-find-wraps-in-the-documents-order ()
+  :tags '(:gui)
+  (portal-test--with-web
+    (portal-test--with-page-scripts
+      (let ((portal-web-find-history nil))
+        ;; Right to left, the second match is left of the first.
+        (portal-open-url "data:text/html,<title>Right to left</title><p dir=rtl>apple x apple y</p>")
+        (portal-test--wait-for-page "Right to left")
+        (portal-test--find "apple RET")
+        (portal-test--wait-for-selection "apple@0")
+        (portal-test--wait-for-echo "1/2 apple")
+        (portal-web-find-next)
+        (portal-test--wait-for-selection "apple@8")
+        (portal-test--wait-for-echo "2/2 apple")
+        (portal-web-find-next)
+        (portal-test--wait-for-selection "apple@0")
+        (portal-test--wait-for-echo "Wrapped 1/2 apple")))))
+
 (ert-deftest portal-web-find-goes-on-through-a-frame-in-the-page ()
   :tags '(:gui)
   (portal-test--with-web

@@ -415,16 +415,15 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
     /// first line of text in view, or the end of the last going backward.
     /// A selection inside an image's Live Text shows the page a range in
     /// the image's figure with no rects: it stays as it is while the figure
-    /// is in view, and WebKit goes on from it. The script returns where the
-    /// find starts, as the caret's rect in the document in CSS pixels, or
-    /// null where it leaves WebKit's selection or finds no text in view.
+    /// is in view, and WebKit goes on from it. The script keeps the caret
+    /// the find starts from in its world, or none where it leaves WebKit's
+    /// selection or finds no text in view.
     private static let startInView = """
         const selection = getSelection(), width = innerWidth, height = innerHeight;
         const shown = (rect) => rect.bottom > 0 && rect.top < height && rect.right > 0 && rect.left < width;
-        const start = () => {
-          const rect = selection.getRangeAt(0).getBoundingClientRect();
-          return [rect.left + scrollX, rect.top + scrollY, rect.width, rect.height];
-        };
+        // Where the find starts, for selectionRect to tell whether it wrapped.
+        globalThis.portalFindStart = null;
+        const start = () => { globalThis.portalFindStart = selection.getRangeAt(0).cloneRange(); };
         if (selection.rangeCount) {
           const range = selection.getRangeAt(0);
           if (range.getClientRects().length) {
@@ -450,19 +449,26 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
           selection.modify("move", backward ? "forward" : "backward", "lineboundary");
           return start();
         }
-        return null;
         """
 
     /// The selection's rect in the document, in CSS pixels from its top
     /// left, or null when the main frame has none with rects: a selection
     /// in a subframe is that frame's, and one in Live Text has no rects.
     private static let selectionRect = """
-        const selection = getSelection();
+        const selection = getSelection(), start = globalThis.portalFindStart;
         if (!selection.rangeCount || selection.isCollapsed) return null;
         const range = selection.getRangeAt(0);
         if (!range.getClientRects().length) return null;
         const rect = range.getBoundingClientRect();
-        return [rect.left + scrollX, rect.top + scrollY, rect.width, rect.height];
+        // In the main frame, finding goes in the document's order: it
+        // wrapped to a match before where it started, or after going back.
+        let wrapped = -1;
+        try {
+          if (start)
+            wrapped = (backward ? range.compareBoundaryPoints(Range.START_TO_START, start) >= 0
+                                : range.compareBoundaryPoints(Range.START_TO_START, start) < 0) ? 1 : 0;
+        } catch (error) {}
+        return [rect.left + scrollX, rect.top + scrollY, rect.width, rect.height, wrapped];
         """
 
     /// Find TEXT as WebKit's own find in page does, which Safari's find bar
@@ -494,14 +500,12 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
         queue { [weak self] done in
             guard let self, self.finding == finding else { return done() }
             callAsyncJavaScript(Self.startInView, arguments: ["backward": backward], in: nil,
-                                in: Self.findWorld) { [weak self] result in
+                                in: Self.findWorld) { [weak self] _ in
                 guard let self, self.finding == finding else { return done() }
-                let start = self.documentRect(result)
                 typealias FindString = @convention(c) (AnyObject, Selector, NSString, UInt, UInt) -> Void
                 unsafeBitCast(self.method(for: findString), to: FindString.self)(
                     self, findString, text as NSString, options, UInt(PORTAL_WEB_FIND_MAX))
-                self.report(text, backward: backward, caseSensitive: caseSensitive, from: start, token: token,
-                            done: done)
+                self.report(text, backward: backward, caseSensitive: caseSensitive, token: token, done: done)
             }
         }
     }
@@ -552,11 +556,18 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
     /// list takes that answer, the selected match alone. Asking for the list
     /// ends WebKit's reports to a find delegate for the view's life, so
     /// finding never relies on those.
-    private func report(_ text: String, backward: Bool, caseSensitive: Bool, from start: NSRect?,
-                        token: UInt64, done: @escaping () -> Void) {
-        callAsyncJavaScript(Self.selectionRect, in: nil, in: Self.findWorld) { [weak self] result in
+    private func report(_ text: String, backward: Bool, caseSensitive: Bool, token: UInt64,
+                        done: @escaping () -> Void) {
+        callAsyncJavaScript(Self.selectionRect, arguments: ["backward": backward], in: nil,
+                            in: Self.findWorld) { [weak self] result in
             guard let self else { return done() }
-            let selected = documentRect(result)
+            var selected: NSRect?, wrapped: Bool?
+            if case .success(let value) = result, let found = value as? [Double], found.count == 5 {
+                let zoom = pageZoom
+                selected = NSRect(x: found[0] * zoom, y: found[1] * zoom, width: found[2] * zoom,
+                                  height: found[3] * zoom)
+                wrapped = found[4] < 0 ? nil : found[4] > 0
+            }
             matches(text, caseSensitive: caseSensitive) { [weak self] rects in
                 defer { done() }
                 guard let self else { return }
@@ -570,30 +581,13 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
                 let at = selected.map { selected in
                     rects.indices.filter { rects[$0].insetBy(dx: -tolerance, dy: -tolerance).contains(selected) }
                 } ?? []
-                guard at.count == 1, let selected else {
+                guard at.count == 1 else {
                     return Core.found(target, token: token, index: 0, count: Int64(rects.count))
                 }
-                // Finding wrapped if the match is before where it started,
-                // or after it going backward.
-                let wrapped = start.map { backward ? Self.before($0, selected) : Self.before(selected, $0) }
                 Core.found(target, token: token, index: Int64(at[0]) + 1, count: Int64(rects.count),
                            wrapped: wrapped)
             }
         }
-    }
-
-    /// A script's RESULT, a rect in the document in CSS pixels, in view
-    /// points as WebKit's match rects are, or nil.
-    private func documentRect(_ result: Result<Any, any Error>) -> NSRect? {
-        guard case .success(let value) = result, let rect = value as? [Double], rect.count == 4 else { return nil }
-        let zoom = pageZoom
-        return NSRect(x: rect[0] * zoom, y: rect[1] * zoom, width: rect[2] * zoom, height: rect[3] * zoom)
-    }
-
-    /// Whether text at rect A comes before text at rect B in reading order:
-    /// on an earlier line, or further left on the same line.
-    private static func before(_ a: NSRect, _ b: NSRect) -> Bool {
-        a.midY < b.minY || (a.midY <= b.maxY && b.midY >= a.minY && a.minX < b.minX)
     }
 
     /// The rects of the page's matches of TEXT, each the union of its line

@@ -203,8 +203,10 @@ is a counter that drifts from the selection, so the platform asks for the
 list of matches that the system find bar's client call returns, counts them,
 and locates the selection's rect among them: a main frame's match is found
 that way, a subframe's or one in Live Text is not, and its position is
-unknown. The script that placed the start reports where it is, and a match
-before it, or after it going backward, wrapped. Asking for the list ends WebKit's find delegate reports for the
+unknown. The script that placed the start keeps it, and a main frame's
+match before it in the document's order, which is the order finding goes in,
+or after it going backward, wrapped; screen position would mislead in
+right-to-left text or columns. Asking for the list ends WebKit's find delegate reports for the
 view, so nothing relies on those. Without the private calls, the public find
 only says whether it matched.
 
