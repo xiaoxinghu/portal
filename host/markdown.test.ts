@@ -176,6 +176,13 @@ test("attribute values decode as a browser reads them", () => {
 		["a&amp;b&lt;&gt;&quot;&apos;", "a&b<>\"'"],
 		["&#32;&#x27;&#X41;&#128512;", " 'A😀"],
 		["&#0;&#xD800;&#x110000;&#99999999999;", "�".repeat(4)],
+		// Numeric references need no semicolon.
+		["my&#32image&#x2Epng", "my image.png"],
+		// 0x80 to 0x9F read as Windows-1252, where it has a character.
+		["&#128;&#x9F;&#x81;&#150", "€Ÿ\u0081–"],
+		// Legacy names need none either, but not before `=' or an alphanumeric.
+		["&amp &lt&gt-&quot", '& <>-"'],
+		["&amp=1 &ampx &lt3 &apos &ampx;", "&amp=1 &ampx &lt3 &apos &ampx;"],
 		[
 			"&eacute; &constructor; &AMP; & ;&#; &#x;",
 			"&eacute; &constructor; &AMP; & ;&#; &#x;",
@@ -213,7 +220,8 @@ test("local images load from the host, relative to the page", async () => {
 		"# Pictures\n\n![relative](<img/a&b pic.PNG>) ![encoded](img/a%26b%20pic.PNG#x) " +
 			"![up](../top.svg) ![absolute](/tmp/abs.gif) ![file](file:///tmp/x%20y.jpg) " +
 			"![web](https://example.com/a.png) ![data](data:image/png;base64,AAAA)\n\n" +
-			'<img src="img/a&#38;b&#x20;pic.PNG" alt="raw">\n',
+			'<img src="img/a&#38;b&#x20;pic.PNG" alt="raw">\n' +
+			'<img src="img/a&#38b&#32pic.PNG" alt="bare">\n',
 	);
 	const response = await get(preview(file));
 	expect(response.headers.get("content-security-policy")).toContain(
@@ -229,6 +237,7 @@ test("local images load from the host, relative to the page", async () => {
 		["web", "https://example.com/a.png"],
 		["data", "data:image/png;base64,AAAA"],
 		["raw", source(pic)],
+		["bare", source(pic)],
 	];
 	for (const [alt, target] of images) {
 		expect([alt, src(page, alt)]).toEqual([alt, target]);

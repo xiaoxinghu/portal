@@ -220,8 +220,8 @@ GFM's tag filter shows `<script>`, `<style>`, `<iframe>` and similar tags as
 text, and `<meta>` is dropped. Local paths in an SVG's own `<image>` or
 `<use>` do not load; Markdown and `<img>` images do. A local path in raw
 HTML may use numeric character references and `&amp;`, `&lt;`, `&gt;`,
-`&quot;` and `&apos;`; other named ones, such as `&eacute;`, stay as
-written. Bun currently marks its Markdown API unstable;
+`&quot;` and `&apos;`, read as a browser reads them; other named ones, such
+as `&eacute;`, stay as written. Bun currently marks its Markdown API unstable;
 Portal tests it with the Bun version in the [build prerequisites](../README.md#build-and-run).
 
 ## Web view behaviour
