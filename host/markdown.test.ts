@@ -5,7 +5,7 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { respond } from "./app";
-import { imageSource, linkTarget } from "./markdown";
+import { decodeAttribute, imageSource, linkTarget } from "./markdown";
 
 const authority = "127.0.0.1:4321";
 const token = "0123456789abcdef0123456789abcdef";
@@ -62,9 +62,7 @@ test("saved files render as sanitised HTML and are reread on each request", asyn
 		file,
 		"# Preview\n\n**Bold** and ~~old~~.\n\n" +
 			"| Name | Value |\n| --- | --- |\n| One | Two |\n\n" +
-			"- [x] Done\n\n```js\nconst value = 1 < 2;\n```\n\n" +
-			"<script>document.title = 'Injected';</script>\n\n" +
-			"<img src=x onerror=alert(1)>\n",
+			"- [x] Done\n\n```js\nconst value = 1 < 2;\n```\n",
 	);
 	const response = await get(preview(file));
 	expect(response.status).toBe(200);
@@ -84,8 +82,6 @@ test("saved files render as sanitised HTML and are reread on each request", asyn
 		"<pre><code",
 		"1 &lt; 2",
 		"<title>Résumé &amp; &lt;notes&gt; #%?.md</title>",
-		"&lt;script&gt;",
-		"&lt;img",
 		"color-scheme: light dark",
 		"@media print",
 		// anywhere would let WebKit squeeze table columns to one character.
@@ -93,13 +89,46 @@ test("saved files render as sanitised HTML and are reread on each request", asyn
 	]) {
 		expect(page).toContain(text);
 	}
-	expect(page).not.toContain("<script>");
-	expect(page).not.toContain("<img src=x");
 
 	await writeFile(file, "# Updated on disk\n");
 	const updated = await (await get(preview(file))).text();
 	expect(updated).toContain("Updated on disk</h1>");
 	expect(updated).not.toContain("<strong>Bold</strong>");
+});
+
+test("raw HTML such as inline SVG renders, without scripts or a refresh", async () => {
+	const file = join(directory, "raw.md");
+	await writeFile(
+		file,
+		'<svg width="40" height="20"><rect fill="currentColor"/>' +
+			"<script>document.title = 'Injected';</script></svg>\n\n" +
+			'A dot <svg width="8" height="8"><circle r="4"/></svg> inline.\n\n' +
+			"<details><summary>More</summary>Hidden</details>\n\n" +
+			"<script>document.title = 'Injected';</script>\n\n" +
+			'<meta http-equiv="refresh" content="0; url=https://example.com/">\n\n' +
+			"<img src=x onerror=alert(1)>\n",
+	);
+	const response = await get(preview(file));
+	expect(response.status).toBe(200);
+	// Scripts, inline handlers included, only run where a policy allows them.
+	const policy = response.headers.get("content-security-policy") ?? "";
+	expect(policy).toStartWith("default-src 'none'");
+	expect(policy).not.toContain("script-src");
+	const page = await response.text();
+	for (const text of [
+		'<svg width="40" height="20"><rect fill="currentColor"/>',
+		'A dot <svg width="8" height="8"><circle r="4"/></svg> inline.',
+		"<details><summary>More</summary>Hidden</details>",
+		"&lt;script>",
+	]) {
+		expect(page).toContain(text);
+	}
+	expect(page).not.toContain("<script>");
+	expect(page).not.toContain("refresh");
+	// Raw images load local files from the host, as Markdown ones do.
+	expect(page).toContain(
+		`<img src="image?path=${encodeURIComponent(join(directory, "x"))}"`,
+	);
 });
 
 test("local links open in the preview or in Emacs; others are left alone", async () => {
@@ -110,10 +139,19 @@ test("local links open in the preview or in Emacs; others are left alone", async
 			"[up](../README.MD) [résumé](résumé.md) [amp](a&b.md) [missing](gone.md) " +
 			"[code](<src/main file.ts#L42-L50>) [image](img/pic.png) [dir](src/) " +
 			"[absolute](/tmp/abs.markdown#x) [file](file:///tmp/x%20y.ts#L3) " +
-			"[web](https://example.com/a.md) [mail](mailto:a@example.com)\n",
+			"[web](https://example.com/a.md) [mail](mailto:a@example.com) " +
+			// Bun writes the apostrophe as &#x27;.
+			"[quote](it's.md) " +
+			'<a href="raw&#32;file.md#a&#x26;b">raw</a> <a href="&#x27;q&apos;.txt">apos</a> ' +
+			'<a href="&eacute;.md">named</a>\n',
 	);
 	const page = await (await get(preview(file))).text();
 	const links: [string, string][] = [
+		["quote", preview(join(docs, "it's.md"))],
+		["raw", `${preview(join(docs, "raw file.md"))}#a&b`],
+		["apos", visit(join(docs, "'q'.txt"))],
+		// A named reference beyond the five stays as written.
+		["named", preview(join(docs, "&eacute;.md"))],
 		["same", "#top"],
 		["other", `${preview(join(docs, "other file.md"))}#next-steps`],
 		["up", preview(join(directory, "README.MD"))],
@@ -130,6 +168,28 @@ test("local links open in the preview or in Emacs; others are left alone", async
 	];
 	for (const [text, target] of links) {
 		expect([text, href(page, text)]).toEqual([text, target]);
+	}
+});
+
+test("attribute values decode as a browser reads them", () => {
+	const cases: [string, string][] = [
+		["a&amp;b&lt;&gt;&quot;&apos;", "a&b<>\"'"],
+		["&#32;&#x27;&#X41;&#128512;", " 'A😀"],
+		["&#0;&#xD800;&#x110000;&#99999999999;", "�".repeat(4)],
+		// Numeric references need no semicolon.
+		["my&#32image&#x2Epng", "my image.png"],
+		// 0x80 to 0x9F read as Windows-1252, where it has a character.
+		["&#128;&#x9F;&#x81;&#150", "€Ÿ\u0081–"],
+		// Legacy names need none either, but not before `=' or an alphanumeric.
+		["&amp &lt&gt-&quot", '& <>-"'],
+		["&amp=1 &ampx &lt3 &apos &ampx;", "&amp=1 &ampx &lt3 &apos &ampx;"],
+		[
+			"&eacute; &constructor; &AMP; & ;&#; &#x;",
+			"&eacute; &constructor; &AMP; & ;&#; &#x;",
+		],
+	];
+	for (const [value, decoded] of cases) {
+		expect([value, decodeAttribute(value)]).toEqual([value, decoded]);
 	}
 });
 
@@ -159,7 +219,9 @@ test("local images load from the host, relative to the page", async () => {
 		file,
 		"# Pictures\n\n![relative](<img/a&b pic.PNG>) ![encoded](img/a%26b%20pic.PNG#x) " +
 			"![up](../top.svg) ![absolute](/tmp/abs.gif) ![file](file:///tmp/x%20y.jpg) " +
-			"![web](https://example.com/a.png) ![data](data:image/png;base64,AAAA)\n",
+			"![web](https://example.com/a.png) ![data](data:image/png;base64,AAAA)\n\n" +
+			'<img src="img/a&#38;b&#x20;pic.PNG" alt="raw">\n' +
+			'<img src="img/a&#38b&#32pic.PNG" alt="bare">\n',
 	);
 	const response = await get(preview(file));
 	expect(response.headers.get("content-security-policy")).toContain(
@@ -174,6 +236,8 @@ test("local images load from the host, relative to the page", async () => {
 		["file", "image?path=%2Ftmp%2Fx%20y.jpg"],
 		["web", "https://example.com/a.png"],
 		["data", "data:image/png;base64,AAAA"],
+		["raw", source(pic)],
+		["bare", source(pic)],
 	];
 	for (const [alt, target] of images) {
 		expect([alt, src(page, alt)]).toEqual([alt, target]);

@@ -55,13 +55,83 @@ const imageTypes: Record<string, string> = {
 	".webp": "image/webp",
 };
 
-// HTMLRewriter reads attribute values as written, and Bun writes these.
-const entities: Record<string, string> = {
-	"&amp;": "&",
-	"&lt;": "<",
-	"&gt;": ">",
-	"&quot;": '"',
-};
+// The named character references `decodeAttribute' knows: those Bun writes,
+// and &apos;. A Map, so a name such as `constructor' finds nothing.
+const namedReferences = new Map([
+	["amp", "&"],
+	["lt", "<"],
+	["gt", ">"],
+	["quot", '"'],
+	["apos", "'"],
+]);
+// Those of them HTML also reads without the semicolon: not &apos;.
+const legacyReferences = new Set(["amp", "lt", "gt", "quot"]);
+
+// The numeric references from 0x80 to 0x9F that HTML reads as Windows-1252.
+const windows1252 = new Map([
+	[0x80, 0x20ac],
+	[0x82, 0x201a],
+	[0x83, 0x0192],
+	[0x84, 0x201e],
+	[0x85, 0x2026],
+	[0x86, 0x2020],
+	[0x87, 0x2021],
+	[0x88, 0x02c6],
+	[0x89, 0x2030],
+	[0x8a, 0x0160],
+	[0x8b, 0x2039],
+	[0x8c, 0x0152],
+	[0x8e, 0x017d],
+	[0x91, 0x2018],
+	[0x92, 0x2019],
+	[0x93, 0x201c],
+	[0x94, 0x201d],
+	[0x95, 0x2022],
+	[0x96, 0x2013],
+	[0x97, 0x2014],
+	[0x98, 0x02dc],
+	[0x99, 0x2122],
+	[0x9a, 0x0161],
+	[0x9b, 0x203a],
+	[0x9c, 0x0153],
+	[0x9e, 0x017e],
+	[0x9f, 0x0178],
+]);
+
+/** The attribute VALUE, as written in HTML, as a browser reads it.
+ * HTMLRewriter returns values as written: Bun's own output writes &#x27;,
+ * and raw HTML may use any numeric reference, with or without its semicolon.
+ * Named references follow HTML's rules for attributes, but only the five in
+ * `namedReferences': others, such as &eacute;, are rare in URLs and stay as
+ * written. */
+export function decodeAttribute(value: string): string {
+	return value.replace(
+		/&(?:#(\d+)|#[xX]([\da-fA-F]+)|([a-zA-Z][a-zA-Z\d]*))(;?)/g,
+		(
+			reference: string,
+			decimal: string | undefined,
+			hex: string | undefined,
+			name: string | undefined,
+			semicolon: string,
+			offset: number,
+		) => {
+			if (name) {
+				if (semicolon) return namedReferences.get(name) ?? reference;
+				// Before `=', HTML leaves even a legacy reference as written.
+				const next = value[offset + reference.length];
+				return legacyReferences.has(name) && next !== "="
+					? (namedReferences.get(name) as string)
+					: reference;
+			}
+			const code = decimal ? Number(decimal) : Number.parseInt(hex ?? "", 16);
+			// As HTML does: NUL, surrogates and beyond Unicode read as U+FFFD.
+			if (code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) {
+				return "�";
+			}
+			return String.fromCodePoint(windows1252.get(code) ?? code);
+		},
+	);
+}
 
 /** The local file that HREF in the Markdown file at PATH names, with its
  * fragment, or null when HREF is a fragment or not a local file. */
@@ -104,19 +174,22 @@ function rewrite(
 	name: string,
 	target: (value: string) => string | null,
 ) {
-	const value = target(
-		(element.getAttribute(name) ?? "").replace(
-			/&(?:amp|lt|gt|quot);/g,
-			(entity) => entities[entity] ?? entity,
-		),
-	);
+	const value = target(decodeAttribute(element.getAttribute(name) ?? ""));
 	// HTMLRewriter escapes only quotes in the values it writes.
 	if (value !== null)
 		element.setAttribute(name, value.replaceAll("&", "&amp;"));
 }
 
-function rewriteLocalPaths(html: string, path: string): string {
+/** The rendered body of the Markdown file at PATH, with local paths made to
+ * load in the preview and raw `<meta>` elements dropped: the page's Content
+ * Security Policy blocks scripts in raw HTML, but not a refresh that leaves. */
+function rewriteBody(html: string, path: string): string {
 	return new HTMLRewriter()
+		.on("meta", {
+			element(meta) {
+				meta.remove();
+			},
+		})
 		.on("a[href]", {
 			element(link) {
 				rewrite(link, "href", (href) => linkTarget(href, path));
@@ -177,10 +250,11 @@ export async function markdown(path: string | null): Promise<Response> {
 			tasklists: true,
 			strikethrough: true,
 			headings: { ids: true },
-			noHtmlBlocks: true,
-			noHtmlSpans: true,
+			// Raw HTML, such as inline <svg>, renders; GFM's tag filter
+			// escapes <script>, <style>, <iframe> and the like.
+			tagFilter: true,
 		});
-		return page(basename(path), rewriteLocalPaths(body, path));
+		return page(basename(path), rewriteBody(body, path));
 	} catch (error) {
 		const code = (error as NodeJS.ErrnoException).code;
 		if (code === "ENOENT" || code === "ENOTDIR") {
