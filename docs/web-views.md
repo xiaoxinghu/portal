@@ -236,8 +236,12 @@ It has no global key; bind one if desired.
 
 This version shows saved contents only, without automatic refresh, syntax
 highlighting, Mermaid or math rendering. Going back past a host restart shows "Not found";
-`g` reloads from the running host. Raw HTML appears as text; a page-specific
-Content Security Policy blocks scripts. Bun currently marks its Markdown API unstable;
+`g` reloads from the running host. Raw HTML renders, so an inline `<svg>`
+diagram shows in place and can use `currentColor` to follow light and dark.
+A page-specific Content Security Policy blocks scripts and event handlers,
+GFM's tag filter shows `<script>`, `<style>`, `<iframe>` and similar tags as
+text, and `<meta>` is dropped. Local paths in an SVG's own `<image>` or
+`<use>` do not load; Markdown and `<img>` images do. Bun currently marks its Markdown API unstable;
 Portal tests it with the Bun version in the [build prerequisites](../README.md#build-and-run).
 
 ## Web view behaviour

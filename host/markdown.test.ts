@@ -62,9 +62,7 @@ test("saved files render as sanitised HTML and are reread on each request", asyn
 		file,
 		"# Preview\n\n**Bold** and ~~old~~.\n\n" +
 			"| Name | Value |\n| --- | --- |\n| One | Two |\n\n" +
-			"- [x] Done\n\n```js\nconst value = 1 < 2;\n```\n\n" +
-			"<script>document.title = 'Injected';</script>\n\n" +
-			"<img src=x onerror=alert(1)>\n",
+			"- [x] Done\n\n```js\nconst value = 1 < 2;\n```\n",
 	);
 	const response = await get(preview(file));
 	expect(response.status).toBe(200);
@@ -84,8 +82,6 @@ test("saved files render as sanitised HTML and are reread on each request", asyn
 		"<pre><code",
 		"1 &lt; 2",
 		"<title>Résumé &amp; &lt;notes&gt; #%?.md</title>",
-		"&lt;script&gt;",
-		"&lt;img",
 		"color-scheme: light dark",
 		"@media print",
 		// anywhere would let WebKit squeeze table columns to one character.
@@ -93,13 +89,46 @@ test("saved files render as sanitised HTML and are reread on each request", asyn
 	]) {
 		expect(page).toContain(text);
 	}
-	expect(page).not.toContain("<script>");
-	expect(page).not.toContain("<img src=x");
 
 	await writeFile(file, "# Updated on disk\n");
 	const updated = await (await get(preview(file))).text();
 	expect(updated).toContain("Updated on disk</h1>");
 	expect(updated).not.toContain("<strong>Bold</strong>");
+});
+
+test("raw HTML such as inline SVG renders, without scripts or a refresh", async () => {
+	const file = join(directory, "raw.md");
+	await writeFile(
+		file,
+		'<svg width="40" height="20"><rect fill="currentColor"/>' +
+			"<script>document.title = 'Injected';</script></svg>\n\n" +
+			'A dot <svg width="8" height="8"><circle r="4"/></svg> inline.\n\n' +
+			"<details><summary>More</summary>Hidden</details>\n\n" +
+			"<script>document.title = 'Injected';</script>\n\n" +
+			'<meta http-equiv="refresh" content="0; url=https://example.com/">\n\n' +
+			"<img src=x onerror=alert(1)>\n",
+	);
+	const response = await get(preview(file));
+	expect(response.status).toBe(200);
+	// Scripts, inline handlers included, only run where a policy allows them.
+	const policy = response.headers.get("content-security-policy") ?? "";
+	expect(policy).toStartWith("default-src 'none'");
+	expect(policy).not.toContain("script-src");
+	const page = await response.text();
+	for (const text of [
+		'<svg width="40" height="20"><rect fill="currentColor"/>',
+		'A dot <svg width="8" height="8"><circle r="4"/></svg> inline.',
+		"<details><summary>More</summary>Hidden</details>",
+		"&lt;script>",
+	]) {
+		expect(page).toContain(text);
+	}
+	expect(page).not.toContain("<script>");
+	expect(page).not.toContain("refresh");
+	// Raw images load local files from the host, as Markdown ones do.
+	expect(page).toContain(
+		`<img src="image?path=${encodeURIComponent(join(directory, "x"))}"`,
+	);
 });
 
 test("local links open in the preview or in Emacs; others are left alone", async () => {
