@@ -510,6 +510,22 @@ return true;" constraints)))
   "Wait for the echo area to show TEXT."
   (portal-terminal-test--wait (lambda () (equal (current-message) text))))
 
+(defconst portal-test--gap-page
+  (concat "data:text/html,<title>Gap</title><input autofocus spellcheck=false>"
+          "<p id=a>apple a</p><p id=b>apple b</p><div style='height:3000px'></div>"
+          "<p id=c>apple c</p><p id=d>apple d</p><div style='height:3000px'></div>"
+          "<p id=e>apple e</p>")
+  "A page whose five matches of apple are on either side of long gaps.")
+
+(defun portal-test--wait-for-match (id)
+  "Wait until the page's selection is a match in its paragraph with ID."
+  (portal-terminal-test--wait
+   (lambda ()
+     (equal (portal-excalidraw-gui--js
+             "const s = getSelection();
+              return s.rangeCount && s.toString() ? s.anchorNode.parentElement.id : '';")
+            id))))
+
 (defun portal-test--find (keys)
   "Run `portal-web-find', typing KEYS in its minibuffer."
   (let ((unread-command-events (listify-key-sequence (kbd keys))))
@@ -556,6 +572,109 @@ return true;" constraints)))
         ;; The page never took the keyboard.
         (should-not (portal-input--action "focused"))
         (portal-integration-test--emacs-input)))))
+
+(defun portal-test--scroll-to (id)
+  "Scroll the page so that its element with ID is at the top of the view.
+Wait until it stays there: the page may reveal its focused field once."
+  (let ((script (format "const top = document.getElementById('%s').getBoundingClientRect().top;
+                         if (Math.abs(top) > 1) document.getElementById('%s').scrollIntoView();
+                         return Math.abs(top) <= 1;"
+                        id id)))
+    (portal-terminal-test--wait
+     (lambda () (and (portal-excalidraw-gui--js script) (sit-for 0.3) (portal-excalidraw-gui--js script))))))
+
+(ert-deftest portal-web-find-starts-from-what-is-on-screen ()
+  :tags '(:gui)
+  (portal-test--with-web
+    (portal-test--with-page-scripts
+      (let ((portal-web-find-history nil))
+        (portal-open-url portal-test--gap-page)
+        (portal-test--wait-for-page "Gap")
+        ;; A find that finding ended before it started does nothing.
+        (let ((target (portal-view-target)))
+          (portal--web-find target "apple" nil nil)
+          (portal--web-find-done target))
+        (sit-for 0.5)
+        (should (equal (portal-excalidraw-gui--js "return getSelection().toString();") ""))
+        ;; Finds sent at once run one after another, and the last says
+        ;; where it is among them all.
+        (dotimes (_ 3) (portal-web--search "apple" nil))
+        (portal-test--wait-for-match "c")
+        (portal-test--wait-for-echo "3/5 apple")
+        (portal-test--scroll-to "a")
+        (portal-excalidraw-gui--js "getSelection().removeAllRanges(); return true;")
+        ;; Scrolled past the first matches, a find selects the first in view,
+        ;; and says where it is among them all.
+        (portal-test--scroll-to "c")
+        (portal-test--find "apple RET")
+        (portal-test--wait-for-match "c")
+        (portal-test--wait-for-echo "3/5 apple")
+        (portal-web-find-next)
+        (portal-test--wait-for-match "d")
+        (portal-test--wait-for-echo "4/5 apple")
+        ;; Scrolled back up, finding starts from the top again, which is no
+        ;; wrapping around; going back from the first match is.
+        (portal-test--scroll-to "a")
+        (portal-web-find-next)
+        (portal-test--wait-for-match "a")
+        (portal-test--wait-for-echo "1/5 apple")
+        (portal-web-find-previous)
+        (portal-test--wait-for-match "e")
+        (portal-test--wait-for-echo "Wrapped 5/5 apple")
+        ;; Going backward starts from the bottom of the view.
+        (portal-test--scroll-to "a")
+        (portal-web-find-previous)
+        (portal-test--wait-for-match "b")
+        (portal-test--wait-for-echo "2/5 apple")
+        ;; A reload is a new page: the next find starts from its view.
+        (portal-excalidraw-gui--js "window.before = true; return true;")
+        (portal-web-reload)
+        (portal-terminal-test--wait
+         (lambda () (equal (portal-excalidraw-gui--js "return window.before ? 'old' : document.title;")
+                           "Gap")))
+        (portal-test--scroll-to "c")
+        (portal-web-find-previous)
+        (portal-test--wait-for-match "d")
+        (portal-test--wait-for-echo "4/5 apple")))))
+
+(ert-deftest portal-web-find-wraps-in-the-documents-order ()
+  :tags '(:gui)
+  (portal-test--with-web
+    (portal-test--with-page-scripts
+      (let ((portal-web-find-history nil))
+        ;; Right to left, the second match is left of the first.
+        (portal-open-url "data:text/html,<title>Right to left</title><p dir=rtl>apple x apple y</p>")
+        (portal-test--wait-for-page "Right to left")
+        (portal-test--find "apple RET")
+        (portal-test--wait-for-selection "apple@0")
+        (portal-test--wait-for-echo "1/2 apple")
+        (portal-web-find-next)
+        (portal-test--wait-for-selection "apple@8")
+        (portal-test--wait-for-echo "2/2 apple")
+        (portal-web-find-next)
+        (portal-test--wait-for-selection "apple@0")
+        (portal-test--wait-for-echo "Wrapped 1/2 apple")))))
+
+(ert-deftest portal-web-find-goes-on-through-a-frame-in-the-page ()
+  :tags '(:gui)
+  (portal-test--with-web
+    (portal-test--with-page-scripts
+      (let ((portal-web-find-history nil)
+            (selected "const s = document.querySelector('iframe').contentDocument.getSelection();
+                       return s.rangeCount && s.toString() ? s.anchorNode.parentElement.id : '';"))
+        (portal-open-url "data:text/html,<title>Framed</title><p id=a>apple a</p><iframe srcdoc='<p id=b>apple b</p><p id=c>apple c</p>'></iframe>")
+        (portal-test--wait-for-page "Framed")
+        (portal-test--find "apple RET")
+        (portal-test--wait-for-match "a")
+        (portal-test--wait-for-echo "1/3 apple")
+        ;; In the frame, finding goes on from the frame's match; Portal
+        ;; cannot tell which of them it is.
+        (portal-web-find-next)
+        (portal-terminal-test--wait (lambda () (equal (portal-excalidraw-gui--js selected) "b")))
+        (portal-test--wait-for-echo "3 apple")
+        (portal-web-find-next)
+        (portal-terminal-test--wait (lambda () (equal (portal-excalidraw-gui--js selected) "c")))
+        (portal-test--wait-for-echo "3 apple")))))
 
 (ert-deftest portal-web-zoom-lays-the-page-out-again-and-stays-with-its-site ()
   :tags '(:gui)

@@ -650,6 +650,16 @@ bool portal_web_find(portal_view *web, portal_string text, bool backward, bool c
     return true;
 }
 
+/* A page counts each time finding was done in it in "find-done". */
+bool portal_web_find_done(portal_view *web, portal_text *error)
+{
+    if (!usable(web, PORTAL_WEB, error) || refused(error))
+        return false;
+    const struct property *done = get(web, "find-done");
+    set_integer(web, "find-done", done ? done->integer + 1 : 1);
+    return true;
+}
+
 /* A page records the file it last printed to in "printed", or "panel" for
    the print panel; tests report the result as a platform does.  A web view
    created with :broken refuses, as for appearances. */

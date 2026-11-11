@@ -876,46 +876,82 @@ static void test_finding(void)
     CHECK(portal_web_views_find(text(web), text("apple"), false, false, &error));
     CHECK(shows(web, "\"finds\":\"apple forward nocase\"", "\"find\":1", NULL));
     CHECK(sent(web, ""));
-    portal_web_found(text(web), 1, 3, 12);
-    CHECK(sent(web, "found %s 1 3 12 1\n"));
+    portal_web_found(text(web), 1, 3, 12, -1);
+    CHECK(sent(web, "found %s 1 3 12 1 -1\n"));
+    /* Whether finding wrapped, where the platform knows. */
+    portal_web_found(text(web), 1, 1, 12, 1);
+    CHECK(sent(web, "found %s 1 1 12 1 1\n"));
+    portal_web_found(text(web), 1, 4, 12, 0);
+    CHECK(sent(web, "found %s 1 4 12 1 0\n"));
+    /* It means nothing without the match's place, or past the count. */
+    portal_web_found(text(web), 1, 0, 12, 1);
+    CHECK(sent(web, "found %s 1 0 12 1 -1\n"));
+    portal_web_found(text(web), 1, 3, PORTAL_WEB_FIND_MAX + 1, 1);
+    CHECK(sent(web, "found %s 1 0 1001 1 -1\n"));
+    portal_web_found(text(web), 1, 3, 12, 7);
+    CHECK(sent(web, "found %s 1 3 12 1 -1\n"));
     /* Found with no count, and more matches than a platform counts. */
-    portal_web_found(text(web), 1, 0, -1);
-    CHECK(sent(web, "found %s 1 0 -1 1\n"));
-    portal_web_found(text(web), 1, 0, PORTAL_WEB_FIND_MAX + 1);
-    CHECK(sent(web, "found %s 1 0 1001 1\n"));
-    portal_web_found(text(web), 1, 0, 4294967295);
-    CHECK(sent(web, "found %s 1 0 1001 1\n"));
+    portal_web_found(text(web), 1, 0, -1, -1);
+    CHECK(sent(web, "found %s 1 0 -1 1 -1\n"));
+    portal_web_found(text(web), 1, 0, PORTAL_WEB_FIND_MAX + 1, -1);
+    CHECK(sent(web, "found %s 1 0 1001 1 -1\n"));
+    portal_web_found(text(web), 1, 0, 4294967295, -1);
+    CHECK(sent(web, "found %s 1 0 1001 1 -1\n"));
 
     /* The user typed on before the first find finished. */
     CHECK(portal_web_views_find(text(web), text("Apple"), true, true, &error));
     CHECK(portal_web_views_find(text(web), text("Apples"), false, true, &error));
     CHECK(shows(web, "\"finds\":\"apple forward nocase,Apple backward case,Apples forward case\"",
                 "\"find\":3", NULL));
-    portal_web_found(text(web), 2, 1, 4);
+    portal_web_found(text(web), 2, 1, 4, -1);
     CHECK(sent(web, ""));
-    portal_web_found(text(web), 3, 0, 0);
-    CHECK(sent(web, "found %s 0 0 0 1\n"));
+    portal_web_found(text(web), 3, 0, 0, -1);
+    CHECK(sent(web, "found %s 0 0 0 1 -1\n"));
 
     /* A find the platform refuses is no find: the one before stays latest. */
     portal_fake_refuse(true);
     CHECK(!portal_web_views_find(text(web), text("pear"), false, false, &error));
     CHECK(says(&error, "The fake refuses to run view primitives"));
     portal_fake_refuse(false);
-    portal_web_found(text(web), 3, 2, 2);
-    CHECK(sent(web, "found %s 1 2 2 1\n"));
+    portal_web_found(text(web), 3, 2, 2, -1);
+    CHECK(sent(web, "found %s 1 2 2 1 -1\n"));
 
     /* Each page committed, even the same one again, is a new generation. */
     portal_web_committed(text(web), text("https://example.com/"));
     portal_web_committed(text(web), text("https://example.com/"));
     CHECK(sent(web, ""));
     CHECK(portal_web_views_find(text(web), text("pear"), false, false, &error));
-    portal_web_found(text(web), 4, 1, 2);
-    CHECK(sent(web, "found %s 1 1 2 3\n"));
+    portal_web_found(text(web), 4, 1, 2, -1);
+    CHECK(sent(web, "found %s 1 1 2 3 -1\n"));
+    /* A result for a page that has gone since is dropped: it is about a
+       page Emacs no longer sees, even the same URL reloaded. */
+    CHECK(portal_web_views_find(text(web), text("pear"), false, false, &error));
+    portal_web_committed(text(web), text("https://example.com/"));
+    portal_web_found(text(web), 5, 2, 2, -1);
+    CHECK(sent(web, ""));
+    /* The next find goes to the new page, and names it. */
+    CHECK(portal_web_views_find(text(web), text("pear"), false, false, &error));
+    portal_web_found(text(web), 6, 1, 2, -1);
+    CHECK(sent(web, "found %s 1 1 2 4 -1\n"));
+
+    /* Finding done reaches the page; another kind of view has no finding. */
+    CHECK(portal_web_views_find_done(text(web), &error));
+    CHECK(shows(web, "\"find-done\":1", NULL));
+    char message[64];
+    char *terminal = open_view("terminal", &error, "directory", "/tmp", NULL);
+    CHECK(terminal != NULL);
+    snprintf(message, sizeof message, "No Portal view %s", terminal);
+    CHECK(!portal_web_views_find_done(text(terminal), &error));
+    CHECK(says(&error, message));
+    close_view(terminal);
 
     char *closed = strdup(web);
     close_view(web);
-    portal_web_found(text(closed), 4, 1, 1);
+    portal_web_found(text(closed), 6, 1, 1, -1);
     CHECK(sent(closed, ""));
+    snprintf(message, sizeof message, "No Portal view %s", closed);
+    CHECK(!portal_web_views_find_done(text(closed), &error));
+    CHECK(says(&error, message));
     free(closed);
 }
 

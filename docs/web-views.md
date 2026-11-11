@@ -104,24 +104,38 @@ loading them, or `M-x portal-web-consult-mode`.
 ## Find and zoom
 
 `C-s` or Command-F (`portal-web-find`) reads text in the minibuffer and finds
-it in the page, after the page's selection; `C-r` (`portal-web-find-backward`)
-finds it before. WebKit selects and highlights the match, wrapping around the
-page's ends. While the minibuffer reads, `C-s` or Command-G and `C-r` or
-Command-Shift-G move to the next and previous match without leaving it, as a
-browser's find bar does, and `RET` stays on the match shown; empty input finds
-the last text again. Text found this way is the last text even if you leave
-with `C-g`. Afterwards Command-G and Command-Shift-G (`portal-web-find-next`
-and `portal-web-find-previous`) move between matches.
+it in the page from what is on screen, as isearch starts from point: after the
+page's selection while that is in view, and otherwise from the top of the
+view; `C-r` (`portal-web-find-backward`) finds it before the selection, or up
+from the bottom of the view. So after scrolling, a find goes to the first match
+you can see. WebKit selects the match, wrapping around the page's ends. While
+the minibuffer reads, `C-s` or Command-G and `C-r` or Command-Shift-G move to
+the next and previous match without leaving it, as a browser's find bar does,
+and `RET` stays on the match shown; empty input finds the last text again.
+Text found this way is the last text even if you leave with `C-g`. Afterwards
+Command-G and Command-Shift-G (`portal-web-find-next` and
+`portal-web-find-previous`) move between matches, from the page too: the page
+keeps its selection while Emacs has the keyboard, so leaving the page and
+coming back, or switching to another application, never loses your place.
 Case matters as in isearch: when `case-fold-search` is off, or the text has an
 upper-case letter. The page never takes the keyboard while finding.
+
+While you find, every match in the page is lit, as isearch's lazy highlight
+lights them, and the current one is the selected one. The lights go, as
+isearch ends, with the first command in the buffer that is not a find
+command, with `C-g` or Escape, and when `RET` or a click gives the page the
+keyboard; the selection stays on the last match found. A new page, or the
+same one loaded again, has no lights, and its first find starts from its view.
 
 Each find says in the echo area, or beside the text being read, which match it
 is of how many, as isearch's count does: `3/12 sh`, `Wrapped 1/12 sh` when it
 went past the page's last match to its first, or its first to its last going
-backward. WebKit counts the matches in every frame, up to 1000: past that the
-count reads `1000+`. A page without a match says `No match for "sh"`. Where
-the system's WebKit cannot count, the echo area shows the text alone once it is
-found.
+backward, from where the find started. WebKit counts the matches in every frame, up to 1000: past that the
+count reads `1000+`. The match's number is shown only when Portal knows it:
+for a match in a frame within the page, or in an image's Live Text, it says
+the count alone, `12 sh`, and never says it wrapped. A page without a match says `No match for "sh"`.
+Where the system's WebKit cannot count, the echo area shows the text alone once
+it is found.
 
 `+` or Command-= (`portal-web-zoom-in`) and `-` or Command-- (`portal-web-zoom-out`)
 step through `portal-web-zoom-steps`, and `0` or Command-0

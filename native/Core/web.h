@@ -34,12 +34,17 @@ bool portal_web_views_download_directory(portal_string directory, portal_text *e
 /* Find TEXT, which must not be empty, in web view TARGET's page: the next
    match, or the previous one if BACKWARD, wrapping around, and ignoring
    case unless CASE_SENSITIVE.  The page highlights it.  When finding ends,
-   Emacs gets the record "found TARGET FOUND INDEX COUNT PAGE": FOUND is 1,
-   or 0 for no match, INDEX and COUNT are portal_web_found's, and PAGE is
-   the page's generation, which each commit changes, unless TARGET has
-   started another find since: only the latest one reports. */
+   Emacs gets the record "found TARGET FOUND INDEX COUNT PAGE WRAPPED":
+   FOUND is 1, or 0 for no match, INDEX and COUNT are portal_web_found's,
+   PAGE is the generation of the page the find went to, which each commit
+   changes, and WRAPPED is 1 or 0 when the platform knows whether finding
+   wrapped around the page to the match at INDEX, else -1, unless TARGET has started another find since, or committed another
+   page: only the latest find reports, and only about its own page. */
 bool portal_web_views_find(portal_string target, portal_string text, bool backward,
                            bool case_sensitive, portal_text *error);
+/* Finding in web view TARGET's page is done: the page stops showing its
+   matches, and keeps its selection for the next find. */
+bool portal_web_views_find_done(portal_string target, portal_text *error);
 /* Show the pages from HOST at PERCENT of their size, from 25 to 500, in
    every web view from now on, oldest first: the pages on screen now and
    each page a view commits later.  HOST is spelled as the platform spells a

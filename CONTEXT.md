@@ -40,6 +40,10 @@ _Avoid_: HUD, toast, notification, overlay
 
 ## Web content
 
+**Page**:
+One document a web view shows, from the commit that loads it to the next; a reload makes a new page with the same URL. Its selection, find highlights, scroll position and typing belong to it, and moving the keyboard or the view never changes them.
+_Avoid_: tab, URL (as identity)
+
 **Hosted app**:
 Web content served by Portal's app host, such as Hello, the Markdown preview, or Excalidraw.
 _Avoid_: hosted page, editor, UI

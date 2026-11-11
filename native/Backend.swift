@@ -312,6 +312,12 @@ public func portalWebFind(_ web: OpaquePointer, _ text: portal_string, _ backwar
     } != nil
 }
 
+@_cdecl("portal_web_find_done")
+public func portalWebFindDone(_ web: OpaquePointer, _ error: UnsafeMutablePointer<portal_text>) -> Bool {
+    let web = native(web)
+    return perform(error) { try session(web, as: WebSession.self).findDone() } != nil
+}
+
 @_cdecl("portal_web_set_zoom")
 public func portalWebSetZoom(_ web: OpaquePointer, _ factor: Double,
                              _ error: UnsafeMutablePointer<portal_text>) -> Bool {

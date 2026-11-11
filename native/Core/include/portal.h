@@ -229,6 +229,10 @@ bool portal_web_create_window(portal_view *opener, portal_string target, void *r
    went with portal_web_found and TOKEN. */
 bool portal_web_find(portal_view *web, portal_string text, bool backward, bool case_sensitive,
                      uint64_t token, portal_text *error);
+/* Finding in WEB's page is done for now: clear what finding shows in it,
+   such as the highlighted matches, and leave its selection where the last
+   find left it, for the next find to start from. */
+bool portal_web_find_done(portal_view *web, portal_text *error);
 /* Show WEB's pages at FACTOR times their size, such as 1.5, from now on,
    including the page on screen, without loading it again.  The page lays
    itself out again for its smaller or larger viewport, as a browser's zoom
@@ -618,10 +622,15 @@ void portal_web_failed(portal_string target, uint64_t token, portal_string messa
 #define PORTAL_WEB_FIND_MAX 1000
 /* The find that portal_web_find started in TARGET with TOKEN finished.
    INDEX is the 1-based position of the selected match among the page's
-   matches, or 0 for no match or when the platform cannot tell.  COUNT is the
+   matches, or 0 for no match or when the platform cannot tell: never a
+   guess, so that Emacs shows only a true position.  COUNT is the
    number of matches, 0 for none: -1 when the platform cannot count them, and
-   PORTAL_WEB_FIND_MAX + 1 when there are more than PORTAL_WEB_FIND_MAX. */
-void portal_web_found(portal_string target, uint64_t token, int64_t index, int64_t count);
+   PORTAL_WEB_FIND_MAX + 1 when there are more than PORTAL_WEB_FIND_MAX.
+   WRAPPED is 1 when finding went past the page's end to its start, or its
+   start to its end going backward, to reach the match, 0 when it did not,
+   and -1 when the platform cannot tell; it counts only with an INDEX. */
+void portal_web_found(portal_string target, uint64_t token, int64_t index, int64_t count,
+                      int wrapped);
 /* The printing that portal_web_print started in TARGET to FILE ended: FILE
    is complete, for a null ERROR, or printing failed and ERROR says why.
    The core tells Emacs over TARGET's messages, unless the view is gone. */

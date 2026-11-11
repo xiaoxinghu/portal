@@ -174,16 +174,41 @@ level with `portal--web-zoom HOST PERCENT`; the core keeps the levels, shows
 every open page from that host at its level, and on each page commit applies
 the new page's host's level, so navigation and new views follow the site.
 Pages without a host share `""`. `portal--web-find` asks the platform to find
-text its own way, with a token; only the latest find's result reaches Emacs,
-as a `found TARGET FOUND INDEX COUNT PAGE` record: FOUND is `1` or `0`, INDEX
-the selected match's position from 1, 0 when unknown, COUNT the matches, -1
-when the platform cannot count and 1001 past `PORTAL_WEB_FIND_MAX`, and PAGE
-the page's generation, which every commit changes, reloads included: Emacs
-says a find wrapped only against a match on the same page. On macOS
-the count comes from WebKit's private find, which Safari's find bar uses,
-behind a `responds(to:)` check, and otherwise from the public find, which
-only says whether it matched. The platform supplies two primitives for
-these: find text, and set a view's zoom factor.
+text its own way, with a token, and notes the page's generation; only the
+latest find's result reaches Emacs, and only while that page is still the
+view's, as a `found TARGET FOUND INDEX COUNT PAGE WRAPPED` record: FOUND is
+`1` or `0`, INDEX the selected match's position from 1, 0 when the platform
+cannot tell, COUNT the matches, -1 when the platform cannot count and 1001
+past `PORTAL_WEB_FIND_MAX`, PAGE that generation, which every commit
+changes, reloads included, and WRAPPED `1` when finding went around the
+page's end to reach the match, `0` when not, and `-1` without an INDEX. The
+platform says whether a find wrapped, as only it knows where the find
+started: from what is on screen, not from the match before. `portal--web-find-done` ends finding in a page for now: the platform
+clears what it shows while finding, such as every match lit, and keeps the
+selection. The platform supplies three primitives for these: find text,
+finding done, and set a view's zoom factor.
+
+A page owns its selection, its find highlights and its scroll position
+([ADR 0004](adr/0004-a-page-owns-its-state.md)): moving the keyboard between
+Emacs and the page never changes them. On macOS, WebKit clears a page's
+selection when the page gives up the keyboard, as it does to Emacs for each
+command Emacs runs from it, so each commit sets the page to keep an inactive
+selection with `WKPageSetMaintainsInactiveSelection`, which navigation
+resets. A find starts from what is on screen: a script in its own world
+collapses a selection in view to its end, or its start going backward, and
+otherwise puts a caret at the first line of text in view, or the last.
+WebKit's private find, which Safari's find bar uses, behind `responds(to:)`
+checks, then selects the match and lights every match. Its own match index
+is a counter that drifts from the selection, so the platform asks for the
+list of matches that the system find bar's client call returns, counts them,
+and locates the selection's rect among them: a main frame's match is found
+that way, a subframe's or one in Live Text is not, and its position is
+unknown. The script that placed the start keeps it, and a main frame's
+match before it in the document's order, which is the order finding goes in,
+or after it going backward, wrapped; screen position would mislead in
+right-to-left text or columns. Asking for the list ends WebKit's find delegate reports for the
+view, so nothing relies on those. Without the private calls, the public find
+only says whether it matched.
 
 The core decides whether a page may use the camera or microphone. The
 platform reports each request with `portal_web_media`: the origins of the

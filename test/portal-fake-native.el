@@ -139,6 +139,12 @@ The selected frame is kept."
   (when (equal text "") (error "Nothing to find"))
   t)
 
+(defun portal--web-find-done (target)
+  (portal-fake-native--call 'portal--web-find-done target)
+  (unless (string-prefix-p "web:" target) (error "No Portal view %s" target))
+  (portal-fake-native--view target)
+  t)
+
 (defun portal--web-print (target &optional file)
   (apply #'portal-fake-native--call 'portal--web-print target (and file (list file)))
   (unless (string-prefix-p "web:" target) (error "No Portal view %s" target))

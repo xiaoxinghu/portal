@@ -32,6 +32,7 @@
 (declare-function portal--close "portal-view" (target))
 (declare-function portal--web-download-directory "portal-web" (directory))
 (declare-function portal--web-find "portal-web" (target text backward case-sensitive))
+(declare-function portal--web-find-done "portal-web" (target))
 (declare-function portal--web-zoom "portal-web" (host percent))
 (declare-function portal--web-print "portal-web" (target &optional file))
 
@@ -392,16 +393,12 @@ STEP is \"back\" or \"forward\"; with no page to go to, nothing changes."
   (portal-web--go "forward"))
 
 ;; Finding text in the page.  WebKit finds and highlights; Emacs keeps the
-;; keyboard, and the minibuffer reads the text.
+;; keyboard, and the minibuffer reads the text.  As in isearch, finding
+;; starts from what is on screen and lights every match until a command
+;; that is not a find command ends the find session.
 
 (defvar portal-web-find-history nil "Texts found in web views, newest first.")
 (defvar-local portal-web--finding nil "The text this buffer's view looked for last.")
-(defvar-local portal-web--finding-backward nil
-  "Whether this buffer's view looked for `portal-web--finding' backward.")
-(defvar-local portal-web--found-at nil
-  "Where this buffer's view last found a match, as (PAGE TEXT INDEX).
-PAGE is the generation of the page found in, which each new page, even a
-reload of the same one, changes: a match on an earlier page is not the last.")
 (defvar portal-web--find-window nil
   "The pane whose web view `portal-web-find' reads text for, while it reads.")
 (defvar portal-web--found nil
@@ -426,30 +423,91 @@ letter and `search-upper-case' is on."
 
 (defun portal-web--search (text backward)
   "Find TEXT in this buffer's web view, BACKWARD or forward."
-  (portal--web-find (portal-web--selected) text backward (portal-web--case-sensitive text))
+  (let ((target (portal-web--selected)))
+    (portal--web-find target text backward (portal-web--case-sensitive text))
+    (portal-web--find-start (window-buffer) target))
   (with-current-buffer (window-buffer)
-    (setq portal-web--finding text
-          portal-web--finding-backward backward)))
+    (setq portal-web--finding text)))
+
+;; The find session: while it lasts, the page lights every match.  It
+;; ends as isearch's does, on the first command in its buffer that is not
+;; a find command, on C-g or Escape, and on a take, RET or a click that
+;; gives the page the keyboard.  A new page has no lights, so it needs no
+;; ending.  The selection stays where the last find left it, as point
+;; stays where isearch left it.
+
+(defvar portal-web--find-session nil
+  "The find session, as (BUFFER . TARGET), while one lasts.")
+
+(defconst portal-web--find-commands
+  '(portal-web-find portal-web-find-backward portal-web-find-next portal-web-find-previous)
+  "The commands that go on with a find session.")
+
+(defconst portal-web--find-keeping
+  '(portal-input--dispatch handle-switch-frame handle-select-window)
+  "Commands that neither go on with a find session nor end it.
+A chord the page hands Emacs counts as the command it runs, not as
+`portal-input--dispatch', and moving focus between frames or
+applications never changes a page.")
+
+(defun portal-web--find-start (buffer target)
+  "Start a find session in BUFFER for its view TARGET, or go on with it."
+  (unless (equal portal-web--find-session (cons buffer target))
+    (portal-web--find-end)
+    (setq portal-web--find-session (cons buffer target))
+    (add-hook 'pre-command-hook #'portal-web--find-command)))
+
+(defun portal-web--find-end ()
+  "End the find session, if one lasts: the page's matches go dark."
+  (when-let* ((session portal-web--find-session))
+    (setq portal-web--find-session nil)
+    (remove-hook 'pre-command-hook #'portal-web--find-command)
+    ;; A view that has closed has no lights left.
+    (ignore-errors (portal--web-find-done (cdr session)))))
+
+(defun portal-web--find-ends (command)
+  "End the find session if COMMAND, about to run, ends it."
+  (when-let* ((session portal-web--find-session))
+    (unless (or (memq command portal-web--find-commands)
+                (memq command portal-web--find-keeping)
+                (and (buffer-live-p (car session))
+                     (not (eq (current-buffer) (car session)))
+                     (not (eq command 'portal-input--select))))
+      (portal-web--find-end))))
+
+(defun portal-web--find-command ()
+  "End the find session if the command about to run ends it."
+  (portal-web--find-ends this-command))
+(add-hook 'portal-input--command-functions #'portal-web--find-ends)
 
 (defun portal-web-find (&optional backward)
   "Find text in this buffer's page, reading it in the minibuffer.
-RET finds the text after the page's selection, or before it with
-BACKWARD, wrapping around, and the page highlights the match.  While
-reading, \\<portal-web-find-minibuffer-map>\\[portal-web-find-next] or Command-G and \\[portal-web-find-previous] or Command-Shift-G move to the
+RET finds the text from what is on screen, as isearch starts from point:
+after the page's selection while it is in view, else from the top of the
+view, or with BACKWARD before the selection, else up from the bottom of
+the view, wrapping around.  The page selects the match and lights every
+match until a command that is not a find command, C-g or Escape, or RET
+or a click into the page; the selection stays.  While reading,
+\\<portal-web-find-minibuffer-map>\\[portal-web-find-next] or Command-G and \\[portal-web-find-previous] or Command-Shift-G move to the
 next and previous match, and RET then stays on the match shown.  The echo
-area says which match it is of how many, as isearch's count does, and
-when finding wrapped around the page.  Empty input finds the last text
-again.  Case matters as in isearch: while `case-fold-search' is off, or
-when the text has an upper-case letter.  The page never takes the
-keyboard, so Emacs keeps it once the text is found."
+area says how many matches there are, which one this is when the page
+can tell, as isearch's count does, and when finding wrapped around the
+page.  Empty input finds the last text again.  Case matters as in
+isearch: while `case-fold-search' is off, or when the text has an
+upper-case letter.  The page never takes the keyboard, so Emacs keeps it
+once the text is found."
   (interactive)
   (portal-web--selected)
   (let* ((last (car portal-web-find-history))
          (portal-web--find-window (selected-window))
          (portal-web--found nil)
-         (text (read-from-minibuffer (format-prompt (if backward "Find backward" "Find") last)
-                                     nil portal-web-find-minibuffer-map nil
-                                     'portal-web-find-history last)))
+         (text (condition-case nil
+                   (read-from-minibuffer (format-prompt (if backward "Find backward" "Find") last)
+                                         nil portal-web-find-minibuffer-map nil
+                                         'portal-web-find-history last)
+                 ;; C-g or Escape ends the find session, as in isearch.
+                 (quit (portal-web--find-end)
+                       (signal 'quit nil)))))
     (when (string-empty-p text)
       (setq text (or last (user-error "Nothing to find"))))
     (unless (equal text portal-web--found)
@@ -488,26 +546,24 @@ This is `portal-web-find-next' going backward."
 ;; The view's latest find ended: FOUND is "1" or "0", and the match is at
 ;; INDEX, from 1 or 0 when unknown, of COUNT, -1 when uncounted, or
 ;; `portal-web-find-max' + 1 when over the most the page counts, on the
-;; page of generation PAGE.
+;; page of generation PAGE; WRAPPED is "1" when finding went around the
+;; page's end to reach it, "0" when not, and "-1" when the page cannot
+;; tell.  The page says, since a find starts from what is on screen, not
+;; from the match before.
 (defconst portal-web-find-max 1000 "The most matches a page counts.")
 
-(defun portal-web--find-message (page text found index count)
+(defun portal-web--find-message (text found index count wrapped)
   "What the echo area says of a find of TEXT, as its found record has it.
-Update the match last found in this buffer, on PAGE, from FOUND, INDEX
-and COUNT."
-  (let ((last portal-web--found-at))
-    (setq portal-web--found-at (and found (> index 0) (list page text index)))
-    (cond
-     ((not found) (format "No match for %S" text))
-     ((< count 0) text)
-     (t (concat (and (> index 0) (equal (butlast last) (list page text))
-                     (if portal-web--finding-backward (> index (nth 2 last)) (< index (nth 2 last)))
-                     "Wrapped ")
-                (and (> index 0) (format "%d/" index))
-                (if (> count portal-web-find-max)
-                    (format "%d+" portal-web-find-max)
-                  (number-to-string count))
-                " " text)))))
+FOUND, INDEX, COUNT and WRAPPED are the record's."
+  (cond
+   ((not found) (format "No match for %S" text))
+   ((< count 0) text)
+   (t (concat (and (> index 0) wrapped "Wrapped ")
+              (and (> index 0) (format "%d/" index))
+              (if (> count portal-web-find-max)
+                  (format "%d+" portal-web-find-max)
+                (number-to-string count))
+              " " text))))
 
 (defun portal-web--say (text)
   "Show TEXT in the echo area, or beside `portal-web-find''s minibuffer."
@@ -517,12 +573,13 @@ and COUNT."
       (message "%s" text))))
 
 (setf (alist-get "found" portal-view-record-handlers nil nil #'equal)
-      (lambda (_target found index count page)
+      (lambda (_target found index count _page wrapped)
         ;; From the command loop, not the process filter, where
         ;; `minibuffer-message' does not belong.
         (run-at-time 0 nil #'portal-web--say
-                     (portal-web--find-message page portal-web--finding (equal found "1")
-                                               (string-to-number index) (string-to-number count)))))
+                     (portal-web--find-message portal-web--finding (equal found "1")
+                                               (string-to-number index) (string-to-number count)
+                                               (equal wrapped "1")))))
 
 ;; Zoom, remembered per site.
 
