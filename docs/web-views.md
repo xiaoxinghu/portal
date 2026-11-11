@@ -200,7 +200,11 @@ open previews change immediately without reloading.
 
 Previews support headings, lists, fenced code, tables, strikethrough, task lists,
 heading anchors and images. Local images, such as `![diagram](img/arch.png)`,
-resolve like links below and show inline; HTTP(S) and `data:` images also work. Command-R rereads the displayed file from disk; from
+resolve like links below; HTTP(S) and `data:` images also work. An image
+alone in its paragraph, linked or not, is a figure, centered in the text
+column; an image in text, or one of a row such as badges, stays inline where
+it is. An inline `<svg>` written as its own block is centered too, and shrinks
+to fit a narrow window, keeping its proportions. Command-R rereads the displayed file from disk; from
 Emacs, `g` (`portal-web-reload`) also starts a stopped host. Loaded previews
 survive host stops or restarts. Missing or unreadable files show an error page.
 

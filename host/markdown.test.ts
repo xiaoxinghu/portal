@@ -131,6 +131,56 @@ test("raw HTML such as inline SVG renders, without scripts or a refresh", async 
 	);
 });
 
+test("images and SVG diagrams that stand alone are centered; others stay inline", async () => {
+	const file = join(directory, "figures.md");
+	await writeFile(
+		file,
+		"![alone](https://example.com/a.png)\n\n" +
+			"[![linked](https://example.com/b.png)](https://example.com/)\n\n" +
+			"Press ![key](https://example.com/c.png) to continue.\n\n" +
+			"![first](https://example.com/d.png) ![second](https://example.com/e.png)\n\n" +
+			"[![build](https://example.com/f.png)](https://example.com/f) " +
+			"[![tests](https://example.com/g.png)](https://example.com/g)\n\n" +
+			"*![stressed](https://example.com/h.png)*\n\n" +
+			'<p class="wide"><img src="https://example.com/i.png" alt="raw"></p>\n\n' +
+			'<p><a href="https://example.com/"></a><img src="https://example.com/j.png" alt="after"></p>\n\n' +
+			'<p><img src="https://example.com/k.png" alt="unclosed">\n\n' +
+			"Text after it.\n\n" +
+			'<svg width="780" height="470" viewBox="0 0 780 470"><rect/></svg>\n',
+	);
+	const page = await (await get(preview(file))).text();
+	// The paragraph holding the image named ALT, up to its image.
+	const paragraph = (alt: string) =>
+		page.match(
+			new RegExp(`<p[^>]*>(?:(?!</?p\\b).)*?alt="${RegExp.escape(alt)}"`, "s"),
+		)?.[0];
+	for (const alt of ["alone", "linked"]) {
+		expect(paragraph(alt)).toStartWith('<p class="figure">');
+	}
+	expect(paragraph("raw")).toStartWith('<p class="wide figure">');
+	for (const alt of [
+		"key",
+		"first",
+		"second",
+		"build",
+		"tests",
+		"stressed",
+		"after",
+		"unclosed",
+	]) {
+		expect(paragraph(alt)).toStartWith("<p>");
+	}
+	expect(page.match(/class="[^"]*figure/g)).toHaveLength(3);
+	// A raw <svg> block is left as written; the stylesheet centers it.
+	expect(page).toContain(
+		'<svg width="780" height="470" viewBox="0 0 780 470"><rect/></svg>',
+	);
+	expect(page).toMatch(
+		/main > svg \{\s*display: block;\s*max-width: 100%;\s*height: auto;\s*\}/,
+	);
+	expect(page).toMatch(/\.figure \{\s*text-align: center;\s*\}/);
+});
+
 test("local links open in the preview or in Emacs; others are left alone", async () => {
 	const file = join(docs, "Guide.md");
 	await writeFile(
