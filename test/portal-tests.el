@@ -573,6 +573,16 @@ return true;" constraints)))
         (should-not (portal-input--action "focused"))
         (portal-integration-test--emacs-input)))))
 
+(defun portal-test--scroll-to (id)
+  "Scroll the page so that its element with ID is at the top of the view.
+Wait until it stays there: the page may reveal its focused field once."
+  (let ((script (format "const top = document.getElementById('%s').getBoundingClientRect().top;
+                         if (Math.abs(top) > 1) document.getElementById('%s').scrollIntoView();
+                         return Math.abs(top) <= 1;"
+                        id id)))
+    (portal-terminal-test--wait
+     (lambda () (and (portal-excalidraw-gui--js script) (sit-for 0.3) (portal-excalidraw-gui--js script))))))
+
 (ert-deftest portal-web-find-starts-from-what-is-on-screen ()
   :tags '(:gui)
   (portal-test--with-web
@@ -582,13 +592,18 @@ return true;" constraints)))
         (portal-test--wait-for-page "Gap")
         ;; Scrolled past the first matches, a find selects the first in view,
         ;; and says where it is among them all.
-        (portal-excalidraw-gui--js "document.getElementById('c').scrollIntoView(); return true;")
+        (portal-test--scroll-to "c")
         (portal-test--find "apple RET")
         (portal-test--wait-for-match "c")
         (portal-test--wait-for-echo "3/5 apple")
         (portal-web-find-next)
         (portal-test--wait-for-match "d")
         (portal-test--wait-for-echo "4/5 apple")
+        ;; Going backward starts from the bottom of the view.
+        (portal-test--scroll-to "a")
+        (portal-web-find-previous)
+        (portal-test--wait-for-match "b")
+        (portal-test--wait-for-echo "2/5 apple")
         ;; A reload is a new page: the next find starts from the top of its
         ;; view, and finding did not wrap to get there.
         (portal-excalidraw-gui--js "window.before = true; return true;")
@@ -596,12 +611,7 @@ return true;" constraints)))
         (portal-terminal-test--wait
          (lambda () (equal (portal-excalidraw-gui--js "return window.before ? 'old' : document.title;")
                            "Gap")))
-        (portal-excalidraw-gui--js "scrollTo(0, 0); return true;")
-        (portal-web-find-next)
-        (portal-test--wait-for-match "a")
-        (portal-test--wait-for-echo "1/5 apple")
-        ;; Going backward starts from the bottom of the view.
-        (portal-excalidraw-gui--js "document.getElementById('d').scrollIntoView(); return true;")
+        (portal-test--scroll-to "c")
         (portal-web-find-previous)
         (portal-test--wait-for-match "d")
         (portal-test--wait-for-echo "4/5 apple")))))
