@@ -79,11 +79,48 @@ git -C build/libghostty-spm format-patch --zero-commit --no-signature \
 The next configuration remakes the copy from the patch files. Keep each patch
 small and in the package's style, so that it can be offered upstream.
 
-To move to a new release, update the version and revision in
-`native/libghostty-spm.json`, configure, and fix any patch that no longer
-applies. Then follow [Licenses](docs/licenses.md#when-dependencies-change) for
-the new prebuilt library, and update the release and Ghostty versions in the
-terminal guide.
+A Rex server runs its terminals with its own Ghostty, and Portal draws a
+block by feeding the same bytes to the Ghostty of its pinned release. When
+the server's knows a sequence Portal's does not, the two screens differ;
+[the Rex guide](docs/rex.md#ghostty-versions) says what that looks like. Run the report before working on the Rex client and after Rex updates:
+
+```sh
+tools/ghostty-version.py
+```
+
+It prints the pinned release, the newest release and the installed Rex
+server's Ghostty, each with its commit and date (in UTC), how many commits of
+the server's each release's Ghostty lacks, and a verdict: up to date, a newer
+release exists, or the newest release is still behind the server. A release's
+Ghostty is the one its `binaryTarget` downloads, the library Portal links; the
+report notes when its `Ghostty.ref` names another. It changes nothing. It reads what is on disk first: the build's patched copy, and the
+clones `PORTAL_LIBGHOSTTY_SPM_CLONE` and `PORTAL_GHOSTTY_CLONE` name (or
+`--package` and `--ghostty`). It asks the network, Git and GitHub's API, only
+for what those lack, and never with `--offline`, and it says what it could not
+find out. The server's Ghostty is read from its executable, which nothing the
+server answers reports; `PORTAL_REX_SERVER` or `--rex` names one that is not in
+Rex's usual place. This report is the only check: Portal does not compare
+versions when it connects to a server.
+
+To move to a new release, bump the pin:
+
+```sh
+tools/ghostty-version.py bump                  # the newest release
+tools/ghostty-version.py bump 2.2.2026110702   # a named one
+```
+
+It writes the release's tag and revision to `native/libghostty-spm.json`,
+refreshes `native/Package.resolved`, and names each patch that no longer
+applies to the release, exiting with status 1 when one does not. Then
+`build/libghostty-spm-bump` holds the new release with the patches applied by
+`git am` up to the first that fails, where it stopped: fix it there and
+`git am --continue`, then write the set back with the `format-patch` command
+above, run from that copy with the new revision. It commits nothing and runs
+no checks, and ends by listing what to do next: those repairs, build, follow
+[Licenses](docs/licenses.md#when-dependencies-change) for the new prebuilt
+library, update the release and Ghostty versions in the terminal guide, and
+run the checks. Run it again after fixing a patch or regaining the network:
+with the pin already moved, it checks the patches and resolves again.
 
 For TypeScript editing, install the host's development dependencies and run its
 checks:

@@ -375,7 +375,8 @@ and its Ghostty build, with Portal's
 of 2026-11-01. The Rex server the [test VM](test-vm.md) pins,
 0.1.0-preview.14, carries Ghostty `5813c9461` of 2026-11-06, 169 commits
 later, so a terminal the server runs can use sequences Portal's copy does not
-know yet. Themes come from the wrapper's bundled catalog;
+know yet; `tools/ghostty-version.py` reports
+[how far apart they are](rex.md#ghostty-versions). Themes come from the wrapper's bundled catalog;
 standalone Ghostty preferences are not loaded.
 Ghostty app-level window/tab commands are unimplemented; its Command bindings
 never apply, since the core routes them to Portal shortcuts or Emacs. Buffers

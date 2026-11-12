@@ -1,0 +1,1 @@
+{"schema":1,"abi":{"target":"aarch64","os":"macos","environment":"none","pointer_size":8,"usize_size":8,"max_alignment":8,"endian":"little"},"library_version":"1.1.0-dev+5813c9461","commit":"5813c9461","dirty":null
