@@ -231,6 +231,22 @@ class Stand_ins(unittest.TestCase):
         self.assertIn("Nothing is committed.", result.stdout)
         self.assertIn("./build.sh", result.stdout)
 
+    def test_bump_from_a_relative_clone(self):
+        result = subprocess.run(
+            [sys.executable, "-B", str(SCRIPT), "bump", "--offline", "--root", "portal",
+             "--package", "package"], cwd=self.dir, env=GIT_ENV, capture_output=True, text=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.pin()["version"], "2.0")
+
+    def test_bump_offline_does_not_resolve(self):
+        (self.checkout / "native" / "Package.swift").write_text("// not to be read\n")
+
+        result = self.run_tool("bump")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Did not refresh native/Package.resolved: --offline", result.stdout)
+
     def test_bump_names_a_patch_that_does_not_apply(self):
         self.patch("0001-one.patch", "one", "1")
         # Made at 1.0, against the line 2.0 changed.

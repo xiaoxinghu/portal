@@ -517,8 +517,11 @@ def try_patches(source, version, revision, patches, work):
     return failed
 
 
-def resolve(root, copy, scratch):
+def resolve(root, copy, scratch, offline=False):
     """Refresh ROOT's native/Package.resolved against COPY.  Returns an error or None."""
+    if offline:
+        # SwiftPM fetches the wrapper's dependencies and its prebuilt library.
+        return "--offline, and resolving fetches the wrapper's dependencies"
     if not (root / "native" / "Package.swift").is_file():
         return "no native/Package.swift"
     if shutil.which("xcrun") is None:
@@ -570,7 +573,7 @@ def bump(args):
         write_pin(root, {**pin, "version": version, "revision": revision})
         resolved = root / RESOLVED
         before = resolved.read_text() if resolved.exists() else None
-        error = resolve(root, copy, Path(temporary) / "swift")
+        error = resolve(root, copy, Path(temporary) / "swift", args.offline)
         after = resolved.read_text() if resolved.exists() else None
 
     print(f"Moved the pin from libghostty-spm {pin['version']} (Ghostty {short(old_commit)}) "
@@ -620,6 +623,11 @@ def main(argv=None):
     # A checkout of Portal other than this one, for the tests.
     parser.add_argument("--root", type=Path, default=ROOT, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    # Absolute, as Git runs some commands from elsewhere, such as a scratch repository.
+    for name in ("package", "ghostty", "rex"):
+        if getattr(args, name):
+            setattr(args, name, os.path.abspath(getattr(args, name)))
+    args.root = args.root.resolve()
     if args.command == "report":
         if args.version:
             parser.error("report takes no version")
