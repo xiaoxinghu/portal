@@ -4,7 +4,7 @@
    copies its arguments, calls the core, and converts and frees what it
    returns.  The lifecycle functions call views.h, portal--channel
    channel.h, the input functions input.h, the terminal functions
-   terminals.h, the web functions web.h, the shortcut functions shortcuts.h, and the status panel's status.h.  No Emacs environment or value
+   terminals.h, the web functions web.h, the shortcut functions shortcuts.h, the status panel's status.h, and the Rex functions rex.h.  No Emacs environment or value
    outlives the module call that received it. */
 #include <emacs-module.h>
 #include <errno.h>
@@ -16,6 +16,7 @@
 #include "channel.h"
 #include "input.h"
 #include "portal.h"
+#include "rex.h"
 #include "shortcuts.h"
 #include "status.h"
 #include "terminals.h"
@@ -404,6 +405,109 @@ LISP_FUNCTION(Fshortcut_remove)
     portal_text error = {0};
     return read_id(env, args[0], &id) ? done(env, portal_shortcuts_remove(id, &error), &error)
                                       : NULL;
+}
+
+/* Copy VALUE, a natural number naming a Rex connection or a wait in
+   milliseconds, into *NUMBER. */
+static bool read_natural(emacs_env *env, emacs_value value, uint64_t *number)
+{
+    intmax_t integer = env->extract_integer(env, value);
+    if (!returning(env))
+        return false;
+    if (integer < 0) {
+        signal_error(env, "Expected a natural number, not %S", value);
+        return false;
+    }
+    *number = (uint64_t) integer;
+    return true;
+}
+
+LISP_FUNCTION(Frex_open)
+{
+    portal_text path = {0}, name = {0}, version = {0}, error = {0};
+    emacs_value result = NULL;
+    uint64_t id;
+    if (read_text(env, args[0], &path) && read_text(env, args[1], &name)
+        && read_text(env, args[2], &version)) {
+        if (portal_rex_open(borrow(path), borrow(name), borrow(version), &id, &error))
+            result = env->make_integer(env, (intmax_t) id);
+        else
+            fail(env, &error);
+    }
+    free(path.data);
+    free(name.data);
+    free(version.data);
+    return result;
+}
+
+LISP_FUNCTION(Frex_request)
+{
+    portal_text method = {0}, payload = {0}, error = {0};
+    emacs_value result = NULL;
+    uint64_t id, request;
+    if (read_natural(env, args[0], &id) && read_text(env, args[1], &method)
+        && read_text(env, args[2], &payload)) {
+        if (portal_rex_request(id, borrow(method), borrow(payload), &request, &error))
+            result = env->make_integer(env, (intmax_t) request);
+        else
+            fail(env, &error);
+    }
+    free(method.data);
+    free(payload.data);
+    return result;
+}
+
+/* Returns (REASON MESSAGE...): the messages as strings, oldest first, after
+   REASON, a string once the connection has ended and nil until then. */
+LISP_FUNCTION(Frex_receive)
+{
+    portal_text *messages = NULL, reason = {0}, error = {0};
+    size_t count = 0;
+    bool ended = false;
+    uint64_t id;
+    if (!read_natural(env, args[0], &id))
+        return NULL;
+    if (!portal_rex_receive(id, &messages, &count, &ended, &reason, &error)) {
+        fail(env, &error);
+        return NULL;
+    }
+    emacs_value *items = calloc(count + 1, sizeof *items);
+    emacs_value result = NULL;
+    if (items) {
+        items[0] = ended ? take_string(env, &reason) : symbol(env, "nil");
+        for (size_t i = 0; i < count; i++)
+            items[i + 1] = take_string(env, &messages[i]);
+        result = list(env, items, count + 1);
+    } else {
+        out_of_memory(env);
+    }
+    for (size_t i = 0; i < count; i++)
+        free(messages[i].data);
+    free(messages);
+    free(reason.data);
+    free(items);
+    return result;
+}
+
+LISP_FUNCTION(Frex_wait)
+{
+    uint64_t id, milliseconds;
+    bool ready = false;
+    portal_text error = {0};
+    if (!read_natural(env, args[0], &id) || !read_natural(env, args[1], &milliseconds))
+        return NULL;
+    if (portal_rex_wait(id, milliseconds, &ready, &error))
+        return boolean(env, ready);
+    fail(env, &error);
+    return NULL;
+}
+
+LISP_FUNCTION(Frex_close)
+{
+    uint64_t id;
+    portal_text error = {0};
+    return read_natural(env, args[0], &id) ? done(env, portal_rex_close(id, &error), &error)
+                                           : NULL;
 }
 
 LISP_FUNCTION(Flauncher_show)
@@ -855,6 +959,20 @@ static const struct export {
      "HEIGHT MIN-WIDTH MAX-WIDTH LINES."},
     {"portal--status-hide", 0, 0, STRINGS_FUNCTION(status_hide, RESULT_T),
      "Hide the status panel; do nothing when it is hidden."},
+    {"portal--rex-open", 3, 3, Frex_open, NULL,
+     "Start connecting to the Rex server on the Unix socket PATH as client NAME at VERSION; "
+     "return the connection's ID."},
+    {"portal--rex-request", 3, 3, Frex_request, NULL,
+     "Ask Rex connection ID's server to run METHOD with PAYLOAD, a JSON object; return the "
+     "request's number."},
+    {"portal--rex-receive", 1, 1, Frex_receive, NULL,
+     "Return (REASON MESSAGE...): the messages waiting on Rex connection ID, as JSON, after "
+     "why it ended, or nil while it has not."},
+    {"portal--rex-wait", 2, 2, Frex_wait, NULL,
+     "Wait at most MILLISECONDS for Rex connection ID to have something to receive; return "
+     "whether it has."},
+    {"portal--rex-close", 1, 1, Frex_close, NULL,
+     "End Rex connection ID, dropping what Emacs has not received."},
 };
 
 /* Run the Lisp function DATA, an export, at Emacs's request (input.h). */

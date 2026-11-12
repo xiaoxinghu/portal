@@ -27,6 +27,14 @@
    later call that names it is counted instead of reading freed memory
    (portal-fake-backend.h).
 
+   Message sockets: a socket's messages go nowhere, and a test reads what was
+   sent, delivers the server's messages and ends the connection
+   (portal-fake-backend.h).  Nothing ever waits.  A socket whose path ends in
+   "/echo.sock" gets each message it sends back, and one whose path ends in
+   "/refused.sock" has ended when it opens, as when nothing listens there,
+   without a report: a platform never reports from inside an operation.
+   A path of 104 bytes or more does not fit a socket's address.
+
    Keys: all views share one window, where one attached view at a time can
    have the keyboard, and Emacs has it otherwise.  Tests press keys, click
    and press the configured escape as a user would, and the fake routes each press
@@ -1242,4 +1250,181 @@ bool portal_status_hide(portal_text *error)
 struct portal_fake_status portal_fake_status(void)
 {
     return status;
+}
+
+/* Message sockets. */
+
+enum { MAX_SOCKETS = 16, MAX_MESSAGES = 64 };
+
+static struct message_socket {
+    uint64_t socket; /* 0 for a free slot. */
+    char address[512];
+    bool echo, ended;
+    char reason[128];
+    char *sent[MAX_MESSAGES], *arrived[MAX_MESSAGES]; /* Oldest first. */
+    size_t sent_count, arrived_count;
+} sockets[MAX_SOCKETS];
+
+static struct message_socket *find_socket(uint64_t socket, portal_text *error)
+{
+    for (size_t i = 0; socket && i < MAX_SOCKETS; i++)
+        if (sockets[i].socket == socket)
+            return &sockets[i];
+    if (error)
+        fail(error, "The fake has no socket %llu", (unsigned long long) socket);
+    return NULL;
+}
+
+static bool ends_with(portal_string string, const char *suffix)
+{
+    size_t length = strlen(suffix);
+    return string.length >= length
+        && !memcmp(string.data + string.length - length, suffix, length);
+}
+
+/* Whether SOCKET has something to read. */
+static bool readable(const struct message_socket *socket)
+{
+    return socket->arrived_count || socket->ended;
+}
+
+static void arrive(struct message_socket *socket, const char *text, size_t length)
+{
+    bool was = readable(socket);
+    if (socket->ended || socket->arrived_count == MAX_MESSAGES)
+        return;
+    socket->arrived[socket->arrived_count++] = copy(text, length).data;
+    if (!was)
+        portal_socket_ready(socket->socket);
+}
+
+bool portal_socket_open(uint64_t socket, portal_string path, portal_string resource,
+                        portal_string protocol, portal_text *error)
+{
+    if (refused(error))
+        return false;
+    if (path.length >= 104)
+        return fail(error, "The fake's socket path is too long: %zu bytes", path.length);
+    struct message_socket *slot = NULL;
+    for (size_t i = 0; i < MAX_SOCKETS; i++) {
+        if (sockets[i].socket == socket)
+            return fail(error, "The fake has socket %llu already", (unsigned long long) socket);
+        if (!slot && !sockets[i].socket)
+            slot = &sockets[i];
+    }
+    if (!socket || !slot)
+        return fail(error, "The fake cannot open socket %llu", (unsigned long long) socket);
+    *slot = (struct message_socket) {.socket = socket, .echo = ends_with(path, "/echo.sock")};
+    snprintf(slot->address, sizeof slot->address, "%s %s %s", path.data, resource.data,
+             protocol.data);
+    if (ends_with(path, "/refused.sock")) {
+        slot->ended = true;
+        snprintf(slot->reason, sizeof slot->reason, "Connection refused");
+    }
+    return true;
+}
+
+bool portal_socket_send(uint64_t socket, portal_string text, portal_text *error)
+{
+    struct message_socket *found = refused(error) ? NULL : find_socket(socket, error);
+    if (!found)
+        return false;
+    if (found->sent_count == MAX_MESSAGES)
+        return fail(error, "The fake's socket is full");
+    if (found->ended)
+        return true;
+    found->sent[found->sent_count++] = copy(text.data, text.length).data;
+    if (found->echo)
+        arrive(found, text.data, text.length);
+    return true;
+}
+
+bool portal_socket_read(uint64_t socket, portal_text **messages, size_t *count, bool *ended,
+                        portal_text *reason, portal_text *error)
+{
+    struct message_socket *found = refused(error) ? NULL : find_socket(socket, error);
+    if (!found)
+        return false;
+    portal_text *texts = calloc(found->arrived_count + 1, sizeof *texts);
+    for (size_t i = 0; i < found->arrived_count; i++)
+        texts[i] = (portal_text) {found->arrived[i], strlen(found->arrived[i])};
+    *messages = texts;
+    *count = found->arrived_count;
+    found->arrived_count = 0;
+    *ended = found->ended;
+    if (found->ended)
+        *reason = copy(found->reason, strlen(found->reason));
+    return true;
+}
+
+bool portal_socket_wait(uint64_t socket, uint64_t milliseconds, bool *ready, portal_text *error)
+{
+    (void) milliseconds;
+    struct message_socket *found = refused(error) ? NULL : find_socket(socket, error);
+    if (found)
+        *ready = readable(found);
+    return found != NULL;
+}
+
+bool portal_socket_close(uint64_t socket, portal_text *error)
+{
+    struct message_socket *found = refused(error) ? NULL : find_socket(socket, error);
+    if (!found)
+        return false;
+    for (size_t i = 0; i < found->sent_count; i++)
+        free(found->sent[i]);
+    for (size_t i = 0; i < found->arrived_count; i++)
+        free(found->arrived[i]);
+    *found = (struct message_socket) {0};
+    return true;
+}
+
+size_t portal_fake_sockets(void)
+{
+    size_t count = 0;
+    for (size_t i = 0; i < MAX_SOCKETS; i++)
+        count += sockets[i].socket != 0;
+    return count;
+}
+
+const char *portal_fake_socket_address(uint64_t socket)
+{
+    struct message_socket *found = find_socket(socket, NULL);
+    return found ? found->address : "";
+}
+
+const char *portal_fake_socket_sent(uint64_t socket)
+{
+    static char text[8192];
+    struct message_socket *found = find_socket(socket, NULL);
+    size_t length = 0;
+    text[0] = '\0';
+    for (size_t i = 0; found && i < found->sent_count; i++) {
+        if (length < sizeof text)
+            length += (size_t) snprintf(text + length, sizeof text - length, "%s%s",
+                                        i ? "\n" : "", found->sent[i]);
+        free(found->sent[i]);
+    }
+    if (found)
+        found->sent_count = 0;
+    return text;
+}
+
+void portal_fake_socket_deliver(uint64_t socket, const char *text)
+{
+    struct message_socket *found = find_socket(socket, NULL);
+    if (found)
+        arrive(found, text, strlen(text));
+}
+
+void portal_fake_socket_end(uint64_t socket, const char *reason)
+{
+    struct message_socket *found = find_socket(socket, NULL);
+    if (!found || found->ended)
+        return;
+    bool was = readable(found);
+    found->ended = true;
+    snprintf(found->reason, sizeof found->reason, "%s", reason);
+    if (!was)
+        portal_socket_ready(socket);
 }

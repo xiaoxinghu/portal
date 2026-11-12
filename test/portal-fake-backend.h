@@ -91,4 +91,16 @@ struct portal_fake_status {
 };
 struct portal_fake_status portal_fake_status(void);
 
+/* Message sockets.  How many are open; the "PATH RESOURCE PROTOCOL" that
+   SOCKET was opened with, or "" for one that is not open; and the messages
+   sent on SOCKET since the last call, oldest first, one to a line.  Both
+   texts are valid until the next call. */
+size_t portal_fake_sockets(void);
+const char *portal_fake_socket_address(uint64_t socket);
+const char *portal_fake_socket_sent(uint64_t socket);
+/* SOCKET's server sends TEXT, or its connection ends because of REASON.
+   Either reports the socket ready when it had nothing to read. */
+void portal_fake_socket_deliver(uint64_t socket, const char *text);
+void portal_fake_socket_end(uint64_t socket, const char *reason);
+
 #endif
