@@ -58,9 +58,10 @@ Events of one connection arrive in the order the server sent them, their
 the next.  An event of one session is wrapped again, as a
 \"session_event\" whose payload names the session and holds the event.
 The functions run from a process filter, or inside a `portal-rex-call'
-that was waiting when the event arrived, so they must never prompt.  One
-that calls `portal-rex-call' itself gets its answer; the events that
-arrive while it waits run once it has returned.")
+that was waiting when the event arrived, in both cases with quitting
+inhibited, so they must never prompt.  One that calls `portal-rex-call'
+itself gets its answer; the events that arrive while it waits run once
+it has returned.")
 
 (define-error 'portal-rex-error "Rex error")
 
@@ -128,7 +129,17 @@ It has the shape of a server's error, with a code no server sends."
 (defun portal-rex--pump (connection)
   "Take what waits on CONNECTION from the native module, and handle it.
 The end of the connection joins the queue behind its last messages, as
-\(:type ended :reason REASON)."
+\(:type ended :reason REASON).
+
+Quitting is inhibited from here down, as Emacs inhibits it in a process
+filter, which is the other place this runs: a quit that cut in between
+the module handing messages over and their handlers returning would lose
+them.  It takes effect once this returns, in whoever waits."
+  (let ((inhibit-quit t))
+    (portal-rex--pump-1 connection)))
+
+(defun portal-rex--pump-1 (connection)
+  "Do `portal-rex--pump' for CONNECTION, with quitting inhibited."
   (when-let* ((id (portal-rex-connection-id connection)))
     (pcase-let ((`(,reason . ,texts) (portal--rex-receive id))
                 (messages nil))
@@ -184,9 +195,10 @@ keep their places until the function returns."
 
 (defun portal-rex--resume-later (connection)
   "Finish soon what a non-local exit left of CONNECTION's messages.
-A quit in a hook function or a callback goes on up, as a quit should, and
-nothing may ever ask for this connection again: its messages, the end
-among them, are in Emacs already."
+Quitting is inhibited while they are handled, but a hook function or a
+callback can still leave another way, as when its error opens the
+debugger and the debugger is left.  Nothing may ever ask for this
+connection again: its messages, the end among them, are in Emacs already."
   (unless (portal-rex-connection-resume connection)
     (setf (portal-rex-connection-resume connection)
           (run-at-time 0 nil #'portal-rex--resume connection))))
@@ -194,9 +206,10 @@ among them, are in Emacs already."
 (defun portal-rex--resume (connection)
   "Handle what was left of CONNECTION's messages, or of its failing requests."
   (setf (portal-rex-connection-resume connection) nil)
-  (if (eq (portal-rex-connection-state connection) 'closed)
-      (portal-rex--fail-calls connection (portal-rex-connection-reason connection))
-    (portal-rex--drain connection)))
+  (let ((inhibit-quit t))
+    (if (eq (portal-rex-connection-state connection) 'closed)
+        (portal-rex--fail-calls connection (portal-rex-connection-reason connection))
+      (portal-rex--drain connection))))
 
 (defun portal-rex--handle (connection message)
   "Handle MESSAGE, which arrived on CONNECTION."
@@ -253,7 +266,8 @@ One whose function exits non-locally leaves the rest to be failed soon."
 A connection that was ready is reported lost in the echo area, unless
 QUIET.  Every request still waiting fails, oldest first."
   (unless (eq (portal-rex-connection-state connection) 'closed)
-    (let ((ready (portal-rex--ready-p connection)))
+    (let ((ready (portal-rex--ready-p connection))
+          (inhibit-quit t))
       (setf (portal-rex-connection-id connection) nil
             (portal-rex-connection-state connection) 'closed
             (portal-rex-connection-reason connection) reason
@@ -281,7 +295,8 @@ QUIET.  Every request still waiting fails, oldest first."
 (defun portal-rex--await (connection done timeout)
   "Handle CONNECTION's messages until DONE returns non-nil, and return that.
 Return nil if it has not after TIMEOUT seconds, or once the connection
-has ended.  The wait blocks Emacs in short turns, so a quit gets through."
+has ended.  The wait blocks Emacs in short turns, and a quit gets through
+between them, never while messages are taken and handled."
   (let ((deadline (+ (float-time) timeout)) result)
     (portal-rex--pump connection)
     (while (and (not (setq result (funcall done)))
@@ -303,8 +318,10 @@ connection ends first, with one whose `:error' says so."
             (list (format "%s: not connected to the Rex server at %s" method
                           (portal-rex--named connection))
                   (list :code "portal_disconnected"))))
-  (let ((number (portal--rex-request (portal-rex-connection-id connection) method
-                                     (if payload (json-serialize payload) "{}"))))
+  (let* ((json (if payload (json-serialize payload) "{}"))
+         ;; Sending and noting who waits are one step.
+         (inhibit-quit t)
+         (number (portal--rex-request (portal-rex-connection-id connection) method json)))
     (push (cons number function) (portal-rex-connection-calls connection))
     number))
 
@@ -320,8 +337,8 @@ is what the method returned, parsed as `json-parse-string' does with
 objects as plists, and ERROR is nil.  When the call failed, RESULT is nil
 and ERROR is the server's error, a plist with `:code', such as
 \"method_not_found\", `:message' and `:status'; a connection that ends
-first gives the code \"portal_disconnected\".  CALLBACK runs from a
-process filter, so it must never prompt."
+first gives the code \"portal_disconnected\".  CALLBACK runs as the
+functions of `portal-rex-event-functions' do, so it must never prompt."
   (portal-rex--request (portal-rex--connection connection) method payload
                        (lambda (response)
                          (funcall callback (plist-get response :payload)

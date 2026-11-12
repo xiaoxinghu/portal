@@ -358,8 +358,9 @@ Connections that BODY leaves are closed, and none may remain."
 
 (ert-deftest portal-rex-quit-in-a-hook-function-strands-nothing ()
   ;; Events and the connection's end are in Emacs when a hook function
-  ;; quits.  The quit goes on up; the rest is handled as soon as Emacs is
-  ;; idle, though nothing will ask for this connection again.
+  ;; leaves non-locally, here by signalling quit itself, as leaving the
+  ;; debugger would.  That goes on up; the rest is handled as soon as Emacs
+  ;; is idle, though nothing will ask for this connection again.
   (portal-rex-tests--with (server)
     (let* ((connection (portal-rex-tests--connect server))
            seen answers
@@ -396,6 +397,35 @@ Connections that BODY leaves are closed, and none may remain."
                      '((first "portal_disconnected") (second "portal_disconnected"))))
       (should (eq (portal-rex-connection-state connection) 'closed))
       (should-not (portal-rex-connection-resume connection)))))
+
+(ert-deftest portal-rex-quit-while-a-call-waits-loses-no-message ()
+  ;; The user quits a waiting call just as messages come out of the module.
+  ;; The call quits, and what had arrived is handled all the same.
+  (portal-rex-tests--with (server)
+    (let* ((connection (portal-rex-tests--connect server))
+           seen
+           (portal-rex-event-functions
+            (list (lambda (_from event)
+                    (push (plist-get (plist-get event :payload) :type) seen))))
+           (parse (symbol-function 'portal-rex--parse))
+           (quits 0))
+      (portal-fake-rex-command server :hold "session.list")
+      (portal-fake-rex-command server :after "session.list"
+                               :then [(:event (:type "one")) (:event (:type "two"))
+                                      (:release "session.list")])
+      (cl-letf (((symbol-function 'portal-rex--parse)
+                 (lambda (text)
+                   ;; As C-g does, at the worst moment: the messages are out
+                   ;; of the module and not yet in the connection's queue.
+                   (when (= (cl-incf quits) 1) (setq quit-flag t))
+                   (funcall parse text))))
+        (should (eq (condition-case nil (progn (portal-rex-call connection "session.list") nil)
+                      (quit 'quit))
+                    'quit)))
+      (should-not (portal-rex-connection-calls connection))
+      (portal-rex-tests--until connection (lambda () (= (length seen) 2)))
+      (should (equal (reverse seen) '("one" "two")))
+      (should (portal-rex-call connection "session.list")))))
 
 (ert-deftest portal-rex-lost-connection-is-reported-once ()
   (portal-rex-tests--with (server)

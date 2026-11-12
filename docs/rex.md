@@ -67,7 +67,8 @@ lists every method with what it takes and returns. JSON crosses as
 array is a vector, and null and false are `:null` and `:false`.
 
 The call waits for the answer, at most `portal-rex-timeout` seconds or the
-timeout given as its fourth argument, and Emacs does nothing else meanwhile.
+timeout given as its fourth argument, and Emacs does nothing else meanwhile;
+`C-g` ends the wait.
 A call that fails signals `portal-rex-error`, whose data is a sentence and the
 error as a plist:
 
@@ -124,9 +125,10 @@ payload has the `:session_id` and the `:event`. Events of one connection
 arrive in order, with `:seq` rising by one, and every function on the hook
 sees one event before any sees the next. The functions run from a process
 filter, or inside a `portal-rex-call` that was waiting when the event came,
-so they must not prompt. A function may call `portal-rex-call` itself: it
-gets its answer, and the events that arrive while it waits run after it
-returns.
+in both cases with quitting inhibited, so they must not prompt. A function
+may call `portal-rex-call` itself: it gets its answer, and the events that
+arrive while it waits run after it returns; `C-g` cannot cut that wait
+short, so give it a short timeout.
 
 `(portal-rex-connection-sessions CONNECTION)` holds the sessions the server
 had when the connection started receiving events, as `session.list` returns
