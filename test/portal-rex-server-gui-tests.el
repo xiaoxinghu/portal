@@ -38,7 +38,8 @@ Its one block runs cat, without a login shell."
             (portal-rex-parity-check-block
              connection session
              (with-current-buffer (car (portal-rex-buffers connection session))
-               portal-rex-block-id)))
+               portal-rex-block-id))
+            (portal-rex-parity-check-sessions connection (portal-real-rex-directory server)))
         (portal-rex-disconnect connection)))))
 
 (ert-deftest portal-rex-server-gui-sees-a-session-made-elsewhere ()
@@ -167,6 +168,53 @@ Its one block runs cat, without a login shell."
               (portal-rex-disconnect connection)
               (should-not (portal-rex-buffers))
               (should (equal (funcall listed second) '(("shell" "placed"))))))
+        (mapc #'portal-rex-disconnect (portal-rex-connections))))))
+
+(ert-deftest portal-rex-server-gui-makes-sessions-and-terminals ()
+  :tags '(:gui)
+  ;; What only a real server shows: a session and terminals made from
+  ;; Emacs, as rex, another client, then lists them, each terminal a
+  ;; window of its own, its shell in the directory it was started in.
+  (portal-real-rex-with (server)
+    (let* ((connection (portal-rex-connect (portal-real-rex-socket server)))
+           (directory (file-name-as-directory
+                       (make-temp-file (expand-file-name "cwd-check-" (portal-real-rex-directory server))
+                                       t)))
+           (blocks (lambda (session)
+                     (mapcar (lambda (block)
+                               (list (plist-get block :label) (plist-get block :placement)
+                                     (stringp (plist-get block :window_id))))
+                             (plist-get (portal-real-rex-cli server "block" "ls" "-s" session "--json")
+                                        :blocks)))))
+      (unwind-protect
+          (save-window-excursion
+            (let* ((session (portal-rex-session-create connection "made"))
+                   (first (portal-rex-new-terminal connection session directory))
+                   (second (portal-rex-new-terminal connection session directory)))
+              (should (equal (plist-get (portal-real-rex-cli server "ls" "--json") :sessions)
+                             `[(:session_id ,session :label "made")]))
+              (with-current-buffer first (portal-terminal-rename "api"))
+              (should (equal (funcall blocks session) '(("api" "placed" t) ("shell" "placed" t))))
+              (should (equal (sort (mapcar #'buffer-name (list first second)) #'string<)
+                             '("*rex: made/api*" "*rex: made/shell*")))
+              ;; Two windows: a tab each in Rex's app.
+              (let ((listed (plist-get (portal-real-rex-cli server "block" "ls" "-s" session "--json")
+                                       :blocks)))
+                (should-not (equal (plist-get (aref listed 0) :window_id)
+                                   (plist-get (aref listed 1) :window_id))))
+              ;; The shell started in the directory.
+              (let ((block (buffer-local-value 'portal-rex-block-id second)))
+                (portal-rex-server-gui-tests--api server "com.superlogical.terminal.write"
+                                                  :session_id session :block_id block
+                                                  :args '(:data "pwd\r"))
+                (portal-rex-server-gui-tests--wait
+                 (lambda () (string-search (file-name-nondirectory (directory-file-name directory))
+                                           (portal-rex-server-gui-tests--screen server session block)))))
+              ;; Destroyed from Emacs: gone from the server, and its buffers.
+              (should (portal-rex-session-destroy connection session))
+              (should-not (buffer-live-p first))
+              (should-not (buffer-live-p second))
+              (should (equal (plist-get (portal-real-rex-cli server "ls" "--json") :sessions) []))))
         (mapc #'portal-rex-disconnect (portal-rex-connections))))))
 
 (declare-function portal--terminal-text "portal-terminal" (target))

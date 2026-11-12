@@ -439,13 +439,26 @@ that ran this command, such as s-1."
   (let ((buffer (nth (- (event-basic-type last-command-event) ?0) (portal-terminal-buffers))))
     (unless buffer (user-error "No terminal at that index"))
     (portal-terminal--switch buffer)))
+(defvar-local portal-terminal--renamer nil
+  "A function that renames this terminal in place of renaming its buffer, or nil.
+Called with no argument, it returns the name to start from; called with
+a name, it gives the terminal that name.  A Rex block's buffer renames
+its block this way, and its buffer's name follows the block's.")
+(put 'portal-terminal--renamer 'permanent-local t)
+
 (defun portal-terminal-rename (name)
   "Rename the current terminal buffer to NAME.
-Portal never renames it again: titles and directory changes leave it."
-  (interactive (list (read-string "Terminal name: " (buffer-name))))
+Portal never renames it again: titles and directory changes leave it.
+In the buffer of a Rex block, NAME is the block's new label instead, on
+its server, and the buffer's name follows it."
+  (interactive (list (read-string "Terminal name: " (if portal-terminal--renamer
+                                                        (funcall portal-terminal--renamer)
+                                                      (buffer-name)))))
   (when portal-terminal--quick-root
     (user-error "Quick terminals are named by their project"))
-  (rename-buffer name t))
+  (if portal-terminal--renamer
+      (funcall portal-terminal--renamer name)
+    (rename-buffer name t)))
 (defun portal-terminal-set-project (directory)
   "Assign this terminal to the project containing DIRECTORY.
 The assignment lasts until the next one: the shell changing directory
