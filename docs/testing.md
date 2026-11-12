@@ -379,6 +379,10 @@ directory, answers a hello and the methods a connection calls, and does what
 a test tells it on its standard input: its sessions and their blocks, canned
 results and errors per method, events on demand, answers held back or never
 sent, dropped connections, refused upgrades, fragments, pings and garbage.
+It also shows a block as a real server does: it attaches, claims and sizes
+it, gives tickets and serves a block's data stream, with a snapshot, the
+program's output a test sends, split as the test asks, and Rex's own
+messages, and paints from a screen the test sets, in parts when asked.
 It changes nothing by itself: a test that sends `block_created` also says
 what `session.list_blocks` returns from then on. It reports each command
 done, and `portal-fake-rex-command` returns only then, so the next thing a
@@ -391,14 +395,19 @@ run it as a subprocess. Extend it there as the client grows.
 Three suites use it or the fake platform:
 
 - `rex-core` runs the core's connection rules against the fake platform's
-  sockets, with no server at all.
+  sockets, with no server at all: its requests and answers, and every step
+  of showing a block in a fed terminal, the stream's framing split
+  anywhere, typing in order and the reports it drops.
 - `rex` runs `portal-rex.el` on the built module against the fake server, in
   batch Emacs: message sockets need no window. Batch Emacs runs no main run
   loop, so the module's `rex ID` record never arrives there; these tests take
   messages by waiting, as `portal-rex-call` does.
 - `test/portal-rex-gui-tests.el`, part of `sh test/views-gui.sh`, proves the
   record: events, answers and a lost connection reaching an idle Emacs, and
-  blocks' buffers following a server meanwhile.
+  blocks' buffers following a server meanwhile. It also shows a block in a
+  real Ghostty view: the first paint, the stream, a pane's new size, a
+  hidden buffer kept current, keys typed in order with one write out at a
+  time, and queries in the block's output that the view leaves unanswered.
 
 The fake follows what a real server was seen to send, from a preview
 protocol that moves every few days, so tests against it prove only that
@@ -432,7 +441,8 @@ one, and after [moving the Rex pin](test-vm.md#move-the-rex-pin). With
 
 [portal-rex-parity.el](../test/portal-rex-parity.el) holds checks that run
 against both servers: the handshake, `server.version`, `session.list`,
-`session.list_blocks` with the buffers made of it, and an unknown method. The `rex` suite runs them against the fake, the tier against
+`session.list_blocks` with the buffers made of it, an unknown method, and
+the calls the core makes to show a block, with the shapes of their answers. The `rex` suite runs them against the fake, the tier against
 a real server. When only the tier's run fails, the real server has moved:
 bring the fake, and Portal, into line with it. Add a check there when the fake
 can answer it as cheaply as the real server.
@@ -499,7 +509,7 @@ run them in the VM, pass the same `sh -c` command to `bash test/vm.sh`:
 ```sh
 sh -c '
 set -eu
-for core in channel views input terminals web shortcuts status rex; do
+for core in channel views input terminals web shortcuts status rex json; do
   xcrun clang -std=c11 -Wall -Wextra -Werror -I native/Core/include \
     -c native/Core/$core.c -o build/$core.o
 done
@@ -510,7 +520,7 @@ xcrun swiftc -swift-version 6 -warnings-as-errors \
   native/MessageSocket.swift native/Views.swift native/WebView.swift \
   test/native-checks.swift test/native-terminal-stub.swift test/native-views.swift \
   test/native-focus.swift build/channel.o build/views.o build/input.o build/terminals.o \
-  build/web.o build/shortcuts.o build/status.o build/rex.o \
+  build/web.o build/shortcuts.o build/status.o build/rex.o build/json.o \
   -framework AppKit -framework WebKit -framework Carbon -o build/check-focus
 build/check-focus
 '
