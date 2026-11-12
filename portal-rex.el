@@ -480,26 +480,30 @@ BUFFER defaults to the current buffer; one that is not a block's has none."
       (portal-rex--session-label connection
                                  (buffer-local-value 'portal-rex-session-id buffer)))))
 
-(defun portal-rex--set-sessions (connection session-id &optional label before)
-  "Put the session SESSION-ID in CONNECTION's sessions, or take it out.
-With LABEL, the session is called that from now on, and is added last if
-it is new.  With neither LABEL nor BEFORE, it is removed.  With BEFORE,
-which is the ID of another session or t for the end, it moves to before
-that one."
-  (let* ((sessions (append (portal-rex-connection-sessions connection) nil))
-         (session (portal-rex--session connection session-id)))
+(defun portal-rex--label-session (connection session-id label)
+  "Call the session SESSION-ID LABEL in CONNECTION's sessions.
+A session that is not among them joins them, last."
+  (let ((sessions (append (portal-rex-connection-sessions connection) nil))
+        (old (portal-rex--session connection session-id))
+        (new (list :session_id session-id :label label)))
     (setf (portal-rex-connection-sessions connection)
-          (vconcat
-           (cond
-            (label (let ((new (list :session_id session-id :label label)))
-                     (if session (cl-substitute new session sessions)
-                       (append sessions (list new)))))
-            ((not (and before session)) (remq session sessions))
-            (t (let* ((others (remq session sessions))
-                      (place (cl-position (portal-rex--session connection before) others)))
-                 (if place
-                     (append (seq-take others place) (list session) (seq-drop others place))
-                   (append others (list session))))))))))
+          (vconcat (if old (cl-substitute new old sessions) (append sessions (list new)))))))
+
+(defun portal-rex--drop-session (connection session-id)
+  "Take the session SESSION-ID out of CONNECTION's sessions."
+  (setf (portal-rex-connection-sessions connection)
+        (vconcat (remq (portal-rex--session connection session-id)
+                       (append (portal-rex-connection-sessions connection) nil)))))
+
+(defun portal-rex--move-session (connection session-id before)
+  "Move the session SESSION-ID to before BEFORE in CONNECTION's sessions.
+BEFORE is another session's ID; without it, the session goes last."
+  (when-let* ((session (portal-rex--session connection session-id)))
+    (let* ((others (remq session (append (portal-rex-connection-sessions connection) nil)))
+           (place (or (cl-position (portal-rex--session connection before) others)
+                      (length others))))
+      (setf (portal-rex-connection-sessions connection)
+            (vconcat (seq-take others place) (list session) (seq-drop others place))))))
 
 (defun portal-rex--buffer-name (connection session-id label)
   "Return the name of the buffer of a block called LABEL.
@@ -648,7 +652,7 @@ An event of a session that the connection does not know is left alone:
       ("session_created"
        (when-let* ((session (plist-get fields :session))
                    (session-id (plist-get session :session_id)))
-         (portal-rex--set-sessions connection session-id (or (plist-get session :label) ""))
+         (portal-rex--label-session connection session-id (or (plist-get session :label) ""))
          (portal-rex--list-blocks connection session-id)))
       ("session_destroyed"
        (let ((session-id (plist-get fields :session_id)))
@@ -658,10 +662,10 @@ An event of a session that the connection does not know is left alone:
          (setf (portal-rex-connection-lists connection)
                (cl-delete session-id (portal-rex-connection-lists connection)
                           :key #'car :test #'equal))
-         (portal-rex--set-sessions connection session-id)))
+         (portal-rex--drop-session connection session-id)))
       ("session_moved"
-       (portal-rex--set-sessions connection (plist-get fields :session_id) nil
-                                 (or (plist-get fields :before_session_id) t)))
+       (portal-rex--move-session connection (plist-get fields :session_id)
+                                 (plist-get fields :before_session_id)))
       ("session_event"
        (let* ((session-id (plist-get fields :session_id))
               (inner (plist-get fields :event))
@@ -670,7 +674,7 @@ An event of a session that the connection does not know is left alone:
            (pcase (plist-get inner :type)
              ("session_label_changed"
               (when-let* ((label (plist-get changed :label)))
-                (portal-rex--set-sessions connection session-id label)
+                (portal-rex--label-session connection session-id label)
                 (mapc #'portal-rex--rename-buffer
                       (portal-rex-buffers connection session-id))))
              ((or "block_created" "session_view_changed")
