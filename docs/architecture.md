@@ -358,6 +358,25 @@ they were at the answer's `seq`, so events that arrived before the answer
 are held, those up to that `seq` are dropped as already in the list, and the
 later ones follow it.
 
+**A block is a buffer**, and Lisp alone makes it one: the buffers need no
+native view, so nothing below Lisp knows of them. A connection holds its
+server's sessions and, by block ID, each block's buffer; a buffer holds its
+connection, its block's ID and its session's. Portal follows an event before
+the hook runs for it. The events say that a block came or went, not what it
+is called: `block_created` carries an ID, a new label arrives only as
+`session_view_changed`, and a detached block's sends nothing. So those two
+events, a new session and connecting each ask the session for all its
+blocks, `session.list_blocks`, and the buffers are made to match the answer:
+made, renamed, or killed when their block is not in it. One such question is
+out for a session at a time; a change that arrives meanwhile asks once more
+when the answer comes, since that answer may be the older. An answer can
+also list a block that closed after the server wrote it, so the blocks
+closed while a question is out are remembered and get no buffer, which is
+safe because an ID is never reused. Killing a buffer for the server never
+asks and never calls the server. A buffer killed by hand stays, dead, in
+its connection's table until its block closes, so that the block gets no
+second buffer.
+
 A connection takes its messages two ways, which share one path from
 `portal--rex-receive` on. With Emacs idle, the reader's thread reports from
 the main run loop, the core sends the record, and the pipe's filter

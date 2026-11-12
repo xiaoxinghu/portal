@@ -5,13 +5,15 @@
 [Rex](https://www.superlogical.com/rex/docs) is a terminal multiplexer: its
 server runs your terminals' programs, so they outlive the applications that
 show them. Portal is becoming a client of that server. Today it can connect to
-one, call its methods and receive its events from Lisp. It shows no Rex
-terminal yet; see [what is not built](#what-is-not-built).
+one, give each of its blocks a buffer that follows the server, call its
+methods and receive its events from Lisp. No buffer shows its block's screen
+yet; see [what is not built](#what-is-not-built).
 
 Rex is optional. Portal's own [terminals](terminals.md) run their shells
 themselves and need no Rex installed.
 
 - [Connect and disconnect](#connect-and-disconnect)
+- [A buffer for every block](#a-buffer-for-every-block)
 - [Call the server](#call-the-server)
 - [Receive events](#receive-events)
 - [When a connection is lost](#when-a-connection-is-lost)
@@ -41,12 +43,96 @@ own connection. Connecting again to a server Emacs is connected to returns
 the connection it has. `(portal-rex-connections)` lists them.
 
 `M-x portal-rex-disconnect` ends a connection, asking which when there are
-several. Disconnecting, like quitting Emacs, ends nothing on the server: its
-sessions and blocks carry on.
+several. Disconnecting, like quitting Emacs, kills the buffers of that
+server's blocks and ends nothing on the server: its sessions and blocks
+carry on.
 
 Portal speaks one revision of Rex's API, 12, and tells the server so. A newer
 server translates to and from it, so updating Rex needs no change in Portal.
 `(portal-rex-connection-welcome CONNECTION)` holds the server's welcome.
+
+## A buffer for every block
+
+While Emacs is connected to a server, each block on it has exactly one
+buffer, and each such buffer has one block. Connecting makes them, for the
+blocks of every session, detached blocks and those made by other clients
+included. Portal keeps no list of its own: `C-x b` and Ibuffer are the list.
+
+A buffer is named `*rex: SESSION/BLOCK*` from the two labels, such as
+`*rex: work/api*`. Two blocks with the same labels are told apart as Emacs
+tells any two buffers apart, `*rex: work/shell*` and `*rex: work/shell*<2>`.
+
+The buffers follow the server, with Emacs idle:
+
+| On the server | In Emacs |
+| --- | --- |
+| A block is made, in Rex's app, by `rex run` or by any other client | It gets a buffer. |
+| A block closes, or its program ends | Its buffer is killed. |
+| A session is destroyed | Its blocks' buffers are killed. |
+| A block or a session is relabelled | The buffers it names are renamed. |
+| Emacs disconnects, or the connection is lost | That server's buffers are killed. |
+
+These kills never ask, and none of them ends anything on the server.
+
+No buffer shows its block's screen yet. A buffer that is displayed says
+which block it is. It is in `portal-terminal-mode`, the mode of Portal's
+[terminals](terminals.md), without a terminal view: `portal-terminal-buffers`
+and the terminal chooser leave it out, and RET says there is no view.
+
+Killing one of these buffers yourself kills only the buffer, and Emacs says
+so: the block still runs, and gets no other buffer until Emacs next connects
+to its server. Ending a block from Emacs is
+[not built](#what-is-not-built).
+
+Two things to know about names:
+
+- The server does not say when a detached block is relabelled. Its buffer
+  takes the new name at the next change to its session that the server
+  does report, such as a block made or a window changed.
+- A name you give one of these buffers lasts until its block or session is
+  next relabelled.
+
+### What a buffer knows
+
+Each buffer holds three buffer-local variables, which no change of major
+mode clears:
+
+| Variable | Holds |
+| --- | --- |
+| `portal-rex-block-connection` | The connection to the block's server. It is nil in every other buffer. |
+| `portal-rex-block-id` | The block's ID, such as `"block:01a1…"`, which never changes and is never reused. |
+| `portal-rex-session-id` | The ID of the block's session. A block stays in one session for its whole life. |
+
+A session is an attribute of a buffer, as a directory is: it has no buffer of
+its own, and every grouping is yours to build from these.
+`(portal-rex-session-label BUFFER)` returns what the buffer's session is
+called now, or nil for a buffer that is no block's.
+`(portal-rex-buffers CONNECTION SESSION-ID)` returns the buffers of a
+session's blocks, of a whole server's without the session, and of every
+connected server's without either.
+`(portal-rex-block-buffer CONNECTION BLOCK-ID)` returns one block's buffer.
+
+`(portal-rex-connection-sessions CONNECTION)` holds the server's sessions as
+`session.list` returns them, a vector of plists with `:session_id` and
+`:label`, in the server's order. The server's events keep it current. Two
+sessions may have the same label.
+
+### Ibuffer
+
+In Ibuffer, `M-x ibuffer-filter-by-portal-rex-session` limits the list to
+the blocks of the sessions with one label, completing over the connected
+servers' sessions. The filter is `portal-rex-session`, for a saved filter
+or a filter group:
+
+```elisp
+(setq ibuffer-saved-filter-groups
+      '(("default"
+         ("work" (portal-rex-session . "work"))
+         ("play" (portal-rex-session . "play")))))
+```
+
+It goes by what a session is called now, so a renamed session's buffers
+move with its label. Portal groups nothing else.
 
 ## Call the server
 
@@ -130,24 +216,25 @@ may call `portal-rex-call` itself: it gets its answer, and the events that
 arrive while it waits run after it returns; `C-g` cannot cut that wait
 short, so give it a short timeout.
 
-`(portal-rex-connection-sessions CONNECTION)` holds the sessions the server
-had when the connection started receiving events, as `session.list` returns
-them. The first event the hook sees is the first change after that list.
-Nothing keeps the list current yet.
+Portal has followed an event before the hook runs for it: the connection's
+sessions have the change, and a closed block's buffer is gone. A new block's
+buffer comes a moment later, as its event carries only the block's ID and
+Portal asks the server for the label. The first event the hook sees is the
+first change after the sessions the connection started with.
 
 ## When a connection is lost
 
 When a server goes away or closes the connection, Emacs says so once in the
 echo area, such as "Lost the Rex server at ~/Library/Application
-Support/rex/server.sock: The server closed the connection". Calls still
-waiting fail with `"portal_disconnected"`, and the connection takes no more.
-Nothing reconnects by itself: run `portal-rex-connect` again.
+Support/rex/server.sock: The server closed the connection". Its blocks'
+buffers are killed, calls still waiting fail with `"portal_disconnected"`,
+and the connection takes no more. Nothing reconnects by itself: run
+`portal-rex-connect` again, which makes the buffers again.
 
 ## What is not built
 
 Portal's Rex client is being built in steps. Not built yet:
 
-- A buffer for each block, following blocks and sessions as they come and go.
 - A block's screen in its buffer, and typing into it.
 - Commands for sessions and for new terminals.
 - Titles, directories and programs of Rex terminals.

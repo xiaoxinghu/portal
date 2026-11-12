@@ -2,8 +2,9 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;; Emacs as a client of Rex, the terminal multiplexer: a connection to a Rex
-;; server, calls of its methods, and its events (docs/rex.md).  Nothing here
-;; shows a terminal yet, and Portal's own terminals need no Rex.
+;; server, calls of its methods, its events, and a buffer for each of its
+;; blocks, following the server (docs/rex.md).  No buffer shows its block's
+;; screen yet, and Portal's own terminals need no Rex.
 ;;
 ;; The native module carries the messages: a WebSocket over the server's Unix
 ;; socket, read off Emacs's thread (docs/architecture.md).  It says hello and
@@ -19,13 +20,19 @@
 ;; https://www.superlogical.com/rex/docs/reference/api.
 
 (require 'cl-lib)
+(require 'seq)
 (require 'portal-view)
+(require 'portal-terminal)
+(eval-when-compile (require 'ibuf-ext))
 
 (declare-function portal--rex-open "portal-rex" (path name version))
 (declare-function portal--rex-request "portal-rex" (id method payload))
 (declare-function portal--rex-receive "portal-rex" (id))
 (declare-function portal--rex-wait "portal-rex" (id milliseconds))
 (declare-function portal--rex-close "portal-rex" (id))
+(declare-function ibuffer-current-buffer "ibuffer" (&optional must-be-live))
+(declare-function ibuffer-update "ibuffer" (arg &optional silent))
+(declare-function ibuffer-push-filter "ibuf-ext" (filter-specification))
 
 (defgroup portal-rex nil
   "Rex servers, whose terminals outlive Emacs."
@@ -61,7 +68,12 @@ The functions run from a process filter, or inside a `portal-rex-call'
 that was waiting when the event arrived, in both cases with quitting
 inhibited, so they must never prompt.  One that calls `portal-rex-call'
 itself gets its answer; the events that arrive while it waits run once
-it has returned.")
+it has returned.
+
+Portal has followed the event by then: the connection's sessions have
+the change, and the buffer of a closed block is gone.  The buffer of a
+new block comes a moment later, once the server has said what the block
+is called.")
 
 (define-error 'portal-rex-error "Rex error")
 
@@ -74,9 +86,15 @@ it has returned.")
          :documentation "`connecting', `attaching', `ready' or `closed'.")
   (welcome nil :documentation "The server's welcome, with the `:api_revision' it speaks.")
   (sessions nil
-            :documentation "The server's sessions when the connection began to receive
-events, a vector of plists with `:session_id' and `:label'.  Nothing
-keeps it current.")
+            :documentation "The server's sessions, a vector of plists with `:session_id' and
+`:label', in the server's order.  The server's events keep it current.")
+  (blocks (make-hash-table :test #'equal)
+          :documentation "Each block's buffer, by block ID.  A buffer killed by hand stays
+here, dead, until its block closes: its block gets no second buffer.")
+  (lists nil
+         :documentation "The sessions whose blocks the server is being asked for, as
+\(SESSION-ID AGAIN . CLOSED): whether to ask again once the answer
+comes, and the IDs of the blocks closed since asking.")
   (calls nil :documentation "Requests without a response, newest first, as (NUMBER . FUNCTION).")
   (inbox nil :documentation "Messages received and not yet handled, oldest first.")
   (held nil :documentation "Events that arrived before the sessions did, newest first.")
@@ -228,7 +246,12 @@ connection again: its messages, the end among them, are in Emacs already."
          (push message (portal-rex-connection-held connection))
        (setf (portal-rex-connection-handling connection) t)
        (unwind-protect
-           (portal-rex--run #'run-hook-with-args 'portal-rex-event-functions connection message)
+           (progn
+             ;; Portal follows the event first, so the hook's functions find
+             ;; the sessions and the buffers as the event left them.
+             (portal-rex--run #'portal-rex--follow connection message)
+             (portal-rex--run #'run-hook-with-args 'portal-rex-event-functions
+                              connection message))
          (setf (portal-rex-connection-handling connection) nil))))
     ('ended (portal-rex--ended connection (plist-get message :reason)))
     ;; Anything else is from a newer server.
@@ -266,7 +289,8 @@ One whose function exits non-locally leaves the rest to be failed soon."
 (defun portal-rex--ended (connection reason &optional quiet)
   "Note that CONNECTION has ended because of REASON, the first time only.
 A connection that was ready is reported lost in the echo area, unless
-QUIET.  Every request still waiting fails, oldest first."
+QUIET.  Its blocks' buffers are killed, which ends nothing on the
+server.  Every request still waiting fails, oldest first."
   (unless (eq (portal-rex-connection-state connection) 'closed)
     (let ((ready (portal-rex--ready-p connection))
           (inhibit-quit t))
@@ -280,6 +304,7 @@ QUIET.  Every request still waiting fails, oldest first."
         (remove-hook 'kill-emacs-hook #'portal-rex--disconnect-all))
       (when (and ready (not quiet))
         (message "Lost the Rex server at %s: %s" (portal-rex--named connection) reason))
+      (portal-rex--run #'portal-rex--forget-blocks connection)
       (portal-rex--fail-calls connection reason))))
 
 (defun portal-rex--record (id &rest _)
@@ -381,6 +406,302 @@ one whose connection ended, with \"portal_disconnected\"."
               (list (format "%s: %s" method (plist-get failure :message)) failure)))
     (plist-get response :payload)))
 
+;;; Sessions and blocks
+
+;; While Emacs is connected to a server, each block on it has exactly one
+;; buffer, and `switch-to-buffer' and Ibuffer are the list of them.  A
+;; buffer knows its block by three variables; its session is one of them,
+;; an attribute as a directory is, and its name carries both labels.
+;;
+;; The server's events say that a block has come or gone, never what one
+;; is called: `block_created' carries only an ID, a label changed in a
+;; window arrives as `session_view_changed', which follows almost any
+;; change, and a detached block's new label sends nothing.  So each of
+;; those events asks the session for all its blocks, `session.list_blocks',
+;; and the buffers are made to match the answer.
+
+(defvar-local portal-rex-block-connection nil
+  "The connection to the Rex server of this buffer's block, or nil.
+It is non-nil exactly in the buffer of a block.")
+
+(defvar-local portal-rex-block-id nil
+  "The ID of this buffer's block on its Rex server, or nil.
+A block's ID never changes and is never reused.")
+
+(defvar-local portal-rex-session-id nil
+  "The ID of the session of this buffer's block, or nil.
+A block stays in one session for its whole life.  `portal-rex-session-label'
+returns what the session is called now.")
+
+(defvar-local portal-rex--block-label nil
+  "The label of this buffer's block, as its server last gave it.")
+
+;; A buffer is its block's whatever mode it is put in.
+(dolist (variable '(portal-rex-block-connection portal-rex-block-id portal-rex-session-id
+                    portal-rex--block-label))
+  (put variable 'permanent-local t))
+
+(defvar portal-rex--killing nil
+  "Non-nil while Portal kills a block's buffer because its block or server went.")
+
+(defun portal-rex-buffers (&optional connection session-id)
+  "Return the buffers of the blocks on CONNECTION's Rex server.
+Without CONNECTION, those of every connected server.  With SESSION-ID,
+only the blocks of that session."
+  (cl-loop for connection in (if connection (list connection) portal-rex--connections)
+           nconc (cl-loop for buffer being the hash-values
+                          of (portal-rex-connection-blocks connection)
+                          when (and (buffer-live-p buffer)
+                                    (or (null session-id)
+                                        (equal (buffer-local-value 'portal-rex-session-id buffer)
+                                               session-id)))
+                          collect buffer)))
+
+(defun portal-rex-block-buffer (connection block-id)
+  "Return the buffer of the block BLOCK-ID on CONNECTION's server, or nil."
+  (let ((buffer (gethash block-id (portal-rex-connection-blocks connection))))
+    (and (buffer-live-p buffer) buffer)))
+
+(defun portal-rex--session (connection session-id)
+  "Return the session SESSION-ID as CONNECTION's sessions have it, or nil."
+  (seq-find (lambda (session) (equal (plist-get session :session_id) session-id))
+            (portal-rex-connection-sessions connection)))
+
+(defun portal-rex--session-label (connection session-id)
+  "Return what CONNECTION's server calls the session SESSION-ID, or nil."
+  (plist-get (portal-rex--session connection session-id) :label))
+
+(defun portal-rex-session-label (&optional buffer)
+  "Return the label of the Rex session that BUFFER's block is in, or nil.
+BUFFER defaults to the current buffer; one that is not a block's has none."
+  (let ((buffer (or buffer (current-buffer))))
+    (when-let* (((buffer-live-p buffer))
+                (connection (buffer-local-value 'portal-rex-block-connection buffer)))
+      (portal-rex--session-label connection
+                                 (buffer-local-value 'portal-rex-session-id buffer)))))
+
+(defun portal-rex--label-session (connection session-id label)
+  "Call the session SESSION-ID LABEL in CONNECTION's sessions.
+A session that is not among them joins them, last."
+  (let ((sessions (append (portal-rex-connection-sessions connection) nil))
+        (old (portal-rex--session connection session-id))
+        (new (list :session_id session-id :label label)))
+    (setf (portal-rex-connection-sessions connection)
+          (vconcat (if old (cl-substitute new old sessions) (append sessions (list new)))))))
+
+(defun portal-rex--drop-session (connection session-id)
+  "Take the session SESSION-ID out of CONNECTION's sessions."
+  (setf (portal-rex-connection-sessions connection)
+        (vconcat (remq (portal-rex--session connection session-id)
+                       (append (portal-rex-connection-sessions connection) nil)))))
+
+(defun portal-rex--move-session (connection session-id before)
+  "Move the session SESSION-ID to before BEFORE in CONNECTION's sessions.
+BEFORE is another session's ID; without it, the session goes last."
+  (when-let* ((session (portal-rex--session connection session-id)))
+    (let* ((others (remq session (append (portal-rex-connection-sessions connection) nil)))
+           (place (or (cl-position (portal-rex--session connection before) others)
+                      (length others))))
+      (setf (portal-rex-connection-sessions connection)
+            (vconcat (seq-take others place) (list session) (seq-drop others place))))))
+
+(defun portal-rex--buffer-name (connection session-id label)
+  "Return the name of the buffer of a block called LABEL.
+The block is in the session SESSION-ID on CONNECTION's server.  Every
+connection is to a server on this Mac, so the name carries no host."
+  (format "*rex: %s/%s*" (or (portal-rex--session-label connection session-id) session-id)
+          label))
+
+(defun portal-rex--describe-block ()
+  "Make the current buffer's text say which block it is the buffer of."
+  (with-silent-modifications
+    (erase-buffer)
+    (insert (format "Rex block %s, in session %s.\n%s on the server at %s\n\n%s\n"
+                    portal-rex--block-label
+                    (or (portal-rex-session-label) portal-rex-session-id)
+                    portal-rex-block-id
+                    (portal-rex--named portal-rex-block-connection)
+                    "Showing a block's screen here is not built yet."))))
+
+(defun portal-rex--buffer-killed ()
+  "Say what killing this block's buffer by hand leaves on its server.
+On `kill-buffer-hook' in a block's buffer.  The dead buffer stays in its
+connection's blocks, so nothing makes the block another."
+  (when (and portal-rex-block-connection (not portal-rex--killing)
+             (eq (portal-rex-block-buffer portal-rex-block-connection portal-rex-block-id)
+                 (current-buffer)))
+    (message "Killed only the buffer: block %s still runs on its Rex server, and gets a buffer again when Emacs next connects"
+             portal-rex--block-label)))
+(put 'portal-rex--buffer-killed 'permanent-local-hook t)
+
+(defun portal-rex--make-buffer (connection session-id block-id label)
+  "Make and return the buffer of the block BLOCK-ID, called LABEL.
+The block is in the session SESSION-ID on CONNECTION's server.  The
+buffer is in `portal-terminal-mode', as the terminal view that will show
+the block needs, and has no view."
+  (let ((buffer (generate-new-buffer (portal-rex--buffer-name connection session-id label)))
+        ready)
+    (unwind-protect
+        (with-current-buffer buffer
+          (portal-terminal-mode)
+          (setq portal-rex-block-connection connection
+                portal-rex-block-id block-id
+                portal-rex-session-id session-id
+                portal-rex--block-label label
+                ;; Not the directory of whichever buffer was current when
+                ;; the server spoke.
+                default-directory (expand-file-name "~/"))
+          (add-hook 'kill-buffer-hook #'portal-rex--buffer-killed nil t)
+          (portal-rex--describe-block)
+          (puthash block-id buffer (portal-rex-connection-blocks connection))
+          (setq ready t))
+      (unless ready
+        (let ((portal-rex--killing t)) (kill-buffer buffer))))
+    buffer))
+
+(defun portal-rex--rename-buffer (buffer &optional label)
+  "Name BUFFER after its session's label and its block's, which is now LABEL."
+  (with-current-buffer buffer
+    (when label (setq portal-rex--block-label label))
+    (rename-buffer (portal-rex--buffer-name portal-rex-block-connection portal-rex-session-id
+                                            portal-rex--block-label)
+                   t)
+    (portal-rex--describe-block)))
+
+(defun portal-rex--kill-buffer (connection block-id)
+  "Forget CONNECTION's block BLOCK-ID, and kill its buffer if it has one.
+The block has gone, or the connection has: nothing asks, whatever is on
+`kill-buffer-query-functions', and nothing is said to the server."
+  (let ((buffer (gethash block-id (portal-rex-connection-blocks connection))))
+    (remhash block-id (portal-rex-connection-blocks connection))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (let ((portal-rex--killing t)
+              (kill-buffer-query-functions nil))
+          (kill-buffer buffer))))))
+
+(defun portal-rex--forget-blocks (connection)
+  "Kill every buffer of CONNECTION's blocks, which has ended."
+  (setf (portal-rex-connection-lists connection) nil)
+  (dolist (block-id (hash-table-keys (portal-rex-connection-blocks connection)))
+    (portal-rex--kill-buffer connection block-id)))
+
+(defun portal-rex--list-blocks (connection session-id)
+  "Ask CONNECTION's server for the blocks of SESSION-ID, for `portal-rex--listed'.
+One request for a session is out at a time.  Asked for again meanwhile,
+the session is asked once more when that answer comes, as the answer may
+be older than the change that asked."
+  (when (portal-rex-connection-id connection)
+    (if-let* ((asked (assoc session-id (portal-rex-connection-lists connection))))
+        (setcar (cdr asked) t)
+      (portal-rex--request connection "session.list_blocks" (list :session_id session-id)
+                           (lambda (response)
+                             (portal-rex--listed connection session-id response)))
+      (push (list session-id nil) (portal-rex-connection-lists connection)))))
+
+(defun portal-rex--listed (connection session-id response)
+  "Make CONNECTION's buffers of SESSION-ID match RESPONSE, its list of blocks.
+A block without a buffer gets one, a buffer whose block is not listed is
+killed, and one whose block has a new label is renamed.  A block that
+closed while the server was asked gets none, though an answer from before
+it closed lists it: an ID is never reused.  Neither does one whose buffer
+was killed by hand."
+  (let* ((asked (assoc session-id (portal-rex-connection-lists connection)))
+         (failure (plist-get response :error))
+         (payload (plist-get (plist-get response :payload) :blocks))
+         ;; A server may say null for none.
+         (blocks (and (vectorp payload) payload)))
+    (setf (portal-rex-connection-lists connection)
+          (delq asked (portal-rex-connection-lists connection)))
+    ;; Without ASKED, the session was destroyed or the connection has ended.
+    (when (and asked (portal-rex--ready-p connection))
+      (cond
+       ;; A session destroyed meanwhile says so in an event.
+       ((equal (plist-get failure :code) "session_not_found"))
+       (failure (message "Cannot list the blocks of Rex session %s: %s"
+                         (or (portal-rex--session-label connection session-id) session-id)
+                         (plist-get failure :message)))
+       (t
+        (let ((listed (seq-keep (lambda (block) (plist-get block :block_id)) blocks)))
+          (dolist (buffer (portal-rex-buffers connection session-id))
+            (let ((block-id (buffer-local-value 'portal-rex-block-id buffer)))
+              (unless (member block-id listed)
+                (portal-rex--kill-buffer connection block-id)))))
+        (seq-doseq (block blocks)
+          (let* ((block-id (plist-get block :block_id))
+                 (label (plist-get block :label))
+                 (buffer (and (stringp block-id)
+                              (gethash block-id (portal-rex-connection-blocks connection)))))
+            (cond
+             ((not (and (stringp block-id) (stringp label))))
+             ((member block-id (cddr asked)))
+             ((null buffer) (portal-rex--make-buffer connection session-id block-id label))
+             ((not (buffer-live-p buffer)))
+             ((not (equal label (buffer-local-value 'portal-rex--block-label buffer)))
+              (portal-rex--rename-buffer buffer label)))))))
+      (when (cadr asked)
+        (portal-rex--list-blocks connection session-id)))))
+
+(defun portal-rex--follow (connection event)
+  "Bring CONNECTION's sessions and its blocks' buffers up to date with EVENT.
+An event of a session that the connection does not know is left alone:
+`session_created' lists a new session's blocks."
+  (let* ((payload (plist-get event :payload))
+         (fields (plist-get payload :payload)))
+    (pcase (plist-get payload :type)
+      ("session_created"
+       (when-let* ((session (plist-get fields :session))
+                   (session-id (plist-get session :session_id)))
+         (portal-rex--label-session connection session-id (or (plist-get session :label) ""))
+         (portal-rex--list-blocks connection session-id)))
+      ("session_destroyed"
+       (let ((session-id (plist-get fields :session_id)))
+         (dolist (buffer (portal-rex-buffers connection session-id))
+           (portal-rex--kill-buffer connection
+                                    (buffer-local-value 'portal-rex-block-id buffer)))
+         (setf (portal-rex-connection-lists connection)
+               (cl-delete session-id (portal-rex-connection-lists connection)
+                          :key #'car :test #'equal))
+         (portal-rex--drop-session connection session-id)))
+      ("session_moved"
+       (portal-rex--move-session connection (plist-get fields :session_id)
+                                 (plist-get fields :before_session_id)))
+      ("session_event"
+       (let* ((session-id (plist-get fields :session_id))
+              (inner (plist-get fields :event))
+              (changed (plist-get inner :payload)))
+         (when (portal-rex--session connection session-id)
+           (pcase (plist-get inner :type)
+             ("session_label_changed"
+              (when-let* ((label (plist-get changed :label)))
+                (portal-rex--label-session connection session-id label)
+                (mapc #'portal-rex--rename-buffer
+                      (portal-rex-buffers connection session-id))))
+             ((or "block_created" "session_view_changed")
+              (portal-rex--list-blocks connection session-id))
+             ("block_closed"
+              (when-let* ((block-id (plist-get changed :block_id)))
+                (portal-rex--kill-buffer connection block-id)
+                (when-let* ((asked (assoc session-id
+                                          (portal-rex-connection-lists connection))))
+                  (push block-id (cddr asked))))))))))))
+
+(defun portal-rex--session-labels ()
+  "Return the labels of every connected server's sessions, each once."
+  (delete-dups
+   (cl-loop for connection in (portal-rex-connections)
+            append (mapcar (lambda (session) (plist-get session :label))
+                           (portal-rex-connection-sessions connection)))))
+
+(with-eval-after-load 'ibuf-ext
+  (define-ibuffer-filter portal-rex-session
+      "Limit current view to buffers of Rex blocks in the session labelled QUALIFIER."
+    (:description "Rex session"
+     :reader (let ((default (portal-rex-session-label (ibuffer-current-buffer))))
+               (completing-read (format-prompt "Filter by Rex session" default)
+                                (portal-rex--session-labels) nil nil nil nil default)))
+    (equal (portal-rex-session-label buf) qualifier)))
+
 ;;; Connecting
 
 (defun portal-rex--attached (connection response)
@@ -388,20 +709,23 @@ one whose connection ended, with \"portal_disconnected\"."
 The sessions it lists are as they were after the response's seq: the
 events held meanwhile that came later follow, and the rest are in them.
 Those that follow go to the front of the inbox, which is being drained,
-so a handler that waits for the server finds them ahead of anything newer."
+so a handler that waits for the server finds them ahead of anything newer.
+Each session is asked for its blocks, which makes their buffers."
   (if-let* ((failure (plist-get response :error)))
       (portal-rex--end connection (format "The server sends no events: %s"
                                           (plist-get failure :message)))
     (let ((seq (or (plist-get response :seq) 0))
-          (held (nreverse (portal-rex-connection-held connection))))
+          (held (nreverse (portal-rex-connection-held connection)))
+          (sessions (plist-get (plist-get response :payload) :sessions)))
       (setf (portal-rex-connection-held connection) nil
-            (portal-rex-connection-sessions connection)
-            (plist-get (plist-get response :payload) :sessions)
+            (portal-rex-connection-sessions connection) (if (vectorp sessions) sessions [])
             (portal-rex-connection-state connection) 'ready
             (portal-rex-connection-inbox connection)
             (nconc (cl-delete-if-not (lambda (event) (> (or (plist-get event :seq) 0) seq))
                                      held)
-                   (portal-rex-connection-inbox connection))))))
+                   (portal-rex-connection-inbox connection)))
+      (seq-doseq (session (portal-rex-connection-sessions connection))
+        (portal-rex--list-blocks connection (plist-get session :session_id))))))
 
 (defun portal-rex--disconnect-all ()
   "Disconnect from every Rex server, as Emacs exits."
@@ -415,10 +739,16 @@ SOCKET defaults to `portal-rex-socket', this Mac's server; with a prefix
 argument, read it.  Emacs can be connected to several servers at once,
 and connecting again to one returns the connection it has.
 
+Each block on the server gets a buffer, named *rex: SESSION/BLOCK* from
+the two labels, and from then on the buffers follow the server: one
+comes with a new block, goes when its block closes or its session is
+destroyed, and is renamed with either label.  `portal-rex-buffers'
+returns them.  No buffer shows its block's screen yet.
+
 Once connected, `portal-rex-call' and `portal-rex-call-async' call the
 server's methods, and `portal-rex-event-functions' runs for each event
 of the server and of its sessions.  The connection's
-`portal-rex-connection-sessions' are the sessions the server had then."
+`portal-rex-connection-sessions' are the server's sessions, kept current."
   (interactive
    (list (and current-prefix-arg
               (read-file-name "Rex server socket: "
@@ -448,7 +778,7 @@ of the server and of its sessions.  The connection's
   "Return a new, ready connection to the Rex server on SOCKET, or signal why not."
   (let ((name (abbreviate-file-name socket))
         (version (or (portal-build-version) "0"))
-        connection)
+        connection finished)
     ;; Whatever stops this, a quit included, leaves no half-made connection:
     ;; the connection is made inside that promise, with quitting inhibited
     ;; until Emacs knows it.
@@ -466,10 +796,17 @@ of the server and of its sessions.  The connection's
             (setf (portal-rex-connection-state connection) 'attaching)
             (portal-rex--request connection "session.attach_all" '(:event_scope "session")
                                  (lambda (response) (portal-rex--attached connection response)))
-            (portal-rex--await connection (lambda () (portal-rex-live-p connection))
-                               portal-rex-timeout)))
-      (when (and connection (not (portal-rex-live-p connection)))
-        (portal-rex--end connection nil)))
+            (when (portal-rex--await connection (lambda () (portal-rex-live-p connection))
+                                     portal-rex-timeout)
+              ;; The buffers, so that they are there when this returns.  A
+              ;; server slow to list a session's blocks is still connected:
+              ;; its buffers come when the answer does.
+              (portal-rex--await connection
+                                 (lambda () (null (portal-rex-connection-lists connection)))
+                                 portal-rex-timeout)))
+          (setq finished t))
+      (when (and connection (not (and finished (portal-rex-live-p connection))))
+        (portal-rex--end connection nil t)))
     (cond
      ((portal-rex-live-p connection) connection)
      ((portal-rex-connection-reason connection)
@@ -492,8 +829,9 @@ of the server and of its sessions.  The connection's
 (defun portal-rex-disconnect (connection)
   "Disconnect from the Rex server of CONNECTION.
 Interactively, from the one connected server, or one read from the
-minibuffer.  The server and what runs on it carry on; requests still
-waiting fail with the code \"portal_disconnected\"."
+minibuffer.  Its blocks' buffers are killed.  The server and what runs
+on it carry on; requests still waiting fail with the code
+\"portal_disconnected\"."
   (interactive (list (portal-rex--read-connection)))
   (unless (eq (portal-rex-connection-state connection) 'closed)
     (portal-rex--end connection "Disconnected" t)

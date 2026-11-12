@@ -34,6 +34,10 @@ Connections that BODY leaves are closed, and none may remain."
          (unwind-protect (progn ,@body)
            (mapc #'portal-rex-disconnect (copy-sequence portal-rex--connections))))
        (should-not portal-rex--connections)
+       ;; No block's buffer outlives its connection.
+       (should-not (cl-remove-if-not
+                    (lambda (buffer) (buffer-local-value 'portal-rex-block-id buffer))
+                    (buffer-list)))
        (should-not (memq #'portal-rex--disconnect-all kill-emacs-hook)))))
 
 (defun portal-rex-tests--connect (server)
@@ -677,6 +681,494 @@ arrives as C-g does, by `quit-flag', the first time NATIVE is called."
       (should (equal (funcall label second) "right"))
       (should (equal (plist-get (portal-rex-call nil "server.version") :rex_version)
                      "0.0.0-fake")))))
+
+;;; Blocks' buffers
+
+(defun portal-rex-tests--block (name &optional label placement)
+  "Return the block NAME as the fake lists it, called LABEL, by default NAME."
+  (list :block_id (concat "block:" name) :label (or label name)
+        :placement (or placement "placed")))
+
+(defun portal-rex-tests--blocks (server session &rest blocks)
+  "Make the fake SERVER list BLOCKS as the blocks of SESSION from now on."
+  (portal-fake-rex-command server :blocks (list (intern (concat ":session:" session))
+                                                (vconcat blocks))))
+
+(defun portal-rex-tests--session-event (server session type &rest fields)
+  "Make the fake SERVER send the event TYPE of SESSION, with FIELDS."
+  (portal-fake-rex-command
+   server :event (list :type "session_event"
+                       :payload (list :session_id (concat "session:" session)
+                                      :event (list :type type :payload fields)))))
+
+(defun portal-rex-tests--settle (connection)
+  "Handle what CONNECTION's server has sent, and the lists of blocks that asks for."
+  (portal-rex-call connection "server.version")
+  (portal-rex-tests--until connection
+                           (lambda () (null (portal-rex-connection-lists connection)))))
+
+(defun portal-rex-tests--names (&optional connection session)
+  "Return the names of the blocks' buffers of CONNECTION and SESSION, sorted."
+  (sort (mapcar #'buffer-name
+                (portal-rex-buffers connection (and session (concat "session:" session))))
+        #'string<))
+
+(defun portal-rex-tests--asked (server connection)
+  "Return the methods that CONNECTION has asked the fake SERVER for, in order.
+Each is returned once: a later call returns those asked for since."
+  ;; Requests are answered in order, and reports written in order.
+  (portal-rex-call connection "server.version")
+  (portal-fake-rex-command server :fragment 0)
+  (let ((requests (cl-remove-if-not (lambda (report) (plist-member report :request))
+                                    (portal-fake-rex-reports server))))
+    (setf (portal-fake-rex-reports server)
+          (cl-set-difference (portal-fake-rex-reports server) requests))
+    (remove "server.version"
+            (mapcar (lambda (report) (plist-get (plist-get report :request) :method))
+                    requests))))
+
+(ert-deftest portal-rex-connect-makes-a-buffer-for-every-block ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")
+                                               (:session_id "session:b" :label "play")
+                                               (:session_id "session:c" :label "empty")])
+    ;; Detached blocks, and one placed in a way a newer server invented, are
+    ;; blocks like any other.
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api")
+                              (portal-rex-tests--block "2" "logs" "detached")
+                              (portal-rex-tests--block "3" "odd" "somewhere-new"))
+    (portal-rex-tests--blocks server "b" (portal-rex-tests--block "4" "shell")
+                              (portal-rex-tests--block "5" "shell"))
+    (let ((connection (portal-rex-tests--connect server)))
+      ;; They are there when connecting returns, named from both labels and
+      ;; made unique as Emacs does.
+      (should (equal (portal-rex-tests--names)
+                     '("*rex: play/shell*" "*rex: play/shell*<2>" "*rex: work/api*"
+                       "*rex: work/logs*" "*rex: work/odd*")))
+      (should (equal (portal-rex-tests--names connection "a")
+                     '("*rex: work/api*" "*rex: work/logs*" "*rex: work/odd*")))
+      (should-not (portal-rex-buffers connection "session:c"))
+      (should (equal (sort (portal-rex-tests--asked server connection) #'string<)
+                     '("session.attach_all" "session.list_blocks" "session.list_blocks"
+                       "session.list_blocks")))
+      ;; Each knows its connection, its block and its session.
+      (dolist (block '(("1" "session:a" "*rex: work/api*") ("2" "session:a" "*rex: work/logs*")
+                       ("4" "session:b" "*rex: play/shell*")
+                       ("5" "session:b" "*rex: play/shell*<2>")))
+        (let ((buffer (portal-rex-block-buffer connection (concat "block:" (car block)))))
+          (should (equal (buffer-name buffer) (nth 2 block)))
+          (with-current-buffer buffer
+            (should (eq portal-rex-block-connection connection))
+            (should (equal portal-rex-block-id (concat "block:" (car block))))
+            (should (equal portal-rex-session-id (nth 1 block))))))
+      (should-not (portal-rex-block-buffer connection "block:none"))
+      (with-current-buffer "*rex: work/api*"
+        (should (equal (portal-rex-session-label) "work"))
+        ;; It says which block it is, and that its screen is not shown.
+        (should (string-match-p "\\`Rex block api, in session work\\.\nblock:1 on the server at "
+                                (buffer-string)))
+        (should (string-search "not built yet" (buffer-string)))
+        (should buffer-read-only)
+        (should-not (buffer-modified-p))
+        (should (equal default-directory (expand-file-name "~/"))))
+      (should-not (portal-rex-session-label (get-buffer-create "*scratch*"))))))
+
+(ert-deftest portal-rex-buffer-is-a-terminal-buffer-without-a-view ()
+  ;; The mode is the one a terminal view lives in, and Portal's terminal
+  ;; commands take a buffer that has no view yet for what it is.
+  (portal-rex-tests--with (server)
+    (let* ((connection (portal-rex-tests--connect server))
+           (buffer (portal-rex-block-buffer connection "block:fake-1")))
+      (should (equal (buffer-name buffer) "*rex: fake/shell*"))
+      (with-current-buffer buffer
+        (should (eq major-mode 'portal-terminal-mode))
+        (should-not portal-view--target)
+        (should-not (portal-terminal-metadata))
+        (should-not (memq buffer (portal-terminal-buffers)))
+        (should-not (memq buffer (portal-view-buffers)))
+        (should-error (portal-terminal-focus) :type 'user-error)
+        (should-error (portal-input-focus) :type 'user-error)
+        (should-error (portal-terminal-set-project nil) :type 'user-error)
+        (should-error (portal-terminal-next) :type 'user-error)
+        (should (portal-terminal--kill-query))
+        ;; Closing the terminal there is none of ends nothing.
+        (portal-terminal-close)
+        (should (buffer-live-p buffer))
+        ;; Another mode leaves it the block's buffer.
+        (fundamental-mode)
+        (should (equal portal-rex-block-id "block:fake-1"))
+        (should (eq portal-rex-block-connection connection)))
+      (portal-rex-disconnect connection)
+      (should-not (buffer-live-p buffer)))))
+
+(ert-deftest portal-rex-buffers-follow-blocks ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api"))
+    (let* ((connection (portal-rex-tests--connect server))
+           (first (portal-rex-block-buffer connection "block:1"))
+           (refuse (lambda () (not portal-rex-block-id)))
+           second)
+      (should (equal (portal-rex-tests--asked server connection)
+                     '("session.attach_all" "session.list_blocks")))
+      ;; A block made elsewhere gets a buffer.  Its event has only its ID, so
+      ;; the session is asked for its blocks.
+      (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api")
+                                (portal-rex-tests--block "2" "shell" "detached"))
+      (portal-rex-tests--session-event server "a" "block_created" :block_id "block:2")
+      (portal-rex-tests--until connection
+                               (lambda () (portal-rex-block-buffer connection "block:2")))
+      (setq second (portal-rex-block-buffer connection "block:2"))
+      (should (equal (portal-rex-tests--names) '("*rex: work/api*" "*rex: work/shell*")))
+      (with-current-buffer second
+        (should (eq portal-rex-block-connection connection))
+        (should (equal portal-rex-block-id "block:2"))
+        (should (equal portal-rex-session-id "session:a")))
+      ;; A new label arrives as a change of the session's view.  The buffer
+      ;; is renamed, and is the same buffer.
+      (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "server")
+                                (portal-rex-tests--block "2" "shell" "detached"))
+      (portal-rex-tests--session-event server "a" "session_view_changed" :revision 2)
+      (portal-rex-tests--until connection
+                               (lambda () (equal (buffer-name first) "*rex: work/server*")))
+      (should (eq (portal-rex-block-buffer connection "block:1") first))
+      (should (string-match-p "\\`Rex block server, in session work\\."
+                              (with-current-buffer first (buffer-string))))
+      (with-current-buffer first
+        (should (eq portal-rex-block-connection connection))
+        (should (equal portal-rex-block-id "block:1"))
+        (should (equal portal-rex-session-id "session:a")))
+      (should (equal (buffer-name second) "*rex: work/shell*"))
+      ;; A name another buffer has is made unique.
+      (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "shell")
+                                (portal-rex-tests--block "2" "shell" "detached"))
+      (portal-rex-tests--session-event server "a" "session_view_changed" :revision 3)
+      (portal-rex-tests--until connection
+                               (lambda () (equal (buffer-name first) "*rex: work/shell*<2>")))
+      ;; A view that changes without a label changing renames nothing.
+      (portal-rex-tests--session-event server "a" "session_view_changed" :revision 4)
+      (portal-rex-tests--settle connection)
+      (should (equal (portal-rex-tests--names) '("*rex: work/shell*" "*rex: work/shell*<2>")))
+      ;; Events that are not about blocks or labels ask the server nothing.
+      (portal-rex-tests--asked server connection)
+      (portal-rex-tests--session-event server "a" "window_created" :window_id "window:1")
+      (portal-rex-tests--session-event server "a" "client_connected" :client_id "client:1")
+      (portal-fake-rex-command server :event '(:type "tailscale_status_changed"))
+      (should-not (portal-rex-tests--asked server connection))
+      ;; A closed block's buffer is killed.  Nothing asks, whatever would,
+      ;; and the server is told nothing.
+      (let ((kill-buffer-query-functions (list refuse)))
+        (should-not (kill-buffer second))
+        (portal-rex-tests--session-event server "a" "block_closed" :block_id "block:2")
+        (portal-rex-tests--until connection (lambda () (not (buffer-live-p second)))))
+      (should (equal (portal-rex-tests--names) '("*rex: work/shell*<2>")))
+      (should-not (portal-rex-block-buffer connection "block:2"))
+      (should-not (portal-rex-tests--asked server connection))
+      ;; A block that the server no longer lists has closed, whether or not
+      ;; its event came.
+      (portal-rex-tests--blocks server "a")
+      (portal-rex-tests--session-event server "a" "session_view_changed" :revision 5)
+      (portal-rex-tests--until connection (lambda () (not (buffer-live-p first))))
+      (should-not (portal-rex-buffers))
+      ;; Events for blocks and sessions it never heard of harm nothing.
+      (portal-rex-tests--session-event server "a" "block_closed" :block_id "block:nine")
+      (portal-rex-tests--session-event server "zz" "block_created" :block_id "block:ten")
+      (portal-rex-tests--session-event server "zz" "session_label_changed" :label "new")
+      (portal-fake-rex-command server :event '(:type "session_destroyed"
+                                               :payload (:session_id "session:zz")))
+      (portal-rex-tests--settle connection)
+      (should-not (portal-rex-buffers))
+      (should (equal (portal-rex-connection-sessions connection)
+                     [(:session_id "session:a" :label "work")])))))
+
+(ert-deftest portal-rex-buffers-and-sessions-follow-sessions ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api")
+                              (portal-rex-tests--block "2" "shell"))
+    (let* ((connection (portal-rex-tests--connect server))
+           (api (portal-rex-block-buffer connection "block:1"))
+           seen
+           (portal-rex-event-functions
+            (list (lambda (from event)
+                    ;; The hook finds the sessions as the event left them.
+                    (push (list (plist-get (plist-get event :payload) :type)
+                                (mapcar (lambda (session) (plist-get session :label))
+                                        (portal-rex-connection-sessions from)))
+                          seen)))))
+      ;; A new session joins the connection's sessions, and its blocks get
+      ;; buffers, though no event names them.
+      (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")
+                                                 (:session_id "session:b" :label "play")])
+      (portal-rex-tests--blocks server "b" (portal-rex-tests--block "3" "shell"))
+      (portal-fake-rex-command server :event '(:type "session_created"
+                                               :payload (:session (:session_id "session:b"
+                                                                   :label "play"))))
+      (portal-rex-tests--until connection
+                               (lambda () (portal-rex-block-buffer connection "block:3")))
+      (should (equal (portal-rex-connection-sessions connection)
+                     [(:session_id "session:a" :label "work")
+                      (:session_id "session:b" :label "play")]))
+      (should (equal (portal-rex-tests--names connection "b") '("*rex: play/shell*")))
+      (with-current-buffer "*rex: play/shell*"
+        (should (equal portal-rex-session-id "session:b")))
+      ;; A renamed session renames its buffers, and no other's.
+      (portal-rex-tests--session-event server "a" "session_label_changed" :label "play")
+      (portal-rex-tests--until connection
+                               (lambda () (equal (buffer-name api) "*rex: play/api*")))
+      (should (equal (portal-rex-connection-sessions connection)
+                     [(:session_id "session:a" :label "play")
+                      (:session_id "session:b" :label "play")]))
+      (should (equal (portal-rex-tests--names connection "a")
+                     '("*rex: play/api*" "*rex: play/shell*<2>")))
+      (should (equal (portal-rex-tests--names connection "b") '("*rex: play/shell*")))
+      (with-current-buffer api
+        (should (equal (portal-rex-session-label) "play"))
+        (should (string-match-p "\\`Rex block api, in session play\\." (buffer-string)))
+        (should (equal portal-rex-session-id "session:a")))
+      ;; A moved session moves in the connection's sessions.
+      (portal-fake-rex-command server :event '(:type "session_moved"
+                                               :payload (:session_id "session:b"
+                                                         :before_session_id "session:a")))
+      (portal-rex-tests--settle connection)
+      (should (equal (mapcar (lambda (session) (plist-get session :session_id))
+                             (portal-rex-connection-sessions connection))
+                     '("session:b" "session:a")))
+      (portal-fake-rex-command server :event '(:type "session_moved"
+                                               :payload (:session_id "session:b")))
+      (portal-rex-tests--settle connection)
+      (should (equal (mapcar (lambda (session) (plist-get session :session_id))
+                             (portal-rex-connection-sessions connection))
+                     '("session:a" "session:b")))
+      ;; A destroyed session takes its buffers with it, and asks nothing.
+      (portal-rex-tests--asked server connection)
+      (portal-fake-rex-command server :event '(:type "session_destroyed"
+                                               :payload (:session_id "session:a")))
+      (portal-rex-tests--until connection (lambda () (not (buffer-live-p api))))
+      (should (equal (portal-rex-tests--names) '("*rex: play/shell*")))
+      (should (equal (portal-rex-connection-sessions connection)
+                     [(:session_id "session:b" :label "play")]))
+      (should-not (portal-rex-tests--asked server connection))
+      (should (equal (reverse seen)
+                     '(("session_created" ("work" "play")) ("session_event" ("play" "play"))
+                       ("session_moved" ("play" "play")) ("session_moved" ("play" "play"))
+                       ("session_destroyed" ("play"))))))))
+
+(ert-deftest portal-rex-answers-that-are-late-make-no-buffer-for-what-has-gone ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")
+                                               (:session_id "session:b" :label "play")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api"))
+    (portal-rex-tests--blocks server "b" (portal-rex-tests--block "9" "shell"))
+    (let ((connection (portal-rex-tests--connect server)))
+      (portal-rex-tests--asked server connection)
+      ;; A block made and closed while the server is asked: the answer, from
+      ;; before it closed, lists it, and it gets no buffer.
+      (portal-fake-rex-command server :hold "session.list_blocks")
+      (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api")
+                                (portal-rex-tests--block "2" "gone")
+                                (portal-rex-tests--block "3" "stays"))
+      (portal-rex-tests--session-event server "a" "block_created" :block_id "block:2")
+      (portal-rex-call connection "server.version")
+      (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api")
+                                (portal-rex-tests--block "3" "stays"))
+      (portal-rex-tests--session-event server "a" "block_closed" :block_id "block:2")
+      (portal-rex-call connection "server.version")
+      (portal-fake-rex-command server :release "session.list_blocks")
+      (portal-rex-tests--settle connection)
+      (should (equal (portal-rex-tests--names connection "a")
+                     '("*rex: work/api*" "*rex: work/stays*")))
+      ;; No second answer put that right: the server was asked once.
+      (should (equal (portal-rex-tests--asked server connection) '("session.list_blocks")))
+      ;; A label that changes while the server is asked is the one that
+      ;; stays, and one question is out for a session at a time: however
+      ;; many changes there were, it is asked once more when the answer comes.
+      (portal-fake-rex-command server :hold "session.list_blocks")
+      (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "second")
+                                (portal-rex-tests--block "3" "stays"))
+      (portal-rex-tests--session-event server "a" "session_view_changed" :revision 2)
+      (portal-rex-call connection "server.version")
+      (dolist (label '("third" "fourth" "fifth"))
+        (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" label)
+                                  (portal-rex-tests--block "3" "stays"))
+        (portal-rex-tests--session-event server "a" "session_view_changed" :revision 3))
+      (portal-rex-call connection "server.version")
+      (portal-fake-rex-command server :release "session.list_blocks")
+      (portal-rex-tests--settle connection)
+      (should (equal (portal-rex-tests--names connection "a")
+                     '("*rex: work/fifth*" "*rex: work/stays*")))
+      (should (equal (portal-rex-tests--asked server connection)
+                     '("session.list_blocks" "session.list_blocks")))
+      ;; A session destroyed while the server is asked: the answer makes
+      ;; nothing, and neither does one that says the session is not there.
+      (portal-fake-rex-command server :hold "session.list_blocks")
+      (portal-rex-tests--blocks server "b" (portal-rex-tests--block "9" "shell")
+                                (portal-rex-tests--block "8" "late"))
+      (portal-rex-tests--session-event server "b" "block_created" :block_id "block:8")
+      (portal-rex-call connection "server.version")
+      (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+      (portal-fake-rex-command server :event '(:type "session_destroyed"
+                                               :payload (:session_id "session:b")))
+      (portal-rex-call connection "server.version")
+      (portal-fake-rex-command server :release "session.list_blocks")
+      (portal-rex-tests--settle connection)
+      (should (equal (portal-rex-tests--names)
+                     '("*rex: work/fifth*" "*rex: work/stays*")))
+      (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")
+                                                 (:session_id "session:c" :label "brief")])
+      (portal-fake-rex-command server :event '(:type "session_created"
+                                               :payload (:session (:session_id "session:c"
+                                                                   :label "brief"))))
+      (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+      (should-not (string-search "Cannot list"
+                                 (portal-rex-tests--messages
+                                   (portal-rex-tests--settle connection))))
+      ;; Any other failure is said, and the connection carries on.
+      (portal-fake-rex-command server :error "session.list_blocks" :code "internal"
+                               :message "out of sorts" :status 500)
+      (portal-rex-tests--session-event server "a" "session_view_changed" :revision 4)
+      (should (equal (portal-rex-tests--messages (portal-rex-tests--settle connection))
+                     "Cannot list the blocks of Rex session work: out of sorts\n"))
+      (should (portal-rex-live-p connection))
+      (should (equal (portal-rex-tests--names)
+                     '("*rex: work/fifth*" "*rex: work/stays*"))))))
+
+(ert-deftest portal-rex-disconnecting-kills-the-buffers-and-ends-nothing ()
+  (portal-rex-tests--with (left right)
+    (portal-fake-rex-command left :sessions [(:session_id "session:l" :label "left")])
+    (portal-rex-tests--blocks left "l" (portal-rex-tests--block "1" "one")
+                              (portal-rex-tests--block "2" "two"))
+    (portal-fake-rex-command right :sessions [(:session_id "session:r" :label "right")])
+    (portal-rex-tests--blocks right "r" (portal-rex-tests--block "1" "one"))
+    (let* ((first (portal-rex-tests--connect left))
+           (second (portal-rex-tests--connect right))
+           (refuse (lambda () (not portal-rex-block-id)))
+           (requests (lambda (server)
+                       (mapcar (lambda (report)
+                                 (plist-get (plist-get report :request) :method))
+                               (cl-remove-if-not (lambda (report) (plist-member report :request))
+                                                 (portal-fake-rex-reports server))))))
+      ;; Two servers may both have a block:1.
+      (should (equal (portal-rex-tests--names first) '("*rex: left/one*" "*rex: left/two*")))
+      (should (equal (portal-rex-tests--names second) '("*rex: right/one*")))
+      (should-not (eq (portal-rex-block-buffer first "block:1")
+                      (portal-rex-block-buffer second "block:1")))
+      ;; Disconnecting kills that connection's buffers, without asking, and
+      ;; asks the server for nothing.
+      (let ((kill-buffer-query-functions (list refuse)))
+        (portal-rex-disconnect first))
+      (should-not (portal-rex-buffers first))
+      (should (equal (portal-rex-tests--names) '("*rex: right/one*")))
+      (portal-fake-rex-take left :disconnected)
+      (should (equal (funcall requests left) '("session.attach_all" "session.list_blocks")))
+      ;; So does losing the connection.
+      (portal-fake-rex-command right :drop t)
+      (let ((inhibit-message t)
+            (kill-buffer-query-functions (list refuse)))
+        (portal-rex-tests--until second
+                                 (lambda () (not (portal-rex-connection-id second)))))
+      (should-not (portal-rex-buffers))
+      (should-not (get-buffer "*rex: right/one*"))
+      (portal-fake-rex-take right :disconnected)
+      (should (equal (funcall requests right) '("session.attach_all" "session.list_blocks")))
+      ;; Connecting again makes them again.
+      (let ((again (portal-rex-tests--connect left)))
+        (should (equal (portal-rex-tests--names again)
+                       '("*rex: left/one*" "*rex: left/two*")))))))
+
+(ert-deftest portal-rex-killing-a-buffer-by-hand-leaves-its-block ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api")
+                              (portal-rex-tests--block "2" "logs"))
+    (let* ((connection (portal-rex-tests--connect server))
+           (buffer (portal-rex-block-buffer connection "block:1")))
+      (portal-rex-tests--asked server connection)
+      ;; It only kills the buffer, and says so.
+      (should (equal (portal-rex-tests--messages (should (kill-buffer buffer)))
+                     "Killed only the buffer: block api still runs on its Rex server, and gets a buffer again when Emacs next connects\n"))
+      (should-not (portal-rex-block-buffer connection "block:1"))
+      (should-not (portal-rex-tests--asked server connection))
+      ;; The block gets no second buffer while Emacs stays connected.
+      (portal-rex-tests--session-event server "a" "session_view_changed" :revision 2)
+      (portal-rex-tests--settle connection)
+      (should (equal (portal-rex-tests--names) '("*rex: work/logs*")))
+      ;; Its closing later is nothing.
+      (portal-rex-tests--blocks server "a" (portal-rex-tests--block "2" "logs"))
+      (portal-rex-tests--session-event server "a" "block_closed" :block_id "block:1")
+      (portal-rex-tests--settle connection)
+      (should (equal (portal-rex-tests--names) '("*rex: work/logs*")))
+      ;; Portal's own kills say nothing.
+      (should (equal (portal-rex-tests--messages
+                       (portal-rex-tests--session-event server "a" "block_closed"
+                                                        :block_id "block:2")
+                       (portal-rex-tests--settle connection))
+                     ""))
+      (should-not (portal-rex-buffers))
+      ;; The next connection has a buffer for every block again.
+      (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api"))
+      (portal-rex-disconnect connection)
+      (should (equal (portal-rex-tests--names (portal-rex-tests--connect server))
+                     '("*rex: work/api*"))))))
+
+(ert-deftest portal-rex-connect-does-not-wait-for-ever-for-the-blocks ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :hold "session.list_blocks")
+    (let* ((portal-rex-timeout 0.3)
+           (connection (portal-rex-tests--connect server)))
+      ;; A server that is slow to list its blocks is connected all the same,
+      ;; and the buffers come when its answer does.
+      (should (portal-rex-live-p connection))
+      (should-not (portal-rex-buffers))
+      (portal-fake-rex-command server :release "session.list_blocks")
+      (portal-rex-tests--settle connection)
+      (should (equal (portal-rex-tests--names) '("*rex: fake/shell*")))
+      (portal-rex-disconnect connection))
+    ;; A quit while connecting waits for the blocks leaves no connection, and
+    ;; no buffer.
+    (portal-fake-rex-command server :hold "session.list_blocks")
+    (let ((wait (symbol-function 'portal--rex-wait))
+          (portal-rex-timeout 30))
+      (cl-letf (((symbol-function 'portal--rex-wait)
+                 (lambda (&rest arguments)
+                   (when (cl-some #'portal-rex-connection-lists portal-rex--connections)
+                     (setq quit-flag t))
+                   (apply wait arguments))))
+        (should (eq (condition-case nil (portal-rex-tests--connect server) (quit 'quit))
+                    'quit))))
+    (should-not portal-rex--connections)
+    (should-not (portal-rex-buffers))))
+
+(ert-deftest portal-rex-ibuffer-filters-by-session ()
+  (require 'ibuf-ext)
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")
+                                               (:session_id "session:b" :label "play")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api")
+                              (portal-rex-tests--block "2" "logs"))
+    (portal-rex-tests--blocks server "b" (portal-rex-tests--block "3" "shell"))
+    (let ((connection (portal-rex-tests--connect server))
+          (listed (lambda (filter)
+                    (save-window-excursion
+                      (ibuffer nil "*portal-rex-ibuffer*" (list filter))
+                      (unwind-protect
+                          (let (names)
+                            (ibuffer-map-lines-nomodify
+                             (lambda (buffer _mark) (push (buffer-name buffer) names)))
+                            (sort names #'string<))
+                        (kill-buffer "*portal-rex-ibuffer*"))))))
+      (should (equal (funcall listed '(portal-rex-session . "work"))
+                     '("*rex: work/api*" "*rex: work/logs*")))
+      (should (equal (funcall listed '(portal-rex-session . "play")) '("*rex: play/shell*")))
+      (should-not (funcall listed '(portal-rex-session . "none")))
+      ;; The filter goes by what the session is called now.
+      (portal-rex-tests--session-event server "b" "session_label_changed" :label "work")
+      (portal-rex-tests--settle connection)
+      (should (equal (funcall listed '(portal-rex-session . "work"))
+                     '("*rex: work/api*" "*rex: work/logs*" "*rex: work/shell*")))
+      ;; The command reads a label, completing over the servers' sessions.
+      (should (commandp 'ibuffer-filter-by-portal-rex-session))
+      (should (equal (portal-rex--session-labels) '("work"))))))
 
 (provide 'portal-rex-tests)
 ;;; portal-rex-tests.el ends here

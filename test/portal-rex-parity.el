@@ -14,8 +14,10 @@
 
 (defun portal-rex-parity-check (connection)
   "Check what the server of CONNECTION says, as Portal relies on it.
-The handshake, `server.version' and `session.list'.  The server has at
-least one session, and none comes or goes meanwhile."
+The handshake, `server.version', `session.list' and `session.list_blocks',
+with the buffers Portal made of them.  The server has at least one
+session, the first of them at least one block, and none comes or goes
+meanwhile."
   (let ((welcome (portal-rex-connection-welcome connection)))
     (should (equal (plist-get welcome :type) "welcome"))
     (should (equal (plist-get welcome :protocol) "rex.control.v1"))
@@ -36,7 +38,31 @@ least one session, and none comes or goes meanwhile."
     (should (equal sessions (portal-rex-connection-sessions connection)))
     (seq-doseq (session sessions)
       (should (string-prefix-p "session:" (plist-get session :session_id)))
-      (should (stringp (plist-get session :label)))))
+      (should (stringp (plist-get session :label))))
+    ;; A session's blocks, each of which has its buffer.
+    (let* ((session (aref sessions 0))
+           (blocks (plist-get (portal-rex-call connection "session.list_blocks"
+                                               (list :session_id (plist-get session :session_id)))
+                              :blocks)))
+      (should (vectorp blocks))
+      (should (> (length blocks) 0))
+      (seq-doseq (block blocks)
+        (should (string-prefix-p "block:" (plist-get block :block_id)))
+        (should (stringp (plist-get block :label)))
+        (should (stringp (plist-get block :placement)))
+        (let ((buffer (portal-rex-block-buffer connection (plist-get block :block_id))))
+          (should (string-prefix-p (format "*rex: %s/%s*" (plist-get session :label)
+                                           (plist-get block :label))
+                                   (buffer-name buffer)))
+          (should (equal (buffer-local-value 'portal-rex-session-id buffer)
+                         (plist-get session :session_id)))))))
+  ;; A session the server does not have.
+  (let ((failure (should-error
+                  (portal-rex-call connection "session.list_blocks"
+                                   '(:session_id "session:00000000-0000-7000-8000-000000000000"))
+                  :type 'portal-rex-error)))
+    (should (equal (plist-get (nth 2 failure) :code) "session_not_found"))
+    (should (eql (plist-get (nth 2 failure) :status) 404)))
   (let ((failure (should-error (portal-rex-call connection "no.such_method")
                                :type 'portal-rex-error)))
     (should (equal (plist-get (nth 2 failure) :code) "method_not_found"))

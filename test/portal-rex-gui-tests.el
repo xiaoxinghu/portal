@@ -3,7 +3,8 @@
 
 ;; The seam that batch Emacs cannot show: with nobody waiting on a
 ;; connection, the native module tells Emacs through the notification pipe
-;; that messages wait, from the main run loop.  The server is
+;; that messages wait, from the main run loop, so that blocks' buffers
+;; follow a server while Emacs is idle.  The server is
 ;; test/fake-rex-server.py on a socket of its own, never the user's Rex
 ;; server; test/portal-rex-tests.el covers the client's behavior in batch.
 
@@ -98,6 +99,78 @@ record can bring them."
                                      (abbreviate-file-name (portal-fake-rex-socket left))))))
             (should (equal (portal-rex-connections) (list second)))
             (should (portal-rex-call second "session.list")))
+        (mapc #'portal-rex-disconnect (portal-rex-connections))))))
+
+(ert-deftest portal-rex-gui-buffers-follow-the-server-with-emacs-idle ()
+  :tags '(:gui)
+  (portal-fake-rex-with (server)
+    (let ((portal-rex-socket (portal-fake-rex-socket server))
+          (session-event
+           (lambda (type &rest fields)
+             (portal-fake-rex-command
+              server :event (list :type "session_event"
+                                  :payload (list :session_id "session:fake-1"
+                                                 :event (list :type type :payload fields))))))
+          (completions (lambda ()
+                         (sort (all-completions "*rex: " #'internal-complete-buffer) #'string<))))
+      (unwind-protect
+          (save-window-excursion
+            (call-interactively #'portal-rex-connect)
+            ;; What C-x b completes over: one buffer for each block.
+            (should (equal (funcall completions) '("*rex: fake/shell*")))
+            ;; Shown, a block's buffer says which block it is.  It has no
+            ;; view, and RET says so.
+            (switch-to-buffer "*rex: fake/shell*")
+            (redisplay t)
+            (should (string-prefix-p "Rex block shell, in session fake." (buffer-string)))
+            (should (string-search "not built yet" (buffer-string)))
+            (should-not portal-view--target)
+            (should-not (portal-view-buffers))
+            (should-error (execute-kbd-macro (kbd "RET")) :type 'user-error)
+            ;; A block made elsewhere, renamed and closed: its buffer comes,
+            ;; is renamed and goes, with nothing asking the connection.
+            (portal-fake-rex-command
+             server :blocks '(:session:fake-1
+                              [(:block_id "block:fake-1" :label "shell" :placement "placed")
+                               (:block_id "block:fake-2" :label "logs" :placement "placed")]))
+            (funcall session-event "block_created" :block_id "block:fake-2")
+            (portal-rex-gui-tests--wait
+             (lambda () (equal (funcall completions) '("*rex: fake/logs*" "*rex: fake/shell*"))))
+            (portal-fake-rex-command
+             server :blocks '(:session:fake-1
+                              [(:block_id "block:fake-1" :label "shell" :placement "placed")
+                               (:block_id "block:fake-2" :label "build" :placement "placed")]))
+            (funcall session-event "session_view_changed" :revision 2)
+            (portal-rex-gui-tests--wait
+             (lambda () (equal (funcall completions) '("*rex: fake/build*" "*rex: fake/shell*"))))
+            ;; The buffer on show is killed under its window.
+            (let ((shown (current-buffer)))
+              (funcall session-event "block_closed" :block_id "block:fake-1")
+              (portal-rex-gui-tests--wait (lambda () (not (buffer-live-p shown))))
+              (should (buffer-live-p (window-buffer))))
+            (should (equal (funcall completions) '("*rex: fake/build*")))
+            ;; A session renamed, then destroyed.
+            (funcall session-event "session_label_changed" :label "real")
+            (portal-rex-gui-tests--wait
+             (lambda () (equal (funcall completions) '("*rex: real/build*"))))
+            (portal-fake-rex-command server :event '(:type "session_destroyed"
+                                                     :payload (:session_id "session:fake-1")))
+            (portal-rex-gui-tests--wait (lambda () (null (funcall completions))))
+            (should (equal (portal-rex-connection-sessions (car (portal-rex-connections))) []))
+            ;; A lost server takes its buffers.
+            (portal-fake-rex-command
+             server :sessions [(:session_id "session:fake-1" :label "fake")])
+            (portal-fake-rex-command server :event '(:type "session_created"
+                                                     :payload (:session (:session_id "session:fake-1"
+                                                                         :label "fake"))))
+            (portal-rex-gui-tests--wait
+             (lambda () (equal (funcall completions)
+                               '("*rex: fake/build*" "*rex: fake/shell*"))))
+            (switch-to-buffer "*rex: fake/build*")
+            (let ((inhibit-message t))
+              (portal-fake-rex-command server :drop t)
+              (portal-rex-gui-tests--wait (lambda () (null (portal-rex-connections)))))
+            (should-not (funcall completions)))
         (mapc #'portal-rex-disconnect (portal-rex-connections))))))
 
 (provide 'portal-rex-gui-tests)

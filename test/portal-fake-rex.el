@@ -15,6 +15,8 @@
   (socket nil :documentation "The Unix socket it listens on.")
   directory
   (reports nil :documentation "Its reports not yet taken, oldest first, as plists.")
+  (commands 0 :documentation "How many commands it has been sent.")
+  (done 0 :documentation "How many of them it has said it finished.")
   (pending "" :documentation "The start of a report whose end is still to come."))
 
 (defconst portal-fake-rex--script
@@ -29,8 +31,11 @@
     (setf (portal-fake-rex-pending server) (car (last lines))
           (portal-fake-rex-reports server)
           (nconc (portal-fake-rex-reports server)
-                 (mapcar (lambda (line) (json-parse-string line :object-type 'plist))
-                         complete)))))
+                 (cl-loop for line in complete
+                          for report = (json-parse-string line :object-type 'plist)
+                          if (plist-member report :done)
+                          do (setf (portal-fake-rex-done server) (plist-get report :done))
+                          else collect report)))))
 
 (defun portal-fake-rex-start ()
   "Start a fake Rex server and return it once it listens."
@@ -57,9 +62,18 @@
 
 (defun portal-fake-rex-command (server &rest command)
   "Send SERVER the COMMAND, a plist that `json-serialize' takes.
-For example (:event (:type \"session_created\" :payload (...)))."
-  (process-send-string (portal-fake-rex-process server)
-                       (concat (json-serialize command) "\n")))
+For example (:event (:type \"session_created\" :payload (...))).
+Return once the server has run it, so that what a client asks next meets
+it.  Only the server's own output is read meanwhile: no other process's,
+and no timer runs."
+  (let ((process (portal-fake-rex-process server))
+        (count (cl-incf (portal-fake-rex-commands server)))
+        (deadline (+ (float-time) 5)))
+    (process-send-string process (concat (json-serialize command) "\n"))
+    (while (< (portal-fake-rex-done server) count)
+      (when (or (> (float-time) deadline) (not (process-live-p process)))
+        (error "The fake Rex server did not run %S" command))
+      (accept-process-output process 0.05 nil 1))))
 
 (defun portal-fake-rex-take (server key &optional seconds)
   "Wait for SERVER's next report that has KEY, and return it.

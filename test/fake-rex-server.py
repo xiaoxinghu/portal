@@ -17,7 +17,9 @@ was seen to:
 - Upgrades a GET for /api/control that asks for rex.control.v1.
 - Answers a client's hello with a welcome.
 - Answers server.version, session.list and session.attach_all, the last two
-  with its sessions, and any other method with method_not_found.
+  with its sessions; session.list_blocks with a session's blocks, or
+  session_not_found for a session it does not have; and any other method
+  with method_not_found.
 - Gives each response the seq of the last event it sent that client.
 
 Reports, on standard output:
@@ -32,11 +34,18 @@ Reports, on standard output:
                                           frame's, its own or its answer to
                                           the server's, or null without one
     {"problem": TEXT}                     a command it could not run
+    {"done": N}                           it has finished with the Nth line
+                                          of standard input, so what a
+                                          client sends next meets it
 
 Commands, on standard input:
 
     {"sessions": [{"session_id": ..., "label": ...}, ...]}
         What session.list and session.attach_all return from now on.
+    {"blocks": {SESSION_ID: [{"block_id": ..., "label": ...}, ...], ...}}
+        What session.list_blocks returns for each of these sessions from
+        now on, as given: a real server adds a placement and more, and
+        sorts by block_id. A session without any has no blocks.
     {"result": METHOD, "payload": {...}}
         Answer METHOD with this payload from now on.
     {"error": METHOD, "code": CODE, "message": TEXT, "status": 400}
@@ -94,6 +103,11 @@ lock = threading.RLock()
 clients = {}
 state = {
     "sessions": [{"session_id": "session:fake-1", "label": "fake"}],
+    "blocks": {
+        "session:fake-1": [
+            {"block_id": "block:fake-1", "label": "shell", "placement": "placed"}
+        ]
+    },
     "results": {},
     "errors": {},
     "silent": set(),
@@ -246,6 +260,16 @@ class Client:
                         "message": 'session.attach_all request: event_scope must be "all" or "session"',
                         "status": 400,
                     }
+            elif method == "session.list_blocks":
+                session = payload.get("session_id")
+                if any(known["session_id"] == session for known in state["sessions"]):
+                    response["payload"] = {"blocks": state["blocks"].get(session, [])}
+                else:
+                    response["error"] = {
+                        "code": "session_not_found",
+                        "message": "session %s not found" % session,
+                        "status": 404,
+                    }
             else:
                 response["error"] = {
                     "code": "method_not_found",
@@ -311,6 +335,8 @@ def command(value):
         everyone = list(clients.values())
         if "sessions" in value:
             state["sessions"] = value["sessions"]
+        elif "blocks" in value:
+            state["blocks"].update(value["blocks"])
         elif "result" in value:
             state["errors"].pop(value["result"], None)
             state["results"][value["result"]] = value.get("payload", {})
@@ -392,16 +418,16 @@ def main():
         threading.Thread(target=write_reports, daemon=True).start()
         threading.Thread(target=accept, args=(listener,), daemon=True).start()
         report(listening=path)
-        for line in sys.stdin:
-            if not line.strip():
-                continue
-            try:
-                value = json.loads(line)
-                if not isinstance(value, dict):
-                    raise ValueError("not an object")
-                command(value)
-            except (ValueError, KeyError, TypeError) as problem:
-                report(problem="%s: %s" % (problem, line.strip()))
+        for count, line in enumerate(sys.stdin, 1):
+            if line.strip():
+                try:
+                    value = json.loads(line)
+                    if not isinstance(value, dict):
+                        raise ValueError("not an object")
+                    command(value)
+                except (ValueError, KeyError, TypeError) as problem:
+                    report(problem="%s: %s" % (problem, line.strip()))
+            report(done=count)
     finally:
         listener.close()
         try:
