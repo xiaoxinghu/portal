@@ -1380,7 +1380,9 @@ bool portal_rex_wait(uint64_t id, uint64_t milliseconds, bool *ready, portal_tex
     for (;;) {
         pump(connection);
         *ready = connection->waiting || connection->ended;
-        uint64_t left = deadline > now() ? deadline - now() : 0;
+        /* One reading of the clock: two could straddle the deadline, and
+           the difference would wrap to a wait of hours. */
+        uint64_t time = now(), left = deadline > time ? deadline - time : 0;
         if (*ready || !left)
             return true;
         bool readable = false;
