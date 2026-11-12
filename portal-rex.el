@@ -318,12 +318,14 @@ one whose connection ended, with \"portal_disconnected\"."
          response
          (number (portal-rex--request connection method payload
                                       (lambda (message) (setq response message)))))
-    (unless (portal-rex--await connection (lambda () response) timeout)
-      ;; An answer that comes later finds no one waiting.
+    (unwind-protect
+        (unless (portal-rex--await connection (lambda () response) timeout)
+          (setq response (portal-rex--failure "portal_timeout"
+                                              (format "no answer within %s seconds" timeout))))
+      ;; However the wait ends, a quit included, an answer that comes later
+      ;; finds no one waiting.
       (setf (portal-rex-connection-calls connection)
-            (assq-delete-all number (portal-rex-connection-calls connection)))
-      (setq response (portal-rex--failure "portal_timeout"
-                                          (format "no answer within %s seconds" timeout))))
+            (assq-delete-all number (portal-rex-connection-calls connection))))
     (when-let* ((failure (plist-get response :error)))
       (signal 'portal-rex-error
               (list (format "%s: %s" method (plist-get failure :message)) failure)))

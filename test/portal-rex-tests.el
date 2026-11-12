@@ -184,7 +184,14 @@ Connections that BODY leaves are closed, and none may remain."
       (portal-fake-rex-command server :release "session.list_blocks")
       (portal-rex-tests--until connection (lambda () late))
       (should (portal-rex-call connection "session.list"))
-      (should-not (portal-rex-connection-calls connection)))))
+      (should-not (portal-rex-connection-calls connection))
+      ;; A quit while it waits leaves no one waiting either.
+      (cl-letf (((symbol-function 'portal--rex-wait) (lambda (&rest _) (signal 'quit nil))))
+        (should (eq (condition-case nil (portal-rex-call connection "session.view")
+                      (quit 'quit))
+                    'quit)))
+      (should-not (portal-rex-connection-calls connection))
+      (should (portal-rex-call connection "session.list")))))
 
 (ert-deftest portal-rex-events-reach-the-hook-in-order ()
   (portal-rex-tests--with (server)
