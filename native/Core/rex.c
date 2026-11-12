@@ -369,6 +369,7 @@ bool portal_rex_request(uint64_t id, portal_string method, portal_string payload
 /* Shows. */
 
 static void stop_stream(struct shown *shown);
+static void free_operation(struct operation *operation);
 static void end_show(struct shown *shown, enum stage stage, const char *reason,
                      portal_string detail);
 static void next_operation(struct shown *shown);
@@ -485,6 +486,11 @@ static void end_show(struct shown *shown, enum stage stage, const char *reason,
         shown->reason = (portal_text) {text, length + detail.length};
     }
     stop_stream(shown);
+    /* Nothing more is shown, so nothing more is typed: a frozen screen
+       must not take commands. */
+    for (size_t k = 0; k < shown->queued; k++)
+        free_operation(&shown->operations[k]);
+    shown->queued = 0;
     clear(&shown->snapshot);
     clear(&shown->held);
     clear(&shown->paint);
@@ -950,6 +956,8 @@ static void free_operation(struct operation *operation)
    alike: typing to typing, and a size to the size it replaces. */
 static void queue(struct shown *shown, struct operation operation)
 {
+    if (shown->stage >= FAILED)
+        return free_operation(&operation);
     struct operation *last = shown->queued ? &shown->operations[shown->queued - 1] : NULL;
     if (last && last->kind == WRITE && operation.kind == WRITE) {
         append(&last->bytes, operation.bytes.data, operation.bytes.length);

@@ -209,7 +209,9 @@ view's own focus, size and colour-scheme reports are dropped.
 A block whose screen cannot be shown, because the server refused part of
 it, loses its view, and its buffer says why; showing the buffer again tries
 again. A block whose output stops, such as when its server drops the
-stream, keeps its last screen, and Emacs says so in the echo area.
+stream, keeps its last screen, and Emacs says so in the echo area; from
+then on nothing typed there reaches the block, so a screen that no longer
+changes never runs a command unseen.
 
 ## Call the server
 

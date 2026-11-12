@@ -482,6 +482,11 @@ static void test_showing(void)
                   "\"rex\":{\"state\":\"ended\",\"columns\":81,\"rows\":21,\"reason\":\"The block's "
                   "stream ended: The server closed the connection (4000: block closed)\"}"));
     CHECK(!*portal_fake_socket_address(data));
+    /* Its last screen stays, and takes no typing. */
+    portal_terminal_input(text(target), "rm -rf x\r", 9);
+    portal_input_focus(text(target), true);
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
+    sent(); /* The focus record. */
     CHECK(portal_views_close(text(target), &error));
     free(target);
 
@@ -585,6 +590,9 @@ static void test_typing(void)
                          "\"cell_height_px\":16}}"));
     answer_with(id, 7, "{}", NULL);
     portal_fake_socket_sent(id);
+    answer_with(id, 8, "{\"ticket\":\"AAECAwQFBgcICQoLDA0ODw\"}", NULL);
+    uint64_t data = portal_fake_socket_last();
+    CHECK(data > id);
     /* Once sized, a new grid resizes the block, the latest of several. */
     CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 400, 160}, text("frame"), &error));
     CHECK(asked(id, 9, "com.superlogical.terminal.resize",
@@ -599,10 +607,18 @@ static void test_typing(void)
                          "\"cell_height_px\":16}}"));
     answer_with(id, 10, "{}", NULL);
     CHECK(asked(id, 11, "com.superlogical.terminal.write", ON_BLOCK ",\"args\":{\"data\":\"d\"}}"));
+    /* The stream ends while a write is out: what was typed after it is
+       dropped, not sent once the write is answered. */
+    portal_terminal_input(text(target), "e", 1);
+    answer_with(id, 11, "{}", NULL);
+    CHECK(asked(id, 12, "com.superlogical.terminal.write", ON_BLOCK ",\"args\":{\"data\":\"e\"}}"));
+    portal_terminal_input(text(target), "f", 1);
+    portal_fake_socket_end(data, "The server closed the connection (1001: keepalive timeout)");
+    answer_with(id, 12, "{}", NULL);
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
     /* Closing the terminal stops its typing. */
     CHECK(portal_views_close(text(target), &error));
-    answer_with(id, 11, "{}", NULL);
-    portal_terminal_input(text(target), "e", 1);
+    portal_terminal_input(text(target), "g", 1);
     CHECK(is_text(portal_fake_socket_sent(id), ""));
     CHECK(is_text(received(id), ""));
     free(target);

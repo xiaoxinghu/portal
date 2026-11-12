@@ -439,7 +439,10 @@ own focus, size and colour-scheme reports are dropped by their shapes: the
 server makes those for itself, and a program would otherwise get two. A
 new grid resizes the block, the latest of several. While Emacs is the
 block's only client, the block follows the pane; a block another client
-owns may draw at the wrong size, which a later task settles.
+owns may draw at the wrong size, which a later task settles. Once a
+stream has failed or ended, what was queued is dropped and nothing more is
+typed: the terminal's last screen no longer changes, and must not run
+commands unseen.
 
 The stream and its terminal stay until the buffer goes, shown or not, so
 the first paint happens once per block per Emacs, and a buffer shown again
