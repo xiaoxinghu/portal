@@ -369,7 +369,8 @@ keys until Lisp can read the keymap and run the command. Ordinary I/O stays
 native, without polling timers or Lisp terminal redraws.
 
 The terminal uses the pinned [GhosttyTerminal Swift wrapper](https://github.com/Lakr233/libghostty-spm/tree/2.2.2026110702)
-and its Ghostty build. Release 2.2.2026110702 ships Ghostty
+and its Ghostty build, with Portal's
+[patches](../CONTRIBUTING.md#the-ghostty-dependency). Release 2.2.2026110702 ships Ghostty
 [`042b16b`](https://github.com/ghostty-org/ghostty/commit/042b16b6146ada29877dfeeea9f286889e4adeb1)
 of 2026-11-01. The Rex server the [test VM](test-vm.md) pins,
 0.1.0-preview.14, carries Ghostty `5813c9461` of 2026-11-06, 169 commits

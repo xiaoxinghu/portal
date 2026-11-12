@@ -109,7 +109,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/Library/Caches/org.swift.swiftpm
-          key: swiftpm-${{ steps.env.outputs.image }}-${{ hashFiles('native/Package.resolved') }}
+          key: swiftpm-${{ steps.env.outputs.image }}-${{ hashFiles('native/Package.resolved', 'native/libghostty-spm.json') }}
 
       - name: Restore Bun, host packages and Emacs packages
         id: build-cache

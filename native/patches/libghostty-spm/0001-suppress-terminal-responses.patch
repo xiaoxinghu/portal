@@ -1,0 +1,209 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxing Hu <hi@xiaoxing.dev>
+Date: Fri, 13 Nov 2026 10:14:37 +1300
+Subject: [PATCH] InMemoryTerminalSession: option to suppress terminal
+ responses
+
+A host whose output comes from another terminal, such as a multiplexer's
+view of a session it runs, needs the surface to draw that output without
+answering the queries in it: the other terminal answered them already, and
+a second reply is typed into the program. ghostty_surface_write_buffer_replay
+does that (Patches/ghostty/0011-replay-response-suppression.sh), but no
+Swift path reached it.
+
+suppressesTerminalResponses, off by default, sends the session's writes
+through it. The write queue, buffering before a surface attaches and the
+backlog handler are unchanged.
+---
+ .../InMemory/InMemoryTerminalSession.swift    | 35 +++++++++++++++++-
+ .../GhosttySurfaceHarness.swift               | 26 +++++++++++--
+ ...InMemoryTerminalSessionResponseTests.swift | 37 +++++++++++++++++++
+ 3 files changed, 93 insertions(+), 5 deletions(-)
+ create mode 100644 Tests/GhosttyKitTest/Session/InMemoryTerminalSessionResponseTests.swift
+
+diff --git a/Sources/GhosttyTerminal/InMemory/InMemoryTerminalSession.swift b/Sources/GhosttyTerminal/InMemory/InMemoryTerminalSession.swift
+index ef0b0e7..e5d1823 100644
+--- a/Sources/GhosttyTerminal/InMemory/InMemoryTerminalSession.swift
++++ b/Sources/GhosttyTerminal/InMemory/InMemoryTerminalSession.swift
+@@ -31,16 +31,33 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
+     /// repaint that re-wraps its content.
+     public let suppressesPixelOnlyResizes: Bool
+ 
++    /// Parse received output as replayed history: the screen updates exactly
++    /// as it does for live output, but the terminal answers none of the
++    /// queries in it (device attributes, cursor position, colors, title
++    /// reports), so nothing reaches the write closure on their account.
++    ///
++    /// Off by default: a host that runs the program itself has no one else to
++    /// answer its queries.
++    ///
++    /// For a host whose output comes from another terminal that has already
++    /// answered them, such as a multiplexer's view of a session it runs:
++    /// answering again would type the replies into the program. Reports from
++    /// the terminal's own state, such as in-band size reports after a resize,
++    /// and encoded keys still go out.
++    public let suppressesTerminalResponses: Bool
++
+     public init(
+         write: @escaping @Sendable (Data) -> Void,
+         resize: @escaping @Sendable (InMemoryTerminalViewport) -> Void,
+         suppressesPixelOnlyResizes: Bool = false,
++        suppressesTerminalResponses: Bool = false,
+     ) {
+         writeHandler = write
+         resizeHandler = resize
+         self.suppressesPixelOnlyResizes = suppressesPixelOnlyResizes
++        self.suppressesTerminalResponses = suppressesTerminalResponses
+         surfaceAccess = InMemoryTerminalSurfaceAccess(
+-            write: Self.writeToSurface,
++            write: suppressesTerminalResponses ? Self.replayToSurface : Self.writeToSurface,
+             processExit: Self.reportProcessExit,
+             tick: Self.tickApp,
+         )
+@@ -52,6 +69,7 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
+         write: @escaping @Sendable (Data) -> Void,
+         resize: @escaping @Sendable (InMemoryTerminalViewport) -> Void,
+         suppressesPixelOnlyResizes: Bool = false,
++        suppressesTerminalResponses: Bool = false,
+         surfaceWrite: @escaping InMemoryTerminalSurfaceAccess.Write,
+         processExit: @escaping InMemoryTerminalSurfaceAccess.ProcessExit =
+             InMemoryTerminalSession.reportProcessExit,
+@@ -60,6 +78,7 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
+         writeHandler = write
+         resizeHandler = resize
+         self.suppressesPixelOnlyResizes = suppressesPixelOnlyResizes
++        self.suppressesTerminalResponses = suppressesTerminalResponses
+         surfaceAccess = InMemoryTerminalSurfaceAccess(
+             write: surfaceWrite,
+             processExit: processExit,
+@@ -352,6 +371,14 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
+     }
+ 
+     private static func writeToSurface(_ surface: ghostty_surface_t, _ data: Data) {
++        write(data, to: surface, replay: false)
++    }
++
++    private static func replayToSurface(_ surface: ghostty_surface_t, _ data: Data) {
++        write(data, to: surface, replay: true)
++    }
++
++    private static func write(_ data: Data, to surface: ghostty_surface_t, replay: Bool) {
+         let start = ProcessInfo.processInfo.systemUptime
+         defer {
+             let duration = ProcessInfo.processInfo.systemUptime - start
+@@ -367,7 +394,11 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
+             guard let ptr = buffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                 return
+             }
+-            ghostty_surface_write_buffer(surface, ptr, UInt(buffer.count))
++            if replay {
++                ghostty_surface_write_buffer_replay(surface, ptr, UInt(buffer.count))
++            } else {
++                ghostty_surface_write_buffer(surface, ptr, UInt(buffer.count))
++            }
+         }
+     }
+ 
+diff --git a/Tests/GhosttyKitTest/GhosttySurfaceHarness.swift b/Tests/GhosttyKitTest/GhosttySurfaceHarness.swift
+index cad4093..f1dfcf2 100644
+--- a/Tests/GhosttyKitTest/GhosttySurfaceHarness.swift
++++ b/Tests/GhosttyKitTest/GhosttySurfaceHarness.swift
+@@ -14,13 +14,13 @@ final class GhosttySurfaceHarness {
+     private static var isOccupied = false
+     private static var waiters: [CheckedContinuation<Void, Never>] = []
+ 
+-    static func make() async -> GhosttySurfaceHarness {
++    static func make(suppressesTerminalResponses: Bool = false) async -> GhosttySurfaceHarness {
+         if isOccupied {
+             await withCheckedContinuation { waiters.append($0) }
+         } else {
+             isOccupied = true
+         }
+-        return GhosttySurfaceHarness()
++        return GhosttySurfaceHarness(suppressesTerminalResponses: suppressesTerminalResponses)
+     }
+ 
+     /// Hands the turn straight to the next waiter, so it stays occupied.
+@@ -38,11 +38,12 @@ final class GhosttySurfaceHarness {
+     private let outbound = LockedBytes()
+     private var holdsTurn = true
+ 
+-    private init() {
++    private init(suppressesTerminalResponses: Bool) {
+         let outbound = outbound
+         session = InMemoryTerminalSession(
+             write: { outbound.append($0) },
+             resize: { _ in },
++            suppressesTerminalResponses: suppressesTerminalResponses,
+         )
+         platformView.wantsLayer = true
+         coordinator.isAttached = { true }
+@@ -101,6 +102,25 @@ final class GhosttySurfaceHarness {
+         return outbound.bytes
+     }
+ 
++    /// The outbound bytes up to and including the first `marker`, which
++    /// nothing in the terminal answers to, so it works where `drain` cannot:
++    /// a session that suppresses responses never sends the reply `drain`
++    /// waits for.
++    func outbound(through marker: String) async -> Data {
++        let needle = Data(marker.utf8)
++        let clock = ContinuousClock()
++        let deadline = clock.now + .seconds(15)
++        while clock.now < deadline {
++            let bytes = outbound.bytes
++            if let found = bytes.range(of: needle) {
++                return Data(bytes[..<found.upperBound])
++            }
++            await Task.yield()
++        }
++        Issue.record("\(marker) never arrived")
++        return outbound.bytes
++    }
++
+     /// The outbound bytes since the last take, then a clean slate: `drain`
+     /// alone stops at the first device-attributes reply in the buffer, so a
+     /// second drain without clearing would return the first one's bytes.
+diff --git a/Tests/GhosttyKitTest/Session/InMemoryTerminalSessionResponseTests.swift b/Tests/GhosttyKitTest/Session/InMemoryTerminalSessionResponseTests.swift
+new file mode 100644
+index 0000000..f360af1
+--- /dev/null
++++ b/Tests/GhosttyKitTest/Session/InMemoryTerminalSessionResponseTests.swift
+@@ -0,0 +1,37 @@
++import Foundation
++import GhosttyKit
++@testable import GhosttyTerminal
++import Testing
++
++/// Each test asks a real surface for its device attributes, then pastes a
++/// marker. Pasted text goes out through the same queue as the terminal's
++/// replies, behind any reply parsing produced, so once the marker is out a
++/// reply would be out too.
++@MainActor
++struct InMemoryTerminalSessionResponseTests {
++    @Test
++    func `a session answers the queries in its output`() async {
++        let bytes = await deviceAttributesThenMarker(suppressesTerminalResponses: false)
++        #expect(bytes.starts(with: Data("\u{1B}[?62;22".utf8)))
++        #expect(bytes.count(of: "\u{1B}[?") == 1)
++    }
++
++    @Test
++    func `a session that suppresses terminal responses answers none`() async {
++        let bytes = await deviceAttributesThenMarker(suppressesTerminalResponses: true)
++        #expect(bytes == Data("marker".utf8))
++    }
++
++    private func deviceAttributesThenMarker(suppressesTerminalResponses: Bool) async -> Data {
++        let harness = await GhosttySurfaceHarness.make(
++            suppressesTerminalResponses: suppressesTerminalResponses,
++        )
++        defer { harness.tearDown() }
++        guard let surface = harness.surface else { return Data() }
++
++        harness.session.receive(Data("\u{1B}[c".utf8))
++        harness.session.waitForPendingOutput()
++        #expect(surface.paste(text: "marker"))
++        return await harness.outbound(through: "marker")
++    }
++}

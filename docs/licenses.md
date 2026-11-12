@@ -39,8 +39,9 @@ A list of dependency names is not that source.
 The native module, `portal.bundle/Contents/MacOS/portal.dylib`, contains Portal's
 C core and Swift backend, statically linked with:
 
-- libghostty-spm, the Swift wrapper, and DisplayLink, from SwiftPM checkouts at
-  the `native/Package.resolved` pins. The wrapper's GhosttyTheme module compiles
+- libghostty-spm, the Swift wrapper, at the release `native/libghostty-spm.json`
+  pins with Portal's patches applied, and DisplayLink, from a SwiftPM checkout at
+  its `native/Package.resolved` pin. The wrapper's GhosttyTheme module compiles
   in iTerm2-Color-Schemes data; SwiftPM drops that data's license from the build,
   so the staged copy is the only one that ships.
 - Ghostty, as the wrapper's prebuilt `libghostty.a`. The library's object members
@@ -108,8 +109,8 @@ The generated index repeats the per-component items.
 1. **Corresponding source.** A binary release conveys the object code of the
    whole module and host, so GPL-3.0 section 6 requires the corresponding source
    or a written offer; the LGPL and MPL-2.0 also require it for JavaScriptCore
-   and z2d. That source is Portal at the release commit; libghostty-spm at its
-   pinned revision, including its `Patches/` and build scripts that produce the
+   and z2d. That source is Portal at the release commit, which holds its patches
+   to libghostty-spm; libghostty-spm at its pinned revision, including its `Patches/` and build scripts that produce the
    prebuilt library; Ghostty at the revision that release names; the dependency archives Ghostty's `build.zig.zon` files pin; Bun at its
    release tag, with oven-sh/WebKit at the commit Bun pins and the libraries Bun's
    build scripts pin; and the npm packages at the lockfile versions. Statically
@@ -153,7 +154,8 @@ failure names the file to update:
 - **A component's version is no longer shipped.** A dependency upgrade made it
   stale, including any code or fonts recorded under it. Review the new version
   and update the component and its texts.
-- **A new Swift pin or wrapper version.** Thin the new prebuilt library with
+- **A new Swift pin or wrapper version.** The wrapper's version is in
+  `native/libghostty-spm.json`, the other Swift pins in `native/Package.resolved`. Thin the new prebuilt library with
   `lipo`, list its members with `ar -t` and its symbols with `nm`, read the
   `build.zig.zon` files at the Ghostty revision its `Ghostty.ref` names, and
   update the Ghostty components and texts.

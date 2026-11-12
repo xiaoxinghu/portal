@@ -9,7 +9,7 @@
 			"shipped": "portal.dylib; portal.bundle resources",
 			"when": ["swift:libghostty-spm@2.2.2026110702"],
 			"texts": ["swift:libghostty-spm/LICENSE"],
-			"note": "The bash and zsh integration it ships is the wrapper's own MIT rewrite, not Ghostty's GPL-3.0 originals"
+			"note": "Built with Portal's patches in native/patches/libghostty-spm. The bash and zsh integration it ships is the wrapper's own MIT rewrite, not Ghostty's GPL-3.0 originals"
 		},
 		{
 			"id": "bash-preexec",
