@@ -252,6 +252,28 @@ Connections that BODY leaves are closed, and none may remain."
         (should (equal (mapcar (lambda (event) (plist-get event :seq)) (reverse seen))
                        '(2 3)))))))
 
+(ert-deftest portal-rex-connect-keeps-order-when-a-handler-calls ()
+  ;; A handler of the first event that overtook the sessions calls the server
+  ;; and waits; an event arrives meanwhile.  The second overtaking event
+  ;; still comes before it.
+  (portal-rex-tests--with (server)
+    (let* (seen
+           (portal-rex-event-functions
+            (list (lambda (from event)
+                    (push (plist-get (plist-get event :payload) :type) seen)
+                    (when (equal (car seen) "first")
+                      (should (portal-rex-call from "session.list")))))))
+      (portal-fake-rex-command server :hold "session.attach_all")
+      (portal-fake-rex-command server :after "session.attach_all"
+                               :then [(:event (:type "first")) (:event (:type "second"))
+                                      (:release "session.attach_all")])
+      (portal-fake-rex-command server :hold "session.list")
+      (portal-fake-rex-command server :after "session.list"
+                               :then [(:event (:type "third")) (:release "session.list")])
+      (let ((connection (portal-rex-tests--connect server)))
+        (portal-rex-tests--until connection (lambda () (= (length seen) 3)))
+        (should (equal (reverse seen) '("first" "second" "third")))))))
+
 (ert-deftest portal-rex-lost-connection-is-reported-once ()
   (portal-rex-tests--with (server)
     (let ((connection (portal-rex-tests--connect server))

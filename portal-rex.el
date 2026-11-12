@@ -285,7 +285,9 @@ one whose connection ended, with \"portal_disconnected\"."
 (defun portal-rex--attached (connection response)
   "Make CONNECTION ready with RESPONSE, the server's answer to attaching.
 The sessions it lists are as they were after the response's seq: the
-events held meanwhile that came later follow, and the rest are in them."
+events held meanwhile that came later follow, and the rest are in them.
+Those that follow go to the front of the inbox, which is being drained,
+so a handler that waits for the server finds them ahead of anything newer."
   (if-let* ((failure (plist-get response :error)))
       (portal-rex--end connection (format "The server sends no events: %s"
                                           (plist-get failure :message)))
@@ -294,10 +296,11 @@ events held meanwhile that came later follow, and the rest are in them."
       (setf (portal-rex-connection-held connection) nil
             (portal-rex-connection-sessions connection)
             (plist-get (plist-get response :payload) :sessions)
-            (portal-rex-connection-state connection) 'ready)
-      (dolist (event held)
-        (when (> (or (plist-get event :seq) 0) seq)
-          (portal-rex--handle connection event))))))
+            (portal-rex-connection-state connection) 'ready
+            (portal-rex-connection-inbox connection)
+            (nconc (cl-delete-if-not (lambda (event) (> (or (plist-get event :seq) 0) seq))
+                                     held)
+                   (portal-rex-connection-inbox connection))))))
 
 (defun portal-rex--disconnect-all ()
   "Disconnect from every Rex server, as Emacs exits."
