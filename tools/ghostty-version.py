@@ -422,6 +422,8 @@ def report(args):
         notes += [note] if note else []
         if not newest_commit:
             unknown.append(f"the Ghostty of the newest release {newest}")
+        elif same_commit(newest_commit, pin_commit):
+            notes.append(f"{newest} ships the same Ghostty as the pin")
 
     executable = find_rex(args.rex)
     server_version = server_commit = server_rex = None
@@ -582,7 +584,8 @@ def bump(args):
         for name in failed:
             print(f"Does not apply to {version}: native/patches/libghostty-spm/{name}")
     else:
-        print(f"All {plural(count, 'patch')} apply to {version}.")
+        print(f"The one patch applies to {version}." if count == 1 else
+              f"All {count} patches apply to {version}." if count else "There are no patches.")
     print()
     print("Nothing is committed. Next:")
     steps = []

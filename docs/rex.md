@@ -17,6 +17,7 @@ themselves and need no Rex installed.
 - [Call the server](#call-the-server)
 - [Receive events](#receive-events)
 - [When a connection is lost](#when-a-connection-is-lost)
+- [Ghostty versions](#ghostty-versions)
 - [What is not built](#what-is-not-built)
 
 For the words used here, see [the domain vocabulary](../CONTEXT.md#rex); for
@@ -230,6 +231,33 @@ Support/rex/server.sock: The server closed the connection". Its blocks'
 buffers are killed, calls still waiting fail with `"portal_disconnected"`,
 and the connection takes no more. Nothing reconnects by itself: run
 `portal-rex-connect` again, which makes the buffers again.
+
+## Ghostty versions
+
+A Rex server runs each block's program in a terminal of its own Ghostty.
+Portal is to draw a block's screen by feeding the same output to its own
+Ghostty, the one in the [libghostty-spm](terminals.md#native-ghostty-terminal)
+release Portal pins. The two are seldom the same Ghostty, and nothing checks
+them: Portal connects to any server whose API it speaks, whatever its Ghostty.
+
+While they agree on every sequence a program sends, the screens match. When
+the server's Ghostty knows a sequence Portal's does not, the screens differ,
+silently, until the program draws that part again: a program that inserted a
+column with DECIC, say, leaves `ab  cdefgh` on the server and `abcdefgh` in
+Emacs. Portal's Ghostty is usually the older, as Rex updates itself and Portal
+moves only when its pin does.
+
+To see how far apart they are, run the report from a checkout of Portal:
+
+```sh
+tools/ghostty-version.py
+```
+
+It prints Portal's Ghostty, that of the newest libghostty-spm release and that
+of the Rex server installed on this Mac, how many of the server's commits each
+lacks, and whether a newer release would help. It is the only check there is;
+[Contributing](../CONTRIBUTING.md#the-ghostty-dependency) says how to bump the
+pin when it would.
 
 ## What is not built
 

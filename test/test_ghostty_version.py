@@ -227,7 +227,7 @@ class Stand_ins(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.pin()["version"], "2.0")
         self.assertEqual(self.pin()["revision"], git(self.package, "rev-parse", "2.0"))
-        self.assertIn("All 1 patch apply to 2.0.", result.stdout)
+        self.assertIn("The one patch applies to 2.0.", result.stdout)
         self.assertIn("Nothing is committed.", result.stdout)
         self.assertIn("./build.sh", result.stdout)
 
