@@ -312,6 +312,43 @@ Connections that BODY leaves are closed, and none may remain."
         (portal-rex-tests--until connection (lambda () (equal (car first) "good"))))
       (should-not (portal-rex-connection-handling connection)))))
 
+(ert-deftest portal-rex-events-before-the-end-run-after-a-waiting-function ()
+  ;; A hook function waits for the server, more events arrive, and the
+  ;; connection ends.  The function's call returns, the events that had
+  ;; arrived still run, in order, and only then is the connection lost.
+  (dolist (case '((:silent [(:event (:type "two")) (:event (:type "three")) (:drop t)]
+                   "portal_disconnected" "The connection to the server was lost")
+                  ;; The same when the server answers first, then closes.
+                  (:result [(:event (:type "two")) (:event (:type "three")) (:close 1000)]
+                   answered "The server closed the connection (1000)")))
+    (portal-rex-tests--with (server)
+      (let* ((connection (portal-rex-tests--connect server))
+             seen outcome live
+             (portal-rex-event-functions
+              (list (lambda (from event)
+                      (push (plist-get (plist-get event :payload) :type) seen)
+                      (when (equal (car seen) "one")
+                        (setq outcome (condition-case failure
+                                          (and (portal-rex-call from "session.view") 'answered)
+                                        (portal-rex-error (plist-get (nth 2 failure) :code)))
+                              live (portal-rex-live-p from))
+                        (push "returned" seen))))))
+        (portal-fake-rex-command server (nth 0 case) "session.view" :payload '(:ok t))
+        (portal-fake-rex-command server :after "session.view" :then (nth 1 case))
+        (portal-fake-rex-command server :event '(:type "one"))
+        (should (equal (portal-rex-tests--messages
+                         (portal-rex-tests--until
+                          connection
+                          (lambda () (eq (portal-rex-connection-state connection) 'closed))))
+                       (format "Lost the Rex server at %s: %s\n"
+                               (abbreviate-file-name (portal-fake-rex-socket server))
+                               (nth 3 case))))
+        (should (equal outcome (nth 2 case)))
+        (should (equal (reverse seen) '("one" "returned" "two" "three")))
+        ;; Once its call has failed, the function sees that the connection is gone.
+        (when (stringp outcome) (should-not live))
+        (should-not (portal-rex-connection-calls connection))))))
+
 (ert-deftest portal-rex-lost-connection-is-reported-once ()
   (portal-rex-tests--with (server)
     (let ((connection (portal-rex-tests--connect server))

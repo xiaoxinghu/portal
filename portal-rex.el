@@ -91,6 +91,12 @@ keeps it current.")
 
 (defun portal-rex-live-p (connection)
   "Return non-nil if CONNECTION takes calls and delivers events."
+  (and (portal-rex--ready-p connection) (portal-rex-connection-id connection) t))
+
+(defun portal-rex--ready-p (connection)
+  "Return non-nil if CONNECTION's events run the hook.
+That outlasts `portal-rex-live-p' by the events that had arrived when the
+connection ended, which run before it is reported lost."
   (eq (portal-rex-connection-state connection) 'ready))
 
 (defun portal-rex--named (connection)
@@ -119,31 +125,46 @@ It has the shape of a server's error, with a code no server sends."
     (and (consp value) (keywordp (car value)) value)))
 
 (defun portal-rex--pump (connection)
-  "Take what waits on CONNECTION from the native module, and handle it."
+  "Take what waits on CONNECTION from the native module, and handle it.
+The end of the connection joins the queue behind its last messages, as
+\(:type ended :reason REASON)."
   (when-let* ((id (portal-rex-connection-id connection)))
-    (pcase-let ((`(,reason . ,texts) (portal--rex-receive id)))
+    (pcase-let ((`(,reason . ,texts) (portal--rex-receive id))
+                (messages nil))
       ;; Once the module gives a reason, it has forgotten the connection.
       (when reason (setf (portal-rex-connection-id connection) nil))
+      (while texts
+        (if-let* ((message (portal-rex--parse (pop texts))))
+            (push message messages)
+          ;; A server that sends anything else is not one to go on with:
+          ;; what it sent after that is dropped with the connection.
+          (when (portal-rex-connection-id connection)
+            (setf (portal-rex-connection-id connection) nil)
+            (ignore-errors (portal--rex-close id)))
+          (setq reason "The server sent a message that is not JSON"
+                texts nil)))
       (setf (portal-rex-connection-inbox connection)
             (nconc (portal-rex-connection-inbox connection)
-                   (mapcar (lambda (text)
-                             (or (portal-rex--parse text) (list :type 'garbled)))
-                           texts)
+                   (nreverse messages)
                    (and reason (list (list :type 'ended :reason reason)))))))
   (portal-rex--drain connection))
 
 (defun portal-rex--next (connection)
   "Remove and return the next of CONNECTION's waiting messages to handle.
 That is the oldest, except while an event's functions run: then it is
-the oldest that is not an event."
+the oldest that is not an event, and the end of the connection stays
+where it is, behind the events before it, once it has failed the
+requests still waiting, so that whoever waits for one returns."
   (let ((inbox (portal-rex-connection-inbox connection)))
     (if (not (portal-rex-connection-handling connection))
         (pop (portal-rex-connection-inbox connection))
       (when-let* ((message (cl-find-if-not (lambda (waiting)
                                              (equal (plist-get waiting :type) "event"))
                                            inbox)))
-        (setf (portal-rex-connection-inbox connection) (delq message inbox))
-        message))))
+        (if (eq (plist-get message :type) 'ended)
+            (ignore (portal-rex--fail-calls connection (plist-get message :reason)))
+          (setf (portal-rex-connection-inbox connection) (delq message inbox))
+          message)))))
 
 (defun portal-rex--drain (connection)
   "Handle CONNECTION's waiting messages, oldest first.
@@ -169,13 +190,12 @@ keep their places until the function returns."
                (delq call (portal-rex-connection-calls connection)))
          (portal-rex--run (cdr call) message))))
     ("event"
-     (if (not (portal-rex-live-p connection))
+     (if (not (portal-rex--ready-p connection))
          (push message (portal-rex-connection-held connection))
        (setf (portal-rex-connection-handling connection) t)
        (unwind-protect
            (portal-rex--run #'run-hook-with-args 'portal-rex-event-functions connection message)
          (setf (portal-rex-connection-handling connection) nil))))
-    ('garbled (portal-rex--end connection "The server sent a message that is not JSON"))
     ('ended (portal-rex--ended connection (plist-get message :reason)))
     ;; Anything else is from a newer server.
     (_ nil)))
@@ -194,24 +214,28 @@ A connection that has ended keeps the reason it had."
     (ignore-errors (portal--rex-close id)))
   (portal-rex--ended connection reason))
 
+(defun portal-rex--fail-calls (connection reason)
+  "Fail every request still waiting on CONNECTION, oldest first, with REASON."
+  (let ((calls (reverse (portal-rex-connection-calls connection))))
+    (setf (portal-rex-connection-calls connection) nil)
+    (dolist (call calls)
+      (portal-rex--run (cdr call) (portal-rex--failure "portal_disconnected" reason)))))
+
 (defun portal-rex--ended (connection reason &optional quiet)
   "Note that CONNECTION has ended because of REASON, the first time only.
 Every request still waiting fails, oldest first.  A connection that was
 ready is reported lost in the echo area, unless QUIET."
   (unless (eq (portal-rex-connection-state connection) 'closed)
-    (let ((ready (portal-rex-live-p connection))
-          (calls (reverse (portal-rex-connection-calls connection))))
+    (let ((ready (portal-rex--ready-p connection)))
       (setf (portal-rex-connection-id connection) nil
             (portal-rex-connection-state connection) 'closed
             (portal-rex-connection-reason connection) reason
-            (portal-rex-connection-calls connection) nil
             (portal-rex-connection-inbox connection) nil
             (portal-rex-connection-held connection) nil
             portal-rex--connections (delq connection portal-rex--connections))
       (unless portal-rex--connections
         (remove-hook 'kill-emacs-hook #'portal-rex--disconnect-all))
-      (dolist (call calls)
-        (portal-rex--run (cdr call) (portal-rex--failure "portal_disconnected" reason)))
+      (portal-rex--fail-calls connection reason)
       (when (and ready (not quiet))
         (message "Lost the Rex server at %s: %s" (portal-rex--named connection) reason)))))
 
