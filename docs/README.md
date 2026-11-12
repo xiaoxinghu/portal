@@ -14,6 +14,7 @@ Run shell examples from the repository root, not `docs/`.
 | Draw and save offline | [Local Excalidraw drawings](excalidraw.md) |
 | Run shells, switch terminals or use a quick terminal | [Terminals and optional Consult/Embark adapters](terminals.md) |
 | Present a command in a panel or set a global shortcut | [Launchers and global shortcuts](launcher.md) |
+| Connect Emacs to a Rex server and call it from Lisp | [Connect to a Rex server](rex.md) |
 | Diagnose a blank hosted app or restart its process | [App host lifecycle and diagnostics](app-host.md) |
 
 ## Build and change Portal
@@ -27,7 +28,7 @@ Run shell examples from the repository root, not `docs/`.
 - [Releasing Portal](releasing.md): the checklist and evidence a release needs.
 - [Licenses and third-party notices](licenses.md): what the outputs ship, the
   staged notices, open questions before a binary release and inventory upkeep.
-- [Domain vocabulary](../CONTEXT.md): view, terminal and hosted-app terms.
+- [Domain vocabulary](../CONTEXT.md): view, terminal, hosted-app and Rex terms.
 - [Implementation and native boundaries](architecture.md): state ownership,
   lifetimes, platform interfaces and failure invariants.
 - [Input bridge](terminal-input-bridge.md): key routing and the notification pipe.

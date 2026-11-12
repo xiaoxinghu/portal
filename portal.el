@@ -36,6 +36,9 @@
 ;; Posts nothing until `portal-post-key' is called.
 (require 'portal-system)
 
+;; Connects to no Rex server until `portal-rex-connect' is called.
+(require 'portal-rex)
+
 (defcustom portal-terminal-consult-auto-enable t
   "Whether loading Portal and Consult enables their terminal integration.
 Set this to nil before loading either package to opt out.  The integration

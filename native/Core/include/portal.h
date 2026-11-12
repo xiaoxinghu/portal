@@ -7,8 +7,8 @@
    and lifecycle, input.c decides who gets each key press, terminals.c keeps
    the rules of terminal views, web.c those of web views and the bridge,
    shortcuts.c the system-wide shortcuts,
-   status.c where the status panel goes, and channel.c owns the pipe that
-   carries records to Emacs.
+   status.c where the status panel goes, rex.c the connections to Rex
+   servers, and channel.c owns the pipe that carries records to Emacs.
    The platform implements the operations below: the production module links
    the macOS backend, native/Backend.swift, and the core's tests link
    test/portal-fake-backend.c.  Nothing here knows about Emacs values or a UI
@@ -341,6 +341,54 @@ bool portal_view_literal(portal_view *view, portal_text *error);
 bool portal_view_copy(portal_view *view, portal_text *error);
 bool portal_view_paste(portal_view *view, portal_text *error);
 
+/* Message sockets, for the core's Rex connections (native/Core/rex.c).  A
+   message socket is a connection to a server on this machine that carries
+   text messages both ways: a WebSocket (RFC 6455) over a Unix domain socket,
+   which no system WebSocket client dials.  What the messages say is the
+   core's business and Lisp's; the platform knows nothing of Rex.
+
+   SOCKET is the core's name for the connection, never 0 and never given to
+   another one.  Open starts connecting to the Unix socket at PATH and asking
+   it for RESOURCE, such as "/api/control", with the subprotocol PROTOCOL,
+   and returns at once: the platform dials, upgrades and reads off the
+   module thread, so a server that answers slowly or never holds nothing up.
+   Open fails only when it cannot start, as for a PATH too long for a socket
+   address.
+
+   Send queues TEXT as one message.  Messages go out in the order they were
+   sent, those sent before the connection is up once it is, and none after
+   it has ended; sending never waits for the server.
+
+   What arrives stays with the platform until the core reads it.  Read sets
+   *MESSAGES to the *COUNT messages that arrived since the last read, oldest
+   first, an array allocated with malloc like each text, which the core
+   frees; a message is whatever text the server sent, with invalid UTF-8
+   replaced.  Read sets *ENDED to whether the connection has ended, so that
+   these messages are its last, and then *REASON to why, for people: the
+   server could not be reached, refused the upgrade, closed the connection,
+   broke the protocol, or went away.  A connection ends once, and nothing
+   arrives after it; otherwise *REASON stays unset.
+
+   Wait returns once Read would return a message or the end, or after
+   MILLISECONDS, whichever comes first, and sets *READY to which: the one
+   primitive that blocks the module thread, for a caller that needs an
+   answer before going on.
+
+   Close ends the connection, telling the server if it is up, and forgets
+   SOCKET: the platform drops what the core has not read and reports nothing
+   more for it.  The core closes every socket it opened, an ended one too.
+
+   When a message or the end is ready to read on a socket that had nothing
+   to read, call portal_socket_ready, below, from the platform's event loop
+   on the module thread; never from inside one of these operations. */
+bool portal_socket_open(uint64_t socket, portal_string path, portal_string resource,
+                        portal_string protocol, portal_text *error);
+bool portal_socket_send(uint64_t socket, portal_string text, portal_text *error);
+bool portal_socket_read(uint64_t socket, portal_text **messages, size_t *count, bool *ended,
+                        portal_text *reason, portal_text *error);
+bool portal_socket_wait(uint64_t socket, uint64_t milliseconds, bool *ready, portal_text *error);
+bool portal_socket_close(uint64_t socket, portal_text *error);
+
 /* Timers, implemented by the platform.  Call portal_timer_fired(TOKEN) once,
    from the platform's event loop on the module thread, no sooner than
    MILLISECONDS from now; never from inside this call.  A timer cannot fail
@@ -442,6 +490,11 @@ bool portal_notify(portal_string type, portal_string target, const portal_string
 bool portal_launcher_blurred(uint64_t session);
 /* A timer from portal_timer_start has fired. */
 void portal_timer_fired(uint64_t token);
+/* SOCKET, which had nothing to read, has a message or its end to read.  The
+   core tells Emacs with a "rex ID" record, and sends no other for that
+   connection until Emacs has received what waits.  The core ignores a
+   socket it has closed. */
+void portal_socket_ready(uint64_t socket);
 /* The user pressed HOTKEY's chord, or released it, in any application.
    Report only what happened after HOTKEY was registered.  A press may repeat
    while the chord is held. */

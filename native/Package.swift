@@ -20,7 +20,7 @@ let package = Package(
     ],
     targets: [
         // The C core: the Emacs bindings, the view registry, input, terminal and
-        // web views' rules, shortcuts, the notification pipe, and portal.h, the
+        // web views' rules, shortcuts, Rex connections, the notification pipe, and portal.h, the
         // interface the Swift backend implements. web.c embeds the shared browser scripts in scripts/. Core/CMakeLists.txt compiles the
         // same sources into the fake-backend tests.
         .target(name: "PortalCore", path: "Core", exclude: ["CMakeLists.txt", "scripts"],
@@ -33,7 +33,7 @@ let package = Package(
            sources: ["Backend.swift", "CoreCalls.swift", "NativeHost.swift", "NativeInput.swift",
                      "Views.swift", "WebView.swift", "Terminal.swift", "Launcher.swift",
                      "Hotkeys.swift", "KeyPost.swift",
-                     "StatusPanel.swift"],
+                     "StatusPanel.swift", "MessageSocket.swift"],
            swiftSettings: [.unsafeFlags(["-warnings-as-errors"])])
     ]
 )

@@ -369,6 +369,34 @@ After `./build.sh`, run them directly:
 (cd host && bun test)
 ```
 
+## Rex checks
+
+Tests of the [Rex client](rex.md) never connect to a real Rex server, and so
+never to yours. They use [a fake one](../test/fake-rex-server.py): a Python
+program that speaks Rex's control protocol on a Unix socket in a temporary
+directory, answers a hello and the methods a connection calls, and does what
+a test tells it on its standard input: canned results and errors per method,
+events on demand, answers held back or never sent, dropped connections,
+refused upgrades, fragments, pings and garbage. It frames WebSocket itself,
+so it can break the framing too. Its docstring lists the commands and what
+it reports; [portal-fake-rex.el](../test/portal-fake-rex.el) starts and
+scripts it from any Emacs, batch or graphical, and any other harness can
+run it as a subprocess. Extend it there as the client grows.
+
+Three suites use it or the fake platform:
+
+- `rex-core` runs the core's connection rules against the fake platform's
+  sockets, with no server at all.
+- `rex` runs `portal-rex.el` on the built module against the fake server, in
+  batch Emacs: message sockets need no window. Batch Emacs runs no main run
+  loop, so the module's `rex ID` record never arrives there; these tests take
+  messages by waiting, as `portal-rex-call` does.
+- `test/portal-rex-gui-tests.el`, part of `sh test/views-gui.sh`, proves the
+  record: events, answers and a lost connection reaching an idle Emacs.
+
+The fake follows what a real server was seen to send. Checks against a real
+Rex server are run by hand, in a session made for them; report what you ran.
+
 ## Package installation checks
 
 The `package` CTest suite installs a copy of the checkout through
@@ -428,7 +456,7 @@ run them in the VM, pass the same `sh -c` command to `bash test/vm.sh`:
 ```sh
 sh -c '
 set -eu
-for core in channel views input terminals web shortcuts status; do
+for core in channel views input terminals web shortcuts status rex; do
   xcrun clang -std=c11 -Wall -Wextra -Werror -I native/Core/include \
     -c native/Core/$core.c -o build/$core.o
 done
@@ -436,10 +464,10 @@ xcrun swiftc -swift-version 6 -warnings-as-errors \
   -I native/Core/include -import-objc-header test/native-core.h \
   native/Backend.swift native/CoreCalls.swift native/NativeHost.swift native/NativeInput.swift \
   native/Launcher.swift native/Hotkeys.swift native/KeyPost.swift native/StatusPanel.swift \
-  native/Views.swift native/WebView.swift \
+  native/MessageSocket.swift native/Views.swift native/WebView.swift \
   test/native-checks.swift test/native-terminal-stub.swift test/native-views.swift \
   test/native-focus.swift build/channel.o build/views.o build/input.o build/terminals.o \
-  build/web.o build/shortcuts.o build/status.o \
+  build/web.o build/shortcuts.o build/status.o build/rex.o \
   -framework AppKit -framework WebKit -framework Carbon -o build/check-focus
 build/check-focus
 '

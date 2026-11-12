@@ -28,6 +28,26 @@ _Avoid_: inferring a terminal's project from its current directory or buffer nam
 A project's scratch terminal view, summoned into a panel at the bottom of the current frame. Each project has one.
 _Avoid_: scratch shell, quick shell
 
+## Rex
+
+Rex is a terminal multiplexer: a server that runs terminals' programs so they outlive the applications that show them. Portal is becoming one of its clients; [the Rex guide](docs/rex.md) says how far that has got. Portal's own terminal views need no Rex.
+
+**Rex server**:
+The program that runs blocks' programs and keeps their screens, on this Mac or another machine. It, not Portal, owns sessions and blocks: Emacs asks it to change them and hears from it when anything does.
+_Avoid_: Rex (for the server alone), daemon, backend, host (unqualified)
+
+**Connection**:
+Emacs's link to one Rex server, from `portal-rex-connect` until it is disconnected or lost. Calls go out on it and the server's events come in on it, in order. Emacs can hold several at once, one per server; ending one ends nothing on the server.
+_Avoid_: session (a Rex term for something else), client, socket (the platform's primitive that carries it)
+
+**Session**:
+A named group of blocks on a Rex server, with an ID and a label. It exists on the server whether or not Emacs is connected, and may be empty.
+_Avoid_: project, workspace; calling a connection a session. The "terminal session" a terminal view runs, its own shell, is not one.
+
+**Block**:
+One program on a Rex server with its screen, such as a shell: what one terminal shows. It belongs to one session for its whole life, and its ID never changes and is never reused.
+_Avoid_: pane, tab, window (Rex's own layout terms), terminal (the view kind that will show it)
+
 ## System-wide
 
 **Global shortcut**:

@@ -160,6 +160,63 @@
     (should (equal (cons name (func-arity name)) (cons name arity)))
     (should (stringp (documentation name)))))
 
+;; The Rex bindings, on the fake backend's sockets: one whose path ends in
+;; "/echo.sock" gets back what it sends, and one whose path ends in
+;; "/refused.sock" has ended.  test/portal-rex-tests.c covers the core's rules.
+(ert-deftest portal-module-rex-bindings ()
+  (dolist (entry '((portal--rex-open 3 . 3) (portal--rex-request 3 . 3)
+                   (portal--rex-receive 1 . 1) (portal--rex-wait 2 . 2)
+                   (portal--rex-close 1 . 1)))
+    (should (equal (func-arity (car entry)) (cdr entry)))
+    (should (stringp (documentation (car entry)))))
+  (let ((id (portal--rex-open "/tmp/Ω/echo.sock" "Pörtal" "0.1.0")))
+    (unwind-protect
+        (progn
+          (should (natnump id))
+          (should (eq (portal--rex-wait id 0) t))
+          ;; Messages come back as strings, oldest first, after nil for a
+          ;; connection that has not ended.
+          (should (equal (portal--rex-request id "session.set_label" "{\"label\":\"naïve 🚀\"}") 1))
+          (should (equal (portal--rex-request id "session.list" "{}") 2))
+          (pcase-let ((`(,reason ,hello ,first ,second) (portal--rex-receive id)))
+            (should-not reason)
+            (should (equal (plist-get (plist-get (json-parse-string hello :object-type 'plist)
+                                                 :client)
+                                      :name)
+                           "Pörtal"))
+            (should (equal first (concat "{\"type\":\"request\",\"id\":\"1\",\"method\":"
+                                         "\"session.set_label\",\"payload\":"
+                                         "{\"label\":\"naïve 🚀\"}}")))
+            (should (equal (json-parse-string second :object-type 'plist)
+                           '(:type "request" :id "2" :method "session.list" :payload nil))))
+          (should (equal (portal--rex-receive id) '(nil)))
+          (should-not (portal--rex-wait id 0))
+          ;; Arguments of the wrong type or shape send nothing.
+          (dolist (arguments (list (list id nil "{}") (list id "m" nil) (list id "m" "[]")
+                                   (list id "" "{}") (list "1" "m" "{}") (list -1 "m" "{}")
+                                   (list id (string #xd800) "{}")
+                                   (list id "m" (string-to-unibyte "{\377}"))))
+            (should-error (apply #'portal--rex-request arguments)))
+          (dolist (arguments (list (list id -1) (list id nil) (list id 0.5) (list nil 0)))
+            (should-error (apply #'portal--rex-wait arguments)))
+          (should (equal (portal--rex-receive id) '(nil))))
+      (should (portal--rex-close id)))
+    ;; A closed connection's ID names nothing.
+    (dolist (call (list (lambda () (portal--rex-close id))
+                        (lambda () (portal--rex-receive id))
+                        (lambda () (portal--rex-wait id 0))
+                        (lambda () (portal--rex-request id "session.list" "{}"))))
+      (should (equal (should-error (funcall call))
+                     (list 'error (format "No Rex connection %d" id))))))
+  (dolist (arguments '(("relative.sock" "Portal" "1") (nil "Portal" "1") ("/s" nil "1")
+                       ("/s" "Portal" 1) ("/s" "" "1")))
+    (should-error (apply #'portal--rex-open arguments)))
+  ;; A connection that has ended says why, once, and is gone.
+  (let ((id (portal--rex-open "/tmp/refused.sock" "Portal" "0.1.0")))
+    (should (portal--rex-wait id 0))
+    (should (equal (portal--rex-receive id) '("Connection refused")))
+    (should-error (portal--rex-receive id))))
+
 (ert-deftest portal-module-lifecycle ()
   (let ((target (portal--open "web" '(:directory "~/Ωmega" :quick t))))
     (should (string-match-p "\\`web:[0-9]+\\'" target))

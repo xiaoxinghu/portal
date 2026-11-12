@@ -206,6 +206,14 @@ if(BUILD_TESTING)
             -l "${CMAKE_SOURCE_DIR}/test/portal-terminal-bindings-tests.el"
             ${ert_batch})
     set_tests_properties(terminal-bindings PROPERTIES TIMEOUT 30)
+    # The Rex client on the built module, whose sockets need no window, against
+    # test/fake-rex-server.py on sockets of its own.
+    add_test(NAME rex
+        COMMAND "${CMAKE_COMMAND}" -E env "PORTAL_TEST_BUILD=${CMAKE_BINARY_DIR}"
+            ${test_emacs} -L "${CMAKE_SOURCE_DIR}"
+            -l "${CMAKE_SOURCE_DIR}/test/portal-rex-tests.el"
+            ${ert_batch})
+    set_tests_properties(rex PROPERTIES TIMEOUT 60)
     add_test(NAME excalidraw
         COMMAND ${test_emacs} -L "${CMAKE_SOURCE_DIR}"
             -l "${CMAKE_SOURCE_DIR}/test/portal-excalidraw-tests.el"

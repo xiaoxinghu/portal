@@ -95,6 +95,53 @@ public func portalLauncherDescribe(_ state: UnsafeMutablePointer<portal_text>,
     perform(error, into: state) { try json(NativeLauncher.describe()) }
 }
 
+@_cdecl("portal_socket_open")
+public func portalSocketOpen(_ socket: UInt64, _ path: portal_string, _ resource: portal_string,
+                             _ subprotocol: portal_string, _ error: UnsafeMutablePointer<portal_text>) -> Bool {
+    let path = String(copying: path), resource = String(copying: resource)
+    let subprotocol = String(copying: subprotocol)
+    return perform(error) {
+        try MessageSockets.open(socket, path: path, resource: resource, subprotocol: subprotocol)
+    } != nil
+}
+
+@_cdecl("portal_socket_send")
+public func portalSocketSend(_ socket: UInt64, _ text: portal_string,
+                             _ error: UnsafeMutablePointer<portal_text>) -> Bool {
+    let text = String(copying: text)
+    return perform(error) { try MessageSockets.socket(socket).send(text) } != nil
+}
+
+@_cdecl("portal_socket_read")
+public func portalSocketRead(_ socket: UInt64,
+                             _ messages: UnsafeMutablePointer<UnsafeMutablePointer<portal_text>?>,
+                             _ count: UnsafeMutablePointer<Int>, _ ended: UnsafeMutablePointer<Bool>,
+                             _ reason: UnsafeMutablePointer<portal_text>,
+                             _ error: UnsafeMutablePointer<portal_text>) -> Bool {
+    guard let read = perform(error, { try MessageSockets.socket(socket).read() }) else { return false }
+    let array = allocate(portal_text.self, read.messages.count)
+    for (index, message) in read.messages.enumerated() { (array + index).initialize(to: owned(message)) }
+    messages.pointee = array
+    count.pointee = read.messages.count
+    ended.pointee = read.reason != nil
+    if let why = read.reason { reason.pointee = owned(why) }
+    return true
+}
+
+/// The one primitive that blocks Emacs's thread, for as long as the core asks.
+@_cdecl("portal_socket_wait")
+public func portalSocketWait(_ socket: UInt64, _ milliseconds: UInt64, _ ready: UnsafeMutablePointer<Bool>,
+                             _ error: UnsafeMutablePointer<portal_text>) -> Bool {
+    guard let found = perform(error, { try MessageSockets.socket(socket) }) else { return false }
+    ready.pointee = found.wait(milliseconds: milliseconds)
+    return true
+}
+
+@_cdecl("portal_socket_close")
+public func portalSocketClose(_ socket: UInt64, _ error: UnsafeMutablePointer<portal_text>) -> Bool {
+    perform(error) { try MessageSockets.close(socket) } != nil
+}
+
 @_cdecl("portal_hotkey_register")
 public func portalHotkeyRegister(_ hotkey: UInt64, _ key: UInt32, _ modifiers: UInt32,
                                  _ error: UnsafeMutablePointer<portal_text>) -> Bool {
