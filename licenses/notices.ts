@@ -25,7 +25,9 @@ type Component = {
 	// Required when any condition holds: swift:IDENTITY@VERSION, bun@VERSION
 	// or npm:NAME@VERSION.
 	when: string[];
-	// Relative to licenses/texts, or swift:PATH inside the SwiftPM checkouts.
+	// Relative to licenses/texts, or swift:IDENTITY/PATH inside that Swift
+	// package's source: its SwiftPM checkout, or the patched copy for
+	// libghostty-spm.
 	texts: string[];
 	// Packages compiled into a bundled npm package, as its source maps name them.
 	embeds?: string[];
@@ -134,6 +136,13 @@ function bundledInputs(build: string, problems: string[]): string[] {
 	];
 }
 
+// IDENTITY/PATH in a Swift package's source, as the build has it.
+function swiftSource(build: string, path: string): string {
+	return path.startsWith("libghostty-spm/")
+		? join(build, path)
+		: join(build, "swift", "checkouts", path);
+}
+
 export function inspect(build: string): {
 	notices: Notice[];
 	problems: string[];
@@ -154,10 +163,16 @@ export function inspect(build: string): {
 		shipped.add(`${name}@${version}`);
 		names.add(name);
 	};
+	// SwiftPM pins every Swift package but libghostty-spm, which the build
+	// patches: native/libghostty-spm.json pins that one.
 	const pins: {
 		identity: string;
 		state: { version?: string; revision: string };
 	}[] = JSON.parse(read(join(root, "native", "Package.resolved"))).pins;
+	const patched: { version: string; revision: string } = JSON.parse(
+		read(join(root, "native", "libghostty-spm.json")),
+	);
+	pins.push({ identity: "libghostty-spm", state: patched });
 	for (const pin of pins)
 		ship(`swift:${pin.identity}`, pin.state.version ?? pin.state.revision);
 	const bun = bunVersion(build, problems);
@@ -202,7 +217,7 @@ export function inspect(build: string): {
 		const condition = `swift:${pin.identity}@${pin.state.version ?? pin.state.revision}`;
 		if (!covers(condition))
 			problems.push(
-				`native/Package.resolved pins ${condition}, which no inventory component covers`,
+				`native/Package.resolved or native/libghostty-spm.json pins ${condition}, which no inventory component covers`,
 			);
 	}
 	if (bun && !covers(`bun@${bun}`))
@@ -275,7 +290,7 @@ export function inspect(build: string): {
 		const files = component.texts.map((text) =>
 			text.startsWith("swift:")
 				? {
-						from: join(build, "swift", "checkouts", text.slice(6)),
+						from: swiftSource(build, text.slice(6)),
 						to: `${component.id}/${basename(text)}`,
 					}
 				: { from: join(texts, text), to: text },

@@ -224,16 +224,31 @@ endif()
 # Keep the bundle intact: Ghostty locates terminfo and shell integration here.
 file(WRITE "${CMAKE_BINARY_DIR}/emacs-include.txt" "${EMACS_INCLUDE}\n")
 set(native_package "${CMAKE_SOURCE_DIR}/native")
+# The Swift package builds libghostty-spm from build/libghostty-spm: its source at
+# the release native/libghostty-spm.json pins, with native/patches/libghostty-spm
+# applied. Configure again, and so make that copy again, when any of them changes.
+set(ghostty_pin "${native_package}/libghostty-spm.json")
+set(ghostty_patches "${native_package}/patches/libghostty-spm")
+set(ghostty_source "${CMAKE_BINARY_DIR}/libghostty-spm")
+file(GLOB ghostty_patch_files CONFIGURE_DEPENDS "${ghostty_patches}/*.patch")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${ghostty_pin}" "${CMAKE_SOURCE_DIR}/tools/patch-libghostty-spm.sh" ${ghostty_patch_files})
+execute_process(
+    COMMAND sh "${CMAKE_SOURCE_DIR}/tools/patch-libghostty-spm.sh"
+        "${ghostty_pin}" "${ghostty_patches}" "${ghostty_source}"
+    COMMAND_ERROR_IS_FATAL ANY)
 set(native_scratch "${CMAKE_BINARY_DIR}/swift")
 set(native_bundle "${CMAKE_BINARY_DIR}/portal.bundle/Contents")
 execute_process(
     COMMAND "${CMAKE_COMMAND}" -E env "EMACS_INCLUDE=${EMACS_INCLUDE}"
+        "PORTAL_LIBGHOSTTY_SPM=${ghostty_source}"
         xcrun swift build --package-path "${native_package}"
         --scratch-path "${native_scratch}" -c release --show-bin-path
     OUTPUT_VARIABLE native_bin OUTPUT_STRIP_TRAILING_WHITESPACE
     COMMAND_ERROR_IS_FATAL ANY)
 add_custom_target(portal ALL
     COMMAND "${CMAKE_COMMAND}" -E env "EMACS_INCLUDE=${EMACS_INCLUDE}"
+        "PORTAL_LIBGHOSTTY_SPM=${ghostty_source}"
         xcrun swift build --package-path "${native_package}"
         --scratch-path "${native_scratch}" -c release --product portal
         --force-resolved-versions
@@ -259,6 +274,13 @@ add_custom_target(portal-licenses ALL
     VERBATIM)
 add_dependencies(portal-licenses portal portal-ui-host)
 if(BUILD_TESTING)
+    # Portal's patches to libghostty-spm, tested by the package's own tests on
+    # real Ghostty surfaces: those the patches add and the in-memory session's.
+    add_test(NAME libghostty-spm
+        COMMAND xcrun swift test --package-path "${ghostty_source}"
+            --scratch-path "${CMAKE_BINARY_DIR}/libghostty-spm-tests"
+            --filter "InMemoryTerminalSession")
+    set_tests_properties(libghostty-spm PROPERTIES TIMEOUT 600 COST 100)
     add_test(NAME licenses
         COMMAND "${CMAKE_COMMAND}" -E env "PORTAL_BUILD=${CMAKE_BINARY_DIR}"
             "${BUN}" test "${CMAKE_SOURCE_DIR}/test/licenses.test.ts")

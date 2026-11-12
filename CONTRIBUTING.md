@@ -29,15 +29,61 @@ cmake --build --preset dev
 CMake locates Emacs, builds the Bun host, and invokes the native Swift package.
 `native/Package.swift` links two targets into one module: `PortalCore`,
 the portable C core, and `Portal`, the Swift backend containing the host, web, terminal and input code. There are no separate feature libraries
-or plugin builds. Ghostty dependency versions and the binary checksum are pinned
-through `native/Package.swift` and `native/Package.resolved`. Configuration writes
-the discovered header path to `build/emacs-include.txt`, which the package also
-reads for editor support.
+or plugin builds. Ghostty comes through its Swift wrapper, libghostty-spm, which
+Portal patches; [the Ghostty dependency](#the-ghostty-dependency) says how it is
+pinned. Configuration writes the discovered header path to
+`build/emacs-include.txt`, which the package also reads for editor support.
 
 Use SourceKit-LSP with Eglot for Swift and the C bindings, with `native/` as its
 SwiftPM project root. Xcode provides the server. Reconnect Eglot after switching
 from the former CMake compilation database. No project-specific header paths
 belong in your Emacs configuration. Reconfigure after changing Emacs or SDKs.
+
+### The Ghostty dependency
+
+Portal draws terminals with [libghostty-spm](https://github.com/Lakr233/libghostty-spm),
+a Swift package around a prebuilt Ghostty library. `native/libghostty-spm.json`
+pins its release: the version tag and the revision that tag must name.
+[The terminal guide](docs/terminals.md) says which Ghostty that release ships.
+DisplayLink, the wrapper's own dependency, is pinned in `native/Package.resolved`.
+
+Portal builds the wrapper's Swift with its own patches. Configuration runs
+`tools/patch-libghostty-spm.sh`, which fetches the pinned release's source with
+Git into `build/libghostty-spm`, checks the revision and applies
+`native/patches/libghostty-spm/*.patch` in name order, one commit each. A patch
+that does not apply fails the configuration, naming it. `native/Package.swift`
+builds that copy with `.package(path:)`, and so does SourceKit-LSP; the copy's
+own manifest still downloads the prebuilt library by URL and checksum. Changing
+the pin, a patch or the script configures again and remakes the copy. The patches
+today:
+
+- `0001-suppress-terminal-responses.patch` adds `suppressesTerminalResponses` to
+  `InMemoryTerminalSession`. With it on, the session parses its output through
+  `ghostty_surface_write_buffer_replay`, so the surface answers no queries in
+  it: the output of a Rex block, whose server has answered them already.
+
+The `libghostty-spm` CTest suite runs the patched package's in-memory session
+tests, on real Ghostty surfaces, including the tests the patches add.
+
+To change a patch, edit the copy in `build/libghostty-spm` and build: while the
+pin, the patches and the script stay the same, a build keeps the changes made
+there and says so. Commit them in the copy, amending a patch's commit or adding
+one on top, then write the whole set back, with REVISION from the pin:
+
+```sh
+rm native/patches/libghostty-spm/*.patch
+git -C build/libghostty-spm format-patch --zero-commit --no-signature \
+    -o "$PWD/native/patches/libghostty-spm" REVISION
+```
+
+The next configuration remakes the copy from the patch files. Keep each patch
+small and in the package's style, so that it can be offered upstream.
+
+To move to a new release, update the version and revision in
+`native/libghostty-spm.json`, configure, and fix any patch that no longer
+applies. Then follow [Licenses](docs/licenses.md#when-dependencies-change) for
+the new prebuilt library, and update the release and Ghostty versions in the
+terminal guide.
 
 For TypeScript editing, install the host's development dependencies and run its
 checks:

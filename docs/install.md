@@ -53,8 +53,8 @@ To prepare Portal ahead of time, run `M-x portal-build` yourself.
 ## First build and first run
 
 The first build takes several minutes and needs the network. It downloads the
-app host's locked dependencies, the pinned GhosttyKit binary (about 77 MB) and
-its Swift wrapper, and Portal's pinned Bun if Emacs finds no compatible one
+app host's locked dependencies, the pinned GhosttyKit binary (about 77 MB),
+the source of its Swift wrapper, which it patches, and Portal's pinned Bun if Emacs finds no compatible one
 (see [Bun](#bun)). Emacs stays usable while it builds.
 
 When it succeeds, the build keeps only what Portal runs, about 100 MB, and
@@ -189,7 +189,7 @@ An installed Portal and the caches its build fills, measured on Apple Silicon:
 | --- | --- | ---: |
 | Portal and its build | The package directory, which `M-: portal-build-root` prints | 110 MB |
 | The app host's packages, in Bun's cache | `~/.bun/install/cache/`, or `BUN_INSTALL_CACHE_DIR` | 330 MB |
-| GhosttyKit and its Swift wrapper, in SwiftPM's cache | `~/Library/Caches/org.swift.swiftpm/` | 80 MB |
+| GhosttyKit, in SwiftPM's cache | `~/Library/Caches/org.swift.swiftpm/` | 80 MB |
 | Portal's pinned Bun, if a build downloaded it | `portal-build-tools-directory` | 60 MB |
 
 The caches spare a rebuild after an upgrade most of its downloads. Removing
