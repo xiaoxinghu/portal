@@ -42,7 +42,7 @@ _Avoid_: session (a Rex term for something else), client, socket (the platform's
 
 **Session**:
 A named group of blocks on a Rex server, with an ID and a label. It exists on the server whether or not Emacs is connected, and may be empty.
-_Avoid_: using it for a connection or for a terminal view's running shell; project, workspace
+_Avoid_: project, workspace; calling a connection a session. The "terminal session" a terminal view runs, its own shell, is not one.
 
 **Block**:
 One program on a Rex server with its screen, such as a shell: what one terminal shows. It belongs to one session for its whole life, and its ID never changes and is never reused.
