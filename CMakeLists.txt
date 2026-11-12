@@ -241,12 +241,14 @@ set(native_scratch "${CMAKE_BINARY_DIR}/swift")
 set(native_bundle "${CMAKE_BINARY_DIR}/portal.bundle/Contents")
 execute_process(
     COMMAND "${CMAKE_COMMAND}" -E env "EMACS_INCLUDE=${EMACS_INCLUDE}"
+        "PORTAL_LIBGHOSTTY_SPM=${ghostty_source}"
         xcrun swift build --package-path "${native_package}"
         --scratch-path "${native_scratch}" -c release --show-bin-path
     OUTPUT_VARIABLE native_bin OUTPUT_STRIP_TRAILING_WHITESPACE
     COMMAND_ERROR_IS_FATAL ANY)
 add_custom_target(portal ALL
     COMMAND "${CMAKE_COMMAND}" -E env "EMACS_INCLUDE=${EMACS_INCLUDE}"
+        "PORTAL_LIBGHOSTTY_SPM=${ghostty_source}"
         xcrun swift build --package-path "${native_package}"
         --scratch-path "${native_scratch}" -c release --product portal
         --force-resolved-versions

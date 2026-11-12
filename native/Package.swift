@@ -4,17 +4,19 @@ import Foundation
 import PackageDescription
 
 // CMake writes the discovered header path for both builds and SourceKit-LSP.
-let build = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-    .appendingPathComponent("../build")
-let configuration = build.appendingPathComponent("emacs-include.txt")
+let native = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+let configuration = native.appendingPathComponent("../build/emacs-include.txt")
 guard let emacsInclude = ProcessInfo.processInfo.environment["EMACS_INCLUDE"]
     ?? (try? String(contentsOf: configuration, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)) else {
     fatalError("Run cmake --preset dev or build.sh to locate emacs-module.h")
 }
 // libghostty-spm at the release libghostty-spm.json pins, with patches/libghostty-spm
-// applied: CMake's configure step makes this copy, build/libghostty-spm.
-let libghosttySPM = build.appendingPathComponent("libghostty-spm")
-guard FileManager.default.fileExists(atPath: libghosttySPM.appendingPathComponent("Package.swift").path) else {
+// applied: CMake's configure step makes this copy in its build directory and names
+// it here; SourceKit-LSP finds it in build/.
+let libghosttySPM = ProcessInfo.processInfo.environment["PORTAL_LIBGHOSTTY_SPM"]
+    ?? "../build/libghostty-spm"
+guard FileManager.default.fileExists(atPath: URL(fileURLWithPath: libghosttySPM, relativeTo: native)
+    .appendingPathComponent("Package.swift").path) else {
     fatalError("Run cmake --preset dev or build.sh to fetch and patch libghostty-spm")
 }
 
@@ -23,7 +25,7 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [.library(name: "portal", type: .dynamic, targets: ["Portal"])],
     dependencies: [
-        .package(path: "../build/libghostty-spm")
+        .package(path: libghosttySPM)
     ],
     targets: [
         // The C core: the Emacs bindings, the view registry, input, terminal and
