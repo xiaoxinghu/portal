@@ -18,6 +18,8 @@
 
 #include "portal.h"
 
+struct json; /* core.h */
+
 /* The one revision of Rex's API that Portal speaks.  The server translates
    every message to and from it, so a newer server changes nothing here. */
 enum { PORTAL_REX_API_REVISION = 12 };
@@ -56,7 +58,56 @@ bool portal_rex_receive(uint64_t id, portal_text **messages, size_t *count, bool
 bool portal_rex_wait(uint64_t id, uint64_t milliseconds, bool *ready, portal_text *error);
 
 /* End connection ID, dropping what Emacs has not received.  No record
-   names it afterwards. */
+   names it afterwards, and the blocks it showed end, as below. */
 bool portal_rex_close(uint64_t id, portal_text *error);
+
+/* Blocks shown in terminals.  The core also makes requests of its own on
+   a connection, numbered among Emacs's, and takes their responses out of
+   what the server sends before Emacs receives it: Emacs never sees them.
+
+   Show the block BLOCK, of the session SESSION on connection ID's server,
+   in TARGET, an open fed terminal (portal.h), from now until TARGET
+   closes.  This returns at once; the core then, in turn, attaches the
+   connection to SESSION unless it has, claims the block with "take", waits
+   for TARGET's grid to settle and sizes the block to it, opens the block's
+   data stream, skips its snapshot, paints TARGET from the server's
+   "format" of the screen in VT form, and then feeds it the stream's bytes
+   from the snapshot on, without Rex's own messages.  From then on what
+   TARGET writes is typed into the block, one request at a time so that it
+   arrives in order, except the terminal's own reports of focus, size and
+   colour scheme, which the server makes for itself; a change of who has
+   the keyboard is sent as a "focus" block event, and a change of TARGET's
+   grid resizes the block.
+
+   Fails, starting nothing, for a closed connection, a TARGET that names no
+   open fed terminal or shows a block already, or a block that another
+   terminal shows on this connection, as a server allows one stream of a
+   block per client. */
+bool portal_rex_show(uint64_t id, portal_string target, portal_string session,
+                     portal_string block, portal_text *error);
+
+/* For views.c: what TARGET shows, if it shows a block, as the member
+   ,"rex":{"state":STATE,"columns":C,"rows":R} appended to JSON, with
+   "reason" after them once it has failed or ended.  STATE is "starting"
+   until the first paint, then "live", or "failed" or "ended" once the
+   stream will bring nothing more; C and R are the block's grid as the
+   stream last said, 0 until it has.  The core sends Emacs the record
+   "rex-block TARGET" when the state becomes live, failed or ended, and
+   no other until TARGET is described.  Appends nothing for a TARGET that
+   shows no block. */
+void portal_rex_describe(portal_string target, struct json *json);
+
+/* For views.c: TARGET has closed.  Its block's stream ends, and the block
+   carries on. */
+void portal_rex_closed(portal_string target);
+
+/* For terminals.c and input.c: what a fed terminal TARGET wrote, its new
+   grid, which views.c holds, and whether it has the keyboard. */
+void portal_rex_input(portal_string target, const char *bytes, size_t length);
+void portal_rex_grid(portal_string target);
+void portal_rex_focus(portal_string target, bool focused);
+
+/* For channel.c: the timer TOKEN, which is not the channel's, fired. */
+void portal_rex_timer(uint64_t token);
 
 #endif

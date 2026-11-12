@@ -36,6 +36,10 @@ void portal_fake_exit(portal_view *terminal);
    one does with escape sequences, and the fake reports the change. */
 void portal_fake_report(portal_view *terminal, const char *title, const char *directory);
 
+/* Everything fed to the fed terminal TARGET so far, "" for none.  Valid
+   until the next call. */
+const char *portal_fake_fed(const char *target);
+
 /* The registered hot keys, oldest first, such as "3:P+14 5:F12+2":
    each one's hot key, its key and its portal_modifier bits.  Valid until the
    next call. */
@@ -92,15 +96,20 @@ struct portal_fake_status {
 struct portal_fake_status portal_fake_status(void);
 
 /* Message sockets.  How many are open; the "PATH RESOURCE PROTOCOL" that
-   SOCKET was opened with, or "" for one that is not open; and the messages
-   sent on SOCKET since the last call, oldest first, one to a line.  Both
-   texts are valid until the next call. */
+   SOCKET was opened with, with " binary" after it for a binary socket, or
+   "" for one that is not open; and the messages sent on SOCKET since the
+   last call, oldest first, one to a line, a binary socket's in hex.  Both
+   texts are valid until the next call.  A binary socket's messages may
+   hold any bytes. */
 size_t portal_fake_sockets(void);
 const char *portal_fake_socket_address(uint64_t socket);
 const char *portal_fake_socket_sent(uint64_t socket);
 /* SOCKET's server sends TEXT, or its connection ends because of REASON.
    Either reports the socket ready when it had nothing to read. */
 void portal_fake_socket_deliver(uint64_t socket, const char *text);
+void portal_fake_socket_deliver_bytes(uint64_t socket, const void *bytes, size_t length);
+/* The highest socket number open, or 0: the one the core opened last. */
+uint64_t portal_fake_socket_last(void);
 void portal_fake_socket_end(uint64_t socket, const char *reason);
 
 #endif

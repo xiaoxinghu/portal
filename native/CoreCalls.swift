@@ -187,6 +187,20 @@ enum Core {
         borrow(target) { portal_terminal_changed($0) }
     }
 
+    /// TARGET, a fed terminal, would write BYTES to its program.
+    static func terminalInput(_ target: String, _ bytes: Data) {
+        borrow(target) { target in
+            bytes.withUnsafeBytes { portal_terminal_input(target, $0.bindMemory(to: CChar.self).baseAddress, $0.count) }
+        }
+    }
+
+    /// TARGET, a fed terminal, has a grid of COLUMNS by ROWS cells, each
+    /// CELL pixels wide and high, or zero when unknown.
+    static func terminalGrid(_ target: String, columns: UInt32, rows: UInt32,
+                             cellWidth: UInt32, cellHeight: UInt32) {
+        borrow(target) { portal_terminal_grid($0, columns, rows, cellWidth, cellHeight) }
+    }
+
     /// The shared links script, started in its world with a report function
     /// that posts to that world's script message HANDLER. This glue is the
     /// only part that names WebKit's transport.

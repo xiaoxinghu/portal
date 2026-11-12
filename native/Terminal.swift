@@ -65,17 +65,26 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     /// program, so it is sampled at each report and about once a second.
     var program = ""
     private var programTimer: Timer?
+    /// A fed terminal's session: its output comes from the core and what it
+    /// writes goes to the core. Nil for a terminal with its own pty.
+    let fed: InMemoryTerminalSession?
 
-    init(directory: String, command: String?, theme: TerminalTheme, points: Double) {
+    init(directory: String?, command: String?, theme: TerminalTheme, points: Double,
+         fed: InMemoryTerminalSession? = nil) {
+        self.fed = fed
         super.init(frame: .zero)
         delegate = self
-        configuration = TerminalSurfaceOptions(
-            workingDirectory: directory,
-            envVars: ["INSIDE_EMACS": "portal-ghostty"],
-            command: command,
-            // Ghostty then reports the exit at once, as a close request,
-            // which leaves the view and its last output.
-            waitAfterCommand: false)
+        if let fed {
+            configuration = TerminalSurfaceOptions(backend: .inMemory(fed))
+        } else {
+            configuration = TerminalSurfaceOptions(
+                workingDirectory: directory,
+                envVars: ["INSIDE_EMACS": "portal-ghostty"],
+                command: command,
+                // Ghostty then reports the exit at once, as a close request,
+                // which leaves the view and its last output.
+                waitAfterCommand: false)
+        }
         controller = TerminalController(theme: theme) { builder in
             builder.withFontThicken(false)
             // Every exit takes that path: none counts as a failed launch.
@@ -104,10 +113,19 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
         refreshProgram()
         session?.changed()
     }
-    func terminalDidResize(_ size: TerminalGridMetrics) { grid = size }
+    func terminalDidResize(_ size: TerminalGridMetrics) {
+        guard size != grid else { return }
+        grid = size
+        if fed != nil, let target = session?.target, size.columns > 0, size.rows > 0 {
+            Core.terminalGrid(target, columns: UInt32(size.columns), rows: UInt32(size.rows),
+                              cellWidth: size.cellWidthPixels, cellHeight: size.cellHeightPixels)
+        }
+    }
     func terminalDidAttachSurface(_ surface: TerminalSurface) {
         terminalSurface = surface
         programTimer?.invalidate()
+        // A fed terminal has no pty, so no program to sample.
+        guard fed == nil else { return }
         programTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, self.refreshProgram() else { return }
@@ -148,6 +166,11 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
         programTimer = nil
     }
 
+    /// A fed terminal's output: parsed in order off the main thread, with
+    /// the replies to its queries dropped (the session's
+    /// suppressesTerminalResponses), and held until the surface exists.
+    func feed(_ output: Data) { fed?.receive(output) }
+
     /// Ghostty asks to close the surface when its process ends, at each key
     /// press after that, and when a close is requested while the process
     /// still runs. Portal keeps the view: the end is reported, and a key
@@ -181,14 +204,28 @@ final class TerminalSession: PortalView {
     let input: NativeInput
 
     init(target: String, options: ViewOptions) throws {
-        guard let directory = try options.string("directory") else {
-            throw NativeError.message("The core passed a terminal without a :directory")
-        }
+        let directory = try options.string("directory")
+        let theme = try Terminals.theme(named: options.string("theme"))
+        let points = portal_terminal_points(try options.number("points") ?? Double(PORTAL_TERMINAL_POINTS))
         self.target = target
-        let terminal = HostedTerminal(directory: directory, command: try terminalCommand(options, directory: directory),
-                                      theme: try Terminals.theme(named: options.string("theme")),
-                                      points: portal_terminal_points(try options.number("points")
-                                                                         ?? Double(PORTAL_TERMINAL_POINTS)))
+        let terminal: HostedTerminal
+        if options.flag("fed") {
+            // Its program runs elsewhere: what it writes goes to the core,
+            // in order, on Emacs's thread, as the core requires.
+            let session = InMemoryTerminalSession(
+                write: { bytes in
+                    DispatchQueue.main.async { MainActor.assumeIsolated { Core.terminalInput(target, bytes) } }
+                },
+                resize: { _ in },
+                suppressesTerminalResponses: true)
+            terminal = HostedTerminal(directory: directory, command: nil, theme: theme, points: points, fed: session)
+        } else {
+            guard let directory else {
+                throw NativeError.message("The core passed a terminal without a :directory")
+            }
+            terminal = HostedTerminal(directory: directory, command: try terminalCommand(options, directory: directory),
+                                      theme: theme, points: points)
+        }
         if let issue = terminal.controller?.lastConfigurationIssue { throw NativeError.message(issue) }
         self.terminal = terminal
         input = NativeInput(target: target, view: terminal, host: NativeView.parking) { [weak terminal] in
@@ -232,6 +269,11 @@ final class TerminalSession: PortalView {
     }
 
     // The terminal primitives of native/Core/include/portal.h.
+
+    func feed(_ output: Data) throws {
+        guard terminal.fed != nil else { throw NativeError.message("Only a fed terminal is fed its output") }
+        terminal.feed(output)
+    }
 
     func applyTheme(_ name: String?) throws {
         let theme = try Terminals.theme(named: name)

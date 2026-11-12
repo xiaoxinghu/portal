@@ -15,6 +15,7 @@
 
 #include "channel.h"
 #include "core.h"
+#include "rex.h"
 #include "terminals.h"
 #include "views.h"
 #include "web.h"
@@ -27,6 +28,8 @@ struct view {
     uint64_t id;
     bool attached;
     bool announced; /* Its portal_views_announce record waits for an inspection. */
+    bool fed;       /* A fed terminal (portal.h). */
+    uint32_t grid[4]; /* A fed terminal's columns, rows and cell size, as it last said. */
     portal_edges edges; /* Where it is attached, while ATTACHED. */
     struct portal_input input;
     size_t length;
@@ -103,7 +106,8 @@ static struct view *add(portal_kind kind, const portal_option *options, size_t c
         fail_with(error, "Portal is out of memory");
         return NULL;
     }
-    *view = (struct view) {.kind = kind, .web = web, .id = id, .length = length};
+    *view = (struct view) {.kind = kind, .web = web, .id = id, .length = length,
+                           .fed = kind == PORTAL_TERMINAL && portal_terminals_fed(options, count)};
     memcpy(view->target, name, length + 1);
     portal_string own = {view->target, length};
     if (!(opener ? portal_web_create_window(opener, own, request, &view->native, error)
@@ -219,6 +223,8 @@ bool portal_views_close(portal_string target, portal_text *error)
             views.last = view;
         return false;
     }
+    if (view->fed)
+        portal_rex_closed(target);
     portal_web_state_free(view->web);
     free(view);
     return true;
@@ -272,23 +278,23 @@ bool portal_views_inspect(portal_string target, portal_text *state, portal_text 
         snprintf(prefix, sizeof prefix,
                  "{\"id\":%" PRIu64 ",\"kind\":\"%s\",\"visible\":false,\"edges\":[]", view->id,
                  kinds[view->kind]);
-    bool empty = rest == end - 1;
-    size_t head = strlen(prefix), total = head + (empty ? 1 : 1 + end - rest);
-    char *json = malloc(total + 1);
-    if (!json) {
-        free(described.data);
+    struct json json = {0};
+    put(&json, prefix, strlen(prefix));
+    /* What only the core knows of a block shown in a fed terminal. */
+    if (view->fed)
+        portal_rex_describe(target, &json);
+    if (rest == end - 1) {
+        put(&json, "}", 1);
+    } else {
+        put(&json, ",", 1);
+        put(&json, data + rest, end - rest);
+    }
+    free(described.data);
+    if (json.failed) {
+        free(json.data);
         return fail_with(error, "Portal is out of memory");
     }
-    memcpy(json, prefix, head);
-    if (empty) {
-        json[head] = '}';
-    } else {
-        json[head] = ',';
-        memcpy(json + head + 1, data + rest, end - rest);
-    }
-    json[total] = '\0';
-    free(described.data);
-    *state = (portal_text) {json, total};
+    *state = (portal_text) {json.data, json.length};
     return true;
 }
 
@@ -308,6 +314,30 @@ bool portal_views_each_web(bool (*visit)(portal_view *native, struct portal_web_
     for (struct view *view = views.first; view; view = view->next)
         if (view->kind == PORTAL_WEB && !visit(view->native, view->web, context))
             return false;
+    return true;
+}
+
+bool portal_views_fed(portal_string target)
+{
+    struct view *view = find(target, PORTAL_TERMINAL, NULL);
+    return view && view->fed;
+}
+
+bool portal_views_set_grid(portal_string target, const uint32_t grid[static 4])
+{
+    struct view *view = find(target, PORTAL_TERMINAL, NULL);
+    if (!view || !view->fed)
+        return false;
+    memcpy(view->grid, grid, sizeof view->grid);
+    return true;
+}
+
+bool portal_views_grid(portal_string target, uint32_t grid[static 4])
+{
+    struct view *view = find(target, PORTAL_TERMINAL, NULL);
+    if (!view || !view->fed)
+        return false;
+    memcpy(grid, view->grid, sizeof view->grid);
     return true;
 }
 

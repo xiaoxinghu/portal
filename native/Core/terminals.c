@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "core.h"
+#include "rex.h"
 #include "terminals.h"
 #include "views.h"
 
@@ -57,6 +58,12 @@ static bool known(portal_string name, portal_text *error)
     return found || fail(error, "Unknown terminal theme: ", name);
 }
 
+bool portal_terminals_fed(const portal_option *options, size_t count)
+{
+    const portal_option *fed = option(options, count, "fed");
+    return fed && fed->flag;
+}
+
 double portal_terminal_points(double points)
 {
     /* NaN fails both comparisons. */
@@ -77,10 +84,15 @@ bool portal_terminals_check(const portal_option *options, size_t count, portal_t
         }
     }
     const portal_option *directory = option(options, count, "directory");
-    if (!directory || !directory->is_string)
-        return fail_with(error, "A terminal view needs a :directory");
     const portal_option *command = option(options, count, "command");
     const portal_option *argv = option(options, count, "argv");
+    if (portal_terminals_fed(options, count)) {
+        /* Its program runs elsewhere. */
+        if ((command && command->is_string) || (argv && argv->is_string))
+            return fail_with(error, "A fed terminal runs no :command or :argv");
+    } else if (!directory || !directory->is_string) {
+        return fail_with(error, "A terminal view needs a :directory");
+    }
     if (command && command->is_string && argv && argv->is_string)
         return fail_with(error, "A terminal view accepts either :command or :argv");
     const portal_option *points = option(options, count, "points");
@@ -185,4 +197,18 @@ bool portal_terminals_text(portal_string target, portal_text *text, portal_text 
 void portal_terminal_changed(portal_string target)
 {
     portal_views_announce(target, PORTAL_TERMINAL, "terminal");
+}
+
+void portal_terminal_input(portal_string target, const char *bytes, size_t length)
+{
+    if (portal_views_fed(target))
+        portal_rex_input(target, bytes, length);
+}
+
+void portal_terminal_grid(portal_string target, uint32_t columns, uint32_t rows,
+                          uint32_t cell_width, uint32_t cell_height)
+{
+    const uint32_t grid[4] = {columns, rows, cell_width, cell_height};
+    if (portal_views_set_grid(target, grid))
+        portal_rex_grid(target);
 }

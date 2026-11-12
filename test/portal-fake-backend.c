@@ -9,6 +9,9 @@
    A view created with the option :description describes itself with exactly
    that text instead, for tests of how the core reads descriptions.
 
+   A fed terminal's "fed" is all it has been fed, as a string, and it
+   reports a grid of 8 by 16 cells in the size it is attached at.
+
    A terminal describes the facts every platform's terminal reports, "ready",
    "title", "pwd", "program", "columns", "rows" and "exited", which is true
    once a test ends its process.  Its "text" is everything pasted into it, with a newline for
@@ -347,6 +350,16 @@ bool portal_view_attach(portal_view *view, portal_string frame, portal_rect rect
     set_string(view, "frame", frame.data, frame.length);
     set_integers(view, "size", (int64_t[]) {rect.width, rect.height}, 2);
     set_flag(view, "attached", true);
+    /* A fed terminal's grid follows its size, in cells of 8 by 16, as a
+       real one reports it once it is laid out. */
+    const struct property *fed = get(view, "fed");
+    if (view->kind == PORTAL_TERMINAL && fed && (fed->kind == STRING || fed->flag)) {
+        uint32_t columns = (uint32_t) (rect.width / 8), rows = (uint32_t) (rect.height / 16);
+        set_integer(view, "columns", columns);
+        set_integer(view, "rows", rows);
+        portal_terminal_grid((portal_string) {view->target, strlen(view->target)}, columns, rows,
+                             8, 16);
+    }
     return true;
 }
 
@@ -615,6 +628,21 @@ bool portal_terminal_read_text(portal_view *terminal, portal_text *text, portal_
         return false;
     const struct property *scrollback = get(terminal, "text");
     *text = scrollback ? copy(scrollback->string.data, scrollback->string.length) : copy("", 0);
+    return true;
+}
+
+/* A fed terminal's output is its "fed" string, everything fed so far. */
+bool portal_terminal_feed(portal_view *terminal, const char *bytes, size_t length,
+                          portal_text *error)
+{
+    if (!working(terminal, error))
+        return false;
+    const struct property *fed = get(terminal, "fed");
+    if (!fed || (fed->kind == FLAG && !fed->flag))
+        return fail(error, "The fake fed a terminal that is not fed");
+    if (fed->kind == FLAG)
+        set_string(terminal, "fed", "", 0);
+    append(terminal, "fed", "", bytes, length);
     return true;
 }
 
@@ -1254,14 +1282,14 @@ struct portal_fake_status portal_fake_status(void)
 
 /* Message sockets. */
 
-enum { MAX_SOCKETS = 16, MAX_MESSAGES = 64 };
+enum { MAX_SOCKETS = 16, MAX_MESSAGES = 256 };
 
 static struct message_socket {
     uint64_t socket; /* 0 for a free slot. */
     char address[512];
-    bool echo, ended;
+    bool binary, echo, ended;
     char reason[128];
-    char *sent[MAX_MESSAGES], *arrived[MAX_MESSAGES]; /* Oldest first. */
+    portal_text sent[MAX_MESSAGES], arrived[MAX_MESSAGES]; /* Oldest first. */
     size_t sent_count, arrived_count;
 } sockets[MAX_SOCKETS];
 
@@ -1293,13 +1321,13 @@ static void arrive(struct message_socket *socket, const char *text, size_t lengt
     bool was = readable(socket);
     if (socket->ended || socket->arrived_count == MAX_MESSAGES)
         return;
-    socket->arrived[socket->arrived_count++] = copy(text, length).data;
+    socket->arrived[socket->arrived_count++] = copy(text, length);
     if (!was)
         portal_socket_ready(socket->socket);
 }
 
 bool portal_socket_open(uint64_t socket, portal_string path, portal_string resource,
-                        portal_string protocol, portal_text *error)
+                        portal_string protocol, bool binary, portal_text *error)
 {
     if (refused(error))
         return false;
@@ -1314,9 +1342,10 @@ bool portal_socket_open(uint64_t socket, portal_string path, portal_string resou
     }
     if (!socket || !slot)
         return fail(error, "The fake cannot open socket %llu", (unsigned long long) socket);
-    *slot = (struct message_socket) {.socket = socket, .echo = ends_with(path, "/echo.sock")};
-    snprintf(slot->address, sizeof slot->address, "%s %s %s", path.data, resource.data,
-             protocol.data);
+    *slot = (struct message_socket) {.socket = socket, .binary = binary,
+                                     .echo = ends_with(path, "/echo.sock")};
+    snprintf(slot->address, sizeof slot->address, "%s %s %s%s", path.data, resource.data,
+             protocol.data, binary ? " binary" : "");
     if (ends_with(path, "/refused.sock")) {
         slot->ended = true;
         snprintf(slot->reason, sizeof slot->reason, "Connection refused");
@@ -1333,7 +1362,7 @@ bool portal_socket_send(uint64_t socket, portal_string text, portal_text *error)
         return fail(error, "The fake's socket is full");
     if (found->ended)
         return true;
-    found->sent[found->sent_count++] = copy(text.data, text.length).data;
+    found->sent[found->sent_count++] = copy(text.data, text.length);
     if (found->echo)
         arrive(found, text.data, text.length);
     return true;
@@ -1347,7 +1376,7 @@ bool portal_socket_read(uint64_t socket, portal_text **messages, size_t *count, 
         return false;
     portal_text *texts = calloc(found->arrived_count + 1, sizeof *texts);
     for (size_t i = 0; i < found->arrived_count; i++)
-        texts[i] = (portal_text) {found->arrived[i], strlen(found->arrived[i])};
+        texts[i] = found->arrived[i];
     *messages = texts;
     *count = found->arrived_count;
     found->arrived_count = 0;
@@ -1372,9 +1401,9 @@ bool portal_socket_close(uint64_t socket, portal_text *error)
     if (!found)
         return false;
     for (size_t i = 0; i < found->sent_count; i++)
-        free(found->sent[i]);
+        free(found->sent[i].data);
     for (size_t i = 0; i < found->arrived_count; i++)
-        free(found->arrived[i]);
+        free(found->arrived[i].data);
     *found = (struct message_socket) {0};
     return true;
 }
@@ -1387,6 +1416,15 @@ size_t portal_fake_sockets(void)
     return count;
 }
 
+uint64_t portal_fake_socket_last(void)
+{
+    uint64_t last = 0;
+    for (size_t i = 0; i < MAX_SOCKETS; i++)
+        if (sockets[i].socket > last)
+            last = sockets[i].socket;
+    return last;
+}
+
 const char *portal_fake_socket_address(uint64_t socket)
 {
     struct message_socket *found = find_socket(socket, NULL);
@@ -1395,15 +1433,26 @@ const char *portal_fake_socket_address(uint64_t socket)
 
 const char *portal_fake_socket_sent(uint64_t socket)
 {
-    static char text[8192];
+    static char text[65536];
+    static const char hex[] = "0123456789abcdef";
     struct message_socket *found = find_socket(socket, NULL);
     size_t length = 0;
     text[0] = '\0';
     for (size_t i = 0; found && i < found->sent_count; i++) {
-        if (length < sizeof text)
-            length += (size_t) snprintf(text + length, sizeof text - length, "%s%s",
-                                        i ? "\n" : "", found->sent[i]);
-        free(found->sent[i]);
+        portal_text message = found->sent[i];
+        if (i && length + 1 < sizeof text)
+            text[length++] = '\n';
+        for (size_t k = 0; k < message.length && length + 3 < sizeof text; k++) {
+            unsigned char c = (unsigned char) message.data[k];
+            if (found->binary) {
+                text[length++] = hex[c >> 4];
+                text[length++] = hex[c & 15];
+            } else {
+                text[length++] = (char) c;
+            }
+        }
+        text[length] = '\0';
+        free(message.data);
     }
     if (found)
         found->sent_count = 0;
@@ -1417,6 +1466,13 @@ void portal_fake_socket_deliver(uint64_t socket, const char *text)
         arrive(found, text, strlen(text));
 }
 
+void portal_fake_socket_deliver_bytes(uint64_t socket, const void *bytes, size_t length)
+{
+    struct message_socket *found = find_socket(socket, NULL);
+    if (found)
+        arrive(found, bytes, length);
+}
+
 void portal_fake_socket_end(uint64_t socket, const char *reason)
 {
     struct message_socket *found = find_socket(socket, NULL);
@@ -1427,4 +1483,19 @@ void portal_fake_socket_end(uint64_t socket, const char *reason)
     snprintf(found->reason, sizeof found->reason, "%s", reason);
     if (!was)
         portal_socket_ready(socket);
+}
+
+const char *portal_fake_fed(const char *target)
+{
+    static char text[65536];
+    text[0] = '\0';
+    for (size_t i = view_count; i-- > 0;) {
+        if (all[i]->destroyed || strcmp(all[i]->target, target))
+            continue;
+        const struct property *fed = get(all[i], "fed");
+        if (fed && fed->kind == STRING)
+            snprintf(text, sizeof text, "%.*s", (int) fed->string.length, fed->string.data);
+        break;
+    }
+    return text;
 }

@@ -5,15 +5,16 @@
 [Rex](https://www.superlogical.com/rex/docs) is a terminal multiplexer: its
 server runs your terminals' programs, so they outlive the applications that
 show them. Portal is becoming a client of that server. Today it can connect to
-one, give each of its blocks a buffer that follows the server, call its
-methods and receive its events from Lisp. No buffer shows its block's screen
-yet; see [what is not built](#what-is-not-built).
+one, give each of its blocks a buffer that follows the server and shows the
+block's screen, a terminal you type in, and call its methods and receive its
+events from Lisp; see [what is not built](#what-is-not-built).
 
 Rex is optional. Portal's own [terminals](terminals.md) run their shells
 themselves and need no Rex installed.
 
 - [Connect and disconnect](#connect-and-disconnect)
 - [A buffer for every block](#a-buffer-for-every-block)
+- [A block's screen](#a-blocks-screen)
 - [Call the server](#call-the-server)
 - [Receive events](#receive-events)
 - [When a connection is lost](#when-a-connection-is-lost)
@@ -75,15 +76,15 @@ The buffers follow the server, with Emacs idle:
 
 These kills never ask, and none of them ends anything on the server.
 
-No buffer shows its block's screen yet. A buffer that is displayed says
-which block it is. It is in `portal-terminal-mode`, the mode of Portal's
-[terminals](terminals.md), without a terminal view: `portal-terminal-buffers`
-and the terminal chooser leave it out, and RET says there is no view.
+A buffer is in `portal-terminal-mode`, the mode of Portal's
+[terminals](terminals.md). Until a window shows it, it has no terminal view
+and its text says which block it is; once one does, it shows
+[the block's screen](#a-blocks-screen).
 
 Killing one of these buffers yourself kills only the buffer, and Emacs says
-so: the block still runs, and gets no other buffer until Emacs next connects
-to its server. Ending a block from Emacs is
-[not built](#what-is-not-built).
+so, without asking first, whatever `portal-terminal-confirm-kill` says: the
+block still runs, and gets no other buffer until Emacs next connects to its
+server. Ending a block from Emacs is [not built](#what-is-not-built).
 
 Two things to know about names:
 
@@ -134,6 +135,83 @@ or a filter group:
 
 It goes by what a session is called now, so a renamed session's buffers
 move with its label. Portal groups nothing else.
+
+## A block's screen
+
+The first time a window shows a block's buffer, the buffer gets a
+terminal view, as one of Portal's [terminals](terminals.md) has, and the
+view shows the block's screen: what it shows on the server, with its
+history above it. Typing in the view types into the block's program,
+which runs on the server, so a shell, vim or an agent behaves as in any
+terminal. The view is an ordinary terminal view in every other way: it
+stays in its pane, takes the keyboard with RET or a click, follows the
+frame's text size and `portal-terminal-theme`, and other panes showing the
+buffer show where it is.
+
+From then on the view keeps up with the block while Emacs is connected,
+whether a window shows the buffer or not, so a buffer you bury and show
+again shows the screen as it is now, at once.
+
+`C-c C-k` closes the view and leaves the block running; the view opens
+again, with a fresh screen, the next time a window starts to show the
+buffer. Killing the buffer closes it too.
+
+### Size
+
+While Emacs is the only client showing a block, the block takes the size
+of the pane that shows it, and resizing the pane reflows the screen as it
+does in any terminal. When a block is shown in a pane, Emacs claims it,
+taking it from Rex's app or any other client that had it. How Emacs and
+Rex's other clients should share a block's size is
+[not built](#what-is-not-built): until it is, a block that another client
+resizes or takes back is drawn in Emacs at Emacs's size, wrongly, until
+the program next draws its whole screen.
+
+### What the first paint loses
+
+The server sends a block's screen as the escape sequences that redraw it:
+text, history, colours, styles, hyperlinks and the modes a program set,
+such as mouse reporting or the keyboard protocol. Three things do not come
+through:
+
+- **The cursor's shape.** A program that set a bar or an underline cursor
+  shows a block until it sets it again.
+- **The primary screen under an alternate one.** Shown while a full-screen
+  program such as vim runs, the screen is vim's; when vim exits, the shell's
+  screen and history are blank in Emacs, though not on the server.
+- **What a program prints while the view opens.** The screen is taken a
+  moment after the block's output starts to arrive, so output in between is
+  drawn twice; a program that moves its cursor relative to where it is,
+  such as a shell redrawing its prompt, can then draw over a line. Emacs
+  waits for the pane's size to settle before it starts, which avoids the
+  common case, a program redrawing for a new size.
+
+Each happens only when a view opens on a block, once per block while Emacs
+stays connected.
+
+### Typing, focus and queries
+
+Keys, mouse clicks and pastes are encoded by the view as for any terminal,
+and typed into the block in order. A click past column 95 in a program
+using the oldest mouse protocol (X10, without SGR) reaches the program
+wrong, as that protocol writes such a column as a byte the server's API
+cannot carry; programs using SGR mouse reporting, as most do, are not
+affected.
+
+The server's terminal answers a program's queries, such as which terminal
+it is or where the cursor is, so the view answers none of them: a program
+gets one answer, the server's. Likewise, whether the view has the keyboard
+goes to the server, which reports focus to a program that asked, and the
+view's own focus, size and colour-scheme reports are dropped.
+
+### When it goes wrong
+
+A block whose screen cannot be shown, because the server refused part of
+it, loses its view, and its buffer says why; showing the buffer again tries
+again. A block whose output stops, such as when its server drops the
+stream, keeps its last screen, and Emacs says so in the echo area; from
+then on nothing typed there reaches the block, so a screen that no longer
+changes never runs a command unseen.
 
 ## Call the server
 
@@ -263,11 +341,10 @@ pin when it would.
 
 Portal's Rex client is being built in steps. Not built yet:
 
-- A block's screen in its buffer, and typing into it.
 - Commands for sessions and for new terminals.
-- Titles, directories and programs of Rex terminals.
+- Titles, directories and programs of Rex terminals, from the server.
 - Ending a block by killing its buffer.
-- Sharing a block's size with Rex's other clients.
+- Sharing a block's size with Rex's other clients: see [Size](#size).
 - Reconnecting, and resuming a block's output after a dropped connection.
 - Restoring the arrangement of Rex terminals with bookmarks or the desktop.
 - Servers on other machines.

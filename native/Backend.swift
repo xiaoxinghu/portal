@@ -24,6 +24,14 @@ private func owned(_ value: String) -> portal_text {
     }
 }
 
+/// BYTES, which may be anything, allocated for the core to free.
+private func owned(bytes: Data) -> portal_text {
+    let data = allocate(CChar.self, bytes.count + 1)
+    bytes.withUnsafeBytes { if let base = $0.baseAddress { memcpy(data, base, bytes.count) } }
+    data[bytes.count] = 0
+    return portal_text(data: data, length: bytes.count)
+}
+
 /// Run BODY on the main actor, Emacs's thread, or describe its failure in FAILURE.
 private func perform<T: Sendable>(_ failure: UnsafeMutablePointer<portal_text>,
                                   _ body: @MainActor () throws -> T) -> T? {
@@ -97,19 +105,21 @@ public func portalLauncherDescribe(_ state: UnsafeMutablePointer<portal_text>,
 
 @_cdecl("portal_socket_open")
 public func portalSocketOpen(_ socket: UInt64, _ path: portal_string, _ resource: portal_string,
-                             _ subprotocol: portal_string, _ error: UnsafeMutablePointer<portal_text>) -> Bool {
+                             _ subprotocol: portal_string, _ binary: Bool,
+                             _ error: UnsafeMutablePointer<portal_text>) -> Bool {
     let path = String(copying: path), resource = String(copying: resource)
     let subprotocol = String(copying: subprotocol)
     return perform(error) {
-        try MessageSockets.open(socket, path: path, resource: resource, subprotocol: subprotocol)
+        try MessageSockets.open(socket, path: path, resource: resource, subprotocol: subprotocol,
+                                binary: binary)
     } != nil
 }
 
 @_cdecl("portal_socket_send")
 public func portalSocketSend(_ socket: UInt64, _ text: portal_string,
                              _ error: UnsafeMutablePointer<portal_text>) -> Bool {
-    let text = String(copying: text)
-    return perform(error) { try MessageSockets.socket(socket).send(text) } != nil
+    let bytes = Data(bytes: text.data, count: text.length)
+    return perform(error) { try MessageSockets.socket(socket).send(bytes) } != nil
 }
 
 @_cdecl("portal_socket_read")
@@ -120,7 +130,7 @@ public func portalSocketRead(_ socket: UInt64,
                              _ error: UnsafeMutablePointer<portal_text>) -> Bool {
     guard let read = perform(error, { try MessageSockets.socket(socket).read() }) else { return false }
     let array = allocate(portal_text.self, read.messages.count)
-    for (index, message) in read.messages.enumerated() { (array + index).initialize(to: owned(message)) }
+    for (index, message) in read.messages.enumerated() { (array + index).initialize(to: owned(bytes: message)) }
     messages.pointee = array
     count.pointee = read.messages.count
     ended.pointee = read.reason != nil
@@ -423,6 +433,14 @@ public func portalTerminalReadText(_ terminal: OpaquePointer, _ text: UnsafeMuta
                                    _ error: UnsafeMutablePointer<portal_text>) -> Bool {
     let terminal = native(terminal)
     return perform(error, into: text) { try session(terminal, as: TerminalSession.self).text() }
+}
+
+@_cdecl("portal_terminal_feed")
+public func portalTerminalFeed(_ terminal: OpaquePointer, _ bytes: UnsafePointer<CChar>?, _ length: Int,
+                               _ error: UnsafeMutablePointer<portal_text>) -> Bool {
+    let terminal = native(terminal)
+    let output = bytes.map { Data(bytes: $0, count: length) } ?? Data()
+    return perform(error) { try session(terminal, as: TerminalSession.self).feed(output) } != nil
 }
 
 @_cdecl("portal_view_focus")

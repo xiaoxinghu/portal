@@ -86,7 +86,9 @@ retry placement or close.
 The core owns terminal rules in `native/Core/terminals.c`. The platform supplies
 six terminal or engine primitives: list themes, apply a named or default theme,
 set the text size, paste text, press Enter, and read all text. Before creation,
-the core validates options: `:directory` must be a string; `:command`, `:argv` and
+the core validates options: `:directory` must be a string, except for a
+[fed terminal](#rex-connections), made with `:fed`, which runs no process
+and takes neither `:command` nor `:argv`; `:command`, `:argv` and
 `:theme` a string or nil; `:command` and `:argv` mutually exclusive; `:theme`
 a platform-listed name; and `:points` nil or a number. The adapter decodes `:argv` into literal arguments and
 executes them through the user's interactive login shell. The core likewise
@@ -331,11 +333,14 @@ reused, which is also the socket's name; the endpoint it asks for,
 with one API revision as both the oldest and the newest Portal speaks, so
 the server translates and Portal never sees another; each request's
 envelope and number; and the one outstanding `rex ID` record. As with a
-hosted app's bridge, messages stay out of the pipe: they wait with the
-platform, the first one waiting sends the record, and no other goes until
-Emacs has received them all. The core never reads a message, so it needs no
-JSON parser. `portal--rex-open`, `portal--rex-request`, `portal--rex-receive`,
-`portal--rex-wait` and `portal--rex-close` are its Lisp functions.
+hosted app's bridge, messages stay out of the pipe: they wait in the core,
+the first one waiting sends the record, and no other goes until Emacs has
+received them all. The core reads only the responses to requests it made
+itself, to show a block (below), and takes them out before Emacs sees the
+rest; for those it reads the few values it needs with `native/Core/json.c`,
+which finds a member by skipping what comes before it. `portal--rex-open`,
+`portal--rex-request`, `portal--rex-receive`, `portal--rex-wait`,
+`portal--rex-close` and `portal--rex-show` are its Lisp functions.
 
 **Lisp reads the messages** (`portal-rex.el`): the server's welcome,
 responses matched to their callers by number, and events for
@@ -388,12 +393,66 @@ way needs no run loop, so batch Emacs can test the real module's sockets.
 Messages that arrive while Emacs is busy wait in memory, without a limit:
 the control protocol's are small, and one above 16 MiB ends its connection.
 
-Two things were left for the tasks that need them. A block's data stream,
-which must not cross Emacs, will be a second kind of socket whose bytes the
-platform feeds to a terminal view. Requests that native code makes for
-itself, such as typed keys, will want their answers without Lisp: the core
-can give them a connection of their own, which it reads instead of
-announcing.
+**A block's screen is a fed terminal.** A terminal view usually runs a
+shell in a pty of its own. A fed terminal, a terminal view opened with
+`:fed`, runs no process: its program runs in a Rex server's block, and the
+core is its pty. The platform makes it from libghostty-spm's
+`InMemoryTerminalSession` with `suppressesTerminalResponses`, Portal's patch
+(see [Contributing](../CONTRIBUTING.md#the-ghostty-dependency)), and gives
+the core three things: it parses the bytes the core feeds it
+(`portal_terminal_feed`), off the main thread and in order, answering no
+query in them, since the server has answered each already and a second
+answer would reach the program as typing; it hands the core what it would
+write to its program, keys, mouse reports, pastes and its own reports, in
+order on the main thread (`portal_terminal_input`); and it reports its grid
+with the cells' size in pixels (`portal_terminal_grid`). Everything else,
+its theme, text size, placement, input and lifetime, is any terminal view's.
+
+Lisp opens one in a block's buffer the first time a window shows the
+buffer, and calls `portal--rex-show` with the view's target, the
+connection and the block. From then on, in `native/Core/rex.c`, the core
+works the block on its own requests, numbered among Lisp's on the same
+connection, so that Emacs is one client of the server:
+
+1. `session.attach`, once per session per connection, which `data.connect`
+   and `session.own_block` need; then `session.own_block` with `take`.
+2. It waits for the terminal's grid to stay the same for 100 ms, as a view
+   placed in a pane reports a grid or two on the way, and sizes the block
+   to it with `com.superlogical.terminal.resize`, cells in pixels included.
+3. `data.connect` gives a ticket for the block's stream, which the core
+   opens on a second message socket, a binary one, at `/api/data`, and
+   greets with the ticket. The stream starts with a snapshot of the
+   terminal, which the core skips record by record without decoding.
+4. It asks for the screen with `com.superlogical.terminal.format` in `vt`
+   form with every `extra_*` flag, in parts through `blob_read` when large,
+   holding the stream's bytes meanwhile, then feeds the paint and the held
+   bytes. From then on the stream's bytes are fed as they come, with Rex's
+   own messages (`ESC _ rex1;NONCE;JSON ESC \`, the nonce from the
+   stream's welcome) cut out, even when one is split across messages.
+
+What the terminal writes goes to the block as
+`com.superlogical.terminal.write`, one request at a time, since the server
+runs block methods concurrently and two could land out of order; what is
+written meanwhile joins the next. A change of who has the keyboard goes as
+a `block.event` `focus`, in its place among the writes, and the terminal's
+own focus, size and colour-scheme reports are dropped by their shapes: the
+server makes those for itself, and a program would otherwise get two. A
+new grid resizes the block, the latest of several. While Emacs is the
+block's only client, the block follows the pane; a block another client
+owns may draw at the wrong size, which a later task settles. Once a
+stream has failed or ended, what was queued is dropped and nothing more is
+typed: the terminal's last screen no longer changes, and must not run
+commands unseen.
+
+The stream and its terminal stay until the buffer goes, shown or not, so
+the first paint happens once per block per Emacs, and a buffer shown again
+is current at once. Closing the view closes the stream, which ends it on
+the server, not the block. The core reports a change of state, the stream
+live, failed or ended, with one `rex-block TARGET` record until
+`portal--inspect` describes the view, whose `:rex` says it. Typed bytes
+and the block's output never cross Emacs, but they do cross its main
+thread: a stream's messages reach the core from the main run loop, as the
+control connection's do, so output pauses while Emacs is busy in Lisp.
 
 ## Geometry, attachment and lifetime
 

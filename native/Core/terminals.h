@@ -11,12 +11,16 @@
 #include "portal.h"
 
 /* Check a terminal's OPTIONS before the platform creates it: :directory must
-   be a string; :command, :argv and :theme a string or nil;
-   :command and :argv mutually exclusive; :theme a name the platform
-   lists; and :points nil or a number, which may be out of range: the
-   platform clamps it with portal_terminal_points.  A later duplicate option
-   wins, and other options pass. */
+   be a string, unless :fed is non-nil; :command, :argv and :theme a string
+   or nil; :command and :argv mutually exclusive, and neither with :fed;
+   :theme a name the platform lists; and :points nil or a number, which may
+   be out of range: the platform clamps it with portal_terminal_points.  A
+   later duplicate option wins, and other options pass. */
 bool portal_terminals_check(const portal_option *options, size_t count, portal_text *error);
+
+/* Whether OPTIONS make a fed terminal (portal.h): :fed, non-nil.  Rex
+   shows its blocks in fed terminals (rex.h). */
+bool portal_terminals_fed(const portal_option *options, size_t count);
 
 /* The platform's theme names as a sorted JSON array of strings. */
 bool portal_terminals_themes(portal_text *json, portal_text *error);

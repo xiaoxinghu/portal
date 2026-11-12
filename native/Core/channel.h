@@ -24,6 +24,11 @@ bool portal_channel_connect(int fd);
 bool portal_channel_send(portal_string type, portal_string target, const portal_string *fields,
                          size_t count);
 
+/* Start a timer for another part of the core, and return its token, which
+   no other timer has: portal_timer_fired passes a token that is not the
+   channel's own to that part (rex.c). */
+uint64_t portal_channel_timer(uint64_t milliseconds);
+
 /* How the channel writes: write(2), unless a test replaces it to produce what
    a real pipe cannot on demand, such as EINTR or a short write. */
 extern ssize_t (*portal_channel_write)(int fd, const void *bytes, size_t length);

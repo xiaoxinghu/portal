@@ -105,10 +105,47 @@ Connections that BODY leaves are closed, and none may remain."
       ;; Disconnecting twice is nothing.
       (portal-rex-disconnect connection))))
 
+(ert-deftest portal-rex-a-block-whose-view-cannot-open-says-why ()
+  ;; A window shows the buffer; graphical Emacs opens its terminal view
+  ;; there (test/portal-rex-gui-tests.el).  Here no view can open.
+  (portal-rex-tests--with (server)
+    (portal-rex-tests--connect server)
+    (save-window-excursion
+      (let (opened)
+        (cl-letf (((symbol-function 'portal--open)
+                   (lambda (kind options)
+                     (push (cons kind options) opened)
+                     (error "No views here"))))
+          (switch-to-buffer "*rex: fake/shell*")
+          (with-current-buffer (get-buffer-create "*rex-tests-plain*")
+            (switch-to-buffer-other-window (current-buffer)))
+          (let ((said (portal-rex-tests--messages (portal-rex--show-shown))))
+            (should (equal said "Cannot show Rex block shell: No views here\n")))
+          ;; One fed terminal was asked for, for the block's buffer alone.
+          (should (equal (mapcar #'car opened) '("terminal")))
+          (should (eq (plist-get (cdar opened) :fed) t))
+          (with-current-buffer "*rex: fake/shell*"
+            (should-not portal-view--target)
+            (should (string-search "Its screen could not be shown: No views here" (buffer-string)))
+            (should (string-search "Showing the buffer again tries again." (buffer-string))))
+          ;; Not again while a window still shows it.
+          (portal-rex--show-shown)
+          (should (= (length opened) 1))
+          ;; Shown again later, it tries again.
+          (set-window-buffer (get-buffer-window "*rex: fake/shell*") "*rex-tests-plain*")
+          (portal-rex--show-shown)
+          (set-window-buffer (selected-window) "*rex: fake/shell*")
+          (ignore (portal-rex-tests--messages (portal-rex--show-shown)))
+          (should (= (length opened) 2))))
+      (kill-buffer "*rex-tests-plain*"))))
+
 (ert-deftest portal-rex-fake-matches-a-real-server ()
   ;; The same checks run against a real server in the real-server tier.
   (portal-rex-tests--with (server)
-    (portal-rex-parity-check (portal-rex-tests--connect server))))
+    (portal-fake-rex-command server :screen '(:block:fake-1 "\e[H\e[2J$ fake screen, long enough"))
+    (let ((connection (portal-rex-tests--connect server)))
+      (portal-rex-parity-check connection)
+      (portal-rex-parity-check-block connection "session:fake-1" "block:fake-1"))))
 
 (ert-deftest portal-rex-call-returns-the-result ()
   (portal-rex-tests--with (server)
@@ -764,10 +801,12 @@ Each is returned once: a later call returns those asked for since."
       (should-not (portal-rex-block-buffer connection "block:none"))
       (with-current-buffer "*rex: work/api*"
         (should (equal (portal-rex-session-label) "work"))
-        ;; It says which block it is, and that its screen is not shown.
+        ;; It says which block it is, and that its screen comes when shown.
         (should (string-match-p "\\`Rex block api, in session work\\.\nblock:1 on the server at "
                                 (buffer-string)))
-        (should (string-search "not built yet" (buffer-string)))
+        (should (string-search "once a window shows this buffer" (buffer-string)))
+        ;; Killing it ends no program, so nothing asks.
+        (should-not portal-terminal-confirm-kill)
         (should buffer-read-only)
         (should-not (buffer-modified-p))
         (should (equal default-directory (expand-file-name "~/"))))

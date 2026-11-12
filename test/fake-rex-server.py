@@ -12,15 +12,29 @@ output. It exits when standard input closes, so it never outlives its test.
 test/portal-fake-rex.el drives it from Emacs.
 
 What it does unasked, as the real server (0.1.0-preview.14, API revision 12)
-was seen to:
+was seen to, and as its documentation of data connections says:
 
-- Upgrades a GET for /api/control that asks for rex.control.v1.
+- Upgrades a GET for /api/control that asks for rex.control.v1, and one for
+  /api/data that asks for rex.data.terminal.v1.
 - Answers a client's hello with a welcome.
 - Answers server.version, session.list and session.attach_all, the last two
   with its sessions; session.list_blocks with a session's blocks, or
   session_not_found for a session it does not have; and any other method
-  with method_not_found.
+  with method_not_found, but those of showing a block, below.
 - Gives each response the seq of the last event it sent that client.
+- Shows a block as a real server does: session.attach joins a session;
+  session.own_block, which needs that, makes the client the block's
+  owner; com.superlogical.terminal.resize sets the block's grid;
+  data.connect, which needs it too, gives a ticket of 16 bytes for one data
+  connection; com.superlogical.terminal.format gives the block's screen,
+  in parts read with com.superlogical.terminal.blob_read when it is longer
+  than the paint part; com.superlogical.terminal.write and block.event
+  answer, writing nothing anywhere.
+- On a data connection, answers a HELLO with the ticket's WELCOME, a nonce
+  of its own, then a snapshot of two records and a Rex resize message with
+  the block's grid; or with a REJECT, reason 0x01, and a close, for a
+  ticket it did not give or gave already.  Each later resize of the block
+  sends its streams a resize message too.
 
 Reports, on standard output:
 
@@ -30,6 +44,8 @@ Reports, on standard output:
     {"request": {...}, "client": N}       each request, as received
     {"message": TEXT, "client": N}        any other text message
     {"pong": N}                           client N answered a ping
+    {"stream": BLOCK, "client": N}        client N's data connection to
+                                          BLOCK has had its WELCOME
     {"disconnected": N, "code": CODE}     client N left; CODE is its close
                                           frame's, its own or its answer to
                                           the server's, or null without one
@@ -82,6 +98,19 @@ Commands, on standard input:
     {"upgrade": "refuse" | "no-protocol" | "bad-accept" | "silent" | "ok"}
         How to answer later upgrades: 400, no subprotocol, a wrong accept
         key, nothing at all, or properly.
+    {"screen": {BLOCK: TEXT, ...}}
+        What format gives for each of these blocks from now on: the screen
+        as escape sequences, "" for a block without one.
+    {"paint_part": BYTES}
+        Give format's content, and each blob_read, in parts of at most BYTES
+        bytes of UTF-8; 0, the start, for one part.
+    {"output": BLOCK, "data": TEXT, "split": BYTES}
+        Send TEXT, as UTF-8, on every data connection of BLOCK, as the
+        program's output, in messages of at most BYTES when split is given.
+    {"rex": BLOCK, "message": {...}}
+        Send every data connection of BLOCK this Rex message, with its nonce.
+    {"end_stream": BLOCK, "code": CODE, "reason": TEXT}
+        Close every data connection of BLOCK with this close frame.
 """
 
 import base64
@@ -96,6 +125,8 @@ import threading
 
 PROTOCOL = "rex.control.v1"
 RESOURCE = "/api/control"
+DATA_PROTOCOL = "rex.data.terminal.v1"
+DATA_RESOURCE = "/api/data"
 API_REVISION = 12
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -117,6 +148,12 @@ state = {
     "welcome": True,
     "upgrade": "ok",
     "last": 0,
+    "screens": {},
+    "paint_part": 0,
+    "blobs": {},
+    "grids": {},
+    "tickets": {},
+    "streams": {},
 }
 
 
@@ -144,6 +181,10 @@ class Client:
         self.code = None
         self.closing = False
         self.buffer = b""
+        self.data = False  # A data connection, not a control one.
+        self.joined = set()  # Sessions it attached to.
+        self.nonce = 0
+        self.block = None
 
     def read(self, count):
         while len(self.buffer) < count:
@@ -191,7 +232,12 @@ class Client:
                 headers[name.strip().lower()] = value.strip()
         how = state["upgrade"]
         asked = [word.strip() for word in headers.get("sec-websocket-protocol", "").split(",")]
-        wrong = lines[0] != "GET %s HTTP/1.1" % RESOURCE or PROTOCOL not in asked
+        self.data = lines[0] == "GET %s HTTP/1.1" % DATA_RESOURCE
+        protocol = DATA_PROTOCOL if self.data else PROTOCOL
+        wrong = (
+            lines[0] not in ("GET %s HTTP/1.1" % RESOURCE, "GET %s HTTP/1.1" % DATA_RESOURCE)
+            or protocol not in asked
+        )
         if how == "silent":
             return False
         if how == "refuse" or wrong:
@@ -202,7 +248,7 @@ class Client:
         answer = "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n"
         answer += "Sec-Websocket-Accept: %s\r\n" % accept
         if how != "no-protocol":
-            answer += "Sec-Websocket-Protocol: %s\r\n" % PROTOCOL
+            answer += "Sec-Websocket-Protocol: %s\r\n" % protocol
         self.connection.sendall((answer + "\r\n").encode())
         return True
 
@@ -270,6 +316,12 @@ class Client:
                         "message": "session %s not found" % session,
                         "status": 404,
                     }
+            elif method in SHOWING:
+                result = SHOWING[method](self, payload)
+                if "code" in result:
+                    response["error"] = result
+                else:
+                    response["payload"] = result
             else:
                 response["error"] = {
                     "code": "method_not_found",
@@ -283,6 +335,39 @@ class Client:
             for value in state["after"].pop(method, []):
                 command(value)
 
+    def stream(self):
+        """A data connection: the HELLO, then the block's stream until it ends."""
+        kind, hello = self.receive()
+        ticket = bytes(hello[1:17])
+        with lock:
+            found = state["tickets"].pop(ticket, None) if kind == 2 and hello[:1] == b"\x01" else None
+            if not found:
+                self.frame(2, b"\x82\x01")
+                self.closing = True
+                self.frame(0x8, struct.pack(">H", 1008) + b"data handshake rejected")
+                return
+            self.block = found["block"]
+            self.nonce = int.from_bytes(os.urandom(8), "little") or 1
+            self.frame(
+                2,
+                b"\x81" + os.urandom(16) + b"\0\0\0" + struct.pack("<I", 10000)
+                + struct.pack("<Q", self.nonce),
+            )
+            snapshot = b"GHOSTSNP\x01\x00"
+            for tag, body in ((1, b"fake screen"), (6, b"")):
+                snapshot += struct.pack("<HIxxxx", tag, len(body)) + body
+            self.frame(2, snapshot)
+            self.rex(resize_message(self.block))
+            state["streams"].setdefault(self.block, []).append(self)
+        report(stream=self.block, client=self.number)
+        while True:
+            self.receive()
+
+    def rex(self, message):
+        """Send one of Rex's own messages on this data connection."""
+        body = json.dumps(message, separators=(",", ":"))
+        self.frame(2, b"\x1b_rex1;%d;%s\x1b\\" % (self.nonce, body.encode()))
+
     def serve(self):
         try:
             if not self.upgrade():
@@ -290,6 +375,8 @@ class Client:
                     self.connection.recv(1)
                 return
             report(connected=self.number)
+            if self.data:
+                return self.stream()
             while True:
                 kind, payload = self.receive()
                 text = payload.decode("utf-8", "replace")
@@ -323,11 +410,136 @@ class Client:
         finally:
             with lock:
                 clients.pop(self.number, None)
+                if self.block and self in state["streams"].get(self.block, []):
+                    state["streams"][self.block].remove(self)
             try:
                 self.connection.close()
             except OSError:
                 pass
             report(disconnected=self.number, code=self.code)
+
+
+def error(code, message, status):
+    return {"code": code, "message": message, "status": status}
+
+
+def find_block(payload):
+    """The session and block a block method names, or an error."""
+    session, block = payload.get("session_id"), payload.get("block_id")
+    if not any(known["session_id"] == session for known in state["sessions"]):
+        return None, error("session_not_found", "session %s not found" % session, 404)
+    if not any(known.get("block_id") == block for known in state["blocks"].get(session, [])):
+        return None, error("not_found", "block %s is not in the session" % block, 404)
+    return block, None
+
+
+def resize_message(block):
+    columns, rows, width, height, owner = state["grids"].get(block, (80, 24, 0, 0, None))
+    return {"type": "resize", "cols": columns, "rows": rows, "cell_width_px": width,
+            "cell_height_px": height, "owner": owner}
+
+
+def attach(client, payload):
+    session = payload.get("session_id")
+    if not any(known["session_id"] == session for known in state["sessions"]):
+        return error("session_not_found", "session %s not found" % session, 404)
+    client.joined.add(session)
+    return {"client_id": "client:fake-%d" % client.number, "view": {"revision": 1}}
+
+
+def own_block(client, payload):
+    session = payload.get("session_id")
+    if session not in client.joined:
+        return error("bad_request", "session.own_block: attach to the session first", 400)
+    owners = []
+    for block in payload.get("block_ids") or []:
+        found, problem = find_block({"session_id": session, "block_id": block})
+        if problem:
+            return error("bad_request", "block %s is not in the session" % block, 400)
+        columns, rows, width, height, _ = state["grids"].get(block, (80, 24, 0, 0, None))
+        state["grids"][block] = (columns, rows, width, height, "client:fake-%d" % client.number)
+        owners.append({"block_id": block, "owner": "client:fake-%d" % client.number})
+    return {"blocks": owners}
+
+
+def resize(client, payload):
+    block, problem = find_block(payload)
+    if problem:
+        return problem
+    args = payload.get("args") or {}
+    _, _, _, _, owner = state["grids"].get(block, (80, 24, 0, 0, None))
+    state["grids"][block] = (args.get("columns", 80), args.get("rows", 24),
+                             args.get("cell_width_px") or 0, args.get("cell_height_px") or 0, owner)
+    for stream in list(state["streams"].get(block, [])):
+        stream.rex(resize_message(block))
+    return {}
+
+
+def connect(client, payload):
+    block, problem = find_block(payload)
+    if problem:
+        return problem
+    if payload.get("session_id") not in client.joined:
+        return error("conflict", "data.connect: the connection is not attached to the session", 409)
+    ticket = os.urandom(16)
+    state["tickets"][ticket] = {"block": block, "client": client.number}
+    return {"ticket": base64.urlsafe_b64encode(ticket).decode().rstrip("="), "expires_in_ms": 30000}
+
+
+def part(text, offset, most=0):
+    """The part of TEXT's UTF-8 from OFFSET, ending on a whole character: at
+    most MOST bytes, as a request's max_bytes asks, and the paint part."""
+    data = text.encode()
+    size = min(size for size in (state["paint_part"], most, len(data) or 1) if size)
+    end = min(len(data), offset + size)
+    while end < len(data) and (data[end] & 0xC0) == 0x80:
+        end -= 1
+    return data[offset:end].decode(), end >= len(data), len(data)
+
+
+def paint(client, payload):
+    block, problem = find_block(payload)
+    if problem:
+        return problem
+    content = state["screens"].get(block, "")
+    first, whole, total = part(content, 0, (payload.get("args") or {}).get("max_bytes") or 0)
+    if whole:
+        return {"content": content}
+    identifier = len(state["blobs"]) + 1
+    state["blobs"][identifier] = content
+    return {"content": first, "id": identifier, "total": total, "eof": False}
+
+
+def blob_read(client, payload):
+    _, problem = find_block(payload)
+    if problem:
+        return problem
+    args = payload.get("args") or {}
+    content = state["blobs"].get(args.get("id"))
+    if content is None:
+        return error("not_found", "no such result", 404)
+    data, eof, total = part(content, args.get("offset", 0), args.get("max_bytes") or 0)
+    return {"id": args.get("id"), "data": data, "total": total, "eof": eof}
+
+
+def answer_block(client, payload):
+    _, problem = find_block(payload)
+    if problem:
+        return problem
+    data = (payload.get("args") or {}).get("data")
+    return {"bytes_written": len(data.encode())} if data is not None else {}
+
+
+SHOWING = {
+    "session.attach": attach,
+    "session.own_block": own_block,
+    "com.superlogical.terminal.resize": resize,
+    "data.connect": connect,
+    "com.superlogical.terminal.format": paint,
+    "com.superlogical.terminal.blob_read": blob_read,
+    "com.superlogical.terminal.write": answer_block,
+    "block.event": answer_block,
+}
 
 
 def command(value):
@@ -390,6 +602,24 @@ def command(value):
             state["welcome"] = bool(value["welcome"])
         elif "upgrade" in value:
             state["upgrade"] = value["upgrade"]
+        elif "screen" in value:
+            state["screens"].update(value["screen"])
+        elif "paint_part" in value:
+            state["paint_part"] = int(value["paint_part"])
+        elif "output" in value:
+            data = value.get("data", "").encode()
+            size = int(value.get("split") or 0) or len(data) or 1
+            for client in list(state["streams"].get(value["output"], [])):
+                for start in range(0, len(data), size):
+                    client.frame(2, data[start : start + size])
+        elif "rex" in value:
+            for client in list(state["streams"].get(value["rex"], [])):
+                client.rex(value["message"])
+        elif "end_stream" in value:
+            for client in list(state["streams"].get(value["end_stream"], [])):
+                client.closing = True
+                reason = value.get("reason", "").encode()
+                client.frame(0x8, struct.pack(">H", int(value.get("code", 1000))) + reason)
         else:
             report(problem="unknown command: %s" % json.dumps(value))
 
