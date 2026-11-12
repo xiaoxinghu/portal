@@ -25,4 +25,11 @@ bun_version=$(awk '$1 == "version" {print $2}' "$bun_manifest")
 [[ $(cmake --version | head -1) == "cmake version $cmake_version" ]]
 [[ $(ninja --version) == "$ninja_version" ]]
 [[ $(bun --version) == "$bun_version" ]]
+# Rex Server alone, at the pinned build; its version is read without a server.
+rex_app="/Applications/Rex Server.app"
+[[ $(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$rex_app/Contents/Info.plist") == "$REX_BUILD" ]]
+[[ $(shasum -a 256 "$rex_app/Contents/MacOS/rex" | awk '{print $1}') == "$REX_SHA256" ]]
+[[ $(HOME=/var/empty "$rex_app/Contents/MacOS/rex" --autostart=false version | head -1) == "rex $REX_VERSION" ]]
+[[ ! -e "/Applications/Rex Beta.app" && ! -e /Applications/Rex.app ]]
+printf 'Rex Server %s (build %s) is installed, without Rex.app.\n' "$REX_VERSION" "$REX_BUILD"
 printf 'Guest toolchain and native compilation passed. Run the GUI suites before accepting this image.\n'

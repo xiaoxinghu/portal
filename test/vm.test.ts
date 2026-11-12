@@ -313,6 +313,7 @@ test("every graphical suite runs, each logging to its own directory", async () =
 			"input-gui.sh": suite("echo 'stalled' >&2; exit 124"),
 			"launcher-gui.sh": suite(""),
 			"terminal-shell-startup.sh": suite(""),
+			"rex-server-gui.sh": suite("echo 'no Rex' >&2; exit 77"),
 			"package-gui.sh": suite(""),
 		});
 		copyFileSync(guiAll, join(cwd, "repo", "test", "gui-all.sh"));
@@ -326,12 +327,14 @@ test("every graphical suite runs, each logging to its own directory", async () =
 		const output = result.stdout.toString();
 		expect(output).toMatch(/^views: passed in \d+ s$/m);
 		expect(output).toMatch(/^input: failed \(124\) in \d+ s$/m);
+		expect(output).toMatch(/^rex-server: not run in \d+ s$/m);
 		expect(output).toMatch(/^package: passed in \d+ s$/m);
 		const suites = [
 			"views",
 			"input",
 			"launcher",
 			"terminal-shell-startup",
+			"rex-server",
 			"package",
 		];
 		expect(tree(logs).filter((file) => file.endsWith("/"))).toEqual(
