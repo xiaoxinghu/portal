@@ -33,7 +33,7 @@ if(BUILD_TESTING)
     # The core's registry and pipe and the fake backend compile without
     # emacs-module.h, so nothing the platform calls can reach Emacs.
     add_library(portal-test-core OBJECT views.c input.c terminals.c web.c channel.c
-        shortcuts.c status.c rex.c "${fake_backend}")
+        shortcuts.c status.c rex.c json.c "${fake_backend}")
     target_include_directories(portal-test-core PUBLIC include . "${portal_root}/test")
     set_target_properties(portal-test-core PROPERTIES POSITION_INDEPENDENT_CODE ON)
     # The real bindings with the fake backend in place of native/Backend.swift.

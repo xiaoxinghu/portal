@@ -4,8 +4,8 @@ import Foundation
 import PortalCore
 
 // Message sockets, the primitives of native/Core/include/portal.h: text
-// messages to and from a server on a Unix socket, as a WebSocket (RFC 6455)
-// framed by hand. Neither system client reaches a Unix socket:
+// messages, or binary ones, to and from a server on a Unix socket, as a
+// WebSocket (RFC 6455) framed by hand. Neither system client reaches a Unix socket:
 // URLSessionWebSocketTask cannot name one, and Network.framework's WebSocket
 // aborts on a `.unix` endpoint before any request leaves. Nothing here knows
 // what the messages mean.
@@ -22,6 +22,8 @@ final class MessageSocket: @unchecked Sendable {
     private let path: String
     private let resource: String
     private let subprotocol: String
+    /// Messages are binary, both ways, not text.
+    private let binary: Bool
     private let writes: DispatchQueue
 
     /// Guards every property below, and wakes `wait`.
@@ -33,13 +35,13 @@ final class MessageSocket: @unchecked Sendable {
     /// Frames sent before the connection was up, oldest first.
     private var waiting: [Data] = []
     /// Messages the core has not read, oldest first.
-    private var arrived: [String] = []
+    private var arrived: [Data] = []
     /// Why the connection ended, once it has.
     private var reason: String?
     /// The core closed the socket: report nothing more.
     private var closed = false
 
-    init(id: UInt64, path: String, resource: String, subprotocol: String) throws {
+    init(id: UInt64, path: String, resource: String, subprotocol: String, binary: Bool) throws {
         let capacity = MemoryLayout.size(ofValue: sockaddr_un().sun_path)
         guard path.utf8.count < capacity else {
             throw NativeError.message(
@@ -49,6 +51,7 @@ final class MessageSocket: @unchecked Sendable {
         self.path = path
         self.resource = resource
         self.subprotocol = subprotocol
+        self.binary = binary
         writes = DispatchQueue(label: "portal.socket.\(id).writes")
         let reader = Thread { [self] in run() }
         reader.name = "portal.socket.\(id)"
@@ -57,8 +60,8 @@ final class MessageSocket: @unchecked Sendable {
 
     // MARK: The module thread
 
-    func send(_ text: String) {
-        let frame = Self.frame(opcode: 0x1, payload: Data(text.utf8))
+    func send(_ message: Data) {
+        let frame = Self.frame(opcode: binary ? 0x2 : 0x1, payload: message)
         state.lock()
         defer { state.unlock() }
         switch phase {
@@ -70,7 +73,7 @@ final class MessageSocket: @unchecked Sendable {
 
     /// The messages that arrived since the last read, and why the connection
     /// ended, once it has.
-    func read() -> (messages: [String], reason: String?) {
+    func read() -> (messages: [Data], reason: String?) {
         state.lock()
         defer { state.unlock() }
         let messages = arrived
@@ -341,20 +344,23 @@ final class MessageSocket: @unchecked Sendable {
                 break
             case 0x8:
                 return goodbye(Array(payload))
-            case 0x0, 0x1:
-                // A message starts with a text frame and continues with
-                // continuation frames, never the other way around.
-                guard (opcode == 0x1) == (message == nil) else { return broken }
+            case 0x0, 0x1, 0x2:
+                // A message starts with a text frame, or a binary one on a
+                // binary socket, and continues with continuation frames,
+                // never the other way around.
+                if opcode == (binary ? 0x1 : 0x2) {
+                    return binary ? "The server sent a message that is not binary"
+                        : "The server sent a message that is not text"
+                }
+                guard (opcode != 0x0) == (message == nil) else { return broken }
                 guard (message?.count ?? 0) + payload.count <= Self.largestMessage else {
                     return "The server sent a message that is too large"
                 }
                 message = (message ?? []) + payload
                 if last, let whole = message {
-                    deliver(String(decoding: whole, as: UTF8.self))
+                    deliver(binary ? Data(whole) : Data(String(decoding: whole, as: UTF8.self).utf8))
                     message = nil
                 }
-            case 0x2:
-                return "The server sent a message that is not text"
             default:
                 return broken
             }
@@ -373,10 +379,10 @@ final class MessageSocket: @unchecked Sendable {
         return "The server closed the connection (\(code)\(why.isEmpty ? "" : ": \(why)"))"
     }
 
-    private func deliver(_ text: String) {
+    private func deliver(_ message: Data) {
         state.lock()
         let report = arrived.isEmpty && !closed
-        arrived.append(text)
+        arrived.append(message)
         state.broadcast()
         state.unlock()
         if report { reportReady() }
@@ -388,9 +394,10 @@ final class MessageSocket: @unchecked Sendable {
 enum MessageSockets {
     private static var sockets: [UInt64: MessageSocket] = [:]
 
-    static func open(_ id: UInt64, path: String, resource: String, subprotocol: String) throws {
+    static func open(_ id: UInt64, path: String, resource: String, subprotocol: String, binary: Bool) throws {
         guard id != 0, sockets[id] == nil else { throw NativeError.message("Message socket \(id) is already open") }
-        sockets[id] = try MessageSocket(id: id, path: path, resource: resource, subprotocol: subprotocol)
+        sockets[id] = try MessageSocket(id: id, path: path, resource: resource, subprotocol: subprotocol,
+                                        binary: binary)
     }
 
     static func socket(_ id: UInt64) throws -> MessageSocket {

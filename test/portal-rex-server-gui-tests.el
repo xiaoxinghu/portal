@@ -30,9 +30,15 @@ Its one block runs cat, without a login shell."
   :tags '(:gui)
   ;; The same checks run against the fake in the `rex' suite.
   (portal-real-rex-with (server)
-    (portal-rex-server-gui-tests--new-session server "parity")
-    (let ((connection (portal-rex-connect (portal-real-rex-socket server))))
-      (unwind-protect (portal-rex-parity-check connection)
+    (let ((session (portal-rex-server-gui-tests--new-session server "parity"))
+          (connection (portal-rex-connect (portal-real-rex-socket server))))
+      (unwind-protect
+          (progn
+            (portal-rex-parity-check connection)
+            (portal-rex-parity-check-block
+             connection session
+             (with-current-buffer (car (portal-rex-buffers connection session))
+               portal-rex-block-id)))
         (portal-rex-disconnect connection)))))
 
 (ert-deftest portal-rex-server-gui-sees-a-session-made-elsewhere ()
@@ -161,6 +167,95 @@ Its one block runs cat, without a login shell."
               (portal-rex-disconnect connection)
               (should-not (portal-rex-buffers))
               (should (equal (funcall listed second) '(("shell" "placed"))))))
+        (mapc #'portal-rex-disconnect (portal-rex-connections))))))
+
+(declare-function portal--terminal-text "portal-terminal" (target))
+(declare-function portal--terminal-paste "portal-terminal" (target text &optional enter))
+(declare-function portal-test-native-key "test-terminal-input" (code flags text &optional windowless))
+
+(defun portal-rex-server-gui-tests--screen (server session block)
+  "Return the screen and history of BLOCK in SESSION as SERVER has them, as text."
+  (plist-get (portal-rex-server-gui-tests--api server "com.superlogical.terminal.format"
+                                               :session_id session :block_id block
+                                               :args '(:format "text"))
+             :content))
+
+(defun portal-rex-server-gui-tests--keys (&rest keys)
+  "Type KEYS, each (CODE FLAGS TEXT), into the view with the keyboard."
+  (dolist (key keys)
+    (should (apply #'portal-test-native-key key))
+    (accept-process-output nil 0.03)))
+
+(ert-deftest portal-rex-server-gui-shows-a-block-and-types-in-it ()
+  :tags '(:gui)
+  ;; What only a real server shows: its first paint of a block that ran
+  ;; before Emacs came, typing at its shell, and its answers to a program's
+  ;; queries, which the terminal leaves to it, so the program gets one.
+  (portal-real-rex-with (server)
+    (let* ((session (plist-get (portal-real-rex-cli server "new" "shown" "--shell" "none" "--json"
+                                                    "--" "/bin/sh")
+                               :session_id))
+           (connection (portal-rex-connect (portal-real-rex-socket server)))
+           (buffer (car (portal-rex-buffers connection session)))
+           (block (buffer-local-value 'portal-rex-block-id buffer))
+           (screen (lambda () (portal-rex-server-gui-tests--screen server session block))))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            ;; Another client types into the block before Emacs shows it.
+            (portal-rex-server-gui-tests--api server "com.superlogical.terminal.write"
+                                              :session_id session :block_id block
+                                              :args '(:data "echo before-$((6*7))\r"))
+            (portal-rex-server-gui-tests--wait (lambda () (string-search "before-42" (funcall screen))))
+            (switch-to-buffer buffer)
+            (redisplay t)
+            (let ((target portal-view--target)
+                  (shows (lambda (text)
+                           (portal-rex-server-gui-tests--wait
+                            (lambda () (string-search text (portal--terminal-text portal-view--target)))))))
+              (should target)
+              (portal-rex-server-gui-tests--wait
+               (lambda () (equal (plist-get (plist-get (portal--inspect target) :rex) :state) "live")))
+              ;; The first paint has what the block showed, and the block has
+              ;; the pane's size.
+              (funcall shows "before-42")
+              (let ((state (portal--inspect target))
+                    (size (portal-rex-server-gui-tests--api
+                           server "com.superlogical.terminal.size" :session_id session :block_id block)))
+                (should (equal (list (plist-get size :columns) (plist-get size :rows))
+                               (list (plist-get state :columns) (plist-get state :rows)))))
+              ;; Typed in Emacs, it reaches the shell, and its output Emacs.
+              (select-frame-set-input-focus (selected-frame))
+              (portal-terminal-focus)
+              (portal-rex-server-gui-tests--keys '(14 0 "e") '(8 0 "c") '(4 0 "h") '(31 0 "o")
+                                                 '(49 0 " ") '(17 0 "t") '(16 0 "y")
+                                                 '(35 0 "p") '(14 0 "e") '(2 0 "d") '(36 0 "\r"))
+              (portal-rex-server-gui-tests--wait
+               (lambda () (string-match-p "^typed$" (funcall screen))))
+              (funcall shows "\ntyped\n")
+              ;; A query: the server answers it, and the terminal does not.
+              (portal--terminal-paste target "printf '\\033[c'; read -r a; printf 'got:%s:\\n' \"$a\" | cat -v" t)
+              (funcall shows "^[[?")
+              (portal--terminal-paste target " " t)
+              (portal-rex-server-gui-tests--wait
+               (lambda () (string-match-p "^got:" (funcall screen))))
+              (should (string-match-p "^got:\\^\\[\\[\\?[0-9;]*c:$" (funcall screen)))
+              ;; vim opens and quits, and leaves nothing behind for the shell.
+              (portal--terminal-paste target "vim -u NONE -N" t)
+              (portal-rex-server-gui-tests--wait
+               (lambda () (string-match-p "^~" (funcall screen))))
+              (funcall shows "\n~")
+              (portal-rex-server-gui-tests--keys '(53 0 "\e") (list 41 (ash 1 17) ":") '(12 0 "q")
+                                                 (list 18 (ash 1 17) "!") '(36 0 "\r"))
+              (portal--terminal-paste target "echo after-vim" t)
+              (portal-rex-server-gui-tests--wait
+               (lambda () (string-match-p "^after-vim$" (funcall screen))))
+              (should (string-match-p "\\$ echo after-vim$" (funcall screen)))
+              (funcall shows "after-vim\n")
+              ;; Emacs's screen is the server's.
+              (let ((ours (portal--terminal-text target)))
+                (dolist (line '("before-42" "typed" "after-vim"))
+                  (should (string-match-p (format "^%s$" line) ours))))))
         (mapc #'portal-rex-disconnect (portal-rex-connections))))))
 
 (provide 'portal-rex-server-gui-tests)

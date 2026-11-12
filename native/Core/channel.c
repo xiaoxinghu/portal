@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #include "channel.h"
+#include "rex.h"
 #include "portal.h"
 
 /* How long a full pipe waits before the next write. */
@@ -127,9 +128,18 @@ bool portal_channel_connect(int fd)
     return true;
 }
 
+uint64_t portal_channel_timer(uint64_t milliseconds)
+{
+    uint64_t token = ++channel.tokens;
+    portal_timer_start(token, milliseconds);
+    return token;
+}
+
 void portal_timer_fired(uint64_t token)
 {
-    if (!token || token != channel.timer)
+    if (token && token != channel.timer)
+        return portal_rex_timer(token);
+    if (!token)
         return; /* Cancelled by a connection since. */
     channel.timer = 0;
     flush();

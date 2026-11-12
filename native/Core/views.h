@@ -55,6 +55,13 @@ portal_view *portal_views_find(portal_string target, int kind, portal_text *erro
    it: inspecting the view lets the next go. */
 void portal_views_announce(portal_string target, portal_kind kind, const char *type);
 
+/* Whether TARGET names an open fed terminal (portal.h). */
+bool portal_views_fed(portal_string target);
+/* Hold GRID, the columns, rows, cell width and cell height of TARGET, a fed
+   terminal, as it reports them; false for anything else.  Read it back. */
+bool portal_views_set_grid(portal_string target, const uint32_t grid[static 4]);
+bool portal_views_grid(portal_string target, uint32_t grid[static 4]);
+
 /* TARGET's input, if TARGET names an open view; valid until it closes. */
 struct portal_input *portal_views_input(portal_string target);
 

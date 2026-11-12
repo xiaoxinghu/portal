@@ -510,6 +510,22 @@ LISP_FUNCTION(Frex_close)
                                            : NULL;
 }
 
+LISP_FUNCTION(Frex_show)
+{
+    portal_text target = {0}, session = {0}, block = {0}, error = {0};
+    emacs_value result = NULL;
+    uint64_t id;
+    if (read_natural(env, args[0], &id) && read_text(env, args[1], &target)
+        && read_text(env, args[2], &session) && read_text(env, args[3], &block))
+        result = done(env, portal_rex_show(id, borrow(target), borrow(session), borrow(block),
+                                           &error),
+                      &error);
+    free(target.data);
+    free(session.data);
+    free(block.data);
+    return result;
+}
+
 LISP_FUNCTION(Flauncher_show)
 {
     int64_t values[6];
@@ -973,6 +989,9 @@ static const struct export {
      "whether it has."},
     {"portal--rex-close", 1, 1, Frex_close, NULL,
      "End Rex connection ID, dropping what Emacs has not received."},
+    {"portal--rex-show", 4, 4, Frex_show, NULL,
+     "Show the block BLOCK of SESSION, on Rex connection ID's server, in TARGET, a fed "
+     "terminal, until it closes."},
 };
 
 /* Run the Lisp function DATA, an export, at Emacs's request (input.h). */

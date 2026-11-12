@@ -1,25 +1,38 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Connections to Rex servers: Portal's end of Rex's control protocol, on the
-   platform's message socket primitives.  The platform carries text messages
-   to and from a Unix socket and knows nothing of Rex.  The core keeps each
-   connection's identity, asks for the control endpoint, writes the hello
-   that opens the protocol and the envelope of every request, and tells
-   Emacs, with one record at a time, that messages wait.  It never reads a
-   message: Lisp parses the server's welcome, responses and events, and
-   decides what a session or a block is (portal-rex.el). */
+   platform's message socket primitives, and the blocks the core shows in
+   fed terminals.  The platform carries messages to and from a Unix socket
+   and knows nothing of Rex.  The core keeps each connection's identity,
+   asks for the control endpoint, writes the hello that opens the protocol
+   and the envelope of every request, and tells Emacs, with one record at a
+   time, that messages wait.  Lisp parses the server's welcome, responses
+   and events, and decides what a session or a block is (portal-rex.el).
+
+   The core reads only the responses to its own requests, which it takes
+   out of what the server sends before Emacs sees it: those that show a
+   block in a terminal.  A block's bytes, its first paint and its typing
+   never cross Emacs.  The order of that work, and what each step guards
+   against, is in rex.h; the protocol is the server's own documentation
+   ("Data Connections" in the server's /llms.txt). */
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "channel.h"
 #include "core.h"
+#include "json.h"
 #include "rex.h"
+#include "views.h"
 
 /* Where a Rex server speaks its control protocol, and the name of the
-   protocol, which the server must agree to. */
+   protocol, which the server must agree to; and the same for a terminal's
+   data stream. */
 #define CONTROL_RESOURCE "/api/control"
 #define CONTROL_PROTOCOL "rex.control.v1"
+#define DATA_RESOURCE "/api/data"
+#define DATA_PROTOCOL "rex.data.terminal.v1"
 
 /* The platform the hello reports, as Rex names platforms. */
 #ifdef __APPLE__
@@ -28,22 +41,150 @@
 #define CLIENT_PLATFORM "linux"
 #endif
 
+enum {
+    /* How long a terminal's grid must stay the same before the block is
+       sized to it: a view placed in a pane reports a grid or two on the
+       way, and a block resized while its stream starts redraws twice. */
+    SETTLE_MILLISECONDS = 100,
+    /* The most of the first paint to ask for at once: the server lowers
+       anything larger to this. */
+    PAINT_BYTES = 983040,
+    /* A Rex message longer than this is a program's look-alike that never
+       ends, and is shown as output. */
+    LONGEST_MESSAGE = 1 << 20,
+};
+
+/* Bytes that grow. */
+struct bytes {
+    char *data;
+    size_t length, size;
+    bool failed; /* Out of memory once: the rest is lost. */
+};
+
+static void append(struct bytes *bytes, const char *data, size_t length)
+{
+    if (!length || bytes->failed)
+        return;
+    if (bytes->length + length > bytes->size) {
+        size_t size = bytes->size ? bytes->size : 4096;
+        while (size < bytes->length + length)
+            size *= 2;
+        char *grown = realloc(bytes->data, size);
+        if (!grown) {
+            bytes->failed = true;
+            return;
+        }
+        bytes->data = grown;
+        bytes->size = size;
+    }
+    memcpy(bytes->data + bytes->length, data, length);
+    bytes->length += length;
+}
+
+static void clear(struct bytes *bytes)
+{
+    free(bytes->data);
+    *bytes = (struct bytes) {0};
+}
+
+/* A request the core made itself: ANSWER is called with the response, or
+   with a NULL one when the connection ends first, for the show SHOWN. */
+struct shown;
+typedef void answer(struct shown *shown, const char *response, size_t length);
+struct pending {
+    uint64_t number;
+    answer *answer;
+    uint64_t shown; /* By ID: the show may be gone by the time it is answered. */
+};
+
 /* A connection.  The platform knows it by the same number, as a socket. */
 struct connection {
     uint64_t id;
-    uint64_t requests; /* The last request number given out. */
+    uint64_t requests; /* The last request number given out, to Emacs or the core. */
     bool announced;    /* Whether a record went out for what waits. */
+    char *path;        /* The server's socket, for its data streams. */
+    portal_text *inbox; /* Messages for Emacs, oldest first. */
+    size_t waiting;
+    bool ended;         /* The connection has ended: REASON says why. */
+    portal_text reason;
+    struct pending *pending; /* The core's requests without a response. */
+    size_t asked;
+    char **attached; /* Sessions attached with session.attach. */
+    size_t sessions;
 };
 
 static struct {
     struct connection *items; /* Oldest first. */
     size_t count;
-    uint64_t last; /* The last ID given out. */
+    uint64_t last; /* The last ID given out, to a connection or a data stream. */
 } connections;
+
+/* What a show does next, in order; FAILED and ENDED end it. */
+enum stage {
+    ATTACHING,  /* The connection attaches to the block's session. */
+    OWNING,     /* It claims the block. */
+    SIZING,     /* The terminal's grid settles. */
+    RESIZING,   /* The block takes that size. */
+    CONNECTING, /* A ticket for the block's stream. */
+    GREETING,   /* The stream's handshake. */
+    SKIPPING,   /* The stream's snapshot. */
+    PAINTING,   /* The first paint, while the stream's bytes are held. */
+    LIVE,       /* The stream's bytes reach the terminal. */
+    FAILED,
+    ENDED,
+};
+
+/* Something to send for the terminal, one at a time, in order. */
+struct operation {
+    enum { WRITE, FOCUS, RESIZE } kind;
+    struct bytes bytes; /* WRITE's. */
+    bool in;            /* FOCUS's. */
+};
+
+/* A block shown in a fed terminal. */
+struct shown {
+    uint64_t id; /* Never reused: requests name their show by it. */
+    portal_text target, session, block;
+    uint64_t connection;
+    enum stage stage;
+    portal_text reason; /* Why it failed or ended. */
+    bool announced;     /* A "rex-block" record waits for a description. */
+    uint64_t timer;     /* The settling grid's timer, or 0. */
+    uint32_t sized[4];  /* The grid last sent to the server, cells first. */
+    uint32_t columns, rows; /* The grid the stream last gave. */
+    uint64_t data;          /* The stream's socket, or 0. */
+    char marker[40];        /* "ESC _ rex1;NONCE;", which starts a Rex message. */
+    size_t marker_length;
+    struct bytes snapshot; /* SKIPPING: what has come of it. */
+    size_t walked;         /* How far its records have been walked. */
+    struct bytes tail;     /* What may start a Rex message, for the next bytes. */
+    struct bytes held;     /* PAINTING: the stream's bytes, for after the paint. */
+    struct bytes paint;    /* PAINTING: the paint so far. */
+    int64_t blob;          /* The paint's result on the server, while read in parts. */
+    struct operation *operations;
+    size_t queued;
+    bool sending; /* An operation's request is out. */
+};
+
+static struct {
+    struct shown **items;
+    size_t count;
+    uint64_t last;
+} shows;
 
 static portal_string literal(const char *text)
 {
     return (portal_string) {text, strlen(text)};
+}
+
+static portal_string view(portal_text text)
+{
+    return (portal_string) {text.data, text.length};
+}
+
+static bool same(portal_text text, portal_string string)
+{
+    return text.length == string.length && !memcmp(text.data, string.data, string.length);
 }
 
 static bool out_of_memory(portal_text *error)
@@ -63,6 +204,25 @@ static portal_string number(uint64_t id, char word[static 24])
     return (portal_string) {word, (size_t) length};
 }
 
+static void put_number(struct json *json, uint64_t value)
+{
+    char word[24];
+    portal_string written = number(value, word);
+    put(json, written.data, written.length);
+}
+
+/* A copy of STRING, NUL-terminated. */
+static bool copy(portal_string string, portal_text *text)
+{
+    char *data = malloc(string.length + 1);
+    if (!data)
+        return false;
+    memcpy(data, string.data, string.length);
+    data[string.length] = '\0';
+    *text = (portal_text) {data, string.length};
+    return true;
+}
+
 /* The open connection ID, or NULL with *ERROR set unless ERROR is NULL. */
 static struct connection *find(uint64_t id, portal_text *error)
 {
@@ -76,22 +236,52 @@ static struct connection *find(uint64_t id, portal_text *error)
     return NULL;
 }
 
+static void free_connection(struct connection *connection)
+{
+    free(connection->path);
+    for (size_t i = 0; i < connection->waiting; i++)
+        free(connection->inbox[i].data);
+    free(connection->inbox);
+    free(connection->reason.data);
+    free(connection->pending);
+    for (size_t i = 0; i < connection->sessions; i++)
+        free(connection->attached[i]);
+    free(connection->attached);
+}
+
 static void forget(struct connection *connection)
 {
+    free_connection(connection);
     size_t index = (size_t) (connection - connections.items);
     memmove(connection, connection + 1, (--connections.count - index) * sizeof *connection);
+}
+
+/* The show with ID, or NULL. */
+static struct shown *shown_by_id(uint64_t id)
+{
+    for (size_t i = 0; i < shows.count; i++)
+        if (shows.items[i]->id == id)
+            return shows.items[i];
+    return NULL;
+}
+
+/* The show in TARGET, or NULL. */
+static struct shown *shown_in(portal_string target)
+{
+    for (size_t i = 0; i < shows.count; i++)
+        if (same(shows.items[i]->target, target))
+            return shows.items[i];
+    return NULL;
 }
 
 /* The hello: one API revision as both the oldest and the newest Portal
    speaks, so the server translates and Portal never sees another. */
 static void put_hello(struct json *json, portal_string name, portal_string version)
 {
-    char revision[24];
-    portal_string spoken = number(PORTAL_REX_API_REVISION, revision);
     put_text(json, "{\"type\":\"hello\",\"api_revision\":");
-    put(json, spoken.data, spoken.length);
+    put_number(json, PORTAL_REX_API_REVISION);
     put_text(json, ",\"api_min_revision\":");
-    put(json, spoken.data, spoken.length);
+    put_number(json, PORTAL_REX_API_REVISION);
     put_text(json, ",\"client\":{\"kind\":\"other\",\"platform\":");
     put_string(json, literal(CLIENT_PLATFORM));
     put_text(json, ",\"name\":");
@@ -110,18 +300,21 @@ bool portal_rex_open(portal_string path, portal_string name, portal_string versi
         return fail_with(error, "A Rex client needs a name and a version");
     struct json hello = {0};
     put_hello(&hello, name, version);
+    portal_text kept = {0};
     struct connection *grown =
-        hello.failed ? NULL
-                     : realloc(connections.items, (connections.count + 1) * sizeof *grown);
+        hello.failed || !copy(path, &kept)
+        ? NULL
+        : realloc(connections.items, (connections.count + 1) * sizeof *grown);
     if (!grown) {
         free(hello.data);
+        free(kept.data);
         return out_of_memory(error);
     }
     connections.items = grown;
     /* A failed open uses its number up too, so no report can name a later one. */
     uint64_t socket = ++connections.last;
     bool opened = portal_socket_open(socket, path, literal(CONTROL_RESOURCE),
-                                     literal(CONTROL_PROTOCOL), error);
+                                     literal(CONTROL_PROTOCOL), false, error);
     if (opened && !portal_socket_send(socket, (portal_string) {hello.data, hello.length}, error)) {
         portal_text ignored = {0};
         portal_socket_close(socket, &ignored);
@@ -129,11 +322,35 @@ bool portal_rex_open(portal_string path, portal_string name, portal_string versi
         opened = false;
     }
     free(hello.data);
-    if (!opened)
+    if (!opened) {
+        free(kept.data);
         return false;
-    connections.items[connections.count++] = (struct connection) {.id = socket};
+    }
+    connections.items[connections.count++] = (struct connection) {.id = socket, .path = kept.data};
     *id = socket;
     return true;
+}
+
+/* Send METHOD with PAYLOAD, a JSON object, on CONNECTION, and set *REQUEST
+   to its number. */
+static bool send_request(struct connection *connection, portal_string method,
+                         portal_string payload, uint64_t *request, portal_text *error)
+{
+    struct json json = {0};
+    put_text(&json, "{\"type\":\"request\",\"id\":\"");
+    put_number(&json, connection->requests + 1);
+    put_text(&json, "\",\"method\":");
+    put_string(&json, method);
+    put_text(&json, ",\"payload\":");
+    put(&json, payload.data, payload.length);
+    put_text(&json, "}");
+    bool sent = json.failed
+        ? out_of_memory(error)
+        : portal_socket_send(connection->id, (portal_string) {json.data, json.length}, error);
+    free(json.data);
+    if (sent)
+        *request = ++connection->requests;
+    return sent;
 }
 
 bool portal_rex_request(uint64_t id, portal_string method, portal_string payload,
@@ -146,33 +363,988 @@ bool portal_rex_request(uint64_t id, portal_string method, portal_string payload
         return fail_with(error, "A Rex request needs a method");
     if (payload.length < 2 || payload.data[0] != '{' || payload.data[payload.length - 1] != '}')
         return fail(error, "A Rex request's payload must be a JSON object, not ", payload);
-    char word[24];
-    portal_string serial = number(connection->requests + 1, word);
-    struct json json = {0};
-    put_text(&json, "{\"type\":\"request\",\"id\":\"");
-    put(&json, serial.data, serial.length);
-    put_text(&json, "\",\"method\":");
-    put_string(&json, method);
-    put_text(&json, ",\"payload\":");
-    put(&json, payload.data, payload.length);
-    put_text(&json, "}");
-    bool sent = json.failed ? out_of_memory(error)
-                            : portal_socket_send(id, (portal_string) {json.data, json.length},
-                                                 error);
-    free(json.data);
-    if (sent)
-        *request = ++connection->requests;
-    return sent;
+    return send_request(connection, method, payload, request, error);
 }
 
-bool portal_rex_receive(uint64_t id, portal_text **messages, size_t *count, bool *ended,
+/* Shows. */
+
+static void stop_stream(struct shown *shown);
+static void end_show(struct shown *shown, enum stage stage, const char *reason,
+                     portal_string detail);
+static void next_operation(struct shown *shown);
+
+/* Ask SHOWN's connection to run METHOD with PAYLOAD, for ANSWER.  A request
+   that cannot go fails the show. */
+static bool ask(struct shown *shown, const char *method, struct json *payload, answer *answer)
+{
+    struct connection *connection = find(shown->connection, NULL);
+    portal_text error = {0};
+    uint64_t request;
+    struct pending *grown =
+        !connection || connection->ended || payload->failed
+        ? NULL
+        : realloc(connection->pending, (connection->asked + 1) * sizeof *grown);
+    if (grown)
+        connection->pending = grown;
+    bool sent = grown
+        && send_request(connection, literal(method), (portal_string) {payload->data, payload->length},
+                        &request, &error);
+    free(payload->data);
+    *payload = (struct json) {0};
+    if (!sent) {
+        char prefix[96];
+        snprintf(prefix, sizeof prefix, "%s: ", method);
+        end_show(shown, FAILED, prefix,
+                 literal(error.data ? error.data
+                         : connection && !connection->ended ? "Portal is out of memory"
+                                                            : "not connected"));
+        free(error.data);
+        return false;
+    }
+    connection->pending[connection->asked++] =
+        (struct pending) {.number = request, .answer = answer, .shown = shown->id};
+    return true;
+}
+
+/* The start of a block method's payload, up to its arguments' opening. */
+static void put_block(struct json *json, struct shown *shown)
+{
+    put_text(json, "{\"session_id\":");
+    put_string(json, view(shown->session));
+    put_text(json, ",\"block_id\":");
+    put_string(json, view(shown->block));
+}
+
+/* RESPONSE's error message, or NULL with *ERROR unset if it succeeded.  A
+   response the connection's end stands for has the message "the connection
+   ended". */
+static bool refused(const char *response, size_t length, portal_text *error)
+{
+    portal_string whole = {response, length}, failure, message;
+    if (!response) {
+        copy(literal("the connection to the server ended"), error);
+        return true;
+    }
+    if (!portal_json_member(whole, "error", &failure))
+        return false;
+    if (!portal_json_member(failure, "message", &message) || !portal_json_string(message, error))
+        copy(failure, error);
+    return true;
+}
+
+/* RESPONSE's payload, or false having failed SHOWN for METHOD. */
+static bool succeeded(struct shown *shown, const char *method, const char *response,
+                      size_t length, portal_string *payload)
+{
+    portal_text error = {0};
+    if (refused(response, length, &error)) {
+        char prefix[96];
+        snprintf(prefix, sizeof prefix, "%s: ", method);
+        end_show(shown, FAILED, prefix, view(error));
+        free(error.data);
+        return false;
+    }
+    if (!portal_json_member((portal_string) {response, length}, "payload", payload))
+        *payload = literal("{}");
+    return true;
+}
+
+/* Feed BYTES to SHOWN's terminal. */
+static void feed(struct shown *shown, const char *bytes, size_t length)
+{
+    portal_view *terminal = portal_views_find(view(shown->target), PORTAL_TERMINAL, NULL);
+    portal_text error = {0};
+    if (length && terminal && !portal_terminal_feed(terminal, bytes, length, &error))
+        free(error.data);
+}
+
+/* Tell Emacs that SHOWN's state changed, unless a record already waits. */
+static void announce(struct shown *shown)
+{
+    if (!shown->announced)
+        shown->announced = portal_channel_send(literal("rex-block"), view(shown->target), NULL, 0);
+}
+
+/* SHOWN's stream will bring nothing more, as STAGE says, because of REASON
+   followed by DETAIL. */
+static void end_show(struct shown *shown, enum stage stage, const char *reason,
+                     portal_string detail)
+{
+    if (shown->stage >= FAILED)
+        return;
+    shown->stage = stage;
+    free(shown->reason.data);
+    shown->reason = (portal_text) {0};
+    size_t length = strlen(reason);
+    char *text = malloc(length + detail.length + 1);
+    if (text) {
+        memcpy(text, reason, length);
+        if (detail.length)
+            memcpy(text + length, detail.data, detail.length);
+        text[length + detail.length] = '\0';
+        shown->reason = (portal_text) {text, length + detail.length};
+    }
+    stop_stream(shown);
+    clear(&shown->snapshot);
+    clear(&shown->held);
+    clear(&shown->paint);
+    clear(&shown->tail);
+    announce(shown);
+}
+
+/* Close SHOWN's stream, if open; a close says the stream is done with. */
+static void stop_stream(struct shown *shown)
+{
+    if (!shown->data)
+        return;
+    portal_text ignored = {0};
+    if (!portal_socket_close(shown->data, &ignored))
+        free(ignored.data);
+    shown->data = 0;
+}
+
+/* The grid views.c holds for SHOWN's terminal, cells and pixels. */
+static bool grid(struct shown *shown, uint32_t values[static 4])
+{
+    return portal_views_grid(view(shown->target), values) && values[0] && values[1];
+}
+
+static void settle(struct shown *shown)
+{
+    shown->timer = portal_channel_timer(SETTLE_MILLISECONDS);
+}
+
+/* The arguments of a resize to VALUES. */
+static void put_resize(struct json *json, struct shown *shown, const uint32_t values[static 4])
+{
+    put_block(json, shown);
+    put_text(json, ",\"args\":{\"columns\":");
+    put_number(json, values[0]);
+    put_text(json, ",\"rows\":");
+    put_number(json, values[1]);
+    if (values[2] && values[3]) {
+        put_text(json, ",\"cell_width_px\":");
+        put_number(json, values[2]);
+        put_text(json, ",\"cell_height_px\":");
+        put_number(json, values[3]);
+    }
+    put_text(json, "}}");
+    memcpy(shown->sized, values, sizeof shown->sized);
+}
+
+static answer attached, owned, resized, connected, painted, read_part, operated;
+
+static void own(struct shown *shown)
+{
+    struct json json = {0};
+    put_text(&json, "{\"session_id\":");
+    put_string(&json, view(shown->session));
+    put_text(&json, ",\"block_ids\":[");
+    put_string(&json, view(shown->block));
+    put_text(&json, "],\"mode\":\"take\"}");
+    shown->stage = OWNING;
+    ask(shown, "session.own_block", &json, owned);
+}
+
+static void attached(struct shown *shown, const char *response, size_t length)
+{
+    portal_string payload;
+    if (!succeeded(shown, "session.attach", response, length, &payload))
+        return;
+    struct connection *connection = find(shown->connection, NULL);
+    char *session = connection ? malloc(shown->session.length + 1) : NULL;
+    char **grown = session ? realloc(connection->attached,
+                                     (connection->sessions + 1) * sizeof *grown)
+                           : NULL;
+    if (grown) {
+        memcpy(session, shown->session.data, shown->session.length + 1);
+        grown[connection->sessions++] = session;
+        connection->attached = grown;
+    } else {
+        /* It attaches again next time, which a server allows. */
+        free(session);
+    }
+    own(shown);
+}
+
+static void owned(struct shown *shown, const char *response, size_t length)
+{
+    portal_string payload;
+    if (!succeeded(shown, "session.own_block", response, length, &payload))
+        return;
+    shown->stage = SIZING;
+    settle(shown);
+}
+
+/* The terminal's grid has settled: size the block to it. */
+static void size(struct shown *shown)
+{
+    uint32_t values[4];
+    if (!grid(shown, values))
+        return; /* Its first grid settles again. */
+    struct json json = {0};
+    put_resize(&json, shown, values);
+    shown->stage = RESIZING;
+    ask(shown, "com.superlogical.terminal.resize", &json, resized);
+}
+
+static void resized(struct shown *shown, const char *response, size_t length)
+{
+    portal_string payload;
+    if (!succeeded(shown, "com.superlogical.terminal.resize", response, length, &payload))
+        return;
+    struct json json = {0};
+    put_block(&json, shown);
+    put_text(&json, ",\"data_ref_id\":\"terminal\",\"subprotocol\":\"" DATA_PROTOCOL "\"}");
+    shown->stage = CONNECTING;
+    ask(shown, "data.connect", &json, connected);
+    /* The grid moved while the block took the last one. */
+    portal_rex_grid(view(shown->target));
+}
+
+/* Decode TEXT, base64url without padding, into exactly COUNT BYTES. */
+static bool base64url(portal_string text, unsigned char *bytes, size_t count)
+{
+    static const char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    uint32_t bits = 0;
+    size_t held = 0, written = 0;
+    for (size_t i = 0; i < text.length; i++) {
+        const char *found = text.data[i] ? strchr(alphabet, text.data[i]) : NULL;
+        if (!found)
+            return false;
+        bits = bits << 6 | (uint32_t) (found - alphabet);
+        held += 6;
+        if (held >= 8) {
+            if (written == count)
+                return false;
+            held -= 8;
+            bytes[written++] = (unsigned char) (bits >> held);
+        }
+    }
+    return written == count;
+}
+
+static void connected(struct shown *shown, const char *response, size_t length)
+{
+    portal_string payload, ticket;
+    portal_text decoded = {0};
+    unsigned char hello[17] = {0x01};
+    if (!succeeded(shown, "data.connect", response, length, &payload))
+        return;
+    bool usable = portal_json_member(payload, "ticket", &ticket)
+        && portal_json_string(ticket, &decoded) && base64url(view(decoded), hello + 1, 16);
+    free(decoded.data);
+    if (!usable) {
+        end_show(shown, FAILED, "data.connect gave no ticket of 16 bytes", literal(""));
+        return;
+    }
+    struct connection *connection = find(shown->connection, NULL);
+    portal_text error = {0};
+    uint64_t socket = ++connections.last;
+    if (!connection
+        || !portal_socket_open(socket, literal(connection->path), literal(DATA_RESOURCE),
+                               literal(DATA_PROTOCOL), true, &error)) {
+        end_show(shown, FAILED, "Cannot open the block's stream: ",
+                 literal(error.data ? error.data : "not connected"));
+        free(error.data);
+        return;
+    }
+    shown->data = socket;
+    shown->stage = GREETING;
+    if (!portal_socket_send(socket, (portal_string) {(const char *) hello, sizeof hello}, &error)) {
+        end_show(shown, FAILED, "Cannot open the block's stream: ", view(error));
+        free(error.data);
+    }
+}
+
+/* Where NEEDLE starts in HAY from FROM, or HAY's length. */
+static size_t search(const char *hay, size_t length, size_t from, const char *needle,
+                     size_t count)
+{
+    while (from + count <= length) {
+        const char *found = memchr(hay + from, needle[0], length - count + 1 - from);
+        if (!found)
+            break;
+        size_t at = (size_t) (found - hay);
+        if (!memcmp(found, needle, count))
+            return at;
+        from = at + 1;
+    }
+    return length;
+}
+
+/* The program's output, between Rex's messages: held until the first paint
+   has gone, then fed. */
+static void output(struct shown *shown, const char *bytes, size_t length)
+{
+    if (shown->stage == PAINTING)
+        append(&shown->held, bytes, length);
+    else if (shown->stage == LIVE)
+        feed(shown, bytes, length);
+}
+
+/* One of Rex's own messages, a JSON object, from SHOWN's stream.  A resize
+   gives the block's grid, which the terminal has already: while Emacs owns
+   the block, the server takes the size of the terminal's pane.  Its other
+   messages are another task's. */
+static void message(struct shown *shown, portal_string json)
+{
+    portal_string type, value;
+    int64_t columns, rows;
+    if (!portal_json_member(json, "type", &type) || !portal_json_is(type, "resize"))
+        return;
+    if (portal_json_member(json, "cols", &value) && portal_json_integer(value, &columns)
+        && portal_json_member(json, "rows", &value) && portal_json_integer(value, &rows)
+        && columns >= 0 && rows >= 0 && columns <= UINT32_MAX && rows <= UINT32_MAX) {
+        shown->columns = (uint32_t) columns;
+        shown->rows = (uint32_t) rows;
+    }
+}
+
+/* Bytes of the stream after its snapshot: the program's output with Rex's
+   messages among it, each "ESC _ rex1;NONCE;JSON ESC \".  A message may be
+   split across the stream's messages, so what could start one waits for
+   the next bytes.  A look-alike with another nonce is output. */
+static void stream_bytes(struct shown *shown, const char *bytes, size_t length)
+{
+    const char *data = bytes;
+    struct bytes joined = {0};
+    if (shown->tail.length) {
+        append(&joined, shown->tail.data, shown->tail.length);
+        append(&joined, bytes, length);
+        clear(&shown->tail);
+        if (joined.failed) {
+            clear(&joined);
+            return end_show(shown, FAILED, "Portal is out of memory", literal(""));
+        }
+        data = joined.data;
+        length = joined.length;
+    }
+    const char *marker = shown->marker;
+    size_t count = shown->marker_length, at = 0;
+    while (at < length && shown->stage < FAILED) {
+        size_t start = search(data, length, at, marker, count);
+        if (start == length) {
+            /* Keep the longest end that could begin the marker. */
+            size_t keep = count - 1 < length - at ? count - 1 : length - at;
+            while (keep && memcmp(data + length - keep, marker, keep))
+                keep--;
+            output(shown, data + at, length - at - keep);
+            append(&shown->tail, data + length - keep, keep);
+            break;
+        }
+        output(shown, data + at, start - at);
+        size_t body = start + count, end = search(data, length, body, "\x1b\\", 2);
+        if (end == length) {
+            if (length - start > LONGEST_MESSAGE)
+                output(shown, data + start, length - start);
+            else
+                append(&shown->tail, data + start, length - start);
+            break;
+        }
+        message(shown, (portal_string) {data + body, end - body});
+        at = end + 2;
+    }
+    clear(&joined);
+}
+
+/* Read the stream's snapshot as far as it has come: "GHOSTSNP", a version
+   of two bytes, then records with a header of ten bytes, a tag of two and a
+   length of four among them, up to and including the one tagged 6.  It is
+   skipped, not decoded: the first paint comes from "format". */
+static void skip_snapshot(struct shown *shown)
+{
+    struct bytes *snapshot = &shown->snapshot;
+    const unsigned char *bytes = (const unsigned char *) snapshot->data;
+    if (snapshot->length >= 8 && memcmp(bytes, "GHOSTSNP", 8)) {
+        /* No snapshot: all of it is the program's. */
+        shown->walked = 0;
+        goto done;
+    }
+    if (!shown->walked)
+        shown->walked = 10;
+    while (shown->walked + 10 <= snapshot->length) {
+        const unsigned char *header = bytes + shown->walked;
+        uint32_t tag = header[0] | (uint32_t) header[1] << 8;
+        uint64_t length = header[2] | (uint64_t) header[3] << 8 | (uint64_t) header[4] << 16
+            | (uint64_t) header[5] << 24;
+        if (shown->walked + 10 + length > snapshot->length)
+            return;
+        shown->walked += 10 + (size_t) length;
+        if (tag == 6)
+            goto done;
+    }
+    return;
+done:;
+    struct bytes rest = *snapshot;
+    size_t from = shown->walked;
+    *snapshot = (struct bytes) {0};
+    shown->walked = 0;
+    shown->stage = PAINTING;
+    struct json json = {0};
+    put_block(&json, shown);
+    put_text(&json, ",\"args\":{\"format\":\"vt\",\"extra_charsets\":true,\"extra_cursor\":true,"
+                    "\"extra_hyperlink\":true,\"extra_keyboard\":true,"
+                    "\"extra_kitty_keyboard\":true,\"extra_modes\":true,\"extra_palette\":true,"
+                    "\"extra_protection\":true,\"extra_pwd\":true,"
+                    "\"extra_scrolling_region\":true,\"extra_style\":true,"
+                    "\"extra_tabstops\":true,\"max_bytes\":");
+    put_number(&json, PAINT_BYTES);
+    put_text(&json, "}}");
+    if (ask(shown, "com.superlogical.terminal.format", &json, painted))
+        stream_bytes(shown, rest.data + from, rest.length - from);
+    clear(&rest);
+}
+
+/* The handshake's answer: a WELCOME of 32 bytes whose last 8 are the
+   channel's nonce, little-endian, or a REJECT with its reason. */
+static void greeted(struct shown *shown, const unsigned char *bytes, size_t length)
+{
+    if (length == 32 && bytes[0] == 0x81) {
+        uint64_t nonce = 0;
+        for (int i = 31; i >= 24; i--)
+            nonce = nonce << 8 | bytes[i];
+        int written = snprintf(shown->marker, sizeof shown->marker, "\x1b_rex1;%" PRIu64 ";", nonce);
+        shown->marker_length = (size_t) written;
+        shown->stage = SKIPPING;
+        return;
+    }
+    char reason[64];
+    if (length == 2 && bytes[0] == 0x82)
+        snprintf(reason, sizeof reason, "reason 0x%02x", bytes[1]);
+    else
+        snprintf(reason, sizeof reason, "an answer of %zu bytes", length);
+    end_show(shown, FAILED, "The server refused the block's stream: ", literal(reason));
+}
+
+static void stream_message(struct shown *shown, const char *bytes, size_t length)
+{
+    switch (shown->stage) {
+    case GREETING:
+        return greeted(shown, (const unsigned char *) bytes, length);
+    case SKIPPING:
+        append(&shown->snapshot, bytes, length);
+        if (shown->snapshot.failed)
+            return end_show(shown, FAILED, "Portal is out of memory", literal(""));
+        return skip_snapshot(shown);
+    case PAINTING:
+    case LIVE:
+        return stream_bytes(shown, bytes, length);
+    default:
+        return;
+    }
+}
+
+/* SHOWN's stream has something to read. */
+static void stream_ready(struct shown *shown)
+{
+    portal_text *messages = NULL, reason = {0}, error = {0};
+    size_t count = 0;
+    bool ended = false;
+    uint64_t socket = shown->data, id = shown->id;
+    if (!portal_socket_read(socket, &messages, &count, &ended, &reason, &error)) {
+        free(error.data);
+        return;
+    }
+    for (size_t i = 0; i < count; i++) {
+        /* A message can end the show, which closes the socket; the rest are
+           dropped with it. */
+        if (shown_by_id(id) == shown && shown->data == socket)
+            stream_message(shown, messages[i].data, messages[i].length);
+        free(messages[i].data);
+    }
+    free(messages);
+    if (ended && shown_by_id(id) == shown && shown->data == socket)
+        end_show(shown, shown->stage == LIVE ? ENDED : FAILED, "The block's stream ended: ",
+                 view(reason));
+    free(reason.data);
+}
+
+/* The paint so far is complete: feed it, then what the stream brought
+   meanwhile.  Output written between the snapshot and the "format" is in
+   both; only a snapshot restore, which follows the stream exactly, would
+   avoid that. */
+static void paint(struct shown *shown)
+{
+    struct bytes held = shown->held;
+    shown->held = (struct bytes) {0};
+    if (shown->paint.failed || held.failed) {
+        clear(&held);
+        return end_show(shown, FAILED, "Portal is out of memory", literal(""));
+    }
+    feed(shown, shown->paint.data, shown->paint.length);
+    clear(&shown->paint);
+    shown->stage = LIVE;
+    feed(shown, held.data, held.length);
+    clear(&held);
+    announce(shown);
+}
+
+/* Add the string member NAME of PAYLOAD to the paint; false having failed
+   SHOWN if there is none. */
+static bool take_part(struct shown *shown, portal_string payload, const char *name)
+{
+    portal_string value;
+    portal_text part = {0};
+    if (!portal_json_member(payload, name, &value) || !portal_json_string(value, &part)) {
+        end_show(shown, FAILED, "The server's paint has no text", literal(""));
+        return false;
+    }
+    append(&shown->paint, part.data, part.length);
+    free(part.data);
+    return true;
+}
+
+/* Ask for the paint's next part, from where it has come to. */
+static void read_next(struct shown *shown)
+{
+    struct json json = {0};
+    put_block(&json, shown);
+    put_text(&json, ",\"args\":{\"id\":");
+    put_number(&json, (uint64_t) shown->blob);
+    put_text(&json, ",\"offset\":");
+    put_number(&json, shown->paint.length);
+    put_text(&json, ",\"max_bytes\":");
+    put_number(&json, PAINT_BYTES);
+    put_text(&json, "}}");
+    ask(shown, "com.superlogical.terminal.blob_read", &json, read_part);
+}
+
+static void painted(struct shown *shown, const char *response, size_t length)
+{
+    portal_string payload, value;
+    if (!succeeded(shown, "com.superlogical.terminal.format", response, length, &payload)
+        || !take_part(shown, payload, "content"))
+        return;
+    /* A reply with an id holds only the first part. */
+    if (portal_json_member(payload, "id", &value) && portal_json_integer(value, &shown->blob))
+        return read_next(shown);
+    paint(shown);
+}
+
+static void read_part(struct shown *shown, const char *response, size_t length)
+{
+    portal_string payload, value;
+    if (!succeeded(shown, "com.superlogical.terminal.blob_read", response, length, &payload))
+        return;
+    size_t before = shown->paint.length;
+    if (!take_part(shown, payload, "data"))
+        return;
+    bool eof = portal_json_member(payload, "eof", &value) && is(value, "true");
+    if (eof)
+        return paint(shown);
+    if (shown->paint.length == before)
+        return end_show(shown, FAILED, "The server's paint stopped short", literal(""));
+    read_next(shown);
+}
+
+/* Operations: typing, focus and size, one request at a time. */
+
+static void free_operation(struct operation *operation)
+{
+    clear(&operation->bytes);
+}
+
+/* Queue OPERATION for SHOWN, joining it to the last one where they are
+   alike: typing to typing, and a size to the size it replaces. */
+static void queue(struct shown *shown, struct operation operation)
+{
+    struct operation *last = shown->queued ? &shown->operations[shown->queued - 1] : NULL;
+    if (last && last->kind == WRITE && operation.kind == WRITE) {
+        append(&last->bytes, operation.bytes.data, operation.bytes.length);
+        free_operation(&operation);
+    } else if (last && last->kind == RESIZE && operation.kind == RESIZE) {
+        free_operation(&operation);
+    } else {
+        struct operation *grown =
+            realloc(shown->operations, (shown->queued + 1) * sizeof *grown);
+        if (!grown) {
+            free_operation(&operation);
+            return;
+        }
+        shown->operations = grown;
+        shown->operations[shown->queued++] = operation;
+    }
+    next_operation(shown);
+}
+
+/* LENGTH BYTES as a JSON string: valid UTF-8 as it is, anything else as
+   U+FFFD, since a write takes a string.  A legacy mouse report past column
+   95 has such a byte, and arrives wrong. */
+static void put_bytes(struct json *json, const char *bytes, size_t length)
+{
+    struct json valid = {0};
+    const unsigned char *at = (const unsigned char *) bytes, *end = at + length;
+    while (at < end) {
+        size_t count = *at < 0x80 ? 1 : *at >= 0xc2 && *at < 0xe0 ? 2
+            : *at >= 0xe0 && *at < 0xf0                       ? 3
+            : *at >= 0xf0 && *at < 0xf5                       ? 4
+                                                              : 0;
+        bool good = count && (size_t) (end - at) >= count;
+        for (size_t i = 1; good && i < count; i++)
+            good = (at[i] & 0xc0) == 0x80;
+        if (good && count == 3)
+            good = !(at[0] == 0xe0 && at[1] < 0xa0) && !(at[0] == 0xed && at[1] >= 0xa0);
+        if (good && count == 4)
+            good = !(at[0] == 0xf0 && at[1] < 0x90) && !(at[0] == 0xf4 && at[1] >= 0x90);
+        if (good) {
+            put(&valid, (const char *) at, count);
+            at += count;
+        } else {
+            put(&valid, "\xef\xbf\xbd", 3);
+            at++;
+        }
+    }
+    put_string(json, (portal_string) {valid.data ? valid.data : "", valid.length});
+    if (valid.failed)
+        json->failed = true;
+    free(valid.data);
+}
+
+static void next_operation(struct shown *shown)
+{
+    if (shown->sending || !shown->queued)
+        return;
+    struct operation operation = shown->operations[0];
+    memmove(shown->operations, shown->operations + 1, --shown->queued * sizeof *shown->operations);
+    struct json json = {0};
+    const char *method;
+    uint32_t values[4];
+    switch (operation.kind) {
+    case WRITE:
+        method = "com.superlogical.terminal.write";
+        put_block(&json, shown);
+        put_text(&json, ",\"args\":{\"data\":");
+        put_bytes(&json, operation.bytes.data, operation.bytes.length);
+        put_text(&json, "}}");
+        break;
+    case FOCUS:
+        method = "block.event";
+        put_block(&json, shown);
+        put_text(&json, operation.in
+                     ? ",\"event\":{\"type\":\"focus\",\"payload\":{\"action\":\"in\"}}}"
+                     : ",\"event\":{\"type\":\"focus\",\"payload\":{\"action\":\"out\"}}}");
+        break;
+    case RESIZE:
+    default:
+        method = "com.superlogical.terminal.resize";
+        if (!grid(shown, values) || !memcmp(values, shown->sized, sizeof values)) {
+            free_operation(&operation);
+            return next_operation(shown);
+        }
+        put_resize(&json, shown, values);
+        break;
+    }
+    free_operation(&operation);
+    struct connection *connection = find(shown->connection, NULL);
+    uint64_t request;
+    portal_text error = {0};
+    struct pending *grown = !connection || connection->ended || json.failed
+        ? NULL
+        : realloc(connection->pending, (connection->asked + 1) * sizeof *grown);
+    if (grown)
+        connection->pending = grown;
+    /* Typing that cannot go is lost, as typing into a closed pty is. */
+    if (grown && send_request(connection, literal(method), (portal_string) {json.data, json.length},
+                              &request, &error)) {
+        connection->pending[connection->asked++] =
+            (struct pending) {.number = request, .answer = operated, .shown = shown->id};
+        shown->sending = true;
+    }
+    free(error.data);
+    free(json.data);
+    if (!shown->sending)
+        next_operation(shown);
+}
+
+/* An operation's answer: the next may go.  A refused one is dropped, as
+   the server has already moved on from it. */
+static void operated(struct shown *shown, const char *response, size_t length)
+{
+    (void) response;
+    (void) length;
+    shown->sending = false;
+    next_operation(shown);
+}
+
+/* Whether BYTES are a report the terminal makes of its own state, which the
+   server makes for itself: focus in or out (mode 1004), the size in pixels
+   (mode 2048), or the colour scheme (mode 2031).  Each is written alone. */
+static bool own_report(const char *bytes, size_t length)
+{
+    if ((length == 3 && (!memcmp(bytes, "\x1b[I", 3) || !memcmp(bytes, "\x1b[O", 3)))
+        || (length == 9 && (!memcmp(bytes, "\x1b[?997;1n", 9) || !memcmp(bytes, "\x1b[?997;2n", 9))))
+        return true;
+    /* ESC [ 48 ; ROWS ; COLUMNS ; HEIGHT ; WIDTH t */
+    if (length < 13 || memcmp(bytes, "\x1b[48;", 5) || bytes[length - 1] != 't')
+        return false;
+    int fields = 1;
+    bool digit = false;
+    for (size_t i = 5; i < length - 1; i++) {
+        if (bytes[i] >= '0' && bytes[i] <= '9') {
+            digit = true;
+        } else if (bytes[i] == ';' && digit) {
+            fields++;
+            digit = false;
+        } else {
+            return false;
+        }
+    }
+    return digit && fields == 4;
+}
+
+void portal_rex_input(portal_string target, const char *bytes, size_t length)
+{
+    struct shown *shown = shown_in(target);
+    if (!shown || !length || own_report(bytes, length))
+        return;
+    struct operation operation = {.kind = WRITE};
+    append(&operation.bytes, bytes, length);
+    if (!operation.bytes.failed)
+        queue(shown, operation);
+}
+
+void portal_rex_focus(portal_string target, bool focused)
+{
+    struct shown *shown = shown_in(target);
+    if (shown)
+        queue(shown, (struct operation) {.kind = FOCUS, .in = focused});
+}
+
+void portal_rex_grid(portal_string target)
+{
+    struct shown *shown = shown_in(target);
+    if (!shown)
+        return;
+    if (shown->stage == SIZING)
+        settle(shown);
+    else if (shown->stage > RESIZING && shown->stage < FAILED)
+        queue(shown, (struct operation) {.kind = RESIZE});
+}
+
+void portal_rex_timer(uint64_t token)
+{
+    for (size_t i = 0; token && i < shows.count; i++) {
+        struct shown *shown = shows.items[i];
+        if (shown->timer == token) {
+            shown->timer = 0;
+            if (shown->stage == SIZING)
+                size(shown);
+            return;
+        }
+    }
+}
+
+bool portal_rex_show(uint64_t id, portal_string target, portal_string session,
+                     portal_string block, portal_text *error)
+{
+    struct connection *connection = find(id, error);
+    if (!connection)
+        return false;
+    if (connection->ended)
+        return fail_with(error, "The Rex connection has ended");
+    if (!portal_views_fed(target))
+        return fail(error, "No fed terminal ", target);
+    if (shown_in(target))
+        return fail(error, "A block is shown already in ", target);
+    if (!session.length || !block.length)
+        return fail_with(error, "A block to show needs a session and a block ID");
+    for (size_t i = 0; i < shows.count; i++)
+        if (shows.items[i]->connection == id && same(shows.items[i]->block, block)
+            && shows.items[i]->stage < FAILED)
+            return fail(error, "The block is shown already: ", block);
+    struct shown *shown = calloc(1, sizeof *shown);
+    struct shown **grown = shown ? realloc(shows.items, (shows.count + 1) * sizeof *grown) : NULL;
+    if (grown)
+        shows.items = grown;
+    if (!grown || !copy(target, &shown->target) || !copy(session, &shown->session)
+        || !copy(block, &shown->block)) {
+        if (shown) {
+            free(shown->target.data);
+            free(shown->session.data);
+            free(shown->block.data);
+        }
+        free(shown);
+        return out_of_memory(error);
+    }
+    shown->id = ++shows.last;
+    shown->connection = id;
+    shows.items[shows.count++] = shown;
+    bool joined = false;
+    for (size_t i = 0; !joined && i < connection->sessions; i++)
+        joined = strlen(connection->attached[i]) == session.length
+            && !memcmp(connection->attached[i], session.data, session.length);
+    if (joined) {
+        own(shown);
+    } else {
+        struct json json = {0};
+        put_text(&json, "{\"session_id\":");
+        put_string(&json, session);
+        put_text(&json, "}");
+        shown->stage = ATTACHING;
+        ask(shown, "session.attach", &json, attached);
+    }
+    return true;
+}
+
+static const char *const states[] = {
+    [ATTACHING] = "starting", [OWNING] = "starting",   [SIZING] = "starting",
+    [RESIZING] = "starting",  [CONNECTING] = "starting", [GREETING] = "starting",
+    [SKIPPING] = "starting",  [PAINTING] = "starting", [LIVE] = "live",
+    [FAILED] = "failed",      [ENDED] = "ended",
+};
+
+void portal_rex_describe(portal_string target, struct json *json)
+{
+    struct shown *shown = shown_in(target);
+    if (!shown)
+        return;
+    shown->announced = false;
+    put_text(json, ",\"rex\":{\"state\":");
+    put_string(json, literal(states[shown->stage]));
+    put_text(json, ",\"columns\":");
+    put_number(json, shown->columns);
+    put_text(json, ",\"rows\":");
+    put_number(json, shown->rows);
+    if (shown->stage >= FAILED) {
+        put_text(json, ",\"reason\":");
+        put_string(json, shown->reason.data ? view(shown->reason) : literal(""));
+    }
+    put_text(json, "}");
+}
+
+void portal_rex_closed(portal_string target)
+{
+    for (size_t i = 0; i < shows.count; i++) {
+        struct shown *shown = shows.items[i];
+        if (!same(shown->target, target))
+            continue;
+        stop_stream(shown);
+        memmove(shows.items + i, shows.items + i + 1, (--shows.count - i) * sizeof *shows.items);
+        for (size_t k = 0; k < shown->queued; k++)
+            free_operation(&shown->operations[k]);
+        free(shown->operations);
+        clear(&shown->snapshot);
+        clear(&shown->tail);
+        clear(&shown->held);
+        clear(&shown->paint);
+        free(shown->target.data);
+        free(shown->session.data);
+        free(shown->block.data);
+        free(shown->reason.data);
+        free(shown);
+        return;
+    }
+}
+
+/* Reading the control connection. */
+
+/* The response MESSAGE answers one of CONNECTION's own requests: take it
+   out, and give it to its show.  False for anything else. */
+static bool own_response(struct connection *connection, portal_text message)
+{
+    portal_string type, id;
+    portal_text decoded = {0};
+    if (!connection->asked || !portal_json_member(view(message), "type", &type)
+        || !portal_json_is(type, "response") || !portal_json_member(view(message), "id", &id)
+        || !portal_json_string(id, &decoded))
+        return false;
+    int64_t request = 0;
+    bool numbered = portal_json_integer(view(decoded), &request);
+    free(decoded.data);
+    for (size_t i = 0; numbered && i < connection->asked; i++) {
+        if (connection->pending[i].number != (uint64_t) request)
+            continue;
+        struct pending pending = connection->pending[i];
+        memmove(connection->pending + i, connection->pending + i + 1,
+                (--connection->asked - i) * sizeof *connection->pending);
+        struct shown *shown = shown_by_id(pending.shown);
+        /* A show that has failed takes no more answers, but its typing's. */
+        if (shown && (shown->stage < FAILED || pending.answer == operated))
+            pending.answer(shown, message.data, message.length);
+        return true;
+    }
+    return false;
+}
+
+/* CONNECTION's end, for the core's own requests and shows. */
+static void ended(struct connection *connection)
+{
+    while (connection->asked) {
+        struct pending pending = connection->pending[--connection->asked];
+        struct shown *shown = shown_by_id(pending.shown);
+        if (shown && pending.answer == operated)
+            shown->sending = false;
+    }
+    for (size_t i = 0; i < shows.count; i++) {
+        struct shown *shown = shows.items[i];
+        if (shown->connection == connection->id) {
+            for (size_t k = 0; k < shown->queued; k++)
+                free_operation(&shown->operations[k]);
+            shown->queued = 0;
+            end_show(shown, shown->stage == LIVE ? ENDED : FAILED,
+                     "The connection to the server ended", literal(""));
+        }
+    }
+}
+
+/* Read what the platform has for CONNECTION: the core's answers it handles,
+   the rest wait for Emacs. */
+static void pump(struct connection *connection)
+{
+    if (connection->ended)
+        return;
+    portal_text *messages = NULL, reason = {0}, error = {0};
+    size_t count = 0;
+    bool over = false;
+    uint64_t id = connection->id;
+    if (!portal_socket_read(id, &messages, &count, &over, &reason, &error)) {
+        free(error.data);
+        return;
+    }
+    for (size_t i = 0; i < count; i++) {
+        /* An answer can make requests, but never opens or closes a
+           connection, so CONNECTION stays where it is. */
+        if (own_response(connection, messages[i])) {
+            free(messages[i].data);
+            continue;
+        }
+        portal_text *grown = realloc(connection->inbox, (connection->waiting + 1) * sizeof *grown);
+        if (!grown) {
+            free(messages[i].data); /* No memory: lost, as the platform's limit loses one. */
+            continue;
+        }
+        connection->inbox = grown;
+        connection->inbox[connection->waiting++] = messages[i];
+    }
+    free(messages);
+    if (over) {
+        connection->ended = true;
+        connection->reason = reason;
+        ended(connection);
+    }
+}
+
+bool portal_rex_receive(uint64_t id, portal_text **messages, size_t *count, bool *ended_now,
                         portal_text *reason, portal_text *error)
 {
     struct connection *connection = find(id, error);
-    if (!connection || !portal_socket_read(id, messages, count, ended, reason, error))
+    if (!connection)
         return false;
+    pump(connection);
+    portal_text *texts = connection->inbox;
+    if (!texts && !(texts = malloc(sizeof *texts)))
+        return out_of_memory(error);
+    *messages = texts;
+    *count = connection->waiting;
+    connection->inbox = NULL;
+    connection->waiting = 0;
     connection->announced = false;
-    if (*ended) {
+    *ended_now = connection->ended;
+    if (connection->ended) {
+        *reason = connection->reason;
+        connection->reason = (portal_text) {0};
         /* The socket has nothing more to say; a platform that cannot close
            it now has ended it all the same. */
         portal_text ignored = {0};
@@ -183,9 +1355,33 @@ bool portal_rex_receive(uint64_t id, portal_text **messages, size_t *count, bool
     return true;
 }
 
+/* Milliseconds on a clock that only goes forward. */
+static uint64_t now(void)
+{
+    struct timespec time;
+    clock_gettime(CLOCK_MONOTONIC, &time);
+    return (uint64_t) time.tv_sec * 1000 + (uint64_t) time.tv_nsec / 1000000;
+}
+
 bool portal_rex_wait(uint64_t id, uint64_t milliseconds, bool *ready, portal_text *error)
 {
-    return find(id, error) && portal_socket_wait(id, milliseconds, ready, error);
+    struct connection *connection = find(id, error);
+    if (!connection)
+        return false;
+    uint64_t deadline = now() + milliseconds;
+    for (;;) {
+        pump(connection);
+        *ready = connection->waiting || connection->ended;
+        uint64_t left = deadline > now() ? deadline - now() : 0;
+        if (*ready || !left)
+            return true;
+        bool readable = false;
+        if (!portal_socket_wait(id, left, &readable, error))
+            return false;
+        /* The core's own answers may be all that came: wait on for Emacs's. */
+        if (!readable)
+            return true;
+    }
 }
 
 bool portal_rex_close(uint64_t id, portal_text *error)
@@ -193,6 +1389,8 @@ bool portal_rex_close(uint64_t id, portal_text *error)
     struct connection *connection = find(id, error);
     if (!connection || !portal_socket_close(id, error))
         return false;
+    connection->ended = true;
+    ended(connection);
     forget(connection);
     return true;
 }
@@ -201,10 +1399,16 @@ bool portal_rex_close(uint64_t id, portal_text *error)
 
 void portal_socket_ready(uint64_t socket)
 {
+    for (size_t i = 0; i < shows.count; i++)
+        if (shows.items[i]->data == socket)
+            return stream_ready(shows.items[i]);
     struct connection *connection = find(socket, NULL);
+    if (!connection)
+        return;
+    pump(connection);
     char word[24];
     /* A record the pipe refuses is tried again with the next report. */
-    if (connection && !connection->announced)
+    if ((connection->waiting || connection->ended) && !connection->announced)
         connection->announced =
             portal_channel_send(literal("rex"), number(socket, word), NULL, 0);
 }

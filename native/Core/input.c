@@ -38,6 +38,7 @@
 #include "channel.h"
 #include "core.h"
 #include "input.h"
+#include "rex.h"
 #include "views.h"
 
 enum { MODIFIERS = PORTAL_SHIFT | PORTAL_CONTROL | PORTAL_META | PORTAL_SUPER };
@@ -361,8 +362,11 @@ void portal_input_focus(portal_string target, bool focused)
         view->escaped = false;
     if (!input.requests)
         abandon(view);
-    if (changed)
+    if (changed) {
         report(view);
+        /* A block shown in a fed terminal is told, as its server reports focus. */
+        portal_rex_focus(target, focused);
+    }
 }
 
 void portal_input_escape(portal_string target)

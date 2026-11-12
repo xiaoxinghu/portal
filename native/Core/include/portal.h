@@ -260,9 +260,22 @@ bool portal_web_print(portal_view *web, const portal_string *file, portal_text *
    interactive login shell, a string or false, mutually exclusive with
    :command; :theme, a name the platform lists, or false for the default;
    :points, the size of its text, a number, which the platform passes
-   through portal_terminal_points, or false for PORTAL_TERMINAL_POINTS; and
-   :quick, a flag. The shell loads startup files and resolves the program;
-   no Lisp environment snapshot is passed to the platform.
+   through portal_terminal_points, or false for PORTAL_TERMINAL_POINTS;
+   :quick, a flag; and :fed, a flag, below. The shell loads startup files
+   and resolves the program; no Lisp environment snapshot is passed to the
+   platform.
+
+   A fed terminal, one created with :fed, runs no process and has no pty:
+   its program runs elsewhere, such as in a Rex server's block, and the
+   core is its pty.  What the terminal shows is the output the core feeds
+   it with portal_terminal_feed.  What it would write to its program, the
+   keys it encodes, its mouse reports, pastes and its own reports, such as
+   focus changes, it gives the core with portal_terminal_input; and it
+   reports its grid with portal_terminal_grid, once it has one and at each
+   change.  It answers no query in its output, as whoever produced that
+   output has answered it: a second answer would reach the program as
+   typing.  It takes neither :command nor :argv, its :directory is
+   optional, its "program" is always "" and it never exits by itself.
 
    A terminal describes itself with "ready", whether its engine can draw and
    take input; "title", which the running program may set, "" until it does;
@@ -303,6 +316,12 @@ bool portal_terminal_press_enter(portal_view *terminal, portal_text *error);
 /* Read all of TERMINAL's text, its scrollback and screen.  macOS reads it by
    selecting everything, and leaves that selection active. */
 bool portal_terminal_read_text(portal_view *terminal, portal_text *text, portal_text *error);
+/* Give TERMINAL, a fed terminal, LENGTH bytes of its program's output,
+   which may be any bytes, after the output fed before them.  It parses them
+   off the module thread, in order, without answering any query in them,
+   and holds them while it cannot parse yet. */
+bool portal_terminal_feed(portal_view *terminal, const char *bytes, size_t length,
+                          portal_text *error);
 /* The size of a terminal's text, in points: the one it starts at without
    :points, and the smallest and largest it is shown at. */
 enum {
@@ -353,7 +372,9 @@ bool portal_view_paste(portal_view *view, portal_text *error);
    and returns at once: the platform dials, upgrades and reads off the
    module thread, so a server that answers slowly or never holds nothing up.
    Open fails only when it cannot start, as for a PATH too long for a socket
-   address.
+   address.  A BINARY socket carries bytes instead of text: its messages,
+   both ways, are WebSocket binary messages, which may hold any bytes, and
+   a text message from the server ends it as a broken protocol would.
 
    Send queues TEXT as one message.  Messages go out in the order they were
    sent, those sent before the connection is up once it is, and none after
@@ -363,7 +384,7 @@ bool portal_view_paste(portal_view *view, portal_text *error);
    *MESSAGES to the *COUNT messages that arrived since the last read, oldest
    first, an array allocated with malloc like each text, which the core
    frees; a message is whatever text the server sent, with invalid UTF-8
-   replaced.  Read sets *ENDED to whether the connection has ended, so that
+   replaced, or on a binary socket the bytes it sent, as they are.  Read sets *ENDED to whether the connection has ended, so that
    these messages are its last, and then *REASON to why, for people: the
    server could not be reached, refused the upgrade, closed the connection,
    broke the protocol, or went away.  A connection ends once, and nothing
@@ -382,7 +403,7 @@ bool portal_view_paste(portal_view *view, portal_text *error);
    to read, call portal_socket_ready, below, from the platform's event loop
    on the module thread; never from inside one of these operations. */
 bool portal_socket_open(uint64_t socket, portal_string path, portal_string resource,
-                        portal_string protocol, portal_text *error);
+                        portal_string protocol, bool binary, portal_text *error);
 bool portal_socket_send(uint64_t socket, portal_string text, portal_text *error);
 bool portal_socket_read(uint64_t socket, portal_text **messages, size_t *count, bool *ended,
                         portal_text *reason, portal_text *error);
@@ -507,6 +528,17 @@ void portal_hotkey_released(uint64_t hotkey);
    program that retitles itself constantly never floods the pipe.  The core
    ignores a call for a target that names no open terminal. */
 void portal_terminal_changed(portal_string target);
+/* TARGET, a fed terminal, would write LENGTH BYTES, any bytes, to its
+   program: keys it encoded, a mouse report, a paste or a report of its
+   own, as one write.  Writes reach the core in the order the terminal made
+   them.  The core ignores a call for a target that names no fed terminal. */
+void portal_terminal_input(portal_string target, const char *bytes, size_t length);
+/* TARGET, a fed terminal, has a grid of COLUMNS by ROWS cells now, each
+   CELL_WIDTH by CELL_HEIGHT pixels of the screen it is drawn on, or 0 by 0
+   when the terminal cannot say.  Reported once it has a grid, and again at
+   each change, a change of cell size alone included. */
+void portal_terminal_grid(portal_string target, uint32_t columns, uint32_t rows,
+                          uint32_t cell_width, uint32_t cell_height);
 /* POINTS, a terminal's text size from Lisp, clamped to
    PORTAL_TERMINAL_MIN_POINTS to PORTAL_TERMINAL_MAX_POINTS: the size a new
    terminal starts at.  Lisp derives sizes from Emacs's fonts, so one out of

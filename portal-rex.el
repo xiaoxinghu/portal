@@ -3,8 +3,8 @@
 
 ;; Emacs as a client of Rex, the terminal multiplexer: a connection to a Rex
 ;; server, calls of its methods, its events, and a buffer for each of its
-;; blocks, following the server (docs/rex.md).  No buffer shows its block's
-;; screen yet, and Portal's own terminals need no Rex.
+;; blocks, following the server, which shows its block's screen once a
+;; window shows it (docs/rex.md).  Portal's own terminals need no Rex.
 ;;
 ;; The native module carries the messages: a WebSocket over the server's Unix
 ;; socket, read off Emacs's thread (docs/architecture.md).  It says hello and
@@ -30,6 +30,8 @@
 (declare-function portal--rex-receive "portal-rex" (id))
 (declare-function portal--rex-wait "portal-rex" (id milliseconds))
 (declare-function portal--rex-close "portal-rex" (id))
+(declare-function portal--rex-show "portal-rex" (id target session-id block-id))
+(declare-function portal--inspect "portal-view" (target))
 (declare-function ibuffer-current-buffer "ibuffer" (&optional must-be-live))
 (declare-function ibuffer-update "ibuffer" (arg &optional silent))
 (declare-function ibuffer-push-filter "ibuf-ext" (filter-specification))
@@ -301,7 +303,8 @@ server.  Every request still waiting fails, oldest first."
             (portal-rex-connection-held connection) nil
             portal-rex--connections (delq connection portal-rex--connections))
       (unless portal-rex--connections
-        (remove-hook 'kill-emacs-hook #'portal-rex--disconnect-all))
+        (remove-hook 'kill-emacs-hook #'portal-rex--disconnect-all)
+        (remove-hook 'window-buffer-change-functions #'portal-rex--show-shown))
       (when (and ready (not quiet))
         (message "Lost the Rex server at %s: %s" (portal-rex--named connection) reason))
       (portal-rex--run #'portal-rex--forget-blocks connection)
@@ -436,9 +439,12 @@ returns what the session is called now.")
 (defvar-local portal-rex--block-label nil
   "The label of this buffer's block, as its server last gave it.")
 
+(defvar-local portal-rex--show-failure nil
+  "Why this block's screen could not be shown the last time, or nil.")
+
 ;; A buffer is its block's whatever mode it is put in.
 (dolist (variable '(portal-rex-block-connection portal-rex-block-id portal-rex-session-id
-                    portal-rex--block-label))
+                    portal-rex--block-label portal-rex--show-failure))
   (put variable 'permanent-local t))
 
 (defvar portal-rex--killing nil
@@ -513,15 +519,21 @@ connection is to a server on this Mac, so the name carries no host."
           label))
 
 (defun portal-rex--describe-block ()
-  "Make the current buffer's text say which block it is the buffer of."
-  (with-silent-modifications
-    (erase-buffer)
-    (insert (format "Rex block %s, in session %s.\n%s on the server at %s\n\n%s\n"
-                    portal-rex--block-label
-                    (or (portal-rex-session-label) portal-rex-session-id)
-                    portal-rex-block-id
-                    (portal-rex--named portal-rex-block-connection)
-                    "Showing a block's screen here is not built yet."))))
+  "Make the current buffer's text say which block it is the buffer of.
+While the buffer has its terminal view, its text is the view's placard
+instead, which this leaves alone."
+  (unless portal-view--target
+    (with-silent-modifications
+      (erase-buffer)
+      (insert (format "Rex block %s, in session %s.\n%s on the server at %s\n\n%s\n"
+                      portal-rex--block-label
+                      (or (portal-rex-session-label) portal-rex-session-id)
+                      portal-rex-block-id
+                      (portal-rex--named portal-rex-block-connection)
+                      (if portal-rex--show-failure
+                          (format "Its screen could not be shown: %s\nShowing the buffer again tries again."
+                                  portal-rex--show-failure)
+                        "Its screen is shown here once a window shows this buffer."))))))
 
 (defun portal-rex--buffer-killed ()
   "Say what killing this block's buffer by hand leaves on its server.
@@ -552,6 +564,8 @@ the block needs, and has no view."
                 ;; the server spoke.
                 default-directory (expand-file-name "~/"))
           (add-hook 'kill-buffer-hook #'portal-rex--buffer-killed nil t)
+          ;; Killing the buffer ends no program: the block runs on.
+          (setq-local portal-terminal-confirm-kill nil)
           (portal-rex--describe-block)
           (puthash block-id buffer (portal-rex-connection-blocks connection))
           (setq ready t))
@@ -702,6 +716,86 @@ An event of a session that the connection does not know is left alone:
                                 (portal-rex--session-labels) nil nil nil nil default)))
     (equal (portal-rex-session-label buf) qualifier)))
 
+;;; Showing a block
+
+;; A buffer is made without its screen.  The first time a window shows it,
+;; it gets a terminal view, a fed one: the native module attaches to the
+;; block's session, claims the block, sizes it to the pane, paints the
+;; screen the server describes and feeds it the block's output from then
+;; on, and types into the block what the terminal encodes (docs/rex.md).
+;; The bytes never cross Emacs.  The view, and the block's stream with it,
+;; stay until the buffer goes, shown or not, so a buffer shown again is
+;; current at once.
+
+(defvar portal-rex--failed-shows nil
+  "The buffers that failed to show their blocks while windows still show them.
+They try again once no window shows them, and one does again.")
+
+(defun portal-rex--show-shown (&optional _frame)
+  "Give each block's buffer that a window shows its terminal view.
+On `window-buffer-change-functions' while Emacs is connected to a server.
+A buffer whose view could not open waits until a window shows it again."
+  (dolist (window (window-list-1 nil 'nomini t))
+    (let ((buffer (window-buffer window)))
+      (when (and (buffer-local-value 'portal-rex-block-connection buffer)
+                 (not (buffer-local-value 'portal-view--target buffer))
+                 (not (memq buffer portal-rex--failed-shows))
+                 (eq (portal-rex-block-buffer
+                      (buffer-local-value 'portal-rex-block-connection buffer)
+                      (buffer-local-value 'portal-rex-block-id buffer))
+                     buffer))
+        (portal-rex--show buffer window))))
+  (setq portal-rex--failed-shows
+        (cl-remove-if-not (lambda (buffer) (get-buffer-window buffer t)) portal-rex--failed-shows)))
+
+(defun portal-rex--show (buffer window)
+  "Open BUFFER's terminal view and show its block in it, in WINDOW's frame.
+A failure is written in the buffer, not signalled: this runs from a
+window change hook."
+  (with-current-buffer buffer
+    (let ((connection portal-rex-block-connection)
+          target)
+      (condition-case failure
+          (progn
+            (portal-terminal--connect)
+            ;; It opens at the size of this frame's text, as any terminal does.
+            (setq portal-terminal--points
+                  (portal-terminal--text-size buffer (window-frame window)))
+            (portal-view-placard "terminal" "This block's terminal has closed; the block runs on.")
+            (setq target (portal-view-open 'terminal
+                                           (list :fed t :theme portal-terminal-theme
+                                                 :points portal-terminal--points)))
+            (portal--rex-show (portal-rex-connection-id connection) target
+                              portal-rex-session-id portal-rex-block-id)
+            (setq portal-rex--show-failure nil)
+            (add-hook 'window-state-change-functions #'portal-terminal--resize-shown 90))
+        (error
+         (when portal-view--target (portal-view-close))
+         (push buffer portal-rex--failed-shows)
+         (setq portal-rex--show-failure (error-message-string failure))
+         (portal-rex--describe-block)
+         (message "Cannot show Rex block %s: %s" portal-rex--block-label
+                  portal-rex--show-failure))))))
+
+(defun portal-rex--block-shown (target &rest _)
+  "Note how showing TARGET's block went, from the native module's record.
+A block whose screen could not be shown loses its view, and its buffer
+says why; one whose stream ended keeps its last screen."
+  (when-let* ((state (plist-get (portal--inspect target) :rex)))
+    (pcase (plist-get state :state)
+      ("failed"
+       (setq portal-rex--show-failure (plist-get state :reason))
+       (push (current-buffer) portal-rex--failed-shows)
+       (portal-view-close)
+       (portal-rex--describe-block)
+       (message "Cannot show Rex block %s: %s" portal-rex--block-label portal-rex--show-failure))
+      ("ended"
+       ;; A block that closed takes its buffer with it, as its event says.
+       (message "Rex block %s: %s" portal-rex--block-label (plist-get state :reason))))))
+
+(setf (alist-get "rex-block" portal-view-record-handlers nil nil #'equal)
+      #'portal-rex--block-shown)
+
 ;;; Connecting
 
 (defun portal-rex--attached (connection response)
@@ -743,7 +837,9 @@ Each block on the server gets a buffer, named *rex: SESSION/BLOCK* from
 the two labels, and from then on the buffers follow the server: one
 comes with a new block, goes when its block closes or its session is
 destroyed, and is renamed with either label.  `portal-rex-buffers'
-returns them.  No buffer shows its block's screen yet.
+returns them.  A buffer shows its block's screen, a terminal you can
+type in, once a window shows the buffer, and keeps it up to date from
+then on, shown or not.
 
 Once connected, `portal-rex-call' and `portal-rex-call-async' call the
 server's methods, and `portal-rex-event-functions' runs for each event
@@ -788,7 +884,8 @@ of the server and of its sessions.  The connection's
             (setq connection (portal-rex--make-connection
                               :id (portal--rex-open socket "Portal" version) :socket socket)
                   portal-rex--connections (append portal-rex--connections (list connection)))
-            (add-hook 'kill-emacs-hook #'portal-rex--disconnect-all))
+            (add-hook 'kill-emacs-hook #'portal-rex--disconnect-all)
+            (add-hook 'window-buffer-change-functions #'portal-rex--show-shown))
           (when (and (portal-rex--await connection
                                         (lambda () (portal-rex-connection-welcome connection))
                                         portal-rex-timeout)
