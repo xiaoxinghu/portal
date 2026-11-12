@@ -19,6 +19,9 @@ macOS backend. Navigate by boundaries, not separate feature libraries:
   pinned Ghostty dependency.
 - The [input bridge](terminal-input-bridge.md), [hosted-app bridge](editor-bridge.md)
   and [launcher panel](launcher-native-panel.md) explain their protocols and platform-specific hazards.
+- [`portal-rex.el`](../portal-rex.el) is Emacs's end of a connection to a Rex
+  server; [Rex connections](#rex-connections) says what sits on each side of
+  the two native interfaces.
 
 ## Shared native host
 
@@ -300,6 +303,68 @@ so showing it neither activates Emacs nor moves the keyboard. It draws the
 HUD material with a hairline edge, rounded to at most 18 points, a spinner
 or an SF Symbol for the tone, and wrapped text; it fades in and out and asks
 VoiceOver to announce new text.
+
+## Rex connections
+
+Portal is becoming a client of [Rex servers](rex.md). A connection to one has
+three layers, split as [ADR 0003](adr/0003-platform-interface-primitives.md)
+splits everything: the platform gives a primitive that knows nothing of Rex,
+and Rex's rules live once, above it.
+
+**The platform carries messages.** Its primitive is the message socket: text
+messages to and from a server on a Unix socket, as a WebSocket. It opens one
+for a path, a resource and a subprotocol, queues a message to send, hands
+over the messages that arrived, waits a bounded time for one, and closes;
+it reports that a socket has something to read with `portal_socket_ready`.
+On macOS, `native/MessageSocket.swift` frames WebSocket by hand, because
+neither system client reaches a Unix socket: `URLSessionWebSocketTask`
+cannot name one, and Network.framework's WebSocket aborts on a `.unix`
+endpoint. Each socket has a thread that dials, upgrades and reads, and a
+serial queue that writes, so a slow or silent server never holds Emacs's
+thread. The platform checks the upgrade (the status, the accept key, the
+subprotocol), answers pings, joins fragments, and ends a connection whose
+server breaks the framing, with a reason for people.
+
+**The core owns the connection** (`native/Core/rex.c`): its ID, never
+reused, which is also the socket's name; the endpoint it asks for,
+`/api/control` with `rex.control.v1`; the hello that opens the protocol,
+with one API revision as both the oldest and the newest Portal speaks, so
+the server translates and Portal never sees another; each request's
+envelope and number; and the one outstanding `rex ID` record. As with a
+hosted app's bridge, messages stay out of the pipe: they wait with the
+platform, the first one waiting sends the record, and no other goes until
+Emacs has received them all. The core never reads a message, so it needs no
+JSON parser. `portal--rex-open`, `portal--rex-request`, `portal--rex-receive`,
+`portal--rex-wait` and `portal--rex-close` are its Lisp functions.
+
+**Lisp reads the messages** (`portal-rex.el`): the server's welcome,
+responses matched to their callers by number, and events for
+`portal-rex-event-functions`. What a session or a block means, and what Emacs
+does about one, belongs here and in the files built on it, never in the
+platform. Messages of one connection are handled strictly in arrival order
+from one queue, also when a handler waits for the server itself. Connecting
+asks for events with `session.attach_all`; the sessions in its answer are as
+they were at the answer's `seq`, so events that arrived before the answer
+are held, those up to that `seq` are dropped as already in the list, and the
+later ones follow it.
+
+A connection takes its messages two ways, which share one path from
+`portal--rex-receive` on. With Emacs idle, the reader's thread reports from
+the main run loop, the core sends the record, and the pipe's filter
+receives. A caller that needs an answer before going on, as
+`portal-rex-call` does, instead blocks in `portal--rex-wait`, the one
+primitive that waits, in turns of at most 50 ms so that a quit gets through,
+and receives directly; the record that follows finds nothing. The second
+way needs no run loop, so batch Emacs can test the real module's sockets.
+Messages that arrive while Emacs is busy wait in memory, without a limit:
+the control protocol's are small, and one above 16 MiB ends its connection.
+
+Two things were left for the tasks that need them. A block's data stream,
+which must not cross Emacs, will be a second kind of socket whose bytes the
+platform feeds to a terminal view. Requests that native code makes for
+itself, such as typed keys, will want their answers without Lisp: the core
+can give them a connection of their own, which it reads instead of
+announcing.
 
 ## Geometry, attachment and lifetime
 
