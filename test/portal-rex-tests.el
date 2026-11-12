@@ -274,6 +274,44 @@ Connections that BODY leaves are closed, and none may remain."
         (portal-rex-tests--until connection (lambda () (= (length seen) 3)))
         (should (equal (reverse seen) '("first" "second" "third")))))))
 
+(ert-deftest portal-rex-every-hook-function-sees-events-in-order ()
+  ;; The first function waits for the server while it handles an event, and
+  ;; the next events arrive before the answer.  The second function still
+  ;; sees the first event first, and the waiting call gets its answer.
+  (portal-rex-tests--with (server)
+    (let* ((connection (portal-rex-tests--connect server))
+           first second answered
+           (type (lambda (event) (plist-get (plist-get event :payload) :type)))
+           (portal-rex-event-functions
+            (list (lambda (from event)
+                    (push (funcall type event) first)
+                    (when (equal (car first) "one")
+                      (portal-rex-call-async from "server.version" nil
+                                             (lambda (&rest _) (push "version" first)))
+                      (setq answered (portal-rex-call from "session.list"))
+                      (push "returned" first)))
+                  (lambda (_from event) (push (funcall type event) second)))))
+      (portal-fake-rex-command server :hold "session.list")
+      (portal-fake-rex-command server :after "session.list"
+                               :then [(:event (:type "two")) (:event (:type "three"))
+                                      (:release "session.list")])
+      (portal-fake-rex-command server :event '(:type "one"))
+      (portal-rex-tests--until connection (lambda () (= (length second) 3)))
+      (should (plist-get answered :sessions))
+      ;; Answers reach a function that waits; events wait for it to return.
+      (should (equal (reverse first) '("one" "version" "returned" "two" "three")))
+      (should (equal (reverse second) '("one" "two" "three")))
+      ;; A function that fails leaves the next event to run as usual.
+      (setq portal-rex-event-functions
+            (list (lambda (_from event)
+                    (push (funcall type event) first)
+                    (when (equal (car first) "bad") (error "Boom")))))
+      (portal-fake-rex-command server :event '(:type "bad"))
+      (portal-fake-rex-command server :event '(:type "good"))
+      (let ((inhibit-message t))
+        (portal-rex-tests--until connection (lambda () (equal (car first) "good"))))
+      (should-not (portal-rex-connection-handling connection)))))
+
 (ert-deftest portal-rex-lost-connection-is-reported-once ()
   (portal-rex-tests--with (server)
     (let ((connection (portal-rex-tests--connect server))

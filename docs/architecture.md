@@ -322,8 +322,8 @@ cannot name one, and Network.framework's WebSocket aborts on a `.unix`
 endpoint. Each socket has a thread that dials, upgrades and reads, and a
 serial queue that writes, so a slow or silent server never holds Emacs's
 thread. The platform checks the upgrade (the status, the accept key, the
-subprotocol), answers pings, joins fragments, and ends a connection whose
-server breaks the framing, with a reason for people.
+subprotocol), answers pings and a server's close, joins fragments, and ends
+a connection whose server breaks the framing, with a reason for people.
 
 **The core owns the connection** (`native/Core/rex.c`): its ID, never
 reused, which is also the socket's name; the endpoint it asks for,
@@ -341,8 +341,11 @@ JSON parser. `portal--rex-open`, `portal--rex-request`, `portal--rex-receive`,
 responses matched to their callers by number, and events for
 `portal-rex-event-functions`. What a session or a block means, and what Emacs
 does about one, belongs here and in the files built on it, never in the
-platform. Messages of one connection are handled strictly in arrival order
-from one queue, also when a handler waits for the server itself. Connecting
+platform. Messages of one connection are handled in arrival order from one
+queue. Events run one at a time, so that every function on the hook sees
+one before any sees the next: while an event's functions run, one that
+waits for the server is given the responses that arrive, and the events
+keep their places in the queue until it returns. Connecting
 asks for events with `session.attach_all`; the sessions in its answer are as
 they were at the answer's `seq`, so events that arrived before the answer
 are held, those up to that `seq` are dropped as already in the list, and the

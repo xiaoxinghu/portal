@@ -121,9 +121,12 @@ event as the server sent it, parsed like a result:
 
 An event of one session comes wrapped once more, as a `session_event` whose
 payload has the `:session_id` and the `:event`. Events of one connection
-arrive in order, with `:seq` rising by one. The functions run from a process
+arrive in order, with `:seq` rising by one, and every function on the hook
+sees one event before any sees the next. The functions run from a process
 filter, or inside a `portal-rex-call` that was waiting when the event came,
-so they must not prompt.
+so they must not prompt. A function may call `portal-rex-call` itself: it
+gets its answer, and the events that arrive while it waits run after it
+returns.
 
 `(portal-rex-connection-sessions CONNECTION)` holds the sessions the server
 had when the connection started receiving events, as `session.list` returns

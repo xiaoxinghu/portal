@@ -54,10 +54,13 @@ event, a plist such as
              :payload (:session (:session_id \"session:01a1…\" :label \"work\"))))
 
 Events of one connection arrive in the order the server sent them, their
-`:seq' rising by one.  An event of one session is wrapped again, as a
+`:seq' rising by one, and every function sees one event before any sees
+the next.  An event of one session is wrapped again, as a
 \"session_event\" whose payload names the session and holds the event.
 The functions run from a process filter, or inside a `portal-rex-call'
-that was waiting when the event arrived, so they must never prompt.")
+that was waiting when the event arrived, so they must never prompt.  One
+that calls `portal-rex-call' itself gets its answer; the events that
+arrive while it waits run once it has returned.")
 
 (define-error 'portal-rex-error "Rex error")
 
@@ -76,6 +79,7 @@ keeps it current.")
   (calls nil :documentation "Requests without a response, newest first, as (NUMBER . FUNCTION).")
   (inbox nil :documentation "Messages received and not yet handled, oldest first.")
   (held nil :documentation "Events that arrived before the sessions did, newest first.")
+  (handling nil :documentation "Whether an event's functions are running.")
   (reason nil :documentation "Why it ended, once it has, when anything said."))
 
 (defvar portal-rex--connections nil
@@ -128,12 +132,29 @@ It has the shape of a server's error, with a code no server sends."
                    (and reason (list (list :type 'ended :reason reason)))))))
   (portal-rex--drain connection))
 
+(defun portal-rex--next (connection)
+  "Remove and return the next of CONNECTION's waiting messages to handle.
+That is the oldest, except while an event's functions run: then it is
+the oldest that is not an event."
+  (let ((inbox (portal-rex-connection-inbox connection)))
+    (if (not (portal-rex-connection-handling connection))
+        (pop (portal-rex-connection-inbox connection))
+      (when-let* ((message (cl-find-if-not (lambda (waiting)
+                                             (equal (plist-get waiting :type) "event"))
+                                           inbox)))
+        (setf (portal-rex-connection-inbox connection) (delq message inbox))
+        message))))
+
 (defun portal-rex--drain (connection)
   "Handle CONNECTION's waiting messages, oldest first.
-A handler that waits for the server, as `portal-rex-call' does, handles
-the messages after its own from in here, so the order holds."
-  (while-let ((message (pop (portal-rex-connection-inbox connection))))
-    (portal-rex--handle connection message)))
+Events run one at a time: every function of the hook sees one before any
+sees the next.  So when one of those functions waits for the server, as
+`portal-rex-call' does, or lets Emacs read its pipes, only what is not
+an event is handled from in here, and the events that arrived meanwhile
+keep their places until the function returns."
+  (let (message)
+    (while (setq message (portal-rex--next connection))
+      (portal-rex--handle connection message))))
 
 (defun portal-rex--handle (connection message)
   "Handle MESSAGE, which arrived on CONNECTION."
@@ -148,9 +169,12 @@ the messages after its own from in here, so the order holds."
                (delq call (portal-rex-connection-calls connection)))
          (portal-rex--run (cdr call) message))))
     ("event"
-     (if (portal-rex-live-p connection)
-         (portal-rex--run #'run-hook-with-args 'portal-rex-event-functions connection message)
-       (push message (portal-rex-connection-held connection))))
+     (if (not (portal-rex-live-p connection))
+         (push message (portal-rex-connection-held connection))
+       (setf (portal-rex-connection-handling connection) t)
+       (unwind-protect
+           (portal-rex--run #'run-hook-with-args 'portal-rex-event-functions connection message)
+         (setf (portal-rex-connection-handling connection) nil))))
     ('garbled (portal-rex--end connection "The server sent a message that is not JSON"))
     ('ended (portal-rex--ended connection (plist-get message :reason)))
     ;; Anything else is from a newer server.
@@ -258,7 +282,8 @@ process filter, so it must never prompt."
 The arguments and the result are as for `portal-rex-call-async', which
 does not wait.  This waits for the answer, for at most TIMEOUT seconds,
 by default `portal-rex-timeout', handling the events and responses that
-arrive before it, in order.
+arrive before it, in order; called from `portal-rex-event-functions',
+it leaves those events until the function that called it returns.
 
 A call the server refuses signals `portal-rex-error', with a sentence and
 the server's error, a plist with `:code', `:message' and `:status'.  So
