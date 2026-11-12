@@ -356,6 +356,47 @@ Connections that BODY leaves are closed, and none may remain."
         (when (stringp outcome) (should-not live))
         (should-not (portal-rex-connection-calls connection))))))
 
+(ert-deftest portal-rex-quit-in-a-hook-function-strands-nothing ()
+  ;; Events and the connection's end are in Emacs when a hook function
+  ;; quits.  The quit goes on up; the rest is handled as soon as Emacs is
+  ;; idle, though nothing will ask for this connection again.
+  (portal-rex-tests--with (server)
+    (let* ((connection (portal-rex-tests--connect server))
+           seen answers
+           (portal-rex-event-functions
+            (list (lambda (_from event)
+                    (push (plist-get (plist-get event :payload) :type) seen)
+                    (when (equal (car seen) "one") (signal 'quit nil))))))
+      (portal-fake-rex-command server :silent "session.view")
+      (dolist (tag '(first second))
+        (portal-rex-call-async connection "session.view" nil
+                               (lambda (_result failure)
+                                 (push (list tag (plist-get failure :code)) answers)
+                                 (when (eq tag 'first) (signal 'quit nil)))))
+      (portal-fake-rex-request server "session.view")
+      (portal-fake-rex-request server "session.view")
+      (dolist (name '("one" "two" "three"))
+        (portal-fake-rex-command server :event (list :type name)))
+      (portal-fake-rex-command server :drop t)
+      (portal-fake-rex-take server :disconnected)
+      (sleep-for 0.2)
+      (should (eq (condition-case nil (progn (portal-rex--pump connection) nil) (quit 'quit))
+                  'quit))
+      (should (equal seen '("one")))
+      (let ((said (portal-rex-tests--messages
+                    (let ((deadline (+ (float-time) 2)))
+                      (while (and (< (length answers) 2) (< (float-time) deadline))
+                        ;; The first request's function quits too, out of the timer.
+                        (condition-case nil (accept-process-output nil 0.05) (quit nil)))))))
+        (should (equal said
+                       (format "Lost the Rex server at %s: The connection to the server was lost\n"
+                               (abbreviate-file-name (portal-fake-rex-socket server))))))
+      (should (equal (reverse seen) '("one" "two" "three")))
+      (should (equal (reverse answers)
+                     '((first "portal_disconnected") (second "portal_disconnected"))))
+      (should (eq (portal-rex-connection-state connection) 'closed))
+      (should-not (portal-rex-connection-resume connection)))))
+
 (ert-deftest portal-rex-lost-connection-is-reported-once ()
   (portal-rex-tests--with (server)
     (let ((connection (portal-rex-tests--connect server))

@@ -347,7 +347,9 @@ one before any sees the next: while an event's functions run, one that
 waits for the server is given the responses that arrive, and the events
 keep their places in the queue until it returns. A connection's end joins
 the queue behind its last messages, so what arrived before it still runs;
-it fails the requests still waiting, and is then reported lost. Connecting
+it is reported lost, and fails the requests still waiting. A quit in a hook
+function or a callback goes on up, and a timer finishes the queue.
+Connecting
 asks for events with `session.attach_all`; the sessions in its answer are as
 they were at the answer's `seq`, so events that arrived before the answer
 are held, those up to that `seq` are dropped as already in the list, and the

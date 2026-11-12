@@ -80,6 +80,7 @@ keeps it current.")
   (inbox nil :documentation "Messages received and not yet handled, oldest first.")
   (held nil :documentation "Events that arrived before the sessions did, newest first.")
   (handling nil :documentation "Whether an event's functions are running.")
+  (resume nil :documentation "The timer that will finish what a non-local exit left, or nil.")
   (reason nil :documentation "Why it ended, once it has, when anything said."))
 
 (defvar portal-rex--connections nil
@@ -173,9 +174,29 @@ sees the next.  So when one of those functions waits for the server, as
 `portal-rex-call' does, or lets Emacs read its pipes, only what is not
 an event is handled from in here, and the events that arrived meanwhile
 keep their places until the function returns."
-  (let (message)
-    (while (setq message (portal-rex--next connection))
-      (portal-rex--handle connection message))))
+  (let (message finished)
+    (unwind-protect
+        (progn
+          (while (setq message (portal-rex--next connection))
+            (portal-rex--handle connection message))
+          (setq finished t))
+      (unless finished (portal-rex--resume-later connection)))))
+
+(defun portal-rex--resume-later (connection)
+  "Finish soon what a non-local exit left of CONNECTION's messages.
+A quit in a hook function or a callback goes on up, as a quit should, and
+nothing may ever ask for this connection again: its messages, the end
+among them, are in Emacs already."
+  (unless (portal-rex-connection-resume connection)
+    (setf (portal-rex-connection-resume connection)
+          (run-at-time 0 nil #'portal-rex--resume connection))))
+
+(defun portal-rex--resume (connection)
+  "Handle what was left of CONNECTION's messages, or of its failing requests."
+  (setf (portal-rex-connection-resume connection) nil)
+  (if (eq (portal-rex-connection-state connection) 'closed)
+      (portal-rex--fail-calls connection (portal-rex-connection-reason connection))
+    (portal-rex--drain connection)))
 
 (defun portal-rex--handle (connection message)
   "Handle MESSAGE, which arrived on CONNECTION."
@@ -215,16 +236,22 @@ A connection that has ended keeps the reason it had."
   (portal-rex--ended connection reason))
 
 (defun portal-rex--fail-calls (connection reason)
-  "Fail every request still waiting on CONNECTION, oldest first, with REASON."
-  (let ((calls (reverse (portal-rex-connection-calls connection))))
-    (setf (portal-rex-connection-calls connection) nil)
-    (dolist (call calls)
-      (portal-rex--run (cdr call) (portal-rex--failure "portal_disconnected" reason)))))
+  "Fail every request still waiting on CONNECTION, oldest first, with REASON.
+One whose function exits non-locally leaves the rest to be failed soon."
+  (let (finished)
+    (unwind-protect
+        (progn
+          (while-let ((call (car (last (portal-rex-connection-calls connection)))))
+            (setf (portal-rex-connection-calls connection)
+                  (delq call (portal-rex-connection-calls connection)))
+            (portal-rex--run (cdr call) (portal-rex--failure "portal_disconnected" reason)))
+          (setq finished t))
+      (unless finished (portal-rex--resume-later connection)))))
 
 (defun portal-rex--ended (connection reason &optional quiet)
   "Note that CONNECTION has ended because of REASON, the first time only.
-Every request still waiting fails, oldest first.  A connection that was
-ready is reported lost in the echo area, unless QUIET."
+A connection that was ready is reported lost in the echo area, unless
+QUIET.  Every request still waiting fails, oldest first."
   (unless (eq (portal-rex-connection-state connection) 'closed)
     (let ((ready (portal-rex--ready-p connection)))
       (setf (portal-rex-connection-id connection) nil
@@ -235,9 +262,9 @@ ready is reported lost in the echo area, unless QUIET."
             portal-rex--connections (delq connection portal-rex--connections))
       (unless portal-rex--connections
         (remove-hook 'kill-emacs-hook #'portal-rex--disconnect-all))
-      (portal-rex--fail-calls connection reason)
       (when (and ready (not quiet))
-        (message "Lost the Rex server at %s: %s" (portal-rex--named connection) reason)))))
+        (message "Lost the Rex server at %s: %s" (portal-rex--named connection) reason))
+      (portal-rex--fail-calls connection reason))))
 
 (defun portal-rex--record (id &rest _)
   "Handle the record that messages wait on the native connection ID."
