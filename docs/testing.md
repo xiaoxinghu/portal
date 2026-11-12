@@ -376,9 +376,13 @@ Tests of the [Rex client](rex.md) never connect to a real Rex server, and so
 never to yours. They use [a fake one](../test/fake-rex-server.py): a Python
 program that speaks Rex's control protocol on a Unix socket in a temporary
 directory, answers a hello and the methods a connection calls, and does what
-a test tells it on its standard input: canned results and errors per method,
-events on demand, answers held back or never sent, dropped connections,
-refused upgrades, fragments, pings and garbage. It frames WebSocket itself,
+a test tells it on its standard input: its sessions and their blocks, canned
+results and errors per method, events on demand, answers held back or never
+sent, dropped connections, refused upgrades, fragments, pings and garbage.
+It changes nothing by itself: a test that sends `block_created` also says
+what `session.list_blocks` returns from then on. It reports each command
+done, and `portal-fake-rex-command` returns only then, so the next thing a
+client asks meets the command. It frames WebSocket itself,
 so it can break the framing too. Its docstring lists the commands and what
 it reports; [portal-fake-rex.el](../test/portal-fake-rex.el) starts and
 scripts it from any Emacs, batch or graphical, and any other harness can
@@ -393,7 +397,8 @@ Three suites use it or the fake platform:
   loop, so the module's `rex ID` record never arrives there; these tests take
   messages by waiting, as `portal-rex-call` does.
 - `test/portal-rex-gui-tests.el`, part of `sh test/views-gui.sh`, proves the
-  record: events, answers and a lost connection reaching an idle Emacs.
+  record: events, answers and a lost connection reaching an idle Emacs, and
+  blocks' buffers following a server meanwhile.
 
 The fake follows what a real server was seen to send, from a preview
 protocol that moves every few days, so tests against it prove only that
@@ -426,8 +431,8 @@ one, and after [moving the Rex pin](test-vm.md#move-the-rex-pin). With
 `portal.testVm` set it runs in the VM, against the pinned Rex.
 
 [portal-rex-parity.el](../test/portal-rex-parity.el) holds checks that run
-against both servers: the handshake, `server.version`, `session.list` and an
-unknown method. The `rex` suite runs them against the fake, the tier against
+against both servers: the handshake, `server.version`, `session.list`,
+`session.list_blocks` with the buffers made of it, and an unknown method. The `rex` suite runs them against the fake, the tier against
 a real server. When only the tier's run fails, the real server has moved:
 bring the fake, and Portal, into line with it. Add a check there when the fake
 can answer it as cheaply as the real server.

@@ -14,7 +14,7 @@ Run shell examples from the repository root, not `docs/`.
 | Draw and save offline | [Local Excalidraw drawings](excalidraw.md) |
 | Run shells, switch terminals or use a quick terminal | [Terminals and optional Consult/Embark adapters](terminals.md) |
 | Present a command in a panel or set a global shortcut | [Launchers and global shortcuts](launcher.md) |
-| Connect Emacs to a Rex server and call it from Lisp | [Connect to a Rex server](rex.md) |
+| Connect Emacs to a Rex server, find its blocks as buffers and call it from Lisp | [Connect to a Rex server](rex.md) |
 | Diagnose a blank hosted app or restart its process | [App host lifecycle and diagnostics](app-host.md) |
 
 ## Build and change Portal

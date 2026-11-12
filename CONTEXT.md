@@ -41,11 +41,11 @@ Emacs's link to one Rex server, from `portal-rex-connect` until it is disconnect
 _Avoid_: session (a Rex term for something else), client, socket (the platform's primitive that carries it)
 
 **Session**:
-A named group of blocks on a Rex server, with an ID and a label. It exists on the server whether or not Emacs is connected, and may be empty.
+A named group of blocks on a Rex server, with an ID and a label, which another session may share. It exists on the server whether or not Emacs is connected, and may be empty. In Emacs it is an attribute of its blocks' buffers, as a directory is, never a buffer or a container of its own.
 _Avoid_: project, workspace; calling a connection a session. The "terminal session" a terminal view runs, its own shell, is not one.
 
 **Block**:
-One program on a Rex server with its screen, such as a shell: what one terminal shows. It belongs to one session for its whole life, and its ID never changes and is never reused.
+One program on a Rex server with its screen, such as a shell: what one terminal shows. It belongs to one session for its whole life, and its ID never changes and is never reused. While Emacs is connected to its server it has exactly one buffer, named from its session's label and its own, which comes and goes with the block.
 _Avoid_: pane, tab, window (Rex's own layout terms), terminal (the view kind that will show it)
 
 ## System-wide

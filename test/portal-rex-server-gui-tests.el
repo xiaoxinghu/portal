@@ -71,5 +71,97 @@ Its one block runs cat, without a login shell."
                              `[(:session_id ,id :label "elsewhere")]))))
         (mapc #'portal-rex-disconnect (portal-rex-connections))))))
 
+(defun portal-rex-server-gui-tests--api (server method &rest payload)
+  "Call METHOD with PAYLOAD on SERVER as another client, and return its result."
+  (json-parse-string (portal-real-rex-cli server "api" "call" method (json-serialize payload))
+                     :object-type 'plist))
+
+(ert-deftest portal-rex-server-gui-buffers-follow-the-server ()
+  :tags '(:gui)
+  ;; What only a real server can show: which events it sends when another
+  ;; client makes, relabels, detaches and closes blocks, and that the
+  ;; buffers follow them.
+  (portal-real-rex-with (server)
+    (let* ((session (portal-rex-server-gui-tests--new-session server "work"))
+           (connection (portal-rex-connect (portal-real-rex-socket server)))
+           (names (lambda ()
+                    (sort (mapcar #'buffer-name (portal-rex-buffers connection)) #'string<)))
+           (named (lambda (&rest wanted)
+                    (portal-rex-server-gui-tests--wait
+                     (lambda () (equal (funcall names) wanted)))))
+           (listed (lambda (session)
+                     (mapcar (lambda (block)
+                               (list (plist-get block :label) (plist-get block :placement)))
+                             (plist-get (portal-rex-server-gui-tests--api
+                                         server "session.list_blocks" :session_id session)
+                                        :blocks)))))
+      (unwind-protect
+          (progn
+            ;; The block the session started with, under the label the
+            ;; server gave it.
+            (should (equal (funcall names) '("*rex: work/shell*")))
+            ;; Another client opens a window with one block.
+            (let* ((made (portal-real-rex-cli server "run" "-s" "work" "--shell" "none"
+                                              "--focus=false" "--label" "api" "--json"
+                                              "--" "/bin/cat"))
+                   (block (aref (plist-get made :block_ids) 0))
+                   buffer)
+              (funcall named "*rex: work/api*" "*rex: work/shell*")
+              (setq buffer (portal-rex-block-buffer connection block))
+              (should (equal (buffer-name buffer) "*rex: work/api*"))
+              (with-current-buffer buffer
+                (should (eq portal-rex-block-connection connection))
+                (should (equal portal-rex-block-id block))
+                (should (equal portal-rex-session-id session)))
+              ;; It relabels the block in its window.
+              (portal-rex-server-gui-tests--api server "session.set_block_label" :session_id session
+                                                :block_id block :label "logs")
+              (funcall named "*rex: work/logs*" "*rex: work/shell*")
+              (should (eq (portal-rex-block-buffer connection block) buffer))
+              ;; A detached block keeps its buffer.
+              (portal-rex-server-gui-tests--api server "session.detach_block" :session_id session
+                                                :block_id block)
+              (should (equal (funcall listed session)
+                             '(("shell" "placed") ("logs" "detached"))))
+              (portal-rex-server-gui-tests--wait
+               (lambda () (null (portal-rex-connection-lists connection))))
+              (funcall named "*rex: work/logs*" "*rex: work/shell*")
+              ;; Its new label sends no event: the buffer has it once
+              ;; something else makes Portal ask, as renaming the session does.
+              (portal-rex-server-gui-tests--api server "session.set_block_label" :session_id session
+                                                :block_id block :label "hidden")
+              (portal-rex-server-gui-tests--api server "session.set_label" :session_id session
+                                                :label "play")
+              (funcall named "*rex: play/hidden*" "*rex: play/shell*")
+              (should (eq (portal-rex-block-buffer connection block) buffer))
+              (should (equal (portal-rex-connection-sessions connection)
+                             `[(:session_id ,session :label "play")]))
+              ;; Closed, it loses its buffer.
+              (portal-rex-server-gui-tests--api server "block.close" :session_id session
+                                                :block_id block)
+              (funcall named "*rex: play/shell*")
+              (should-not (buffer-live-p buffer)))
+            ;; A second session, with the same label as the first, and its
+            ;; end.
+            (let ((second (portal-rex-server-gui-tests--new-session server "play")))
+              (funcall named "*rex: play/shell*" "*rex: play/shell*<2>")
+              (should (equal (portal-rex-connection-sessions connection)
+                             `[(:session_id ,session :label "play")
+                               (:session_id ,second :label "play")]))
+              (portal-rex-server-gui-tests--api server "session.destroy" :session_id session)
+              (portal-rex-server-gui-tests--wait
+               (lambda () (null (portal-rex-buffers connection session))))
+              (should (equal (mapcar (lambda (buffer)
+                                       (buffer-local-value 'portal-rex-session-id buffer))
+                                     (portal-rex-buffers connection))
+                             (list second)))
+              (should (equal (portal-rex-connection-sessions connection)
+                             `[(:session_id ,second :label "play")]))
+              ;; Disconnecting kills the buffers and ends nothing.
+              (portal-rex-disconnect connection)
+              (should-not (portal-rex-buffers))
+              (should (equal (funcall listed second) '(("shell" "placed"))))))
+        (mapc #'portal-rex-disconnect (portal-rex-connections))))))
+
 (provide 'portal-rex-server-gui-tests)
 ;;; portal-rex-server-gui-tests.el ends here
