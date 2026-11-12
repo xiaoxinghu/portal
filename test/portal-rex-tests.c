@@ -33,9 +33,16 @@ static bool is_text(const char *actual, const char *expected)
     return true;
 }
 
+/* The platform a hello reports, as the core names the one it is built for. */
+#ifdef __APPLE__
+#define PLATFORM "macos"
+#else
+#define PLATFORM "linux"
+#endif
+
 #define HELLO(name, version)                                                              \
     "{\"type\":\"hello\",\"api_revision\":12,\"api_min_revision\":12,\"client\":{\"kind\":" \
-    "\"other\",\"platform\":\"macos\",\"name\":\"" name "\",\"version\":\"" version "\"}}"
+    "\"other\",\"platform\":\"" PLATFORM "\",\"name\":\"" name "\",\"version\":\"" version "\"}}"
 
 /* Connect to PATH as Portal 0.1.0; return the ID, or 0 with *ERROR set. */
 static uint64_t open_connection(const char *path, portal_text *error)
