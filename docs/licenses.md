@@ -44,13 +44,14 @@ C core and Swift backend, statically linked with:
   in iTerm2-Color-Schemes data; SwiftPM drops that data's license from the build,
   so the staged copy is the only one that ships.
 - Ghostty, as the wrapper's prebuilt `libghostty.a`. The library's object members
-  and symbols show what it contains: FreeType, libpng, zlib, Oniguruma, GNU
-  libintl and gnulib, Wuffs, Highway, simdutf, stb_image, libxev, libvaxis, z2d,
-  zig-objc, uucode, the Zig standard library and compiler-rt, plus the embedded
-  JetBrains Mono and Symbols Nerd Font fonts. Versions come from the
-  `build.zig.zon` files at the Ghostty revision the release names. Ghostty's
-  other optional packages, such as HarfBuzz, fontconfig and glslang, are absent
-  from this macOS library.
+  and symbols show what it contains: FreeType, libpng, zlib, Oniguruma, Wuffs,
+  Highway, simdutf, stb_image, libxev, libvaxis, z2d, zig-objc, uucode, the Zig
+  standard library and compiler-rt, plus the embedded JetBrains Mono and Symbols
+  Nerd Font fonts. Versions come from the `build.zig.zon` files at the Ghostty
+  revision the release names. Ghostty's other optional packages, such as
+  HarfBuzz, fontconfig and glslang, are absent from this macOS library. So are
+  zigimg, which only libvaxis's image loading uses and Ghostty never calls, and
+  GNU libintl, which the wrapper's `0021-no-libintl.sh` patch leaves unlinked.
 
 The bundle's resources hold Ghostty's compiled terminfo and the wrapper's bash
 and zsh integration. That integration is the wrapper's own MIT rewrite, not
@@ -94,9 +95,8 @@ use licenses that GPL-3.0 accepts: MIT, BSD, ISC, Zlib, libpng-2.0, Apache-2.0,
 - FreeType is offered under the FreeType License or GPL-2.0-or-later. Its own
   LICENSE.TXT says the FTL is compatible with GPL-3.0; the FTL requires the
   credit that the generated index prints.
-- libintl is LGPL-2.1-or-later and z2d is MPL-2.0 without the "Incompatible
-  With Secondary Licenses" notice; both may combine with GPL-3.0 code but carry
-  source obligations.
+- z2d is MPL-2.0 without the "Incompatible With Secondary Licenses" notice; it
+  may combine with GPL-3.0 code but carries a source obligation.
 - DOMPurify is offered under MPL-2.0 or Apache-2.0.
 - The OFL-1.1 and MIT fonts may ship with software when their copyright and
   license accompany them, which the staged notices do. Two fonts remain open.
@@ -107,16 +107,16 @@ The generated index repeats the per-component items.
 
 1. **Corresponding source.** A binary release conveys the object code of the
    whole module and host, so GPL-3.0 section 6 requires the corresponding source
-   or a written offer; the LGPL and MPL-2.0 also require it for libintl,
-   JavaScriptCore and z2d. That source is Portal at the release commit;
-   libghostty-spm at its pinned revision, including its `Patches/` and build
-   scripts that produce the prebuilt library; Ghostty at the revision that release
-   names; the dependency archives Ghostty's `build.zig.zon` files pin; Bun at its
+   or a written offer; the LGPL and MPL-2.0 also require it for JavaScriptCore
+   and z2d. That source is Portal at the release commit; libghostty-spm at its
+   pinned revision, including its `Patches/` and build scripts that produce the
+   prebuilt library; Ghostty at the revision that release names; the dependency archives Ghostty's `build.zig.zon` files pin; Bun at its
    release tag, with oven-sh/WebKit at the commit Bun pins and the libraries Bun's
    build scripts pin; and the npm packages at the lockfile versions. Statically
-   linked LGPL code also needs a way to relink with a modified library; complete
-   build sources and scripts provide that. No release mechanism provides any of
-   this yet; task 5's release automation should attach it.
+   linked LGPL code, such as JavaScriptCore in Bun, also needs a way to relink
+   with a modified library; complete build sources and scripts provide that. No
+   release mechanism provides any of this yet; task 5's release automation
+   should attach it.
 2. **Bun's notices.** Only Bun's LICENSE.md is staged. Bun publishes no license
    texts for the roughly 25 libraries it links statically, the Rust crates behind
    lol-html and argon2, or WebKit's per-file notices. Portal does not pin Bun yet
@@ -132,8 +132,8 @@ The generated index repeats the per-component items.
    or ship a release with plain OFL metadata.
 5. **Unrecorded versions.** No upstream record gives the exact versions of
    woff2 and Brotli inside fonteditor-core's WebAssembly, path-browserify inside
-   Mermaid's parser, bash-preexec in the wrapper, or the Zig release that built
-   the prebuilt library. Their texts come from the cited revisions.
+   Mermaid's parser, or bash-preexec in the wrapper. Their texts come from the
+   cited revisions.
 6. **Portal artwork.** `assets/portal.png` and `host/icons/` are assumed to be
    project-owned under Portal's license; record their provenance.
 
