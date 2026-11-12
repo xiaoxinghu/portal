@@ -350,11 +350,14 @@ Connections that BODY leaves are closed, and none may remain."
         (should (portal-rex-call again "session.list"))
         ;; A server that says goodbye gives its reason.
         (portal-fake-rex-command server :close 1001 :reason "going away")
+        (portal-fake-rex-take server :disconnected)
         (should (equal (portal-rex-tests--messages
                          (portal-rex-tests--until
                           again (lambda () (not (portal-rex-connection-id again)))))
                        (format "Lost the Rex server at %s: The server closed the connection (1001: going away)\n"
-                               name)))))))
+                               name)))
+        ;; The server's goodbye is answered before the line goes.
+        (should (equal (plist-get (portal-fake-rex-take server :disconnected) :code) 1001))))))
 
 (ert-deftest portal-rex-waiting-call-ends-with-its-connection ()
   (portal-rex-tests--with (server)

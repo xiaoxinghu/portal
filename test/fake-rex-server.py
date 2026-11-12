@@ -29,7 +29,8 @@ Reports, on standard output:
     {"message": TEXT, "client": N}        any other text message
     {"pong": N}                           client N answered a ping
     {"disconnected": N, "code": CODE}     client N left; CODE is its close
-                                          frame's, or null without one
+                                          frame's, its own or its answer to
+                                          the server's, or null without one
     {"problem": TEXT}                     a command it could not run
 
 Commands, on standard input:
@@ -127,6 +128,7 @@ class Client:
         self.attached = False
         self.seq = 0
         self.code = None
+        self.closing = False
         self.buffer = b""
 
     def read(self, count):
@@ -204,7 +206,8 @@ class Client:
             payload = bytes(byte ^ mask[i & 3] for i, byte in enumerate(self.read(length)))
             if opcode == 0x8:
                 self.code = struct.unpack(">H", payload[:2])[0] if len(payload) >= 2 else 1005
-                self.frame(0x8, payload[:2])
+                if not self.closing:
+                    self.frame(0x8, payload[:2])
                 raise EOFError
             if opcode == 0x9:
                 self.frame(0xA, payload)
@@ -349,6 +352,7 @@ def command(value):
         elif "close" in value:
             for client in everyone:
                 reason = value.get("reason", "").encode()
+                client.closing = True
                 client.frame(0x8, struct.pack(">H", int(value["close"])) + reason)
         elif "drop" in value:
             for client in everyone:

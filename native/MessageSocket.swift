@@ -362,8 +362,11 @@ final class MessageSocket: @unchecked Sendable {
     }
 
     /// The server is closing the connection with PAYLOAD: answer, and say why.
+    /// The answer goes out before the reader takes the descriptor back,
+    /// unless the server has stopped reading, which a hang-up then ends.
     private func goodbye(_ payload: [UInt8]) -> String {
-        writes.async { [self] in write(Self.frame(opcode: 0x8, payload: Data(payload.prefix(2)))) }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 1) { [self] in hangUp() }
+        writes.sync { _ = write(Self.frame(opcode: 0x8, payload: Data(payload.prefix(2)))) }
         guard payload.count >= 2 else { return "The server closed the connection" }
         let code = Int(payload[0]) << 8 | Int(payload[1])
         let why = String(decoding: payload.dropFirst(2), as: UTF8.self)
