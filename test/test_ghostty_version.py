@@ -106,6 +106,10 @@ class Verdict(unittest.TestCase):
         self.assertTrue(tool.verdict("2.0", "2.0", "abc", self.D(days=-2), None)
                         .startswith("Unknown:"))
 
+    def test_a_server_whose_ghostty_cannot_be_read(self):
+        self.assertEqual(tool.verdict("2.0", "2.0", None, None, None, server_found=True),
+                         "Unknown: the Rex server's Ghostty could not be read.")
+
     def test_without_a_server(self):
         self.assertEqual(tool.verdict("1.0", "2.0", None, None, None),
                          "A newer release exists: 2.0. No Rex server was found to compare with.")
@@ -198,6 +202,31 @@ class Stand_ins(unittest.TestCase):
         self.assertIn("The newest release's Ghostty is the server's.", out)
         self.assertIn("Verdict: A newer release exists: bump to 2.0", out)
         self.assertNotIn("Could not find out", out)
+
+    def test_report_does_not_count_in_a_shallow_clone(self):
+        git(self.ghostty, "tag", "first", self.commits[0])
+        shallow = self.dir / "shallow"
+        subprocess.run(["git", "clone", "-q", "--depth", "1", self.ghostty.as_uri(), str(shallow)],
+                       check=True, env=GIT_ENV, capture_output=True)
+        git(shallow, "fetch", "-q", "--depth", "1", "origin", "refs/tags/first:refs/tags/first")
+
+        result = subprocess.run(
+            [sys.executable, "-B", str(SCRIPT), "--offline", "--root", str(self.checkout),
+             "--package", str(self.package), "--ghostty", str(shallow), "--rex", str(self.rex)],
+            env=GIT_ENV, capture_output=True, text=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("counted in the Ghostty clone", result.stdout)
+        self.assertIn("Portal's Ghostty is from the same day as the server's (by date", result.stdout)
+
+    def test_report_with_an_unreadable_server(self):
+        self.rex.write_text('#!/bin/sh\necho "rex 0.0.0-test"\n')
+
+        result = self.run_tool()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Verdict: Unknown: the Rex server's Ghostty could not be read.", result.stdout)
+        self.assertIn("no library_version in it", result.stdout)
 
     def test_report_without_rex(self):
         result = self.run_tool(rex=self.dir / "no-rex")

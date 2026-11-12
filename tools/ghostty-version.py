@@ -176,10 +176,14 @@ def plural(count, word):
     return f"{count} {word}" if count == 1 else f"{count} {word}s"
 
 
-def verdict(pin, newest, server, pin_distance, newest_distance):
+def verdict(pin, newest, server, pin_distance, newest_distance, server_found=None):
     """One line: PIN and NEWEST are release names (NEWEST None when unknown),
-    SERVER the server's Ghostty commit or None, the distances Distance or None."""
+    SERVER the server's Ghostty commit or None, the distances Distance or None.
+    SERVER_FOUND is whether a Rex server is installed, when SERVER is None."""
     newer = newest if newest and release_key(newest) > release_key(pin) else None
+    if server is None and server_found:
+        tail = f" A newer release exists: {newer}." if newer else ""
+        return f"Unknown: the Rex server's Ghostty could not be read.{tail}"
     if server is None:
         if newest is None:
             return "Unknown: neither the newest release nor a Rex server could be found."
@@ -321,7 +325,10 @@ class Ghostty:
         if same_commit(commit, server):
             return Distance(0, 0, source="the same commit")
         mine, theirs = self._resolve(commit), self._resolve(server)
-        if mine and theirs:
+        # A shallow clone counts from its cut, not from where the two histories meet.
+        shallow = self.clone and (git(self.clone, "rev-parse", "--is-shallow-repository")
+                                  or "").strip() == "true"
+        if mine and theirs and not shallow:
             text = git(self.clone, "rev-list", "--left-right", "--count", f"{mine}...{theirs}")
             if text:
                 extra, missing = (int(n) for n in text.split())
@@ -481,7 +488,8 @@ def report(args):
             print("\n".join(lines))
 
     print()
-    print("Verdict: " + verdict(pin["version"], newest, server_commit, pin_distance, newest_distance))
+    print("Verdict: " + verdict(pin["version"], newest, server_commit, pin_distance, newest_distance,
+                                executable is not None))
     for note in notes:
         print(f"Note: {note}.")
     for item in unknown:
