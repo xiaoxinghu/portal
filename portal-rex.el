@@ -240,13 +240,15 @@ The messages after this one must still be handled."
   (with-demoted-errors "Portal Rex: %S"
     (apply function arguments)))
 
-(defun portal-rex--end (connection reason)
-  "End CONNECTION from this side, because of REASON.
-A connection that has ended keeps the reason it had."
-  (when-let* ((id (portal-rex-connection-id connection)))
-    (setf (portal-rex-connection-id connection) nil)
-    (ignore-errors (portal--rex-close id)))
-  (portal-rex--ended connection reason))
+(defun portal-rex--end (connection reason &optional quiet)
+  "End CONNECTION from this side, because of REASON, as one step.
+A connection that has ended keeps the reason it had.  QUIET is as for
+`portal-rex--ended'."
+  (let ((inhibit-quit t))
+    (when-let* ((id (portal-rex-connection-id connection)))
+      (setf (portal-rex-connection-id connection) nil)
+      (ignore-errors (portal--rex-close id)))
+    (portal-rex--ended connection reason quiet)))
 
 (defun portal-rex--fail-calls (connection reason)
   "Fail every request still waiting on CONNECTION, oldest first, with REASON.
@@ -359,17 +361,21 @@ does a call with no answer in time, with the code \"portal_timeout\", and
 one whose connection ended, with \"portal_disconnected\"."
   (let* ((connection (portal-rex--connection connection))
          (timeout (or timeout portal-rex-timeout))
-         response
-         (number (portal-rex--request connection method payload
-                                      (lambda (message) (setq response message)))))
+         response number)
+    ;; However the wait ends, a quit included, an answer that comes later
+    ;; finds no one waiting.  The request is made inside that promise, with
+    ;; quitting inhibited until its number is known.
     (unwind-protect
-        (unless (portal-rex--await connection (lambda () response) timeout)
-          (setq response (portal-rex--failure "portal_timeout"
-                                              (format "no answer within %s seconds" timeout))))
-      ;; However the wait ends, a quit included, an answer that comes later
-      ;; finds no one waiting.
-      (setf (portal-rex-connection-calls connection)
-            (assq-delete-all number (portal-rex-connection-calls connection))))
+        (progn
+          (let ((inhibit-quit t))
+            (setq number (portal-rex--request connection method payload
+                                              (lambda (message) (setq response message)))))
+          (unless (portal-rex--await connection (lambda () response) timeout)
+            (setq response (portal-rex--failure
+                            "portal_timeout" (format "no answer within %s seconds" timeout)))))
+      (when number
+        (setf (portal-rex-connection-calls connection)
+              (assq-delete-all number (portal-rex-connection-calls connection)))))
     (when-let* ((failure (plist-get response :error)))
       (signal 'portal-rex-error
               (list (format "%s: %s" method (plist-get failure :message)) failure)))
@@ -440,23 +446,29 @@ of the server and of its sessions.  The connection's
 
 (defun portal-rex--open (socket)
   "Return a new, ready connection to the Rex server on SOCKET, or signal why not."
-  (let* ((id (portal--rex-open socket "Portal" (or (portal-build-version) "0")))
-         (connection (portal-rex--make-connection :id id :socket socket))
-         (name (abbreviate-file-name socket)))
-    (setq portal-rex--connections (append portal-rex--connections (list connection)))
-    (add-hook 'kill-emacs-hook #'portal-rex--disconnect-all)
-    ;; Whatever stops the wait, a quit included, leaves no half-made connection.
+  (let ((name (abbreviate-file-name socket))
+        (version (or (portal-build-version) "0"))
+        connection)
+    ;; Whatever stops this, a quit included, leaves no half-made connection:
+    ;; the connection is made inside that promise, with quitting inhibited
+    ;; until Emacs knows it.
     (unwind-protect
-        (when (and (portal-rex--await connection
-                                      (lambda () (portal-rex-connection-welcome connection))
-                                      portal-rex-timeout)
-                   (portal-rex-connection-id connection))
-          (setf (portal-rex-connection-state connection) 'attaching)
-          (portal-rex--request connection "session.attach_all" '(:event_scope "session")
-                               (lambda (response) (portal-rex--attached connection response)))
-          (portal-rex--await connection (lambda () (portal-rex-live-p connection))
-                             portal-rex-timeout))
-      (unless (portal-rex-live-p connection)
+        (progn
+          (let ((inhibit-quit t))
+            (setq connection (portal-rex--make-connection
+                              :id (portal--rex-open socket "Portal" version) :socket socket)
+                  portal-rex--connections (append portal-rex--connections (list connection)))
+            (add-hook 'kill-emacs-hook #'portal-rex--disconnect-all))
+          (when (and (portal-rex--await connection
+                                        (lambda () (portal-rex-connection-welcome connection))
+                                        portal-rex-timeout)
+                     (portal-rex-connection-id connection))
+            (setf (portal-rex-connection-state connection) 'attaching)
+            (portal-rex--request connection "session.attach_all" '(:event_scope "session")
+                                 (lambda (response) (portal-rex--attached connection response)))
+            (portal-rex--await connection (lambda () (portal-rex-live-p connection))
+                               portal-rex-timeout)))
+      (when (and connection (not (portal-rex-live-p connection)))
         (portal-rex--end connection nil)))
     (cond
      ((portal-rex-live-p connection) connection)
@@ -484,10 +496,7 @@ minibuffer.  The server and what runs on it carry on; requests still
 waiting fail with the code \"portal_disconnected\"."
   (interactive (list (portal-rex--read-connection)))
   (unless (eq (portal-rex-connection-state connection) 'closed)
-    (let ((id (portal-rex-connection-id connection)))
-      (setf (portal-rex-connection-id connection) nil)
-      (when id (portal--rex-close id)))
-    (portal-rex--ended connection "Disconnected" t)
+    (portal-rex--end connection "Disconnected" t)
     (when (called-interactively-p 'any)
       (message "Disconnected from the Rex server at %s" (portal-rex--named connection)))))
 

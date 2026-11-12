@@ -427,6 +427,47 @@ Connections that BODY leaves are closed, and none may remain."
       (should (equal (reverse seen) '("one" "two")))
       (should (portal-rex-call connection "session.list")))))
 
+(defun portal-rex-tests--quitting (native function)
+  "Call FUNCTION with a quit arriving inside the module's function NATIVE.
+Return `quit' if FUNCTION quit, and what it returned otherwise.  The quit
+arrives as C-g does, by `quit-flag', the first time NATIVE is called."
+  (let ((original (symbol-function native))
+        (arrived nil))
+    (cl-letf (((symbol-function native)
+               (lambda (&rest arguments)
+                 (unless arrived (setq arrived t quit-flag t))
+                 (apply original arguments))))
+      (condition-case nil (funcall function) (quit 'quit)))))
+
+(ert-deftest portal-rex-quit-at-any-step-leaves-nothing-half-done ()
+  ;; A quit that arrives while a connection is made, a request sent or a
+  ;; connection closed waits for that step, and what the step began is undone
+  ;; or finished: no connection half made, no request with no one waiting,
+  ;; no connection half closed.
+  (portal-rex-tests--with (server)
+    (let ((socket (portal-fake-rex-socket server)))
+      (should (eq (portal-rex-tests--quitting 'portal--rex-open
+                                              (lambda () (portal-rex-connect socket)))
+                  'quit))
+      ;; The server may never have seen that one: it was closed as it dialed.
+      (should-not portal-rex--connections)
+      (let ((connection (portal-rex-connect socket)))
+        (portal-fake-rex-command server :silent "session.view")
+        (should (eq (portal-rex-tests--quitting
+                     'portal--rex-request
+                     (lambda () (portal-rex-call connection "session.view")))
+                    'quit))
+        (should (portal-fake-rex-request server "session.view"))
+        (should-not (portal-rex-connection-calls connection))
+        (should (portal-rex-call connection "session.list"))
+        (should (eq (portal-rex-tests--quitting
+                     'portal--rex-close (lambda () (portal-rex-disconnect connection)))
+                    'quit))
+        (should (eq (portal-rex-connection-state connection) 'closed))
+        (should-not portal-rex--connections)
+        (should (portal-fake-rex-take
+                 server (lambda (report) (equal (plist-get report :code) 1000))))))))
+
 (ert-deftest portal-rex-lost-connection-is-reported-once ()
   (portal-rex-tests--with (server)
     (let ((connection (portal-rex-tests--connect server))
