@@ -156,7 +156,7 @@ launcher, `package-gui.sh` for installation and the build.
 ### Full set
 
 The full set adds the tests tagged `:expensive`, long soaks and matrices, to
-every ERT runner, and three more graphical checks. With
+every ERT runner, and four more graphical checks. With
 `PORTAL_TEST_EXPENSIVE=1` set, run the default loop's batch checks, then every
 graphical suite:
 
@@ -165,9 +165,12 @@ sh test/gui-all.sh
 ```
 
 It runs `test/views-gui.sh`, `test/input-gui.sh`, `test/launcher-gui.sh`,
-`test/terminal-shell-startup.sh` and `test/package-gui.sh` in turn, after a
-failure too, and fails if any of them did; run one of those to repeat a single
-suite. In a VM the wrapper builds once for all of them.
+`test/terminal-shell-startup.sh`, `test/rex-server-gui.sh` and
+`test/package-gui.sh` in turn, after a failure too, and fails if any of them
+did; run one of those to repeat a single suite. In a VM the wrapper builds
+once for all of them. `rex-server-gui.sh` checks Portal against a
+[real Rex server](docs/testing.md#against-a-real-rex-server); where none is
+installed it reports itself not run.
 [Test tiers](docs/testing.md#test-tiers) says how tests join a tier.
 
 ### What they cover

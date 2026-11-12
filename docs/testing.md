@@ -275,9 +275,10 @@ PORTAL_TEST_EXPENSIVE=1 sh test/gui-all.sh
 
 In the VM, the runner builds once and the suites run one after another in the
 same run. A failing suite does not stop the others; the wrapper ends with each
-suite's result and fails if any failed. Each suite logs to a directory of its
+suite's result and fails if any failed. The [real-server tier](#against-a-real-rex-server)
+is "not run" where no Rex Server is installed, and fails nothing. Each suite logs to a directory of its
 own in `PORTAL_TEST_LOGS`, or `build/gui-all` outside the runner: `views`,
-`input`, `launcher`, `terminal-shell-startup` and `package`, each with the
+`input`, `launcher`, `terminal-shell-startup`, `rex-server` and `package`, each with the
 suite's output in `test.log`, its `exit-status` and its diagnostics, such as
 `gui-progress.log`. In the VM they copy back below `.cache/vm/<run>/`. The
 wrapper raises `PORTAL_TEST_TIMEOUT` to 3,600 seconds, as one stage runs every
@@ -394,8 +395,45 @@ Three suites use it or the fake platform:
 - `test/portal-rex-gui-tests.el`, part of `sh test/views-gui.sh`, proves the
   record: events, answers and a lost connection reaching an idle Emacs.
 
-The fake follows what a real server was seen to send. Checks against a real
-Rex server are run by hand, in a session made for them; report what you ran.
+The fake follows what a real server was seen to send, from a preview
+protocol that moves every few days, so tests against it prove only that
+Portal matches that reading. The real-server tier checks the reading.
+
+### Against a real Rex server
+
+```sh
+sh test/rex-server-gui.sh
+```
+
+It runs [the real-server tests](../test/portal-rex-server-gui-tests.el) in one
+fresh graphical Emacs. Each test starts a Rex server of its own through
+[portal-real-rex.el](../test/portal-real-rex.el): `rex server run` on a socket
+in a temporary directory, which is also the server's home and state, with no
+configuration and nothing restored or saved. The `rex` commands a test runs,
+as another client would, reach that server alone. Stopping it ends its
+blocks, and the script fails if one outlives the run. Your own Rex server and
+its sessions are never touched.
+
+Rex is private beta software, so the tier runs only where a Rex Server is
+installed: the `rex` program that `PORTAL_TEST_REX` names, or else the test
+VM's `/Applications/Rex Server.app`, which [the VM recipe](test-vm.md#rex-server)
+pins, or the one Rex's Mac app keeps. Elsewhere it says so, exits 77 and
+counts as not run; report it so. It prints the Rex version it ran against.
+
+It belongs to the [full set](../CONTRIBUTING.md#full-set), not the default
+loop. Run it too after changing what Portal sends a Rex server or reads from
+one, and after [moving the Rex pin](test-vm.md#move-the-rex-pin). With
+`portal.testVm` set it runs in the VM, against the pinned Rex.
+
+[portal-rex-parity.el](../test/portal-rex-parity.el) holds checks that run
+against both servers: the handshake, `server.version`, `session.list` and an
+unknown method. The `rex` suite runs them against the fake, the tier against
+a real server. When only the tier's run fails, the real server has moved:
+bring the fake, and Portal, into line with it. Add a check there when the fake
+can answer it as cheaply as the real server.
+
+A change whose correctness depends on what a real server does adds a test to
+the tier, with `portal-real-rex-cli` for what another client does.
 
 ## Package installation checks
 

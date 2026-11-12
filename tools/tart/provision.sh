@@ -37,6 +37,7 @@ while IFS= read -r package; do
     done
 done < "$share/cellar.txt"
 install -m 755 "$share/bun" /opt/homebrew/bin/bun
+bash "$share/install-rex.sh" "$share"
 xcode-select -s /Applications/Xcode.app/Contents/Developer
 xcodebuild -license accept
 xcodebuild -runFirstLaunch

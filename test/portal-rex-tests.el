@@ -7,7 +7,8 @@
 ;; Batch Emacs runs no main run loop, so the module's "rex ID" record never
 ;; comes: these tests take messages by waiting, as `portal-rex-call' does.
 ;; test/portal-rex-gui-tests.el covers the record, and
-;; test/portal-rex-tests.c the core's own rules.
+;; test/portal-rex-tests.c the core's own rules.  The real-server tier,
+;; test/rex-server-gui.sh, runs the parity checks against a real server.
 
 (require 'ert)
 (require 'portal-fake-rex
@@ -18,6 +19,8 @@
   (module-load (expand-file-name "portal.bundle/Contents/MacOS/portal.dylib" build)))
 
 (require 'portal-rex)
+(require 'portal-rex-parity
+         (expand-file-name "portal-rex-parity.el" (file-name-directory load-file-name)))
 
 (defmacro portal-rex-tests--with (servers &rest body)
   "Run BODY with each symbol in SERVERS bound to a new fake Rex server.
@@ -97,6 +100,11 @@ Connections that BODY leaves are closed, and none may remain."
       (should-not (portal-rex-connections))
       ;; Disconnecting twice is nothing.
       (portal-rex-disconnect connection))))
+
+(ert-deftest portal-rex-fake-matches-a-real-server ()
+  ;; The same checks run against a real server in the real-server tier.
+  (portal-rex-tests--with (server)
+    (portal-rex-parity-check (portal-rex-tests--connect server))))
 
 (ert-deftest portal-rex-call-returns-the-result ()
   (portal-rex-tests--with (server)
