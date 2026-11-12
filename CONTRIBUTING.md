@@ -111,9 +111,12 @@ tools/ghostty-version.py bump 2.2.2026110702   # a named one
 
 It writes the release's tag and revision to `native/libghostty-spm.json`,
 refreshes `native/Package.resolved`, and names each patch that no longer
-applies to the release, exiting with status 1 when one does not. It commits
-nothing and runs no checks, and ends by listing what to do next: fix those
-patches as above, build, follow
+applies to the release, exiting with status 1 when one does not. Then
+`build/libghostty-spm-bump` holds the new release with the patches applied by
+`git am` up to the first that fails, where it stopped: fix it there and
+`git am --continue`, then write the set back with the `format-patch` command
+above, run from that copy with the new revision. It commits nothing and runs
+no checks, and ends by listing what to do next: those repairs, build, follow
 [Licenses](docs/licenses.md#when-dependencies-change) for the new prebuilt
 library, update the release and Ghostty versions in the terminal guide, and
 run the checks. Run it again after fixing a patch or regaining the network:

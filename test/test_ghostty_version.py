@@ -228,6 +228,15 @@ class Stand_ins(unittest.TestCase):
         self.assertIn("Verdict: Unknown: the Rex server's Ghostty could not be read.", result.stdout)
         self.assertIn("no library_version in it", result.stdout)
 
+    def test_report_with_a_server_it_cannot_read(self):
+        self.rex.chmod(0o000)
+
+        result = self.run_tool()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Verdict: Unknown: the Rex server's Ghostty could not be read.", result.stdout)
+        self.assertIn(f"Rex server at {self.rex}: cannot read it", result.stdout)
+
     def test_report_without_rex(self):
         result = self.run_tool(rex=self.dir / "no-rex")
 
@@ -290,7 +299,13 @@ class Stand_ins(unittest.TestCase):
                       result.stdout)
         self.assertNotIn("0001-one", result.stdout)
         self.assertNotIn("0003-three", result.stdout)
-        self.assertIn("fix the patches named above", result.stdout)
+        repair = self.checkout / "build" / "libghostty-spm-bump"
+        self.assertIn("build/libghostty-spm-bump holds 2.0", result.stdout)
+        self.assertIn("format-patch", result.stdout)
+        # Stopped at 0002, after 0001, to be fixed and continued.
+        self.assertTrue((repair / ".git" / "rebase-apply").is_dir())
+        self.assertEqual(git(repair, "log", "-1", "--format=%s"), "one to 1")
+        self.assertIn("2.0", git(repair, "log", "--format=%s"))
 
     def test_bump_again_names_the_patch_still_failing(self):
         self.patch("0001-two.patch", "two", "2", at="1.0")

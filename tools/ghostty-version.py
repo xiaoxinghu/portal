@@ -39,6 +39,7 @@ PIN = Path("native/libghostty-spm.json")
 PATCHES = Path("native/patches/libghostty-spm")
 RESOLVED = Path("native/Package.resolved")
 COPY = Path("build/libghostty-spm")
+REPAIR = Path("build/libghostty-spm-bump")
 GHOSTTY_REPO = "ghostty-org/ghostty"
 REX_SERVERS = [
     Path.home() / "Library/Application Support/com.superlogical.rex/RexServer/Versions/Current"
@@ -383,13 +384,15 @@ def rex_version(executable):
 
 
 def rex_library_version(executable):
-    """library_version from the server's binary: nothing the server answers gives it."""
-    with open(executable, "rb") as handle:
-        try:
-            with mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as data:
-                return find_library_version(data)
-        except ValueError:
-            return None
+    """library_version from the server's binary, as nothing the server answers gives
+    it, and why it is None when it is."""
+    try:
+        with open(executable, "rb") as handle, \
+                mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as data:
+            found = find_library_version(data)
+    except (OSError, ValueError) as error:
+        return None, f"cannot read it: {getattr(error, 'strerror', None) or error}"
+    return found, None if found else "no library_version in it"
 
 
 # ---------------------------------------------------------------------------
@@ -440,10 +443,11 @@ def report(args):
         notes.append(f"Rex server not found at {where}")
     else:
         server_rex = rex_version(executable)
-        server_version = rex_library_version(executable)
+        server_version, why = rex_library_version(executable)
         server_commit = parse_library_version(server_version) if server_version else None
         if not server_commit:
-            unknown.append(f"the Ghostty of the Rex server at {executable}: no library_version in it")
+            unknown.append(f"the Ghostty of the Rex server at {executable}: "
+                           f"{why or 'no commit in ' + server_version}")
 
     commits = [c for c in (pin_commit, newest_commit, server_commit) if c]
     dates = {c: ghostty.date(c) for c in dict.fromkeys(commits)}
@@ -501,14 +505,19 @@ def report(args):
 # ---------------------------------------------------------------------------
 # bump
 
-def try_patches(source, version, revision, patches, work):
-    """Fetch VERSION from SOURCE into WORK and apply each patch in name order,
-    skipping one that fails.  Returns the names that did not apply."""
+def git_in(work):
+    """Git in WORK, with signing and hooks off, as the build's patch step has it."""
     def quiet(*args):
         return subprocess.run(["git", "-C", str(work), "-c", "user.name=Portal",
                                "-c", "user.email=portal@invalid", "-c", "commit.gpgsign=false",
                                "-c", "core.hooksPath=/dev/null", *args],
                               capture_output=True, text=True)
+    return quiet
+
+
+def checkout(source, version, revision, work):
+    """WORK, a new repository holding VERSION fetched from SOURCE, checked out."""
+    quiet = git_in(work)
     subprocess.run(["git", "init", "-q", str(work)], check=True)
     fetched = quiet("fetch", "-q", "--depth", "1", source, f"refs/tags/{version}")
     if fetched.returncode != 0:
@@ -518,12 +527,34 @@ def try_patches(source, version, revision, patches, work):
     if head != revision:
         raise SystemExit(f"ghostty-version: libghostty-spm's tag {version} is {head}, not {revision}")
     quiet("checkout", "-q", "--detach", head)
+    return quiet
+
+
+def try_patches(source, version, revision, patches, work):
+    """Fetch VERSION from SOURCE into WORK and apply each patch in name order,
+    skipping one that fails.  Returns the names that did not apply."""
+    quiet = checkout(source, version, revision, work)
     failed = []
     for patch in sorted(patches.glob("*.patch")):
         if quiet("am", "-q", "--committer-date-is-author-date", str(patch)).returncode != 0:
             quiet("am", "--abort")
             failed.append(patch.name)
     return failed
+
+
+def repair_checkout(source, version, revision, patches, work):
+    """WORK, VERSION with the patches applied by one `git am` that stops at the
+    first that fails, to fix there and continue.  One for the same revision is
+    kept, with the work done in it.  Returns whether it was kept."""
+    record = work / ".git" / "portal-bump"
+    if record.is_file() and record.read_text().strip() == revision:
+        return True
+    shutil.rmtree(work, ignore_errors=True)
+    quiet = checkout(source, version, revision, work)
+    record.write_text(revision + "\n")
+    quiet("am", "-q", "--3way", "--committer-date-is-author-date",
+          *[str(patch) for patch in sorted(patches.glob("*.patch"))])
+    return False
 
 
 def resolve(root, copy, scratch, offline=False):
@@ -581,6 +612,8 @@ def bump(args):
         failed = try_patches(source, version, revision, root / PATCHES, copy)
         if not already:
             write_pin(root, {**pin, "version": version, "revision": revision})
+        repair = root / REPAIR
+        kept = failed and repair_checkout(source, version, revision, root / PATCHES, repair)
         resolved = root / RESOLVED
         before = resolved.read_text() if resolved.exists() else None
         error = resolve(root, copy, Path(temporary) / "swift", args.offline)
@@ -603,12 +636,21 @@ def bump(args):
     else:
         print(f"The one patch applies to {version}." if count == 1 else
               f"All {count} patches apply to {version}." if count else "There are no patches.")
+    if failed:
+        print(f"{REPAIR} holds {version} with the patches applied up to the first that fails, "
+              "where git am stopped" + (", kept from an earlier bump." if kept else "."))
     print()
     print("Nothing is committed. Next:")
     steps = []
     if failed:
-        steps.append("fix the patches named above, in build/libghostty-spm, as CONTRIBUTING.md's "
-                     "\"The Ghostty dependency\" says")
+        steps += [
+            f"fix that patch in {REPAIR}: resolve, git add, git am --continue; then each "
+            "next one that stops",
+            "write the set back: rm native/patches/libghostty-spm/*.patch; "
+            f"git -C {REPAIR} format-patch --zero-commit --no-signature "
+            f"-o \"$PWD/native/patches/libghostty-spm\" {revision}",
+            f"tools/ghostty-version.py bump {version}, to check they apply",
+        ]
     steps += [
         "./build.sh, which configures and remakes the patched copy",
         "ctest --test-dir build -R licenses --output-on-failure, and docs/licenses.md's "
