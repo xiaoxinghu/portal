@@ -350,7 +350,8 @@ def write_pin(root, pin):
 
 
 def release_ghostty(package, version, revision=None):
-    """The Ghostty commit of a release, and a note when its two records disagree."""
+    """The Ghostty commit of a release, and a note when its two records disagree.
+    The binaryTarget's commit wins: that is the library Portal links."""
     ref_text = package.file(version, "Ghostty.ref", revision)
     manifest = package.file(version, "Package.swift", revision)
     from_ref = parse_ghostty_ref(ref_text) if ref_text else None
@@ -360,7 +361,7 @@ def release_ghostty(package, version, revision=None):
     if from_ref and from_target and not same_commit(from_ref, from_target):
         note = (f"{version}'s Ghostty.ref names {from_ref[:12]} but its binaryTarget "
                 f"upstream.{from_target}")
-    return from_ref or from_target, note
+    return from_target or from_ref, note
 
 
 def find_rex(explicit=None):
@@ -566,9 +567,9 @@ def bump(args):
         raise SystemExit(f"ghostty-version: the pin, {pin['version']}, is newer than the newest "
                          f"release found, {version}")
     revision = tags[version]
-    if version == pin["version"] and revision == pin["revision"]:
-        print(f"The pin is already libghostty-spm {version}.")
-        return 0
+    # Pinned already, perhaps by a bump that stopped short: check the patches and
+    # resolve again all the same.
+    already = version == pin["version"] and revision == pin["revision"]
 
     old_commit, _ = release_ghostty(package, pin["version"])
     new_commit, _ = release_ghostty(package, version)
@@ -578,14 +579,19 @@ def bump(args):
     with tempfile.TemporaryDirectory(prefix="portal-bump-") as temporary:
         copy = Path(temporary) / "libghostty-spm"
         failed = try_patches(source, version, revision, root / PATCHES, copy)
-        write_pin(root, {**pin, "version": version, "revision": revision})
+        if not already:
+            write_pin(root, {**pin, "version": version, "revision": revision})
         resolved = root / RESOLVED
         before = resolved.read_text() if resolved.exists() else None
         error = resolve(root, copy, Path(temporary) / "swift", args.offline)
         after = resolved.read_text() if resolved.exists() else None
 
-    print(f"Moved the pin from libghostty-spm {pin['version']} (Ghostty {short(old_commit)}) "
-          f"to {version} (Ghostty {short(new_commit)}), revision {revision}.")
+    if already:
+        print(f"The pin is already libghostty-spm {version} (Ghostty {short(new_commit)}); "
+              "checked its patches and resolved again.")
+    else:
+        print(f"Moved the pin from libghostty-spm {pin['version']} (Ghostty {short(old_commit)}) "
+              f"to {version} (Ghostty {short(new_commit)}), revision {revision}.")
     if error:
         print(f"Did not refresh native/Package.resolved: {error}. Configuring resolves it.")
     else:

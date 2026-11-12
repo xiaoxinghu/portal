@@ -91,8 +91,9 @@ tools/ghostty-version.py
 It prints the pinned release, the newest release and the installed Rex
 server's Ghostty, each with its commit and date (in UTC), how many commits of
 the server's each release's Ghostty lacks, and a verdict: up to date, a newer
-release exists, or the newest release is still behind the server. It changes
-nothing. It reads what is on disk first: the build's patched copy, and the
+release exists, or the newest release is still behind the server. A release's
+Ghostty is the one its `binaryTarget` downloads, the library Portal links; the
+report notes when its `Ghostty.ref` names another. It changes nothing. It reads what is on disk first: the build's patched copy, and the
 clones `PORTAL_LIBGHOSTTY_SPM_CLONE` and `PORTAL_GHOSTTY_CLONE` name (or
 `--package` and `--ghostty`). It asks the network, Git and GitHub's API, only
 for what those lack, and never with `--offline`, and it says what it could not
@@ -115,7 +116,8 @@ nothing and runs no checks, and ends by listing what to do next: fix those
 patches as above, build, follow
 [Licenses](docs/licenses.md#when-dependencies-change) for the new prebuilt
 library, update the release and Ghostty versions in the terminal guide, and
-run the checks.
+run the checks. Run it again after fixing a patch or regaining the network:
+with the pin already moved, it checks the patches and resolves again.
 
 For TypeScript editing, install the host's development dependencies and run its
 checks:

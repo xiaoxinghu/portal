@@ -292,6 +292,31 @@ class Stand_ins(unittest.TestCase):
         self.assertNotIn("0003-three", result.stdout)
         self.assertIn("fix the patches named above", result.stdout)
 
+    def test_bump_again_names_the_patch_still_failing(self):
+        self.patch("0001-two.patch", "two", "2", at="1.0")
+        self.assertEqual(self.run_tool("bump").returncode, 1)
+
+        result = self.run_tool("bump")
+
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("The pin is already libghostty-spm 2.0", result.stdout)
+        self.assertIn("Does not apply to 2.0: native/patches/libghostty-spm/0001-two.patch",
+                      result.stdout)
+
+    def test_the_linked_library_wins_over_ghostty_ref(self):
+        git(self.package, "checkout", "-q", "2.0")
+        (self.package / "Ghostty.ref").write_text(self.commits[1] + "\n")
+        git(self.package, "commit", "-q", "-am", "a Ghostty.ref the library does not match")
+        git(self.package, "tag", "3.0")
+
+        result = self.run_tool()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertRegex(result.stdout, rf"Newest release: +libghostty-spm 3\.0 +Ghostty {self.commits[2][:12]} ")
+        self.assertIn(f"Note: 3.0's Ghostty.ref names {self.commits[1][:12]} but its binaryTarget "
+                      f"upstream.{self.commits[2][:12]}.", result.stdout)
+        self.assertIn("Verdict: A newer release exists: bump to 3.0", result.stdout)
+
     def test_bump_to_a_named_release(self):
         result = self.run_tool("bump", "1.0")
 
