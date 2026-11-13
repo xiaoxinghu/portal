@@ -114,6 +114,14 @@ It is nil while a hosted app waits for the app host.")
 Each message is a JSON object parsed into a plist.  The function runs with
 the buffer current, inside a process filter, so it must never prompt; it
 queues commands through `unread-command-events'.")
+(defvar-local portal-web-window-action nil
+  "How to show the buffer of a window this buffer's page opens.
+A `display-buffer' action, used in place of the default, which shows it
+in a pane other than this buffer's; nil for the default.  The new buffer's
+`portal-web-opener' is this buffer while it is shown.")
+(defvar-local portal-web-opener nil
+  "The buffer whose page opened this window's page, or nil.
+Set when the window gets this buffer; it stays when the opener is killed.")
 
 (define-derived-mode portal-web-mode special-mode "Portal Web"
   "Major mode for a buffer presenting a web view.
@@ -925,24 +933,29 @@ A fragment such as #L42 or #L42-L50 moves to line 42."
 (defun portal-web--opened (event)
   "Give the window that EVENT's page opened, a new web view, a buffer.
 The buffer is named after the window's page, and renamed as the window
-goes to other pages.  It is shown in a pane other than the opener's, as a
-Markdown preview shows files, and its view gets the keyboard.  A buffer
-that cannot take the view closes it."
+goes to other pages.  Its `portal-web-opener' is the opener's buffer.  It
+is shown as the opener's `portal-web-window-action' says, or else in a
+pane other than the opener's, as a Markdown preview shows files, and its
+view gets the keyboard.  A buffer that cannot take the view closes it."
   (interactive "e")
   (pcase-let* ((`(,target ,opener) (cadr event))
                (state (portal--inspect target)))
     (when state ; Closed already, as when Emacs could not keep up.
-      (let ((buffer (generate-new-buffer
-                     (format "*portal: %s*"
-                             (portal-web--page-name (or (plist-get state :url) "about:blank")))))
-            (show (lambda (buffer) (pop-to-buffer buffer '(portal-web--display-elsewhere))))
-            ready)
+      (let* ((buffer (generate-new-buffer
+                      (format "*portal: %s*"
+                              (portal-web--page-name (or (plist-get state :url) "about:blank")))))
+             (from (portal-view--target-buffer opener))
+             (action (or (and from (buffer-local-value 'portal-web-window-action from))
+                         '(portal-web--display-elsewhere)))
+             (show (lambda (buffer) (pop-to-buffer buffer action)))
+             ready)
         (unwind-protect
             (progn
               (with-current-buffer buffer
                 (portal-web--start-buffer)
-                (setq portal-web--target (portal-view-adopt target)))
-              (if (portal-view--target-buffer opener)
+                (setq portal-web--target (portal-view-adopt target)
+                      portal-web-opener from))
+              (if from
                   (portal-web--from-view opener (lambda () (funcall show buffer)))
                 (funcall show buffer))
               (setq ready t))

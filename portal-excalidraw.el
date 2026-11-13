@@ -18,7 +18,28 @@
 (defvar-local portal-excalidraw--reply nil)
 (defvar-local portal-excalidraw--flushing nil)
 (defvar-local portal-excalidraw--mode "draw"
-  "The drawing page's screen, as the page last said: \"draw\" or \"arrange\".")
+  "The drawing page's screen, as the page last said: \"draw\", \"arrange\"
+or \"present\".")
+(defvar-local portal-excalidraw--slides nil
+  "The buffer of the drawing's slide window while presenting, or nil.")
+(defvar-local portal-excalidraw--slides-frame nil
+  "The frame made to show the drawing's slide window, or nil.")
+
+(defcustom portal-excalidraw-slides-frame-parameters
+  '((minibuffer . nil) (tool-bar-lines . 0) (tab-bar-lines . 0) (menu-bar-lines . 0)
+    (unsplittable . t) (left-fringe . 0) (right-fringe . 0) (internal-border-width . 0)
+    (vertical-scroll-bars . nil) (horizontal-scroll-bars . nil)
+    (width . 100) (height . 30))
+  "Parameters of the frame that shows a drawing's slide window.
+The frame shows the slide and nothing of Emacs: no minibuffer, bars or
+fringes.  Add `left', `top', `width' and `height' to place it.  Its name,
+unless given here, is the drawing's buffer name and \"Slides\"."
+  :type '(alist :key-type symbol :value-type sexp)
+  :group 'portal)
+
+(defvar portal-excalidraw--pixelwise 'unset
+  "The value `frame-resize-pixelwise' had before a slide window opened.
+It is `unset' while no drawing has a slide window.")
 
 (defconst portal-excalidraw--empty
   "{\"type\":\"excalidraw\",\"version\":2,\"source\":\"portal\",\"elements\":[],\"appState\":{},\"files\":{}}\n")
@@ -41,7 +62,11 @@ in another pane showing this buffer brings it there, as switching to the
 buffer in a pane does.  It keeps its undo history while hidden.
 \[portal-excalidraw-arrange] shows the drawing's slides, its frames, and
 \[portal-excalidraw-draw] goes back to the editor; the mode line says
-:Arrange while the slides are shown."
+:Arrange while the slides are shown.
+\[portal-excalidraw-present] presents them: the drawing's pane becomes the
+console, and the slide window shows the slide in a frame of its own, to
+share in a call or make fullscreen on a projector.
+\[portal-excalidraw-stop-presenting], or closing that window, stops."
   (when (and buffer-file-name (file-remote-p buffer-file-name))
     (user-error "Excalidraw currently supports local files only"))
   (when (= (buffer-size) 0)
@@ -57,7 +82,9 @@ buffer in a pane does.  It keeps its undo history while hidden.
   (setq-local buffer-offer-save t)
   ;; After the light `portal-input-mode' puts first, as the terminal's :exited.
   (setq mode-line-process
-        '(:eval (and (equal portal-excalidraw--mode "arrange") ":Arrange")))
+        '(:eval (pcase portal-excalidraw--mode
+                  ("arrange" ":Arrange")
+                  ("present" ":Present"))))
   (portal-input-mode 1)
   (setq portal-excalidraw--saved (unless (buffer-modified-p) (buffer-string)))
   ;; Emacs deliberately catches before-save-hook errors and may still write.
@@ -66,6 +93,9 @@ buffer in a pane does.  It keeps its undo history while hidden.
   (add-hook 'after-save-hook #'portal-excalidraw--did-save nil t)
   (add-hook 'kill-buffer-query-functions #'portal-excalidraw--query-kill nil t)
   (add-hook 'change-major-mode-hook #'portal-excalidraw--leave-mode nil t)
+  (add-hook 'kill-buffer-hook #'portal-excalidraw--end-slides nil t)
+  ;; The slide window, the one window this page opens.
+  (setq-local portal-web-window-action '(portal-excalidraw--display-slides))
   (setq-local revert-buffer-function #'portal-excalidraw--revert)
   (portal-excalidraw--start)
   (when auto-save-default (auto-save-mode 1)))
@@ -125,20 +155,32 @@ Never prompt in this function."
         ("error"
          (setq portal-excalidraw--error (plist-get message :message))
          (message "Drawing: %s" portal-excalidraw--error))
-        ("save"
-         (setq unread-command-events
-               (nconc unread-command-events
-                      (list (list 'portal-excalidraw-command
-                                  (list (current-buffer) (plist-get message :type))))))))
+        ("notice" (message "Drawing: %s" (plist-get message :message)))
+        ("save" (portal-excalidraw--queue "save")))
     (error (setq portal-excalidraw--error (error-message-string err))
            (message "Drawing: %s" portal-excalidraw--error))))
 
 (defun portal-excalidraw--screen (mode)
-  "Record MODE as the page's screen, and show it in the mode line."
-  (if (not (member mode '("draw" "arrange")))
+  "Record MODE as the page's screen, and show it in the mode line.
+Entering Present gives the keyboard back to the console, which the slide
+window took as it opened; leaving it closes the slide window."
+  (if (not (member mode '("draw" "arrange" "present")))
       (message "Drawing: unknown screen %S" mode)
-    (setq portal-excalidraw--mode mode)
-    (force-mode-line-update)))
+    (let ((was portal-excalidraw--mode))
+      (setq portal-excalidraw--mode mode)
+      (force-mode-line-update)
+      (cond ((and (equal mode "present") (not (equal was "present")))
+             ;; After the slide window's own buffer, which is queued already.
+             (portal-excalidraw--queue "console"))
+            ((and (equal was "present") (not (equal mode "present")))
+             (portal-excalidraw--end-slides))))))
+
+(defun portal-excalidraw--queue (kind)
+  "Queue the command KIND, such as \"save\", to run in this drawing's buffer.
+The bridge's messages arrive in a process filter, which must not prompt."
+  (setq unread-command-events
+        (nconc unread-command-events
+               (list (list 'portal-excalidraw-command (list (current-buffer) kind))))))
 
 (defun portal-excalidraw--show (mode)
   "Ask the drawing's page to show MODE, then give it the keyboard.
@@ -164,17 +206,132 @@ editor; Escape goes back to the editor where it was."
   (interactive nil portal-excalidraw-mode)
   (portal-excalidraw--show "draw"))
 
+(defun portal-excalidraw-present ()
+  "Present the drawing's slides, from the one Arrange selects.
+From the editor, start at the slide nearest the middle of its view.  The
+drawing's pane becomes the console, which keeps the keyboard, and a new
+bare frame shows the slide window: the current slide, letterboxed.
+Right, Down, Space or Page Down shows the next slide, in either window;
+Left, Up or Page Up the previous; Home and End the first and the last.
+Escape, `portal-excalidraw-stop-presenting', closing the slide window or
+deleting its frame stops, back in Arrange at the slide that showed."
+  (interactive nil portal-excalidraw-mode)
+  (portal-excalidraw--show "present"))
+
+(defun portal-excalidraw-stop-presenting ()
+  "Stop presenting the drawing: close its slide window and show Arrange,
+at the slide that showed."
+  (interactive nil portal-excalidraw-mode)
+  (unless (derived-mode-p 'portal-excalidraw-mode)
+    (user-error "This buffer is not a drawing"))
+  (unless (or (equal portal-excalidraw--mode "present") portal-excalidraw--slides)
+    (user-error "The drawing is not being presented"))
+  (portal-excalidraw--stop-presenting))
+
+(defun portal-excalidraw--stop-presenting ()
+  "Close the drawing's slide window, and have its page leave Present."
+  (portal-excalidraw--end-slides)
+  (when (and (equal portal-excalidraw--mode "present")
+             portal-excalidraw--ready (not portal-excalidraw--error))
+    (portal-web-send (list :type "mode" :mode "arrange"))))
+
+(defun portal-excalidraw--display-slides (buffer alist)
+  "Show slide window BUFFER in a new bare frame, as its drawing's.
+This is the drawing's `display-buffer' action for the window its page
+opens; ALIST's entries come first.  The drawing keeps the buffer and the
+frame, and an earlier slide window of it closes."
+  (let* ((drawing (buffer-local-value 'portal-web-opener buffer))
+         (parameters (append portal-excalidraw-slides-frame-parameters
+                             `((name . ,(format "%s: Slides"
+                                                (if (buffer-live-p drawing)
+                                                    (buffer-name drawing)
+                                                  "Drawing"))))))
+         (window (display-buffer-pop-up-frame
+                  buffer
+                  (append alist
+                          `((pop-up-frame-parameters . ,parameters)
+                            (window-parameters . ((mode-line-format . none)
+                                                  (header-line-format . none)
+                                                  (tab-line-format . none))))))))
+    (when (and window (buffer-live-p drawing))
+      (with-current-buffer drawing
+        (portal-excalidraw--end-slides)
+        (setq portal-excalidraw--slides buffer
+              portal-excalidraw--slides-frame (window-frame window)))
+      (with-current-buffer buffer
+        (add-hook 'kill-buffer-hook #'portal-excalidraw--slides-killed nil t))
+      (portal-excalidraw--resize-pixelwise))
+    window))
+
+(defun portal-excalidraw--end-slides ()
+  "Close this drawing's slide window, if it has one: delete its frame, then
+kill its buffer.  Neither goes by itself when the other does.  A slide
+frame that had the keyboard gives it to the console."
+  (let ((buffer portal-excalidraw--slides)
+        (frame portal-excalidraw--slides-frame))
+    (setq portal-excalidraw--slides nil portal-excalidraw--slides-frame nil)
+    (when (frame-live-p frame)
+      (when (and (eq frame (selected-frame)) (get-buffer-window (current-buffer) t))
+        (portal-excalidraw--queue "console"))
+      (condition-case nil
+          (delete-frame frame)
+        ;; The last frame left: it stays, showing another buffer.
+        (error nil)))
+    (when (buffer-live-p buffer) (kill-buffer buffer))
+    (portal-excalidraw--resize-pixelwise)))
+
+(defun portal-excalidraw--slides-killed ()
+  "Stop presenting the drawing whose slide window's buffer this was."
+  (let ((slides (current-buffer))
+        (drawing portal-web-opener))
+    (when (and (buffer-live-p drawing)
+               (eq (buffer-local-value 'portal-excalidraw--slides drawing) slides))
+      (with-current-buffer drawing
+        (setq portal-excalidraw--slides nil)
+        (portal-excalidraw--stop-presenting)))))
+
+(defun portal-excalidraw--frame-deleted (frame)
+  "Stop presenting the drawing whose slide window FRAME showed.
+Only Emacs hears that a frame went; the drawing's page saw it lose focus."
+  (dolist (buffer (buffer-list))
+    (when (eq (buffer-local-value 'portal-excalidraw--slides-frame buffer) frame)
+      (with-current-buffer buffer
+        (setq portal-excalidraw--slides-frame nil)
+        (portal-excalidraw--stop-presenting)))))
+(add-hook 'delete-frame-functions #'portal-excalidraw--frame-deleted)
+
+(defun portal-excalidraw--resize-pixelwise ()
+  "Resize frames pixelwise while any drawing has a slide window.
+Otherwise a fullscreen slide frame is rounded to whole characters, short
+of the display.  Afterwards, `frame-resize-pixelwise' is as it was."
+  (let ((presenting (cl-some (lambda (buffer)
+                                (buffer-local-value 'portal-excalidraw--slides buffer))
+                              (buffer-list))))
+    (cond ((and presenting (eq portal-excalidraw--pixelwise 'unset))
+           (setq portal-excalidraw--pixelwise frame-resize-pixelwise
+                 frame-resize-pixelwise t))
+          ((and (not presenting) (not (eq portal-excalidraw--pixelwise 'unset)))
+           (setq frame-resize-pixelwise portal-excalidraw--pixelwise
+                 portal-excalidraw--pixelwise 'unset)))))
+
 (defun portal-excalidraw--dispatch (event)
   "Run the command in EVENT, which a drawing's app asked for, in its buffer."
   (interactive "e")
   (pcase-let ((`(,buffer ,kind) (cadr event)))
     (when (buffer-live-p buffer)
-      (pop-to-buffer buffer)
-      (when (equal kind "save")
-        ;; The app still has the keyboard, and saving can ask for a file name.
-        (portal-input--action "unfocus" portal-web--target)
-        (portal-excalidraw-save)
-        (when (eq (current-buffer) buffer) (portal-view-focus))))))
+      (pcase kind
+        ("save"
+         (pop-to-buffer buffer)
+         ;; The app still has the keyboard, and saving can ask for a file name.
+         (portal-input--action "unfocus" portal-web--target)
+         (portal-excalidraw-save)
+         (when (eq (current-buffer) buffer) (portal-view-focus)))
+        ("console"
+         ;; The console keeps the keyboard while presenting.
+         (when-let* ((window (get-buffer-window buffer t)))
+           (select-frame-set-input-focus (window-frame window))
+           (select-window window)
+           (ignore-error user-error (portal-view-focus))))))))
 (define-key global-map [portal-excalidraw-command] #'portal-excalidraw--dispatch)
 
 (defun portal-excalidraw--wait (predicate)
@@ -232,12 +389,16 @@ editor; Escape goes back to the editor where it was."
         (yes-or-no-p "Drawing has new unsaved changes; discard them? "))))
 
 (defun portal-excalidraw--leave-mode ()
-  "Bring the buffer up to date before a new major mode closes the view."
+  "Bring the buffer up to date before a new major mode closes the view.
+The slide window closes with it."
+  (portal-excalidraw--end-slides)
   (when (and portal-excalidraw--ready (not portal-excalidraw--error))
     (portal-excalidraw--flush)))
 
 (defun portal-excalidraw--close ()
-  "Close the drawing's web view.  The buffer keeps the drawing."
+  "Close the drawing's web view, and its slide window.
+The buffer keeps the drawing."
+  (portal-excalidraw--end-slides)
   (portal-view-close)
   (setq portal-excalidraw--ready nil)
   (portal-excalidraw--screen "draw"))
