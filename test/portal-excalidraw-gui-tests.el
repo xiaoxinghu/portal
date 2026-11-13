@@ -495,29 +495,39 @@ The page sends it on its own; nothing here asks it to."
   (list 124 (logior (ash 1 23) (ash 1 21)) (string #xF703))
   "The Right arrow, as AppKit reports it.")
 
-(defun portal-excalidraw-gui--in-frame (frame script)
-  "Run SCRIPT in the page FRAME shows, then target the selected frame again."
-  (let ((main (selected-frame)))
-    (unwind-protect
-        (progn
-          (should (portal-view--with-frame-title frame #'portal-test-native-target-frame))
-          (portal-excalidraw-gui--js script))
-      (should (portal-view--with-frame-title main #'portal-test-native-target-frame)))))
+(defun portal-excalidraw-gui--until (predicate)
+  "Service events until PREDICATE succeeds, for up to 10 s; return its value."
+  (let ((deadline (+ (float-time) 10)) value)
+    (while (and (not (setq value (funcall predicate))) (< (float-time) deadline))
+      (accept-process-output nil 0.02)
+      (redisplay t))
+    value))
 
-(defun portal-excalidraw-gui--showing (frame slide)
-  "Wait until the slide window in FRAME, and the console, show SLIDE of 2."
-  (portal-terminal-test--wait
-   (lambda ()
-     (and (equal (portal-excalidraw-gui--in-frame frame "return document.title;")
-                 (format "Slide %d of 2" slide))
-          (equal (portal-excalidraw-gui--js
-                  "return document.querySelector('.portal-present-count')?.textContent;")
-                 (format "%d / 2" slide)))))
-  (should (equal (portal-excalidraw-gui--in-frame
-                  frame "const slide = document.getElementById('slide');
-                         return [document.title, slide.src.startsWith('blob:'),
-                                 slide.complete && slide.naturalWidth > 0];")
-                 (vector (format "Slide %d of 2" slide) t t))))
+(defun portal-excalidraw-gui--in-frame (frame script console)
+  "Run SCRIPT in the page FRAME shows, then target frame CONSOLE again."
+  (unwind-protect
+      (progn
+        (should (portal-view--with-frame-title frame #'portal-test-native-target-frame))
+        (portal-excalidraw-gui--js script))
+    (should (portal-view--with-frame-title console #'portal-test-native-target-frame))))
+
+(defun portal-excalidraw-gui--showing (frame console slide)
+  "Wait until the slide window in FRAME, and the console in frame CONSOLE,
+show SLIDE of 2."
+  (let ((expected (list (format "Slide %d of 2" slide) t t (format "%d / 2" slide)))
+        seen)
+    (portal-excalidraw-gui--until
+     (lambda ()
+       (setq seen (append (portal-excalidraw-gui--in-frame
+                           frame "const slide = document.getElementById('slide');
+                                  if (!slide) return [];  // Still loading.
+                                  return [document.title, slide.src.startsWith('blob:'),
+                                          slide.complete && slide.naturalWidth > 0];"
+                           console)
+                          (list (portal-excalidraw-gui--js
+                                 "return document.querySelector('.portal-present-count')?.textContent ?? null;"))))
+       (equal seen expected)))
+    (should (equal seen expected))))
 
 (ert-deftest portal-excalidraw-gui-presents-in-a-slide-window-and-stops ()
   :tags '(:gui)
@@ -541,7 +551,7 @@ The page sends it on its own; nothing here asks it to."
         (should (frame-live-p frame))
         (should (= (length (frame-list)) (1+ frames)))
         ;; The slide window's frame is bare: the slide fills it.
-        (should-not (frame-parameter frame 'minibuffer))
+        (should-not (eq (window-frame (minibuffer-window frame)) frame))
         (should (eq (window-buffer (frame-root-window frame)) slides))
         (should (= (window-mode-line-height (frame-root-window frame)) 0))
         (should frame-resize-pixelwise)
@@ -549,24 +559,26 @@ The page sends it on its own; nothing here asks it to."
         (should (eq (selected-frame) main))
         (should (eq (window-buffer) document))
         (should (string-match-p ":Present" (format-mode-line mode-line-process)))
-        (portal-terminal-test--wait
+        (portal-excalidraw-gui--until
          (lambda () (portal-excalidraw-gui--js "return document.hasFocus();")))
-        (portal-excalidraw-gui--showing frame 1)
+        (should (portal-excalidraw-gui--js "return document.hasFocus();"))
+        (portal-excalidraw-gui--showing frame main 1)
         ;; Next in the console.
         (apply #'portal-excalidraw-gui--key portal-excalidraw-gui--right)
-        (portal-excalidraw-gui--showing frame 2)
+        (portal-excalidraw-gui--showing frame main 2)
         (portal-excalidraw-gui--key 115 (ash 1 23) (string #xF729)) ; Home
-        (portal-excalidraw-gui--showing frame 1)
+        (portal-excalidraw-gui--showing frame main 1)
         ;; Next in the slide window, which passes it to the console's page.
         (select-frame-set-input-focus frame)
         (select-window (frame-root-window frame))
         (portal-view-focus)
-        (portal-terminal-test--wait
-         (lambda () (portal-excalidraw-gui--in-frame frame "return document.hasFocus();")))
+        (portal-excalidraw-gui--until
+         (lambda () (portal-excalidraw-gui--in-frame frame "return document.hasFocus();" main)))
+        (should (portal-excalidraw-gui--in-frame frame "return document.hasFocus();" main))
         (should (portal-view--with-frame-title frame #'portal-test-native-target-frame))
         (apply #'portal-excalidraw-gui--key portal-excalidraw-gui--right)
         (should (portal-view--with-frame-title main #'portal-test-native-target-frame))
-        (portal-excalidraw-gui--showing frame 2)
+        (portal-excalidraw-gui--showing frame main 2)
         ;; Escape there stops: the drawing goes to Arrange at that slide, and
         ;; the slide window and its frame go.
         (should (portal-view--with-frame-title frame #'portal-test-native-target-frame))
@@ -585,5 +597,84 @@ The page sends it on its own; nothing here asks it to."
         (with-current-buffer document
           (portal-excalidraw--flush)
           (should-not (buffer-modified-p)))))))
+
+(defun portal-excalidraw-gui--page-size (frame console)
+  "The size of the page the slide window in FRAME shows, as [WIDTH HEIGHT]."
+  (portal-excalidraw-gui--in-frame frame "return [innerWidth, innerHeight];" console))
+
+(ert-deftest portal-excalidraw-gui-slide-window-fills-the-display-and-draws-covered ()
+  :tags '(:gui :expensive)
+  (portal-excalidraw-gui--drawing
+      (list (portal-excalidraw-gui--frame "opening" "Opening" 0 0 0 1600 900)
+            (portal-excalidraw-gui--frame "closing" "Closing" 1 0 1000 1600 900))
+      nil
+    (let ((main (selected-frame)))
+      (portal-excalidraw-present)
+      (portal-web-gui--run-until 'portal-web-opened)
+      (portal-web-gui--run-until 'portal-excalidraw-command)
+      (let ((frame portal-excalidraw--slides-frame))
+        (portal-excalidraw-gui--showing frame main 1)
+        ;; Covered by another frame, the slide window still draws the slide
+        ;; it is sent: a call app sharing it shows what it draws.
+        (let ((cover (make-frame '((name . "Cover") (left . 0) (top . 0)
+                                   (width . 400) (height . 200) (user-position . t)))))
+          (unwind-protect
+              (progn
+                ;; It shows no web view, or the drawing's would move there.
+                (set-window-buffer (frame-root-window cover) (get-buffer-create "*scratch*"))
+                (select-frame-set-input-focus cover)
+                (raise-frame cover)
+                (sit-for 1)
+                (select-frame-set-input-focus main)
+                (raise-frame cover)
+                ;; The console's Next button, which leaves the windows as they are.
+                (should (eq (portal-excalidraw-gui--js
+                             "const next = [...document.querySelectorAll('.portal-present button')]
+                                .find(button => button.textContent === 'Next');
+                              next.click();
+                              return true;")
+                            t))
+                (portal-excalidraw-gui--showing frame main 2)
+                (should (equal (portal-excalidraw-gui--in-frame
+                                frame "return document.visibilityState;" main)
+                               "visible")))
+            (delete-frame cover)))
+        ;; Fullscreen, it fills the display to the pixel, and so does its page.
+        (let ((before (portal-excalidraw-gui--page-size frame main))
+              (display (alist-get 'geometry (frame-monitor-attributes frame))))
+          (select-frame-set-input-focus frame)
+          (toggle-frame-fullscreen frame)
+          (let ((expected (list 'fullboth (nth 2 display) (nth 3 display)
+                                (vector (nth 2 display) (nth 3 display))))
+                seen)
+            (portal-excalidraw-gui--until
+             (lambda ()
+               (equal expected
+                      (setq seen (list (frame-parameter frame 'fullscreen)
+                                       (frame-pixel-width frame) (frame-pixel-height frame)
+                                       (portal-excalidraw-gui--page-size frame main))))))
+            (should (equal seen expected)))
+          ;; macOS ignores a toggle while its animation runs.
+          (let ((deadline (+ (float-time) 3)))
+            (while (< (float-time) deadline)
+              (accept-process-output nil 0.05)
+              (redisplay t)))
+          (select-frame-set-input-focus frame)
+          (toggle-frame-fullscreen frame)
+          ;; Nothing touches the frame while its animation runs: retitling
+          ;; it to target it, and running a script in its page, every few
+          ;; milliseconds then aborted Emacs in the VM.
+          (portal-excalidraw-gui--until
+           (lambda () (null (frame-parameter frame 'fullscreen))))
+          (let ((deadline (+ (float-time) 3)))
+            (while (< (float-time) deadline)
+              (accept-process-output nil 0.05)
+              (redisplay t)))
+          (should (equal (list (frame-parameter frame 'fullscreen)
+                               (portal-excalidraw-gui--page-size frame main))
+                         (list nil before)))
+          (select-frame-set-input-focus main))
+        (with-current-buffer document (portal-excalidraw-stop-presenting))
+        (should-not (frame-live-p frame))))))
 
 (provide 'portal-excalidraw-gui-tests)
