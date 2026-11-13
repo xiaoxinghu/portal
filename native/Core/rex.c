@@ -25,6 +25,7 @@
 
 #include "channel.h"
 #include "core.h"
+#include "input.h"
 #include "json.h"
 #include "rex.h"
 #include "views.h"
@@ -60,6 +61,18 @@ enum {
        unless it was made to stay, and the server sends the two events one
        after the other. */
     EXIT_MILLISECONDS = 250,
+    /* The first wait before connecting again to a server that was lost,
+       doubled at each try that fails, up to the longest; and how long a
+       try has for the server's welcome. */
+    RETRY_MILLISECONDS = 200,
+    LONGEST_RETRY_MILLISECONDS = 5000,
+    WELCOME_MILLISECONDS = 5000,
+    /* The most of a stream's output held while the first paint is made:
+       past it, the stream waits unread, and so does the server. */
+    HELD_MOST = 4 << 20,
+    /* How many times in a row a block's stream may end before it shows
+       anything, a paint or live output, before the show gives up. */
+    STREAM_TRIES = 3,
 };
 
 /* Bytes that grow. */
@@ -104,11 +117,14 @@ struct pending {
     answer *answer;
     uint64_t shown; /* By ID: the show may be gone by the time it is answered. */
     uint64_t paint; /* The show's paint it was asked for, which a later one discards. */
+    uint64_t generation; /* The show's stream when asked: see struct shown. */
 };
 
-/* A connection.  The platform knows it by the same number, as a socket. */
+/* A connection.  Its first socket has its number; one that connects again
+   after a loss has a new socket each time. */
 struct connection {
     uint64_t id;
+    uint64_t socket;   /* The platform's socket, or 0 between tries. */
     uint64_t requests; /* The last request number given out, to Emacs or the core. */
     bool announced;    /* Whether a record went out for what waits. */
     char *path;        /* The server's socket, for its data streams. */
@@ -121,6 +137,15 @@ struct connection {
     char **attached; /* Sessions attached with session.attach. */
     size_t sessions;
     char *client; /* Its client's ID, from the welcome, or NULL until then. */
+    /* Coming back: a connection lost once it had a welcome is tried again,
+       as the client the welcome named, until a try has a welcome too. */
+    portal_text name, version; /* The client's, for each hello. */
+    portal_text token;         /* The last welcome's reconnect token. */
+    bool welcomed;             /* This socket has had its welcome. */
+    bool ever;                 /* Some socket has: a loss is tried again. */
+    bool lost;                 /* Lost, and not welcomed back yet. */
+    uint64_t retry;            /* The timer of the next try, or of a try's welcome. */
+    unsigned tries;            /* Tries since the loss. */
 };
 
 static struct {
@@ -198,6 +223,24 @@ struct shown {
     uint64_t paints;        /* How many first paints were asked for: the last counts. */
     uint32_t painted[2];    /* PAINTING: the grid the paint is for, 0 by 0 until known. */
     bool paint_waits;       /* PAINTING: the paint has come, before the stream's grid. */
+    /* Holding up: flow control, and coming back from a stream or a
+       connection that ended. */
+    bool backlogged;          /* The terminal has too much to parse. */
+    bool deferred;            /* The stream has something unread meanwhile. */
+    unsigned char token[16];  /* The latest WELCOME's reconnect token. */
+    bool tokened;             /* A WELCOME gave it. */
+    uint64_t received;        /* The stream's bytes taken since its HELLO, for a RESUME. */
+    bool resuming;            /* A RESUME is out: the next message is its answer. */
+    bool waiting;             /* The stream dropped while the connection was lost. */
+    bool restart;             /* It starts over once the connection is back. */
+    bool offline;             /* The connection is lost: typing goes nowhere. */
+    bool typed;               /* Something was typed meanwhile, since described. */
+    bool painted_once;        /* The terminal has had a paint, which a new one resets. */
+    unsigned tries;           /* Stream ends in a row before it showed anything. */
+    /* Counts the streams the show has started: an answer to a request made
+       for an earlier one, such as a paint, drives nothing. */
+    uint64_t generation;
+    bool resync; /* Started again: once claimed, it is brought up to date. */
 };
 
 /* Which of a shown block's details a seq is for. */
@@ -260,6 +303,15 @@ static bool copy(portal_string string, portal_text *text)
     return true;
 }
 
+/* The connection whose socket is SOCKET, or NULL. */
+static struct connection *on_socket(uint64_t socket)
+{
+    for (size_t i = 0; socket && i < connections.count; i++)
+        if (connections.items[i].socket == socket)
+            return &connections.items[i];
+    return NULL;
+}
+
 /* The open connection ID, or NULL with *ERROR set unless ERROR is NULL. */
 static struct connection *find(uint64_t id, portal_text *error)
 {
@@ -285,6 +337,9 @@ static void free_connection(struct connection *connection)
         free(connection->attached[i]);
     free(connection->attached);
     free(connection->client);
+    free(connection->name.data);
+    free(connection->version.data);
+    free(connection->token.data);
 }
 
 static void forget(struct connection *connection)
@@ -313,8 +368,10 @@ static struct shown *shown_in(portal_string target)
 }
 
 /* The hello: one API revision as both the oldest and the newest Portal
-   speaks, so the server translates and Portal never sees another. */
-static void put_hello(struct json *json, portal_string name, portal_string version)
+   speaks, so the server translates and Portal never sees another; with
+   TOKEN, if it is not empty, to continue that client. */
+static void put_hello(struct json *json, portal_string name, portal_string version,
+                      portal_string token)
 {
     put_text(json, "{\"type\":\"hello\",\"api_revision\":");
     put_number(json, PORTAL_REX_API_REVISION);
@@ -326,7 +383,12 @@ static void put_hello(struct json *json, portal_string name, portal_string versi
     put_string(json, name);
     put_text(json, ",\"version\":");
     put_string(json, version);
-    put_text(json, "}}");
+    put_text(json, "}");
+    if (token.length) {
+        put_text(json, ",\"reconnect_token\":");
+        put_string(json, token);
+    }
+    put_text(json, "}");
 }
 
 bool portal_rex_open(portal_string path, portal_string name, portal_string version, uint64_t *id,
@@ -337,15 +399,17 @@ bool portal_rex_open(portal_string path, portal_string name, portal_string versi
     if (!name.length || !version.length)
         return fail_with(error, "A Rex client needs a name and a version");
     struct json hello = {0};
-    put_hello(&hello, name, version);
-    portal_text kept = {0};
+    put_hello(&hello, name, version, literal(""));
+    portal_text kept = {0}, named = {0}, versioned = {0};
     struct connection *grown =
-        hello.failed || !copy(path, &kept)
+        hello.failed || !copy(path, &kept) || !copy(name, &named) || !copy(version, &versioned)
         ? NULL
         : realloc(connections.items, (connections.count + 1) * sizeof *grown);
     if (!grown) {
         free(hello.data);
         free(kept.data);
+        free(named.data);
+        free(versioned.data);
         return out_of_memory(error);
     }
     connections.items = grown;
@@ -362,9 +426,12 @@ bool portal_rex_open(portal_string path, portal_string name, portal_string versi
     free(hello.data);
     if (!opened) {
         free(kept.data);
+        free(named.data);
+        free(versioned.data);
         return false;
     }
-    connections.items[connections.count++] = (struct connection) {.id = socket, .path = kept.data};
+    connections.items[connections.count++] = (struct connection) {
+        .id = socket, .socket = socket, .path = kept.data, .name = named, .version = versioned};
     *id = socket;
     return true;
 }
@@ -374,6 +441,8 @@ bool portal_rex_open(portal_string path, portal_string name, portal_string versi
 static bool send_request(struct connection *connection, portal_string method,
                          portal_string payload, uint64_t *request, portal_text *error)
 {
+    if (connection->lost)
+        return fail_with(error, "The Rex connection is lost, and connects again by itself");
     struct json json = {0};
     put_text(&json, "{\"type\":\"request\",\"id\":\"");
     put_number(&json, connection->requests + 1);
@@ -384,7 +453,7 @@ static bool send_request(struct connection *connection, portal_string method,
     put_text(&json, "}");
     bool sent = json.failed
         ? out_of_memory(error)
-        : portal_socket_send(connection->id, (portal_string) {json.data, json.length}, error);
+        : portal_socket_send(connection->socket, (portal_string) {json.data, json.length}, error);
     free(json.data);
     if (sent)
         *request = ++connection->requests;
@@ -407,12 +476,14 @@ bool portal_rex_request(uint64_t id, portal_string method, portal_string payload
 /* Shows. */
 
 static void stop_stream(struct shown *shown);
+static void start_over(struct shown *shown, portal_string why);
 static void free_operation(struct operation *operation);
 static void end_show(struct shown *shown, enum stage stage, const char *reason,
                      portal_string detail);
 static void next_operation(struct shown *shown);
 static bool ask_paint(struct shown *shown);
 static void paint(struct shown *shown);
+static void queue(struct shown *shown, struct operation operation);
 
 /* Ask SHOWN's connection to run METHOD with PAYLOAD, for ANSWER.  A request
    that cannot go fails the show. */
@@ -420,6 +491,14 @@ static bool ask(struct shown *shown, const char *method, struct json *payload, a
 {
     struct connection *connection = find(shown->connection, NULL);
     portal_text error = {0};
+    /* A lost connection holds the show until it is back. */
+    if (connection && connection->lost) {
+        free(payload->data);
+        *payload = (struct json) {0};
+        shown->restart = true;
+        stop_stream(shown);
+        return false;
+    }
     uint64_t request;
     struct pending *grown =
         !connection || connection->ended || payload->failed
@@ -442,9 +521,9 @@ static bool ask(struct shown *shown, const char *method, struct json *payload, a
         free(error.data);
         return false;
     }
-    connection->pending[connection->asked++] =
-        (struct pending) {.number = request, .answer = answer, .shown = shown->id,
-                          .paint = shown->paints};
+    connection->pending[connection->asked++] = (struct pending) {
+        .number = request, .answer = answer, .shown = shown->id, .paint = shown->paints,
+        .generation = shown->generation};
     return true;
 }
 
@@ -948,6 +1027,8 @@ static void terminal_event(struct shown *shown, portal_string event, uint64_t se
 }
 
 static answer attached, owned, resized, connected, painted, read_part, operated, taken;
+static answer told_title, told_directory, told_process;
+static bool open_stream(struct shown *shown, const unsigned char *handshake, size_t length);
 
 /* The arguments of a claim of SHOWN's block in MODE, "request" or "take". */
 static void put_claim(struct json *json, struct shown *shown, const char *mode)
@@ -994,6 +1075,21 @@ static void attached(struct shown *shown, const char *response, size_t length)
     own(shown);
 }
 
+/* Tell SHOWN's block how its terminal is now, whatever the server was
+   last told: its grid, once it has been sized, and whether it has the
+   keyboard.  A change of either while the connection was lost went
+   nowhere, so every way back after a loss ends here, once the block is
+   claimed. */
+static void bring_up_to_date(struct shown *shown)
+{
+    memset(shown->sized, 0, sizeof shown->sized);
+    if (shown->stage > RESIZING && shown->stage < FAILED)
+        queue(shown, (struct operation) {.kind = RESIZE});
+    struct portal_input *input = portal_views_input(view(shown->target));
+    if (input)
+        queue(shown, (struct operation) {.kind = FOCUS, .in = input->focused});
+}
+
 static void owned(struct shown *shown, const char *response, size_t length)
 {
     portal_string payload;
@@ -1002,6 +1098,11 @@ static void owned(struct shown *shown, const char *response, size_t length)
     take_owners(shown, payload, seq_of((portal_string) {response, length}));
     shown->stage = SIZING;
     settle(shown);
+    /* Its first size follows once the grid settles. */
+    if (shown->resync) {
+        shown->resync = false;
+        bring_up_to_date(shown);
+    }
     /* What waited for the claim, such as a take. */
     next_operation(shown);
 }
@@ -1069,23 +1170,32 @@ static void connected(struct shown *shown, const char *response, size_t length)
         end_show(shown, FAILED, "data.connect gave no ticket of 16 bytes", literal(""));
         return;
     }
+    shown->stage = GREETING;
+    shown->received = 0;
+    shown->tokened = false;
+    open_stream(shown, hello, sizeof hello);
+}
+
+/* Open a data connection for SHOWN's block and send it HANDSHAKE, a HELLO
+   or a RESUME; false having failed the show. */
+static bool open_stream(struct shown *shown, const unsigned char *handshake, size_t length)
+{
     struct connection *connection = find(shown->connection, NULL);
     portal_text error = {0};
     uint64_t socket = ++connections.last;
-    if (!connection
-        || !portal_socket_open(socket, literal(connection->path), literal(DATA_RESOURCE),
-                               literal(DATA_PROTOCOL), true, &error)) {
+    bool opened = connection
+        && portal_socket_open(socket, literal(connection->path), literal(DATA_RESOURCE),
+                              literal(DATA_PROTOCOL), true, &error);
+    if (opened) {
+        shown->data = socket;
+        opened = portal_socket_send(socket, (portal_string) {(const char *) handshake, length},
+                                    &error);
+    }
+    if (!opened)
         end_show(shown, FAILED, "Cannot open the block's stream: ",
                  literal(error.data ? error.data : "not connected"));
-        free(error.data);
-        return;
-    }
-    shown->data = socket;
-    shown->stage = GREETING;
-    if (!portal_socket_send(socket, (portal_string) {(const char *) hello, sizeof hello}, &error)) {
-        end_show(shown, FAILED, "Cannot open the block's stream: ", view(error));
-        free(error.data);
-    }
+    free(error.data);
+    return opened;
 }
 
 /* Where NEEDLE starts in HAY from FROM, or HAY's length. */
@@ -1283,17 +1393,24 @@ done:;
     clear(&rest);
 }
 
-/* The handshake's answer: a WELCOME of 32 bytes whose last 8 are the
-   channel's nonce, little-endian, or a REJECT with its reason. */
+/* The handshake's answer, to a HELLO or a RESUME: a WELCOME of 32 bytes,
+   a reconnect token in bytes 1 to 16 and the channel's nonce, little-endian,
+   in the last 8; or a REJECT with its reason.  A refused RESUME starts
+   over, as the server asks. */
 static void greeted(struct shown *shown, const unsigned char *bytes, size_t length)
 {
+    bool resuming = shown->resuming;
+    shown->resuming = false;
     if (length == 32 && bytes[0] == 0x81) {
         uint64_t nonce = 0;
         for (int i = 31; i >= 24; i--)
             nonce = nonce << 8 | bytes[i];
         int written = snprintf(shown->marker, sizeof shown->marker, "\x1b_rex1;%" PRIu64 ";", nonce);
         shown->marker_length = (size_t) written;
-        shown->stage = SKIPPING;
+        memcpy(shown->token, bytes + 1, sizeof shown->token);
+        shown->tokened = true;
+        if (!resuming)
+            shown->stage = SKIPPING;
         return;
     }
     char reason[64];
@@ -1301,11 +1418,102 @@ static void greeted(struct shown *shown, const unsigned char *bytes, size_t leng
         snprintf(reason, sizeof reason, "reason 0x%02x", bytes[1]);
     else
         snprintf(reason, sizeof reason, "an answer of %zu bytes", length);
+    if (resuming)
+        return start_over(shown, literal(reason));
     end_show(shown, FAILED, "The server refused the block's stream: ", literal(reason));
+}
+
+/* Drop all SHOWN has of its stream, for a new one: what came of its
+   snapshot, its cursor in it, what was held for a paint and the paint so
+   far, and its token.  Answers to what the old stream asked drive
+   nothing from here on. */
+static void fresh_stream(struct shown *shown)
+{
+    stop_stream(shown);
+    shown->resuming = shown->waiting = shown->tokened = false;
+    /* The new stream says its grid again, which its paint is for. */
+    shown->columns = shown->rows = 0;
+    shown->walked = 0;
+    shown->received = 0;
+    shown->blob = 0;
+    clear(&shown->snapshot);
+    clear(&shown->tail);
+    clear(&shown->held);
+    clear(&shown->paint);
+    shown->generation++;
+}
+
+/* SHOWN's stream is to continue on a new data connection, from the byte
+   after those it has taken, once its connection is up; else it starts
+   over. */
+static void resume_stream(struct shown *shown)
+{
+    struct connection *connection = find(shown->connection, NULL);
+    stop_stream(shown);
+    if (connection && connection->lost) {
+        shown->waiting = true;
+        return;
+    }
+    shown->waiting = false;
+    if (!shown->tokened)
+        return start_over(shown, literal("it had no token to resume with"));
+    if (++shown->tries > STREAM_TRIES)
+        return end_show(shown, FAILED, "The block's stream keeps ending", literal(""));
+    unsigned char resume[25] = {0x02};
+    memcpy(resume + 1, shown->token, sizeof shown->token);
+    for (int i = 0; i < 8; i++)
+        resume[17 + i] = (unsigned char) (shown->received >> (8 * i));
+    shown->resuming = true;
+    open_stream(shown, resume, sizeof resume);
+}
+
+/* SHOWN's stream cannot go on, because of WHY: ask for a new one, which
+   paints the terminal afresh.  A lost connection waits until it is back,
+   and a stream that keeps ending before it shows anything fails. */
+static void start_over(struct shown *shown, portal_string why)
+{
+    struct connection *connection = find(shown->connection, NULL);
+    fresh_stream(shown);
+    if (connection && connection->lost) {
+        shown->restart = true;
+        return;
+    }
+    if (++shown->tries > STREAM_TRIES)
+        return end_show(shown, FAILED, "The block's stream keeps ending: ", why);
+    struct json json = {0};
+    put_block(&json, shown);
+    put_text(&json, ",\"data_ref_id\":\"terminal\",\"subprotocol\":\"" DATA_PROTOCOL "\"}");
+    shown->stage = CONNECTING;
+    ask(shown, "data.connect", &json, connected);
+}
+
+/* SHOWN's stream ended, the server's close frame giving CODE, or 0, and
+   REASON.  The block's end, or one the server gives as final, ends the
+   show; a stream the server wants started again starts over, and any
+   other end resumes. */
+static void stream_ended(struct shown *shown, int code, portal_string reason)
+{
+    bool resuming = shown->resuming;
+    stop_stream(shown);
+    shown->resuming = false;
+    if (code == 1000 || code == 1008 || code == 1011 || code >= 4000)
+        end_show(shown, shown->stage == LIVE ? ENDED : FAILED, "The block's stream ended: ", reason);
+    else if (code == 1013 || resuming || !shown->tokened || shown->stage < SKIPPING)
+        start_over(shown, reason);
+    else
+        resume_stream(shown);
 }
 
 static void stream_message(struct shown *shown, const char *bytes, size_t length)
 {
+    if (shown->resuming)
+        return greeted(shown, (const unsigned char *) bytes, length);
+    /* Every byte after a WELCOME is the stream's, and counts for a RESUME.
+       Only output shown says the stream works: a snapshot alone does not. */
+    if (shown->stage > GREETING)
+        shown->received += length;
+    if (shown->stage == LIVE)
+        shown->tries = 0;
     switch (shown->stage) {
     case GREETING:
         return greeted(shown, (const unsigned char *) bytes, length);
@@ -1322,14 +1530,20 @@ static void stream_message(struct shown *shown, const char *bytes, size_t length
     }
 }
 
-/* SHOWN's stream has something to read. */
+/* SHOWN's stream has something to read.  While its terminal has too much
+   to parse, or the first paint holds too much, it waits unread, and so
+   does the server, as the platform stops reading the socket. */
 static void stream_ready(struct shown *shown)
 {
     portal_text *messages = NULL, reason = {0}, error = {0};
     size_t count = 0;
     bool ended = false;
+    int code = 0;
     uint64_t socket = shown->data, id = shown->id;
-    if (!portal_socket_read(socket, &messages, &count, &ended, &reason, &error)) {
+    shown->deferred = shown->backlogged || (shown->stage == PAINTING && shown->held.length >= HELD_MOST);
+    if (shown->deferred || !socket)
+        return;
+    if (!portal_socket_read(socket, &messages, &count, &ended, &code, &reason, &error)) {
         free(error.data);
         return;
     }
@@ -1342,15 +1556,15 @@ static void stream_ready(struct shown *shown)
     }
     free(messages);
     if (ended && shown_by_id(id) == shown && shown->data == socket)
-        end_show(shown, shown->stage == LIVE ? ENDED : FAILED, "The block's stream ended: ",
-                 view(reason));
+        stream_ended(shown, code, view(reason));
     free(reason.data);
 }
 
 /* The paint so far is complete: feed it, then what the stream brought
    meanwhile.  Output written between the snapshot and the "format" is in
    both; only a snapshot restore, which follows the stream exactly, would
-   avoid that. */
+   avoid that.  A terminal painted before, for a stream that started over,
+   is reset first, its history with it. */
 static void paint(struct shown *shown)
 {
     /* The paint is laid out for the block's grid, which the stream gives,
@@ -1364,6 +1578,10 @@ static void paint(struct shown *shown)
         clear(&held);
         return end_show(shown, FAILED, "Portal is out of memory", literal(""));
     }
+    if (shown->painted_once)
+        feed(shown, "\x1b" "c\x1b[3J", 6);
+    shown->painted_once = true;
+    shown->tries = 0;
     hold(shown);
     feed(shown, shown->paint.data, shown->paint.length);
     clear(&shown->paint);
@@ -1371,6 +1589,9 @@ static void paint(struct shown *shown)
     feed(shown, held.data, held.length);
     clear(&held);
     announce(shown);
+    /* The stream waited while the paint held too much. */
+    if (shown->deferred)
+        stream_ready(shown);
 }
 
 /* Add the string member NAME of PAYLOAD to the paint; false having failed
@@ -1443,7 +1664,9 @@ static void free_operation(struct operation *operation)
    take. */
 static void queue(struct shown *shown, struct operation operation)
 {
-    if (shown->stage >= FAILED)
+    /* Nothing goes while the connection is lost: what is typed is lost,
+       and the size is sent again when the block resumes. */
+    if (shown->stage >= FAILED || shown->offline)
         return free_operation(&operation);
     struct operation *last = shown->queued ? &shown->operations[shown->queued - 1] : NULL;
     if (last && last->kind == WRITE && operation.kind == WRITE) {
@@ -1625,6 +1848,12 @@ void portal_rex_input(portal_string target, const char *bytes, size_t length)
     struct shown *shown = shown_in(target);
     if (!shown || !length || own_report(bytes, length))
         return;
+    /* Typing into a block whose connection is lost goes nowhere, and Emacs
+       says so. */
+    if (shown->offline) {
+        shown->typed = true;
+        return announce(shown);
+    }
     /* Typing is using the block, as in Rex's app: a block another client
        took meanwhile, such as a phone, comes back first. */
     if (!mine(shown))
@@ -1638,7 +1867,7 @@ void portal_rex_input(portal_string target, const char *bytes, size_t length)
 void portal_rex_focus(portal_string target, bool focused)
 {
     struct shown *shown = shown_in(target);
-    if (shown)
+    if (shown && !shown->offline)
         queue(shown, (struct operation) {.kind = FOCUS, .in = focused});
 }
 
@@ -1649,6 +1878,16 @@ bool portal_rex_take(portal_string target, portal_text *error)
         return fail(error, "No block is shown in ", target);
     take(shown);
     return true;
+}
+
+void portal_rex_backlog(portal_string target, bool backlogged)
+{
+    struct shown *shown = shown_in(target);
+    if (!shown)
+        return;
+    shown->backlogged = backlogged;
+    if (!backlogged && shown->deferred)
+        stream_ready(shown);
 }
 
 void portal_rex_grid(portal_string target)
@@ -1662,19 +1901,38 @@ void portal_rex_grid(portal_string target)
         queue(shown, (struct operation) {.kind = RESIZE});
 }
 
-void portal_rex_timer(uint64_t token)
+/* Start SHOWN: attach to its session unless the connection has, then
+   claim the block, and the rest follows. */
+static void begin(struct shown *shown)
 {
-    for (size_t i = 0; token && i < shows.count; i++) {
-        struct shown *shown = shows.items[i];
-        if (shown->timer == token) {
-            shown->timer = 0;
-            if (shown->stage == SIZING)
-                size(shown);
-            return;
-        }
-        if (shown->exit_timer == token)
-            return exited(shown);
+    struct connection *connection = find(shown->connection, NULL);
+    bool joined = false;
+    for (size_t i = 0; connection && !joined && i < connection->sessions; i++)
+        joined = strlen(connection->attached[i]) == shown->session.length
+            && !memcmp(connection->attached[i], shown->session.data, shown->session.length);
+    if (joined) {
+        own(shown);
+    } else {
+        struct json json = {0};
+        put_text(&json, "{\"session_id\":");
+        put_string(&json, view(shown->session));
+        put_text(&json, "}");
+        shown->stage = ATTACHING;
+        ask(shown, "session.attach", &json, attached);
     }
+}
+
+/* Start SHOWN again from the beginning, on the terminal it has, for a
+   connection that is back: what the server knew of Emacs may be gone. */
+static void restart_show(struct shown *shown)
+{
+    fresh_stream(shown);
+    shown->resync = true;
+    shown->restart = false;
+    shown->sending = false;
+    shown->timer = 0;
+    shown->tries = 0;
+    begin(shown);
 }
 
 bool portal_rex_show(uint64_t id, portal_string target, portal_string session,
@@ -1685,6 +1943,8 @@ bool portal_rex_show(uint64_t id, portal_string target, portal_string session,
         return false;
     if (connection->ended)
         return fail_with(error, "The Rex connection has ended");
+    if (connection->lost)
+        return fail_with(error, "The Rex connection is lost, and connects again by itself");
     if (!portal_views_fed(target))
         return fail(error, "No fed terminal ", target);
     if (shown_in(target))
@@ -1712,20 +1972,7 @@ bool portal_rex_show(uint64_t id, portal_string target, portal_string session,
     shown->id = ++shows.last;
     shown->connection = id;
     shows.items[shows.count++] = shown;
-    bool joined = false;
-    for (size_t i = 0; !joined && i < connection->sessions; i++)
-        joined = strlen(connection->attached[i]) == session.length
-            && !memcmp(connection->attached[i], session.data, session.length);
-    if (joined) {
-        own(shown);
-    } else {
-        struct json json = {0};
-        put_text(&json, "{\"session_id\":");
-        put_string(&json, session);
-        put_text(&json, "}");
-        shown->stage = ATTACHING;
-        ask(shown, "session.attach", &json, attached);
-    }
+    begin(shown);
     return true;
 }
 
@@ -1752,7 +1999,11 @@ void portal_rex_describe(portal_string target, struct json *json)
     put_string(json, shown->program.data ? view(shown->program) : literal(""));
     put_text(json, shown->exited ? ",\"exited\":true" : ",\"exited\":false");
     put_text(json, ",\"rex\":{\"state\":");
-    put_string(json, literal(states[shown->stage]));
+    put_string(json, literal(shown->offline && shown->stage < FAILED ? "disconnected"
+                                                                      : states[shown->stage]));
+    if (shown->typed)
+        put_text(json, ",\"typed\":true");
+    shown->typed = false;
     put_text(json, ",\"columns\":");
     put_number(json, shown->columns);
     put_text(json, ",\"rows\":");
@@ -1831,10 +2082,16 @@ static bool own_response(struct connection *connection, portal_text message)
                 (--connection->asked - i) * sizeof *connection->pending);
         struct shown *shown = shown_by_id(pending.shown);
         /* A show that has failed takes no more answers, but its typing's;
-           nor does a paint that a later one replaced. */
+           nor does a paint that a later one replaced; and one that started
+           a new stream none of the old one's steps: what its terminal
+           reports, who owns it, and its typing hold for either. */
         bool stale = (pending.answer == painted || pending.answer == read_part)
             && pending.paint != shown_paints(shown);
-        if (shown && !stale
+        bool current = shown && shown->generation == pending.generation;
+        bool lasting = pending.answer == operated || pending.answer == taken
+            || pending.answer == named || pending.answer == told_title
+            || pending.answer == told_directory || pending.answer == told_process;
+        if (shown && !stale && (current || lasting)
             && (shown->stage < FAILED || pending.answer == operated || pending.answer == taken))
             pending.answer(shown, message.data, message.length);
         return true;
@@ -1881,20 +2138,6 @@ static void block_event(struct connection *connection, portal_text message)
     free(id.data);
 }
 
-/* MESSAGE, if it is the server's welcome, says which client CONNECTION is,
-   for telling the blocks Emacs owns from those other clients do.  It goes
-   on to Emacs all the same. */
-static void welcomed(struct connection *connection, portal_text message)
-{
-    portal_string type, client, id;
-    portal_text text = {0};
-    if (connection->client || !portal_json_member(view(message), "type", &type)
-        || !portal_json_is(type, "welcome") || !portal_json_member(view(message), "client", &client)
-        || !portal_json_member(client, "id", &id) || !portal_json_string(id, &text))
-        return;
-    connection->client = text.data;
-}
-
 /* CONNECTION's end, for the core's own requests and shows. */
 static void ended(struct connection *connection)
 {
@@ -1910,30 +2153,236 @@ static void ended(struct connection *connection)
             for (size_t k = 0; k < shown->queued; k++)
                 free_operation(&shown->operations[k]);
             shown->queued = 0;
+            shown->offline = false;
             end_show(shown, shown->stage == LIVE ? ENDED : FAILED,
                      "The connection to the server ended", literal(""));
         }
     }
 }
 
+/* Coming back. */
+
+/* Whether a connection that ended with the close frame CODE, for REASON,
+   is not to be tried again: the server will refuse a client like this
+   one each time. */
+static bool final(int code, portal_string reason)
+{
+    static const char backlog[] = "event backlog exceeded";
+    bool behind = false;
+    for (size_t i = 0; i + sizeof backlog - 1 <= reason.length && !behind; i++)
+        behind = !memcmp(reason.data + i, backlog, sizeof backlog - 1);
+    return code == 1002 || code == 1003 || code == 1007 || code == 1009
+        || (code == 1008 && !behind);
+}
+
+/* Put MESSAGE, which the core made, among CONNECTION's messages for Emacs. */
+static void tell(struct connection *connection, struct json *message)
+{
+    portal_text *grown = message->failed
+        ? NULL
+        : realloc(connection->inbox, (connection->waiting + 1) * sizeof *grown);
+    if (grown) {
+        connection->inbox = grown;
+        connection->inbox[connection->waiting++] = (portal_text) {message->data, message->length};
+    } else {
+        free(message->data);
+    }
+    *message = (struct json) {0};
+}
+
+/* Try CONNECTION's server again after a while, longer at each try. */
+static void try_later(struct connection *connection)
+{
+    uint64_t wait = RETRY_MILLISECONDS;
+    for (unsigned i = 0; i < connection->tries && wait < LONGEST_RETRY_MILLISECONDS; i++)
+        wait *= 2;
+    connection->tries++;
+    connection->retry = portal_channel_timer(wait < LONGEST_RETRY_MILLISECONDS
+                                             ? wait : LONGEST_RETRY_MILLISECONDS);
+}
+
+/* Give up CONNECTION's socket, if it has one. */
+static void hang_up(struct connection *connection)
+{
+    if (!connection->socket)
+        return;
+    portal_text ignored = {0};
+    if (!portal_socket_close(connection->socket, &ignored))
+        free(ignored.data);
+    connection->socket = 0;
+    connection->welcomed = false;
+}
+
+/* CONNECTION, which had a welcome, has lost its socket because of REASON.
+   The server keeps the client a while, so the connection tries it again,
+   until a try has a welcome.  Meanwhile Emacs's requests fail, as do the
+   core's: a block shown starts again once the connection is back, and one
+   live keeps its stream, which may still be up, but takes no typing.
+   Emacs hears of the loss as a message of the core's, among the server's,
+   {"type":"portal_lost","reason":REASON}. */
+static void lose(struct connection *connection, portal_string reason)
+{
+    hang_up(connection);
+    connection->lost = true;
+    connection->tries = 0;
+    connection->asked = 0;
+    for (size_t i = 0; i < shows.count; i++) {
+        struct shown *shown = shows.items[i];
+        if (shown->connection != connection->id || shown->stage >= FAILED)
+            continue;
+        for (size_t k = 0; k < shown->queued; k++)
+            free_operation(&shown->operations[k]);
+        shown->queued = 0;
+        shown->sending = false;
+        shown->taking = false;
+        shown->offline = true;
+        if (shown->stage < LIVE) {
+            shown->restart = true;
+            shown->timer = 0;
+            stop_stream(shown);
+        }
+        announce(shown);
+    }
+    struct json json = {0};
+    put_text(&json, "{\"type\":\"portal_lost\",\"reason\":");
+    put_string(&json, reason);
+    put_text(&json, "}");
+    tell(connection, &json);
+    try_later(connection);
+}
+
+/* Try CONNECTION's server again: a new socket, and a hello that continues
+   the client with the last welcome's token.  The try has a while for its
+   welcome. */
+static void try_again(struct connection *connection)
+{
+    struct json hello = {0};
+    put_hello(&hello, view(connection->name), view(connection->version), view(connection->token));
+    uint64_t socket = ++connections.last;
+    portal_text error = {0};
+    bool opened = !hello.failed
+        && portal_socket_open(socket, literal(connection->path), literal(CONTROL_RESOURCE),
+                              literal(CONTROL_PROTOCOL), false, &error);
+    if (opened) {
+        connection->socket = socket;
+        if (!portal_socket_send(socket, (portal_string) {hello.data, hello.length}, &error))
+            hang_up(connection);
+    }
+    free(hello.data);
+    free(error.data);
+    if (!connection->socket)
+        return try_later(connection);
+    connection->retry = portal_channel_timer(WELCOME_MILLISECONDS);
+}
+
+/* MESSAGE is the welcome of CONNECTION's socket: keep its reconnect token.
+   After a loss, the connection is back, as the same client if the welcome
+   says it resumed; a new client has no sessions attached and owns no
+   block, and each block shown starts again once Emacs resumes them.
+   Every seq starts again at 1. */
+static void welcomed(struct connection *connection, portal_string message)
+{
+    portal_string client, value;
+    portal_text token = {0}, id = {0};
+    connection->welcomed = true;
+    /* Which client this is, for telling the blocks Emacs owns from those
+       other clients do: a new one after a loss, unless resumed. */
+    if (portal_json_member(message, "client", &client) && portal_json_member(client, "id", &value)
+        && portal_json_string(value, &id)) {
+        free(connection->client);
+        connection->client = id.data;
+    }
+    if (portal_json_member(message, "client", &client)
+        && portal_json_member(client, "reconnect_token", &value)
+        && portal_json_string(value, &token)) {
+        free(connection->token.data);
+        connection->token = token;
+    }
+    bool resumed = portal_json_member(message, "client", &client)
+        && portal_json_member(client, "resumed", &value) && is(value, "true");
+    if (!connection->ever) {
+        connection->ever = true;
+        return;
+    }
+    connection->lost = false;
+    connection->retry = 0;
+    connection->tries = 0;
+    if (!resumed) {
+        for (size_t i = 0; i < connection->sessions; i++)
+            free(connection->attached[i]);
+        connection->sessions = 0;
+    }
+    for (size_t i = 0; i < shows.count; i++) {
+        struct shown *shown = shows.items[i];
+        if (shown->connection != connection->id)
+            continue;
+        memset(shown->seqs, 0, sizeof shown->seqs);
+        if (!resumed) {
+            shown->restart = true;
+            stop_stream(shown);
+        }
+    }
+}
+
+bool portal_rex_resume(uint64_t id, portal_text *error)
+{
+    struct connection *connection = find(id, error);
+    if (!connection)
+        return false;
+    if (connection->lost)
+        return fail_with(error, "The Rex connection is not back yet");
+    for (size_t i = 0; i < shows.count; i++) {
+        struct shown *shown = shows.items[i];
+        if (shown->connection != id || !shown->offline)
+            continue;
+        shown->offline = false;
+        if (shown->stage >= FAILED)
+            continue;
+        if (shown->restart) {
+            restart_show(shown);
+        } else {
+            /* Events were lost meanwhile: ask again what they said. */
+            ask_details(shown);
+            if (shown->waiting)
+                resume_stream(shown);
+            bring_up_to_date(shown);
+        }
+        announce(shown);
+    }
+    return true;
+}
+
 /* Read what the platform has for CONNECTION: the core's answers it handles,
-   the rest wait for Emacs. */
+   the rest wait for Emacs.  A socket that ends is the connection's end,
+   unless it had a welcome and the server may take the client back: then
+   the connection is lost, and tries again. */
 static void pump(struct connection *connection)
 {
-    if (connection->ended)
+    if (connection->ended || !connection->socket)
         return;
     portal_text *messages = NULL, reason = {0}, error = {0};
     size_t count = 0;
     bool over = false;
-    uint64_t id = connection->id;
-    if (!portal_socket_read(id, &messages, &count, &over, &reason, &error)) {
+    int code = 0;
+    uint64_t socket = connection->socket;
+    if (!portal_socket_read(socket, &messages, &count, &over, &code, &reason, &error)) {
         free(error.data);
         return;
     }
     for (size_t i = 0; i < count; i++) {
+        portal_string type;
+        /* A try's messages before its welcome are no one's. */
+        if (connection->lost && !connection->welcomed
+            && !(portal_json_member(view(messages[i]), "type", &type)
+                 && portal_json_is(type, "welcome"))) {
+            free(messages[i].data);
+            continue;
+        }
+        if (!connection->welcomed && portal_json_member(view(messages[i]), "type", &type)
+            && portal_json_is(type, "welcome"))
+            welcomed(connection, view(messages[i]));
         /* An answer can make requests, but never opens or closes a
            connection, so CONNECTION stays where it is. */
-        welcomed(connection, messages[i]);
         if (own_response(connection, messages[i])) {
             free(messages[i].data);
             continue;
@@ -1948,7 +2397,18 @@ static void pump(struct connection *connection)
         connection->inbox[connection->waiting++] = messages[i];
     }
     free(messages);
-    if (over) {
+    if (!over) {
+        free(reason.data);
+    } else if (connection->lost && !connection->welcomed && !final(code, view(reason))) {
+        /* A try that failed: the next comes later.  One the server refuses
+           for good ends the connection, below. */
+        free(reason.data);
+        hang_up(connection);
+        try_later(connection);
+    } else if (connection->ever && !final(code, view(reason))) {
+        lose(connection, view(reason));
+        free(reason.data);
+    } else {
         connection->ended = true;
         connection->reason = reason;
         ended(connection);
@@ -1976,9 +2436,7 @@ bool portal_rex_receive(uint64_t id, portal_text **messages, size_t *count, bool
         connection->reason = (portal_text) {0};
         /* The socket has nothing more to say; a platform that cannot close
            it now has ended it all the same. */
-        portal_text ignored = {0};
-        portal_socket_close(id, &ignored);
-        free(ignored.data);
+        hang_up(connection);
         forget(connection);
     }
     return true;
@@ -2004,10 +2462,11 @@ bool portal_rex_wait(uint64_t id, uint64_t milliseconds, bool *ready, portal_tex
         /* One reading of the clock: two could straddle the deadline, and
            the difference would wrap to a wait of hours. */
         uint64_t time = now(), left = deadline > time ? deadline - time : 0;
-        if (*ready || !left)
+        /* Between tries there is no socket to wait on. */
+        if (*ready || !left || !connection->socket)
             return true;
         bool readable = false;
-        if (!portal_socket_wait(id, left, &readable, error))
+        if (!portal_socket_wait(connection->socket, left, &readable, error))
             return false;
         /* The core's own answers may be all that came: wait on for Emacs's. */
         if (!readable)
@@ -2018,12 +2477,45 @@ bool portal_rex_wait(uint64_t id, uint64_t milliseconds, bool *ready, portal_tex
 bool portal_rex_close(uint64_t id, portal_text *error)
 {
     struct connection *connection = find(id, error);
-    if (!connection || !portal_socket_close(id, error))
+    if (!connection || (connection->socket && !portal_socket_close(connection->socket, error)))
         return false;
+    connection->socket = 0;
     connection->ended = true;
     ended(connection);
     forget(connection);
     return true;
+}
+
+/* A timer of CONNECTION's: a try is due, or a try's welcome is late. */
+static void retried(struct connection *connection)
+{
+    connection->retry = 0;
+    if (!connection->lost)
+        return;
+    if (!connection->socket)
+        return try_again(connection);
+    if (!connection->welcomed) {
+        hang_up(connection);
+        try_later(connection);
+    }
+}
+
+void portal_rex_timer(uint64_t token)
+{
+    for (size_t i = 0; token && i < shows.count; i++) {
+        struct shown *shown = shows.items[i];
+        if (shown->timer == token) {
+            shown->timer = 0;
+            if (shown->stage == SIZING)
+                size(shown);
+            return;
+        }
+        if (shown->exit_timer == token)
+            return exited(shown);
+    }
+    for (size_t i = 0; token && i < connections.count; i++)
+        if (connections.items[i].retry == token)
+            return retried(&connections.items[i]);
 }
 
 /* The platform's call, from portal.h. */
@@ -2033,7 +2525,7 @@ void portal_socket_ready(uint64_t socket)
     for (size_t i = 0; i < shows.count; i++)
         if (shows.items[i]->data == socket)
             return stream_ready(shows.items[i]);
-    struct connection *connection = find(socket, NULL);
+    struct connection *connection = on_socket(socket);
     if (!connection)
         return;
     pump(connection);
@@ -2041,5 +2533,5 @@ void portal_socket_ready(uint64_t socket)
     /* A record the pipe refuses is tried again with the next report. */
     if ((connection->waiting || connection->ended) && !connection->announced)
         connection->announced =
-            portal_channel_send(literal("rex"), number(socket, word), NULL, 0);
+            portal_channel_send(literal("rex"), number(connection->id, word), NULL, 0);
 }

@@ -54,9 +54,9 @@ own connection. Connecting again to a server Emacs is connected to returns
 the connection it has. `(portal-rex-connections)` lists them.
 
 `M-x portal-rex-disconnect` ends a connection, asking which when there are
-several. Disconnecting, like quitting Emacs, kills the buffers of that
-server's blocks and ends nothing on the server: its sessions and blocks
-carry on.
+several, a [lost](#when-a-connection-is-lost) one among them. Disconnecting,
+like quitting Emacs, kills the buffers of that server's blocks at once and
+ends nothing on the server: its sessions and blocks carry on.
 
 Portal speaks one revision of Rex's API, 12, and tells the server so. A newer
 server translates to and from it, so updating Rex needs no change in Portal.
@@ -81,7 +81,8 @@ The buffers follow the server, with Emacs idle:
 | A block closes, or its program ends | Its buffer is killed. |
 | A session is destroyed | Its blocks' buffers are killed. |
 | A block or a session is relabelled | The buffers it names are renamed. |
-| Emacs disconnects, or the connection is lost | That server's buffers are killed. |
+| Emacs disconnects, or the server refuses it for good | That server's buffers are killed. |
+| The connection is lost | The buffers stay, marked, until it is back, then match the server again: see [When a connection is lost](#when-a-connection-is-lost). |
 
 These kills never ask, and none of them ends anything on the server.
 
@@ -234,12 +235,38 @@ gets one answer, the server's. Likewise, whether the view has the keyboard
 goes to the server, which reports focus to a program that asked, and the
 view's own focus, size and colour-scheme reports are dropped.
 
+### A program that floods
+
+A program that writes faster than the view can draw, such as `yes` or a
+build that prints megabytes, does not slow Emacs down, whether its buffer is
+shown or buried. Emacs reads the block's output only as fast as the view
+takes it in: while the view has more than half a megabyte waiting to be
+drawn, Emacs stops reading, and the server holds the rest. Typing, `C-c`
+among it, reaches the block at once all the while. Emacs's memory stays
+bounded however long the program runs.
+
+A server holds only so much for a client that reads slowly. When it can
+hold no more, it asks for a new stream; Emacs paints the block's screen
+afresh, as at first show, and carries on from there. What scrolled past
+meanwhile is in the block's history on the server, as the paint has it.
+
+### When a stream drops
+
+A block's output comes on a stream of its own, beside the connection that
+carries everything else. When that stream drops, Emacs opens it again at
+once and the server carries on from the first byte Emacs did not have, so
+nothing is lost or drawn twice. When the server cannot do that, because it
+could not keep the output or asks for a new stream, Emacs paints the
+screen afresh instead, as at first show. Either way nothing needs a
+command, and the view stays as it is meanwhile.
+
 ### When it goes wrong
 
 A block whose screen cannot be shown, because the server refused part of
 it, loses its view, and its buffer says why; showing the buffer again tries
-again. A block whose output stops, such as when its server drops the
-stream, keeps its last screen, and Emacs says so in the echo area; from
+again. So does a block whose stream keeps ending before it shows anything,
+after three tries. A block whose stream ends for good, as when the server
+fails it, keeps its last screen, and Emacs says so in the echo area; from
 then on nothing typed there reaches the block, so a screen that no longer
 changes never runs a command unseen.
 
@@ -375,12 +402,14 @@ name.
 
 Nothing else ends a block:
 
-- Quitting Emacs, disconnecting and a lost connection kill the buffers and
-  end nothing: connect again, and every block has its buffer again.
+- Quitting Emacs and disconnecting kill the buffers and end nothing:
+  connect again, and every block has its buffer again. A lost connection
+  keeps them, and Emacs connects again by itself.
 - The buffers Portal kills because the server says a block closed or a
   session was destroyed ask nothing and call nothing.
-- A server that goes while a kill asks it, or while the question waits for
-  you, takes its buffers with it, and the kill ends nothing.
+- A server that is lost while a kill asks it, or while the question waits
+  for you, can be told nothing: the kill only kills the buffer, and says
+  the block still runs.
 - A kill that runs no question, as when a program binds
   `kill-buffer-query-functions` to nil, cannot know the block is idle, so it
   kills only the buffer and says so; the block gets a buffer again when
@@ -583,7 +612,7 @@ error as a plist:
 | --- | --- |
 | One of the server's, such as `"method_not_found"`, `"bad_request"` or `"conflict"` | The server refused the call. `:message` and `:status` are the server's. |
 | `"portal_timeout"` | No answer came in time. |
-| `"portal_disconnected"` | The connection ended first, or had ended. |
+| `"portal_disconnected"` | The connection ended or was lost first, or had. |
 
 ```elisp
 (condition-case failure
@@ -648,12 +677,44 @@ first change after the sessions the connection started with.
 
 ## When a connection is lost
 
-When a server goes away or closes the connection, Emacs says so once in the
-echo area, such as "Lost the Rex server at ~/Library/Application
-Support/rex/server.sock: The server closed the connection". Its blocks'
-buffers are killed, calls still waiting fail with `"portal_disconnected"`,
-and the connection takes no more. Nothing reconnects by itself: run
-`portal-rex-connect` again, which makes the buffers again.
+A connection is lost when it drops, as when the server stops or restarts,
+or the Mac sleeps long enough for the server to stop waiting for it.
+Emacs says so once in the echo area, such as "Lost the Rex server at
+~/Library/Application Support/rex/server.sock: The connection to the
+server was lost; connecting again", and then connects again by itself:
+after a fifth of a second, then twice as long after each try that fails,
+up to every five seconds, for as long as it takes. Meanwhile:
+
+- Every block's buffer stays, with its view and its last screen, and its
+  mode line says `:disconnected`. A block whose stream is still up keeps
+  drawing.
+- Typing in a block's view goes nowhere, and Emacs says so: nothing typed
+  while the server cannot hear it is sent later.
+- Calls still waiting fail with `"portal_disconnected"`, as do new ones,
+  and the commands that change the server say it is not connected.
+  `(portal-rex-connections)` leaves the connection out until it is back;
+  `portal-rex-connect` returns it, and `portal-rex-disconnect` ends it,
+  which kills its buffers.
+
+Once the server takes the connection back, Emacs makes the buffers match
+what the server has, as on first connecting: a block that closed meanwhile
+loses its buffer, a new one gets one, and so does every block of a server
+that restarted with other sessions or none. One message says what went,
+such as "Back on the Rex server at ~/Library/Application
+Support/rex/server.sock; its block *rex: work/build* went meanwhile". Then
+each view goes on from where it was: a block whose stream dropped resumes
+it, and a block the server no longer knows Emacs showed, as after a
+restart, is painted afresh.
+
+Emacs comes back as the same client when the server still keeps it, which
+it does for a while after a drop, so its blocks stay sized as they were.
+After that, or from a server that restarted, it comes back as a new one.
+
+A connection ends for good only when the server refuses the client in a
+way that trying again would not change, such as a broken protocol or an
+API revision it does not speak, whether while connected or as a try is
+answered: then its buffers are killed, Emacs says it has stopped
+connecting, and `portal-rex-connect` connects afresh.
 
 ## Ghostty versions
 
@@ -686,5 +747,4 @@ pin when it would.
 
 Portal's Rex client is being built in steps. Not built yet:
 
-- Reconnecting, and resuming a block's output after a dropped connection.
 - Servers on other machines.

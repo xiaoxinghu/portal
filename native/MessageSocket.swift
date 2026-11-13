@@ -36,8 +36,13 @@ final class MessageSocket: @unchecked Sendable {
     private var waiting: [Data] = []
     /// Messages the core has not read, oldest first.
     private var arrived: [Data] = []
-    /// Why the connection ended, once it has.
+    /// Why the connection ended, once it has, and the status of the
+    /// server's close frame, or 0 without one.
     private var reason: String?
+    private var code = 0
+    /// The bytes of `arrived`: past PORTAL_SOCKET_UNREAD on a binary
+    /// socket, the reader stops until the core reads.
+    private var unread = 0
     /// The core closed the socket: report nothing more.
     private var closed = false
 
@@ -72,13 +77,15 @@ final class MessageSocket: @unchecked Sendable {
     }
 
     /// The messages that arrived since the last read, and why the connection
-    /// ended, once it has.
-    func read() -> (messages: [Data], reason: String?) {
+    /// ended, once it has, with the status of the server's close frame.
+    func read() -> (messages: [Data], reason: String?, code: Int) {
         state.lock()
         defer { state.unlock() }
         let messages = arrived
         arrived = []
-        return (messages, reason)
+        unread = 0
+        state.broadcast()
+        return (messages, reason, code)
     }
 
     /// Whether there is something to read, after waiting at most
@@ -99,6 +106,8 @@ final class MessageSocket: @unchecked Sendable {
         state.lock()
         closed = true
         let open = phase == .open
+        // A reader holding back for the core has nobody to hold back for.
+        state.broadcast()
         state.unlock()
         guard open else { return hangUp() }
         writes.async { [self] in
@@ -317,14 +326,17 @@ final class MessageSocket: @unchecked Sendable {
 
     /// Read messages until the connection ends; return why it did.
     private func receive() -> String {
-        let broken = "The server broke the WebSocket protocol"
+        // A server that breaks the protocol ends the connection as a close
+        // of the client's would say: 1002, or 1009 for a message too large.
+        func broken() -> String { refuse("The server broke the WebSocket protocol", 1002) }
+        let large = "The server sent a message that is too large"
         var message: [UInt8]?
         while true {
             if let failure = fill(2) { return failure }
             let header = Array(take(2))
             let last = header[0] & 0x80 != 0, opcode = header[0] & 0x0f
             // No extension was asked for, and a server never masks.
-            guard header[0] & 0x70 == 0, header[1] & 0x80 == 0 else { return broken }
+            guard header[0] & 0x70 == 0, header[1] & 0x80 == 0 else { return broken() }
             var length = UInt64(header[1] & 0x7f)
             if length >= 126 {
                 let bytes = length == 126 ? 2 : 8
@@ -332,8 +344,8 @@ final class MessageSocket: @unchecked Sendable {
                 length = take(bytes).reduce(0) { $0 << 8 | UInt64($1) }
             }
             let control = opcode >= 0x8
-            guard !control || (last && length < 126) else { return broken }
-            guard length <= UInt64(Self.largestMessage) else { return "The server sent a message that is too large" }
+            guard !control || (last && length < 126) else { return broken() }
+            guard length <= UInt64(Self.largestMessage) else { return refuse(large, 1009) }
             if let failure = fill(Int(length)) { return failure }
             let payload = take(Int(length))
             switch opcode {
@@ -343,18 +355,24 @@ final class MessageSocket: @unchecked Sendable {
             case 0xA:
                 break
             case 0x8:
-                return goodbye(Array(payload))
+                let payload = Array(payload)
+                if payload.count >= 2 {
+                    state.lock()
+                    code = Int(payload[0]) << 8 | Int(payload[1])
+                    state.unlock()
+                }
+                return goodbye(payload)
             case 0x0, 0x1, 0x2:
                 // A message starts with a text frame, or a binary one on a
                 // binary socket, and continues with continuation frames,
                 // never the other way around.
                 if opcode == (binary ? 0x1 : 0x2) {
-                    return binary ? "The server sent a message that is not binary"
-                        : "The server sent a message that is not text"
+                    return refuse(binary ? "The server sent a message that is not binary"
+                                  : "The server sent a message that is not text", 1002)
                 }
-                guard (opcode != 0x0) == (message == nil) else { return broken }
+                guard (opcode != 0x0) == (message == nil) else { return broken() }
                 guard (message?.count ?? 0) + payload.count <= Self.largestMessage else {
-                    return "The server sent a message that is too large"
+                    return refuse(large, 1009)
                 }
                 message = (message ?? []) + payload
                 if last, let whole = message {
@@ -362,9 +380,18 @@ final class MessageSocket: @unchecked Sendable {
                     message = nil
                 }
             default:
-                return broken
+                return broken()
             }
         }
+    }
+
+    /// WHY the connection ends, with STATUS as its code: the server broke
+    /// the protocol.
+    private func refuse(_ why: String, _ status: Int) -> String {
+        state.lock()
+        code = status
+        state.unlock()
+        return why
     }
 
     /// The server is closing the connection with PAYLOAD: answer, and say why.
@@ -379,13 +406,21 @@ final class MessageSocket: @unchecked Sendable {
         return "The server closed the connection (\(code)\(why.isEmpty ? "" : ": \(why)"))"
     }
 
+    /// Hand MESSAGE to the core. On a binary socket, wait while the core
+    /// has more unread than PORTAL_SOCKET_UNREAD: what is not read from the
+    /// socket meanwhile holds the server back.
     private func deliver(_ message: Data) {
         state.lock()
         let report = arrived.isEmpty && !closed
         arrived.append(message)
+        unread += message.count
         state.broadcast()
         state.unlock()
         if report { reportReady() }
+        guard binary else { return }
+        state.lock()
+        while unread >= Int(PORTAL_SOCKET_UNREAD) && !closed { state.wait() }
+        state.unlock()
     }
 }
 

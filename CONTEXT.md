@@ -37,7 +37,7 @@ The program that runs blocks' programs and keeps their screens, on this Mac or a
 _Avoid_: Rex (for the server alone), daemon, backend, host (unqualified)
 
 **Connection**:
-Emacs's link to one Rex server, from `portal-rex-connect` until it is disconnected or lost. Calls go out on it and the server's events come in on it, in order. Emacs can hold several at once, one per server; ending one ends nothing on the server.
+Emacs's link to one Rex server, from `portal-rex-connect` until it is disconnected or the server refuses it for good. Calls go out on it and the server's events come in on it, in order. One that is lost, as when the server restarts, keeps its buffers and connects again by itself. Emacs can hold several at once, one per server; ending one ends nothing on the server.
 _Avoid_: session (a Rex term for something else), client, socket (the platform's primitive that carries it)
 
 **Session**:

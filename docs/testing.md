@@ -381,8 +381,13 @@ results and errors per method, events on demand, answers held back or never
 sent, dropped connections, refused upgrades, fragments, pings and garbage.
 It also shows a block as a real server does: it attaches, claims and sizes
 it, gives tickets and serves a block's data stream, with a snapshot, the
-program's output a test sends, split as the test asks, and Rex's own
-messages, and paints from a screen the test sets, in parts when asked.
+program's output a test sends, split as the test asks, or a flood of it at
+the pace the client reads, and Rex's own messages, and paints from a
+screen the test sets, in parts when asked. It holds up as a real server
+does: it keeps a stream that drops for a RESUME and a control client that
+drops for its reconnect token, and on command drops only control
+connections or one block's stream, forgets a stream as one that overflowed,
+or comes back as a server that restarted with other sessions.
 It changes nothing by itself: a test that sends `block_created` also says
 what `session.list_blocks` returns from then on. It reports each command
 done, and `portal-fake-rex-command` returns only then, so the next thing a
@@ -397,11 +402,14 @@ Three suites use it or the fake platform:
 - `rex-core` runs the core's connection rules against the fake platform's
   sockets, with no server at all: its requests and answers, and every step
   of showing a block in a fed terminal, the stream's framing split
-  anywhere, typing in order and the reports it drops.
+  anywhere, typing in order and the reports it drops; a backlog holding the
+  stream unread, a resume, a refused one and a new stream; and a lost
+  connection's tries, coming back as the same client and as a new one.
 - `rex` runs `portal-rex.el` on the built module against the fake server, in
   batch Emacs: message sockets need no window. Batch Emacs runs no main run
-  loop, so the module's `rex ID` record never arrives there; these tests take
-  messages by waiting, as `portal-rex-call` does.
+  loop, so the module's `rex ID` record never arrives there, and nor do its
+  timers, so a lost connection stays lost; these tests take messages by
+  waiting, as `portal-rex-call` does.
 - `test/portal-rex-gui-tests.el`, part of `sh test/views-gui.sh`, proves the
   record: events, answers and a lost connection reaching an idle Emacs, and
   blocks' buffers following a server meanwhile. It also shows a block in a
@@ -412,6 +420,10 @@ Three suites use it or the fake platform:
   selected, resized, given the view or typed in and as Emacs loses and
   regains the keyboard, while another client, which the fake plays, takes
   the block at a size of its own that the view then holds.
+  And it holds up: a stream that drops resumes, a new stream paints afresh,
+  a lost connection comes back by itself as the same client, a restarted
+  server's buffers replace the old with one message, and a flood, shown or
+  buried, leaves Emacs's timers on time.
 
 The fake follows what a real server was seen to send, from a preview
 protocol that moves every few days, so tests against it prove only that

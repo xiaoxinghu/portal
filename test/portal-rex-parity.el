@@ -37,6 +37,9 @@ meanwhile."
     (should (>= (plist-get welcome :api_server_revision) 12))
     (should (string-prefix-p "client:" (plist-get (plist-get welcome :client) :id)))
     (should (stringp (plist-get (plist-get welcome :client) :reconnect_token)))
+    ;; A first connection continues no client: Emacs reconnects with the
+    ;; token, and only then is the client resumed.
+    (should (memq (plist-get (plist-get welcome :client) :resumed) '(nil :false)))
     (should (natnump (plist-get (plist-get welcome :limits) :max_message_bytes))))
   (let ((version (portal-rex-call connection "server.version")))
     (should (stringp (plist-get version :rex_version)))

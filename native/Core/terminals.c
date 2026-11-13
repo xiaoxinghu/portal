@@ -212,3 +212,9 @@ void portal_terminal_grid(portal_string target, uint32_t columns, uint32_t rows,
     if (portal_views_set_grid(target, grid))
         portal_rex_grid(target);
 }
+
+void portal_terminal_backlog(portal_string target, bool backlogged)
+{
+    if (portal_views_fed(target))
+        portal_rex_backlog(target, backlogged);
+}
