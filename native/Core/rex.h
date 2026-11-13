@@ -91,7 +91,8 @@ bool portal_rex_close(uint64_t id, portal_text *error);
    the stream (portal_terminal_hold_grid), as the stream's bytes are laid
    out for it, whoever sized it.  A resize to another grid while the paint
    is on its way asks for the paint again, for that grid, and drops the
-   output held until then, as the new paint has it.  A key typed into a block that another
+   output held until then, as the new paint has it.  A paint that comes
+   before the stream has given the grid waits for it.  A key typed into a block that another
    client owns, or whose owner is not known yet, takes it first.
 
    As it claims the block, the core also asks for the terminal's title,

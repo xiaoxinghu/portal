@@ -1024,6 +1024,30 @@ static void test_resizing_while_painting(void)
     received(id);
     CHECK(portal_views_close(text(target), &error));
     free(target);
+
+    /* A paint that comes before the stream's grid waits for it: the paint
+       arrives on the control connection, the grid on the stream. */
+    target = fed_terminal(&error);
+    CHECK(portal_rex_show(id, text(target), text(SESSION), text(BLOCK), &error));
+    answer_with(id, 11, OWNED_BY("client:app"), NULL);
+    portal_fake_fire_timers();
+    answer_with(id, 16, "{}", NULL);
+    answer_with(id, 17, "{\"ticket\":\"AAECAwQFBgcICQoLDA0ODw\"}", NULL);
+    portal_fake_socket_sent(id);
+    data = portal_fake_socket_last();
+    portal_fake_socket_deliver_bytes(data, welcome, sizeof welcome);
+    portal_fake_socket_deliver_bytes(data, snapshot, sizeof snapshot - 1);
+    CHECK(paint_asked(id, 18));
+    answer_with(id, 18, "{\"content\":\"PAINT \"}", NULL);
+    CHECK(is_text(portal_fake_fed(target), ""));
+    CHECK(strstr(rex_state(target), "\"state\":\"starting\"") != NULL);
+    portal_fake_socket_deliver(data, "\x1b_rex1;42;{\"type\":\"resize\",\"cols\":60,\"rows\":15}\x1b\\after");
+    CHECK(is_text(portal_fake_fed(target), "<grid 60x15>PAINT after"));
+    CHECK(strstr(rex_state(target), "\"state\":\"live\",\"columns\":60,\"rows\":15") != NULL);
+    sent();
+    received(id);
+    CHECK(portal_views_close(text(target), &error));
+    free(target);
     CHECK(portal_rex_close(id, &error));
     sent();
 }

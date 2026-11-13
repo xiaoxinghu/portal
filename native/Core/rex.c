@@ -197,6 +197,7 @@ struct shown {
     uint32_t drawn[2];      /* The grid last given the terminal, 0 by 0 before any. */
     uint64_t paints;        /* How many first paints were asked for: the last counts. */
     uint32_t painted[2];    /* PAINTING: the grid the paint is for, 0 by 0 until known. */
+    bool paint_waits;       /* PAINTING: the paint has come, before the stream's grid. */
 };
 
 /* Which of a shown block's details a seq is for. */
@@ -411,6 +412,7 @@ static void end_show(struct shown *shown, enum stage stage, const char *reason,
                      portal_string detail);
 static void next_operation(struct shown *shown);
 static bool ask_paint(struct shown *shown);
+static void paint(struct shown *shown);
 
 /* Ask SHOWN's connection to run METHOD with PAYLOAD, for ANSWER.  A request
    that cannot go fails the show. */
@@ -1163,6 +1165,8 @@ static void message(struct shown *shown, portal_string json)
             if (!shown->painted[0] && !shown->painted[1]) {
                 shown->painted[0] = shown->columns;
                 shown->painted[1] = shown->rows;
+                if (shown->paint_waits)
+                    paint(shown);
             } else if (shown->painted[0] != shown->columns || shown->painted[1] != shown->rows) {
                 clear(&shown->held);
                 ask_paint(shown);
@@ -1224,6 +1228,7 @@ static bool ask_paint(struct shown *shown)
 {
     struct json json = {0};
     shown->paints++;
+    shown->paint_waits = false;
     shown->painted[0] = shown->columns;
     shown->painted[1] = shown->rows;
     clear(&shown->paint);
@@ -1348,6 +1353,11 @@ static void stream_ready(struct shown *shown)
    avoid that. */
 static void paint(struct shown *shown)
 {
+    /* The paint is laid out for the block's grid, which the stream gives,
+       on a connection of its own that may be behind the paint's. */
+    shown->paint_waits = !shown->columns || !shown->rows;
+    if (shown->paint_waits)
+        return;
     struct bytes held = shown->held;
     shown->held = (struct bytes) {0};
     if (shown->paint.failed || held.failed) {
