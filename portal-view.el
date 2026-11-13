@@ -25,6 +25,11 @@
 (defvar portal-view-close-hook nil
   "Normal hook run in a buffer whose Portal view has just closed.
 The buffer has no target by then, and may be about to be killed.")
+(defvar portal-view-moved-hook nil
+  "Normal hook run in a buffer whose Portal view has moved to another pane.
+It runs once `portal-view--window' is the new pane, or nil once the view
+is hidden, whether the view moved with the windows or was taken to the
+selected pane, as by `portal-view-focus'.")
 
 (defvar portal-view-record-handlers nil
   "How to handle each type of native record, as (\"TYPE\" . FUNCTION).
@@ -320,8 +325,10 @@ another frame moves it there.  Nothing is sent when nothing moved.
                      (portal--place portal-view--target (nth 2 geometry) title)))
           (portal--hide portal-view--target))
         (setq portal-view--geometry geometry))
-      (setq portal-view--window window
-            portal-view--showing windows))))
+      (let ((moved (not (eq window portal-view--window))))
+        (setq portal-view--window window
+              portal-view--showing windows)
+        (when moved (run-hooks 'portal-view-moved-hook))))))
 
 (defun portal-view-sync (&optional _frame)
   "Place or hide each Portal view to match the windows showing its buffer.
@@ -340,10 +347,14 @@ When the selected pane shows the buffer without its view, as a placard,
 the view moves there first, from wherever it is."
   (unless portal-view--target (user-error "No Portal view in this buffer"))
   (redisplay t)
-  (let ((pane (portal-view--selected-pane)))
-    (when (eq (window-buffer pane) (current-buffer))
-      (setq portal-view--window pane)))
-  (portal-view--sync-buffer (current-buffer))
+  (let ((pane (portal-view--selected-pane))
+        (moved nil))
+    (when (and (eq (window-buffer pane) (current-buffer))
+               (not (eq pane portal-view--window)))
+      (setq portal-view--window pane
+            moved t))
+    (portal-view--sync-buffer (current-buffer))
+    (when moved (run-hooks 'portal-view-moved-hook)))
   (unless (portal--input portal-view--target "focus")
     (user-error "No visible Portal view to focus")))
 

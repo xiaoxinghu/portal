@@ -270,11 +270,14 @@ bool portal_web_print(portal_view *web, const portal_string *file, portal_text *
    core is its pty.  What the terminal shows is the output the core feeds
    it with portal_terminal_feed.  What it would write to its program, the
    keys it encodes, its mouse reports, pastes and its own reports, such as
-   focus changes, it gives the core with portal_terminal_input; and it
-   reports its grid with portal_terminal_grid, once it has one and at each
-   change.  It answers no query in its output, as whoever produced that
-   output has answered it: a second answer would reach the program as
-   typing.  It takes neither :command nor :argv, its :directory is
+   focus changes, it gives the core with portal_terminal_input.  Its grid
+   is the one the core gives it with portal_terminal_hold_grid, the grid
+   its output is laid out for, whatever the size of its pane; until the
+   core gives one, it fills its pane.  It reports the grid its pane would
+   hold, at its text's cell size, with portal_terminal_grid, once it can
+   and at each change.  It answers no query in its output, as whoever
+   produced that output has answered it: a second answer would reach the
+   program as typing.  It takes neither :command nor :argv, its :directory is
    optional, and it never exits by itself.  It describes no "title",
    "pwd", "program" or "exited" and reports no change of them: the core
    describes those of the program it is fed from (rex.h).
@@ -324,6 +327,17 @@ bool portal_terminal_read_text(portal_view *terminal, portal_text *text, portal_
    and holds them while it cannot parse yet. */
 bool portal_terminal_feed(portal_view *terminal, const char *bytes, size_t length,
                           portal_text *error);
+/* From the output fed after this call on, TERMINAL, a fed terminal, has a
+   grid of COLUMNS by ROWS cells, whatever the size of its pane; the output
+   fed before it is parsed on the grid it had.  The grid is drawn from the
+   pane's bottom-left corner at the terminal's text size, never scaled:
+   clipped at the top and the right where it is larger than the pane, and
+   with the theme's background above it and to its right where it is
+   smaller, so a shell's prompt and cursor stay in view.  The platform holds
+   the output fed after the call while its terminal takes the grid, for at
+   most a quarter of a second. */
+bool portal_terminal_hold_grid(portal_view *terminal, uint32_t columns, uint32_t rows,
+                               portal_text *error);
 /* The size of a terminal's text, in points: the one it starts at without
    :points, and the smallest and largest it is shown at. */
 enum {
@@ -535,10 +549,12 @@ void portal_terminal_changed(portal_string target);
    own, as one write.  Writes reach the core in the order the terminal made
    them.  The core ignores a call for a target that names no fed terminal. */
 void portal_terminal_input(portal_string target, const char *bytes, size_t length);
-/* TARGET, a fed terminal, has a grid of COLUMNS by ROWS cells now, each
-   CELL_WIDTH by CELL_HEIGHT pixels of the screen it is drawn on, or 0 by 0
-   when the terminal cannot say.  Reported once it has a grid, and again at
-   each change, a change of cell size alone included. */
+/* TARGET, a fed terminal, is in a pane that holds a grid of COLUMNS by
+   ROWS cells now, each CELL_WIDTH by CELL_HEIGHT pixels of the screen it
+   is drawn on, or 0 by 0 when the terminal cannot say: the grid the
+   terminal would have if it filled its pane, whatever grid it holds.
+   Reported once it is known, and again at each change, a change of cell
+   size alone included. */
 void portal_terminal_grid(portal_string target, uint32_t columns, uint32_t rows,
                           uint32_t cell_width, uint32_t cell_height);
 /* POINTS, a terminal's text size from Lisp, clamped to

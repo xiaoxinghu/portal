@@ -327,6 +327,15 @@ static void test_json(void)
     CHECK(!portal_json_member(text("{}"), "type", &value));
     CHECK(portal_json_member(text("{\"a\":[[[]]],\"type\":true}"), "type", &value));
     CHECK(value.length == 4 && !memcmp(value.data, "true", 4));
+    /* An array's elements, by index. */
+    CHECK(portal_json_element(text(" [ 1 , {\"a\":[2]} ,\"]\" ] "), 1, &value));
+    CHECK(value.length == 9 && !memcmp(value.data, "{\"a\":[2]}", 9));
+    CHECK(portal_json_element(text("[1,{\"a\":[2]},\"]\"]"), 2, &value));
+    CHECK(portal_json_is(value, "]"));
+    CHECK(!portal_json_element(text("[1,2]"), 2, &value));
+    CHECK(!portal_json_element(text("[]"), 0, &value));
+    CHECK(!portal_json_element(text("[1,"), 1, &value));
+    CHECK(!portal_json_element(text("{\"a\":1}"), 0, &value));
     const char *integers[] = {"1.5", "1e3", "01", "-", "", "9223372036854775808", "\"1\""};
     for (size_t i = 0; i < sizeof integers / sizeof *integers; i++)
         CHECK(!portal_json_integer(text(integers[i]), &number));
@@ -352,15 +361,16 @@ static bool asked(uint64_t id, int number, const char *method, const char *paylo
     return is_text(portal_fake_socket_sent(id), expected);
 }
 
-/* The claim of the block numbered NUMBER, and the three questions about
-   its terminal that follow it, the last thing the core sent on ID. */
+/* The claim of the block numbered NUMBER, a request, and the three
+   questions about its terminal that follow it, the last thing the core
+   sent on ID. */
 static bool claimed(uint64_t id, int number)
 {
     char expected[2048];
     snprintf(expected, sizeof expected,
              "{\"type\":\"request\",\"id\":\"%d\",\"method\":\"session.own_block\","
              "\"payload\":{\"session_id\":\"" SESSION "\",\"block_ids\":[\"" BLOCK "\"],"
-             "\"mode\":\"take\"}}\n"
+             "\"mode\":\"request\"}}\n"
              "{\"type\":\"request\",\"id\":\"%d\",\"method\":"
              "\"com.superlogical.terminal.title\",\"payload\":" ON_BLOCK ",\"args\":{}}}\n"
              "{\"type\":\"request\",\"id\":\"%d\",\"method\":"
@@ -424,7 +434,7 @@ static void test_showing(void)
     /* Attach, claim, then wait for the grid to settle before sizing. */
     CHECK(portal_rex_show(id, text(target), text(SESSION), text(BLOCK), &error));
     CHECK(asked(id, 1, "session.attach", "{\"session_id\":\"" SESSION "\"}"));
-    CHECK(is_text(rex_state(target), "\"rex\":{\"state\":\"starting\",\"columns\":0,\"rows\":0,\"directory\":\"\"}"));
+    CHECK(is_text(rex_state(target), "\"rex\":{\"state\":\"starting\",\"columns\":0,\"rows\":0,\"owner\":\"unknown\",\"owner_name\":\"\",\"directory\":\"\"}"));
     /* Emacs's own requests are numbered among the core's, and only their
        answers reach it. */
     CHECK(request(id, "session.list", "{}", &error) == 2);
@@ -467,14 +477,16 @@ static void test_showing(void)
     CHECK(is_text(portal_fake_socket_sent(id), ""));
     static const char rest[] = "abc\x06\x00\x00\x00\x00\x00\x00\x00\x00\x00hello \x1b_rex1;4";
     portal_fake_socket_deliver_bytes(data, rest, sizeof rest - 1);
-    /* Without the server's palette: the terminal keeps its theme's. */
+    /* Without the server's palette: the terminal keeps its theme's.  Lines
+       the terminal wrapped come unwrapped, so that the terminal wraps them
+       again as the server does at the next resize. */
     CHECK(asked(id, 9, "com.superlogical.terminal.format",
                 ON_BLOCK ",\"args\":{\"format\":\"vt\",\"extra_charsets\":true,"
                          "\"extra_cursor\":true,\"extra_hyperlink\":true,\"extra_keyboard\":true,"
                          "\"extra_kitty_keyboard\":true,\"extra_modes\":true,"
                          "\"extra_protection\":true,\"extra_pwd\":true,"
                          "\"extra_scrolling_region\":true,\"extra_style\":true,"
-                         "\"extra_tabstops\":true,\"max_bytes\":983040}}"));
+                         "\"extra_tabstops\":true,\"unwrap\":true,\"max_bytes\":983040}}"));
     portal_fake_socket_deliver(data, "2;{\"type\":\"resize\",\"cols\":80,\"rows\":20,\"owner\":null}"
                                      "\x1b\\world \x1b_rex1;7;{}\x1b\\\x1b");
     /* Held until the paint has gone. */
@@ -486,19 +498,24 @@ static void test_showing(void)
                 ON_BLOCK ",\"args\":{\"id\":9,\"offset\":8,\"max_bytes\":983040}}"));
     CHECK(is_text(sent(), ""));
     answer_with(id, 10, "{\"id\":9,\"data\":\"-MORE\",\"total\":11,\"eof\":true}", NULL);
-    CHECK(is_text(portal_fake_fed(target), "\x1b[HPAINT-MORE" "hello world \x1b_rex1;7;{}\x1b\\"));
+    /* The paint takes the block's grid, the last the stream gave. */
+    CHECK(is_text(portal_fake_fed(target),
+                  "<grid 80x20>\x1b[HPAINT-MORE" "hello world \x1b_rex1;7;{}\x1b\\"));
     CHECK(is_text(sent(), record));
-    CHECK(is_text(rex_state(target), "\"rex\":{\"state\":\"live\",\"columns\":80,\"rows\":20,\"directory\":\"\"}"));
+    CHECK(is_text(rex_state(target), "\"rex\":{\"state\":\"live\",\"columns\":80,\"rows\":20,\"owner\":\"unknown\",\"owner_name\":\"\",\"directory\":\"\"}"));
     /* Live: the ESC held back starts no message after all. */
     portal_fake_socket_deliver(data, "[c\x1b_rex1;42;{\"type\":\"resize\",\"cols\":81,\"rows\":21}\x1b\\!");
-    CHECK(is_text(portal_fake_fed(target),
-                  "\x1b[HPAINT-MORE" "hello world \x1b_rex1;7;{}\x1b\\\x1b[c!"));
-    CHECK(is_text(rex_state(target), "\"rex\":{\"state\":\"live\",\"columns\":81,\"rows\":21,\"directory\":\"\"}"));
+    /* A new grid takes its place in the stream; the same grid again is no
+       change. */
+    portal_fake_socket_deliver(data, "\x1b_rex1;42;{\"type\":\"resize\",\"cols\":81,\"rows\":21}\x1b\\?");
+    CHECK(is_text(portal_fake_fed(target), "<grid 80x20>\x1b[HPAINT-MORE"
+                                           "hello world \x1b_rex1;7;{}\x1b\\\x1b[c<grid 81x21>!?"));
+    CHECK(is_text(rex_state(target), "\"rex\":{\"state\":\"live\",\"columns\":81,\"rows\":21,\"owner\":\"unknown\",\"owner_name\":\"\",\"directory\":\"\"}"));
     /* The server ends the stream: the block has closed. */
     portal_fake_socket_end(data, "The server closed the connection (4000: block closed)");
     CHECK(is_text(sent(), record));
     CHECK(is_text(rex_state(target),
-                  "\"rex\":{\"state\":\"ended\",\"columns\":81,\"rows\":21,\"directory\":\"\",\"reason\":\"The block's "
+                  "\"rex\":{\"state\":\"ended\",\"columns\":81,\"rows\":21,\"owner\":\"unknown\",\"owner_name\":\"\",\"directory\":\"\",\"reason\":\"The block's "
                   "stream ended: The server closed the connection (4000: block closed)\"}"));
     CHECK(!*portal_fake_socket_address(data));
     /* Its last screen stays, and takes no typing. */
@@ -525,7 +542,7 @@ static void test_showing(void)
     snprintf(record, sizeof record, "rex-block %s\n", target);
     answer_with(id, 11, NULL, "not yours");
     CHECK(is_text(sent(), record));
-    CHECK(is_text(rex_state(target), "\"rex\":{\"state\":\"failed\",\"columns\":0,\"rows\":0,\"directory\":\"\","
+    CHECK(is_text(rex_state(target), "\"rex\":{\"state\":\"failed\",\"columns\":0,\"rows\":0,\"owner\":\"unknown\",\"owner_name\":\"\",\"directory\":\"\","
                                      "\"reason\":\"session.own_block: not yours\"}"));
     CHECK(portal_views_close(text(target), &error));
     free(target);
@@ -545,7 +562,7 @@ static void test_showing(void)
     portal_fake_socket_sent(id);
     data = portal_fake_socket_last();
     portal_fake_socket_deliver_bytes(data, "\x82\x01", 2);
-    CHECK(is_text(rex_state(other), "\"rex\":{\"state\":\"failed\",\"columns\":0,\"rows\":0,\"directory\":\"\","
+    CHECK(is_text(rex_state(other), "\"rex\":{\"state\":\"failed\",\"columns\":0,\"rows\":0,\"owner\":\"unknown\",\"owner_name\":\"\",\"directory\":\"\","
                                     "\"reason\":\"The server refused the block's stream: reason 0x01\"}"));
     CHECK(!*portal_fake_socket_address(data));
     CHECK(portal_views_close(text(other), &error));
@@ -554,7 +571,7 @@ static void test_showing(void)
     other = fed_terminal(&error);
     CHECK(portal_rex_show(id, text(other), text(SESSION), text(BLOCK), &error));
     portal_fake_socket_end(id, "The connection to the server was lost");
-    CHECK(is_text(rex_state(other), "\"rex\":{\"state\":\"failed\",\"columns\":0,\"rows\":0,\"directory\":\"\","
+    CHECK(is_text(rex_state(other), "\"rex\":{\"state\":\"failed\",\"columns\":0,\"rows\":0,\"owner\":\"unknown\",\"owner_name\":\"\",\"directory\":\"\","
                                     "\"reason\":\"The connection to the server ended\"}"));
     CHECK(is_text(received(id), "ended: The connection to the server was lost"));
     CHECK(!portal_rex_show(id, text(other), text(SESSION), text("block:c"), &error));
@@ -565,19 +582,40 @@ static void test_showing(void)
     sent();
 }
 
+/* The server's welcome to ID's client, client:me. */
+static void welcome_me(uint64_t id)
+{
+    portal_fake_socket_deliver(id, "{\"type\":\"welcome\",\"protocol\":\"rex.control.v1\","
+                                   "\"client\":{\"id\":\"client:me\",\"reconnect_token\":\"t\"},"
+                                   "\"api_revision\":12}");
+    received(id);
+    sent();
+}
+
+/* A take of the block, the last thing the core sent on ID, numbered NUMBER. */
+static bool took(uint64_t id, int number)
+{
+    return asked(id, number, "session.own_block",
+                 "{\"session_id\":\"" SESSION "\",\"block_ids\":[\"" BLOCK "\"],\"mode\":\"take\"}");
+}
+
+#define OWNED_BY(client) "{\"blocks\":[{\"block_id\":\"" BLOCK "\",\"owner\":\"" client "\"}]}"
+
 static void test_typing(void)
 {
     portal_text error = {0};
     uint64_t id = open_connection("/tmp/rex/server.sock", &error);
     portal_fake_socket_sent(id);
+    welcome_me(id);
     char *target = fed_terminal(&error);
-    /* Typing goes from the start, before the paint. */
+    /* Typing waits for the claim, as nothing reaches a block before the
+       session is attached. */
     CHECK(portal_rex_show(id, text(target), text(SESSION), text(BLOCK), &error));
     portal_fake_socket_sent(id);
     portal_terminal_input(text(target), "a", 1);
-    CHECK(asked(id, 2, "com.superlogical.terminal.write", ON_BLOCK ",\"args\":{\"data\":\"a\"}}"));
-    /* One write at a time, the next joining what came meanwhile, and the
-       terminal's own reports dropped. */
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
+    /* What is typed meanwhile joins it, and the terminal's own reports are
+       dropped. */
     portal_terminal_input(text(target), "b", 1);
     portal_terminal_input(text(target), "\x1b[I", 3);
     portal_terminal_input(text(target), "\x1b[48;20;80;320;640t", 19);
@@ -586,52 +624,60 @@ static void test_typing(void)
     portal_input_focus(text(target), true);
     portal_terminal_input(text(target), "\x1b[48;20t", 8);
     CHECK(is_text(portal_fake_socket_sent(id), ""));
-    answer_with(id, 2, "{\"bytes_written\":1}", NULL);
-    CHECK(asked(id, 3, "com.superlogical.terminal.write",
-                ON_BLOCK ",\"args\":{\"data\":\"bc\xef\xbf\xbd\xe2\x82\xac\"}}"));
-    answer_with(id, 3, NULL, "refused");
-    /* Focus as a block event, in its place among the writes. */
-    CHECK(asked(id, 4, "block.event",
-                ON_BLOCK ",\"event\":{\"type\":\"focus\",\"payload\":{\"action\":\"in\"}}}"));
-    answer_with(id, 4, "{}", NULL);
-    CHECK(asked(id, 5, "com.superlogical.terminal.write",
-                ON_BLOCK ",\"args\":{\"data\":\"\\u001b[48;20t\"}}"));
-    /* The attach comes back meanwhile; the show goes on. */
     answer_with(id, 1, "{}", NULL);
-    CHECK(claimed(id, 6));
-    answer_with(id, 5, "{}", NULL);
-    answer_with(id, 6, "{}", NULL);
+    CHECK(claimed(id, 2));
+    /* Another client owns the block: Emacs asks what it is called, and
+       typing takes the block first, once. */
+    answer_with(id, 2, OWNED_BY("client:app"), NULL);
+    CHECK(is_text(portal_fake_socket_sent(id),
+                  "{\"type\":\"request\",\"id\":\"6\",\"method\":\"client.inspect\","
+                  "\"payload\":{\"client_id\":\"client:app\"}}\n"
+                  "{\"type\":\"request\",\"id\":\"7\",\"method\":\"session.own_block\","
+                  "\"payload\":{\"session_id\":\"" SESSION "\",\"block_ids\":[\"" BLOCK "\"],"
+                  "\"mode\":\"take\"}}"));
+    answer_with(id, 7, OWNED_BY("client:me"), NULL);
+    CHECK(asked(id, 8, "com.superlogical.terminal.write",
+                ON_BLOCK ",\"args\":{\"data\":\"abc\xef\xbf\xbd\xe2\x82\xac\"}}"));
+    answer_with(id, 8, NULL, "refused");
+    /* Focus as a block event, in its place among the writes. */
+    CHECK(asked(id, 9, "block.event",
+                ON_BLOCK ",\"event\":{\"type\":\"focus\",\"payload\":{\"action\":\"in\"}}}"));
+    answer_with(id, 9, "{}", NULL);
+    CHECK(asked(id, 10, "com.superlogical.terminal.write",
+                ON_BLOCK ",\"args\":{\"data\":\"\\u001b[48;20t\"}}"));
+    answer_with(id, 10, "{}", NULL);
+    /* The pane's grid settles and goes to the server. */
     portal_fake_fire_timers();
-    CHECK(asked(id, 10, "com.superlogical.terminal.resize",
+    CHECK(asked(id, 11, "com.superlogical.terminal.resize",
                 ON_BLOCK ",\"args\":{\"columns\":100,\"rows\":30,\"cell_width_px\":8,"
                          "\"cell_height_px\":16}}"));
-    answer_with(id, 10, "{}", NULL);
+    answer_with(id, 11, "{}", NULL);
     portal_fake_socket_sent(id);
-    answer_with(id, 11, "{\"ticket\":\"AAECAwQFBgcICQoLDA0ODw\"}", NULL);
+    answer_with(id, 12, "{\"ticket\":\"AAECAwQFBgcICQoLDA0ODw\"}", NULL);
     uint64_t data = portal_fake_socket_last();
     CHECK(data > id);
     /* Once sized, a new grid resizes the block, the latest of several. */
     CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 400, 160}, text("frame"), &error));
-    CHECK(asked(id, 12, "com.superlogical.terminal.resize",
+    CHECK(asked(id, 13, "com.superlogical.terminal.resize",
                 ON_BLOCK ",\"args\":{\"columns\":50,\"rows\":10,\"cell_width_px\":8,"
                          "\"cell_height_px\":16}}"));
     CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 480, 160}, text("frame"), &error));
     CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 560, 160}, text("frame"), &error));
     portal_terminal_input(text(target), "d", 1);
-    answer_with(id, 12, "{}", NULL);
-    CHECK(asked(id, 13, "com.superlogical.terminal.resize",
+    answer_with(id, 13, "{}", NULL);
+    CHECK(asked(id, 14, "com.superlogical.terminal.resize",
                 ON_BLOCK ",\"args\":{\"columns\":70,\"rows\":10,\"cell_width_px\":8,"
                          "\"cell_height_px\":16}}"));
-    answer_with(id, 13, "{}", NULL);
-    CHECK(asked(id, 14, "com.superlogical.terminal.write", ON_BLOCK ",\"args\":{\"data\":\"d\"}}"));
+    answer_with(id, 14, "{}", NULL);
+    CHECK(asked(id, 15, "com.superlogical.terminal.write", ON_BLOCK ",\"args\":{\"data\":\"d\"}}"));
     /* The stream ends while a write is out: what was typed after it is
        dropped, not sent once the write is answered. */
     portal_terminal_input(text(target), "e", 1);
-    answer_with(id, 14, "{}", NULL);
-    CHECK(asked(id, 15, "com.superlogical.terminal.write", ON_BLOCK ",\"args\":{\"data\":\"e\"}}"));
+    answer_with(id, 15, "{}", NULL);
+    CHECK(asked(id, 16, "com.superlogical.terminal.write", ON_BLOCK ",\"args\":{\"data\":\"e\"}}"));
     portal_terminal_input(text(target), "f", 1);
     portal_fake_socket_end(data, "The server closed the connection (1001: keepalive timeout)");
-    answer_with(id, 15, "{}", NULL);
+    answer_with(id, 16, "{}", NULL);
     CHECK(is_text(portal_fake_socket_sent(id), ""));
     /* Closing the terminal stops its typing. */
     CHECK(portal_views_close(text(target), &error));
@@ -795,6 +841,217 @@ static void test_details(void)
     received(id);
 }
 
+/* An event at SEQ on ID: BLOCK's owner is now OWNER, or no client for NULL. */
+static void owner_changed(uint64_t id, int seq, const char *owner)
+{
+    char event[1024], field[128] = "";
+    if (owner)
+        snprintf(field, sizeof field, "\"owner\":\"%s\",", owner);
+    snprintf(event, sizeof event,
+             "{\"type\":\"event\",\"seq\":%d,\"payload\":{\"type\":\"session_event\",\"payload\":"
+             "{\"session_id\":\"" SESSION "\",\"event\":{\"type\":\"block_owner_changed\","
+             "\"payload\":{\"block_id\":\"" BLOCK "\",%s\"previous\":\"client:x\","
+             "\"reason\":\"take\"}}}}}",
+             seq, field);
+    portal_fake_socket_deliver(id, event);
+}
+
+/* What TARGET's description says of its block's owner. */
+static const char *owner_of(const char *target)
+{
+    static char found[256];
+    const char *state = rex_state(target), *start = strstr(state, "\"owner\":");
+    const char *end = start ? strstr(start, ",\"directory\"") : NULL;
+    snprintf(found, sizeof found, "%.*s", end ? (int) (end - start) : 0, start ? start : "");
+    return found;
+}
+
+static void test_owning(void)
+{
+    portal_text error = {0};
+    char terminal[64], lisp[32], both[96];
+    uint64_t id = open_connection("/tmp/rex/server.sock", &error);
+    portal_fake_socket_sent(id);
+    welcome_me(id);
+    snprintf(lisp, sizeof lisp, "rex %llu\n", (unsigned long long) id);
+    char *target = fed_terminal(&error);
+    snprintf(terminal, sizeof terminal, "terminal %s\n", target);
+    snprintf(both, sizeof both, "%s%s", terminal, lisp);
+    CHECK(portal_rex_show(id, text(target), text(SESSION), text(BLOCK), &error));
+    portal_fake_socket_sent(id);
+    CHECK(is_text(owner_of(target), "\"owner\":\"unknown\",\"owner_name\":\"\""));
+    /* A take waits for the show's own claim, and one waiting stands for
+       the next. */
+    CHECK(portal_rex_take(text(target), &error));
+    CHECK(portal_rex_take(text(target), &error));
+    answer_with(id, 1, "{}", NULL);
+    CHECK(claimed(id, 2));
+    answer_with(id, 2, "{\"blocks\":[{\"block_id\":\"block:c\",\"owner\":\"client:x\"},"
+                       "{\"block_id\":\"" BLOCK "\"}]}",
+                NULL);
+    CHECK(is_text(sent(), terminal));
+    CHECK(is_text(owner_of(target), "\"owner\":\"none\",\"owner_name\":\"\""));
+    CHECK(took(id, 6));
+    /* A take unanswered stands for another. */
+    CHECK(portal_rex_take(text(target), &error));
+    answer_with(id, 6, OWNED_BY("client:me"), NULL);
+    CHECK(is_text(sent(), terminal));
+    CHECK(is_text(owner_of(target), "\"owner\":\"self\",\"owner_name\":\"\""));
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
+    /* Typing into a block Emacs owns takes nothing. */
+    portal_terminal_input(text(target), "x", 1);
+    CHECK(asked(id, 7, "com.superlogical.terminal.write", ON_BLOCK ",\"args\":{\"data\":\"x\"}}"));
+    /* Another client takes it: Emacs hears, and asks what it is called. */
+    owner_changed(id, 5, "client:app");
+    CHECK(is_text(sent(), both));
+    received(id);
+    CHECK(is_text(owner_of(target), "\"owner\":\"other\",\"owner_name\":\"\""));
+    CHECK(asked(id, 8, "client.inspect", "{\"client_id\":\"client:app\"}"));
+    answer_with(id, 8, "{\"client\":{\"client_id\":\"client:app\",\"info\":{\"kind\":\"app\","
+                       "\"name\":\"Rex.app\"}}}",
+                NULL);
+    CHECK(is_text(sent(), terminal));
+    CHECK(is_text(owner_of(target), "\"owner\":\"other\",\"owner_name\":\"Rex.app\""));
+    /* An older word changes nothing. */
+    owner_changed(id, 4, "client:me");
+    CHECK(is_text(sent(), lisp));
+    received(id);
+    CHECK(is_text(owner_of(target), "\"owner\":\"other\",\"owner_name\":\"Rex.app\""));
+    /* The pane's grid still goes to the server, as Emacs's size for when
+       it owns the block again. */
+    portal_fake_fire_timers();
+    CHECK(asked(id, 9, "com.superlogical.terminal.resize",
+                ON_BLOCK ",\"args\":{\"columns\":100,\"rows\":30,\"cell_width_px\":8,"
+                         "\"cell_height_px\":16}}"));
+    /* A key typed now takes the block back first, after the write out. */
+    portal_terminal_input(text(target), "y", 1);
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
+    answer_with(id, 7, "{}", NULL);
+    CHECK(took(id, 10));
+    owner_changed(id, 6, "client:me");
+    CHECK(is_text(sent(), both));
+    received(id);
+    CHECK(is_text(owner_of(target), "\"owner\":\"self\",\"owner_name\":\"\""));
+    answer_at(id, 10, 6, OWNED_BY("client:me"));
+    CHECK(asked(id, 11, "com.superlogical.terminal.write", ON_BLOCK ",\"args\":{\"data\":\"y\"}}"));
+    answer_with(id, 11, "{}", NULL);
+    /* A client named by its label; one that has left is not named. */
+    owner_changed(id, 7, "client:phone");
+    CHECK(asked(id, 12, "client.inspect", "{\"client_id\":\"client:phone\"}"));
+    answer_with(id, 12, "{\"client\":{\"client_id\":\"client:phone\",\"info\":{\"label\":\"iPhone\","
+                        "\"name\":\"Rex\"}}}",
+                NULL);
+    CHECK(is_text(owner_of(target), "\"owner\":\"other\",\"owner_name\":\"iPhone\""));
+    owner_changed(id, 8, "client:gone");
+    CHECK(asked(id, 13, "client.inspect", "{\"client_id\":\"client:gone\"}"));
+    answer_with(id, 13, NULL, "client not found");
+    CHECK(is_text(owner_of(target), "\"owner\":\"other\",\"owner_name\":\"\""));
+    CHECK(strstr(rex_state(target), "\"state\":\"starting\"") != NULL);
+    /* A name that comes after its client lost the block names nothing. */
+    owner_changed(id, 9, "client:app");
+    owner_changed(id, 10, NULL);
+    answer_with(id, 14, "{\"client\":{\"client_id\":\"client:app\",\"info\":{\"name\":\"Rex.app\"}}}",
+                NULL);
+    CHECK(is_text(owner_of(target), "\"owner\":\"none\",\"owner_name\":\"\""));
+    received(id);
+    sent();
+    /* Only a terminal that shows a block takes one. */
+    CHECK(!portal_rex_take(text("terminal:none"), &error));
+    CHECK(says(&error, "No block is shown in terminal:none"));
+    CHECK(portal_views_close(text(target), &error));
+    CHECK(!portal_rex_take(text(target), &error));
+    free(error.data);
+    free(target);
+    CHECK(portal_rex_close(id, &error));
+    sent();
+}
+
+/* Whether the last thing the core sent on ID is the first paint's request,
+   numbered NUMBER. */
+static bool paint_asked(uint64_t id, int number)
+{
+    char expected[96];
+    snprintf(expected, sizeof expected,
+             "{\"type\":\"request\",\"id\":\"%d\",\"method\":\"com.superlogical.terminal.format\"",
+             number);
+    const char *got = portal_fake_socket_sent(id);
+    if (strncmp(got, expected, strlen(expected)) || strchr(got, '\n')) {
+        fprintf(stderr, "Expected a paint request %d, got \"%s\"\n", number, got);
+        return false;
+    }
+    return true;
+}
+
+static void test_resizing_while_painting(void)
+{
+    portal_text error = {0};
+    uint64_t id = open_connection("/tmp/rex/server.sock", &error);
+    portal_fake_socket_sent(id);
+    welcome_me(id);
+    char *target = fed_terminal(&error);
+    CHECK(portal_rex_show(id, text(target), text(SESSION), text(BLOCK), &error));
+    answer_with(id, 1, "{}", NULL);
+    answer_with(id, 2, OWNED_BY("client:app"), NULL);
+    portal_fake_fire_timers();
+    answer_with(id, 7, "{}", NULL);
+    answer_with(id, 8, "{\"ticket\":\"AAECAwQFBgcICQoLDA0ODw\"}", NULL);
+    portal_fake_socket_sent(id);
+    uint64_t data = portal_fake_socket_last();
+    portal_fake_socket_deliver_bytes(data, welcome, sizeof welcome);
+    /* The snapshot, then the stream's first resize, which says the grid
+       the paint is for, and output. */
+    static const char snapshot[] = "GHOSTSNP\x01\x00\x06\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+    portal_fake_socket_deliver_bytes(data, snapshot, sizeof snapshot - 1);
+    CHECK(paint_asked(id, 9));
+    portal_fake_socket_deliver(data, "\x1b_rex1;42;{\"type\":\"resize\",\"cols\":60,\"rows\":15}\x1b\\early ");
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
+    /* The same grid again changes nothing. */
+    portal_fake_socket_deliver(data, "\x1b_rex1;42;{\"type\":\"resize\",\"cols\":60,\"rows\":15}\x1b\\still ");
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
+    /* Another client resizes the block before the paint comes: output on
+       either side of it is laid out for a different grid, so the paint is
+       asked for again, and only output after the resize waits for it. */
+    portal_fake_socket_deliver(data, "\x1b_rex1;42;{\"type\":\"resize\",\"cols\":90,\"rows\":25}\x1b\\late");
+    CHECK(paint_asked(id, 10));
+    /* The first paint, answered late, is not drawn; nor are its parts. */
+    answer_with(id, 9, "{\"content\":\"OLD\",\"id\":1,\"total\":9,\"eof\":false}", NULL);
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
+    CHECK(is_text(portal_fake_fed(target), ""));
+    answer_with(id, 10, "{\"content\":\"NEW \"}", NULL);
+    CHECK(is_text(portal_fake_fed(target), "<grid 90x25>NEW late"));
+    CHECK(strstr(rex_state(target), "\"state\":\"live\",\"columns\":90,\"rows\":25") != NULL);
+    sent();
+    received(id);
+    CHECK(portal_views_close(text(target), &error));
+    free(target);
+
+    /* A paint that comes before the stream's grid waits for it: the paint
+       arrives on the control connection, the grid on the stream. */
+    target = fed_terminal(&error);
+    CHECK(portal_rex_show(id, text(target), text(SESSION), text(BLOCK), &error));
+    answer_with(id, 11, OWNED_BY("client:app"), NULL);
+    portal_fake_fire_timers();
+    answer_with(id, 16, "{}", NULL);
+    answer_with(id, 17, "{\"ticket\":\"AAECAwQFBgcICQoLDA0ODw\"}", NULL);
+    portal_fake_socket_sent(id);
+    data = portal_fake_socket_last();
+    portal_fake_socket_deliver_bytes(data, welcome, sizeof welcome);
+    portal_fake_socket_deliver_bytes(data, snapshot, sizeof snapshot - 1);
+    CHECK(paint_asked(id, 18));
+    answer_with(id, 18, "{\"content\":\"PAINT \"}", NULL);
+    CHECK(is_text(portal_fake_fed(target), ""));
+    CHECK(strstr(rex_state(target), "\"state\":\"starting\"") != NULL);
+    portal_fake_socket_deliver(data, "\x1b_rex1;42;{\"type\":\"resize\",\"cols\":60,\"rows\":15}\x1b\\after");
+    CHECK(is_text(portal_fake_fed(target), "<grid 60x15>PAINT after"));
+    CHECK(strstr(rex_state(target), "\"state\":\"live\",\"columns\":60,\"rows\":15") != NULL);
+    sent();
+    received(id);
+    CHECK(portal_views_close(text(target), &error));
+    free(target);
+    CHECK(portal_rex_close(id, &error));
+    sent();
+}
+
 int main(void)
 {
     int ends[2];
@@ -812,6 +1069,8 @@ int main(void)
     test_showing();
     test_typing();
     test_details();
+    test_owning();
+    test_resizing_while_painting();
     if (failures) {
         fprintf(stderr, "%d checks failed\n", failures);
         return 1;

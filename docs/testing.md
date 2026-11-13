@@ -408,6 +408,10 @@ Three suites use it or the fake platform:
   real Ghostty view: the first paint, the stream, a pane's new size, a
   hidden buffer kept current, keys typed in order with one write out at a
   time, and queries in the block's output that the view leaves unanswered.
+  And who sizes the block: the claims Emacs sends as a pane is placed,
+  selected, resized, given the view or typed in and as Emacs loses and
+  regains the keyboard, while another client, which the fake plays, takes
+  the block at a size of its own that the view then holds.
 
 The fake follows what a real server was seen to send, from a preview
 protocol that moves every few days, so tests against it prove only that
@@ -442,9 +446,10 @@ one, and after [moving the Rex pin](test-vm.md#move-the-rex-pin). With
 [portal-rex-parity.el](../test/portal-rex-parity.el) holds checks that run
 against both servers: the handshake, `server.version`, `session.list`,
 `session.list_blocks` with the buffers made of it, an unknown method, the
-calls the core makes to show a block, with the shapes of their answers, and
-an idle block ended by killing its buffer, with the two replies that say it
-is idle. The `rex` suite runs them against the fake, the tier against
+calls the core makes to show a block, with the shapes of their answers, how
+a block's size follows its owner as Emacs and a second client of the
+test's own claim and size it, and an idle block ended by killing its
+buffer, with the two replies that say it is idle. The `rex` suite runs them against the fake, the tier against
 a real server. When only the tier's run fails, the real server has moved:
 bring the fake, and Portal, into line with it. Add a check there when the fake
 can answer it as cheaply as the real server.

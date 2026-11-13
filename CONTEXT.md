@@ -49,8 +49,12 @@ One program on a Rex server with its screen, such as a shell: what one terminal 
 _Avoid_: pane, tab, window (Rex's own layout terms), terminal (the view kind that shows it)
 
 **Fed terminal**:
-A terminal view that runs no program of its own: what it shows is the output of a block on a Rex server, fed to it by Portal, and what is typed in it goes to that block. Its title, directory, program and exit are its block's, as the server reports them.
+A terminal view that runs no program of its own: what it shows is the output of a block on a Rex server, fed to it by Portal, and what is typed in it goes to that block. Its title, directory, program and exit are its block's, as the server reports them, and so is its grid, whatever the size of its pane.
 _Avoid_: remote terminal, Rex view (it is a terminal view like any other)
+
+**Owner**:
+The one Rex client whose size a block has, as the server decides; every other client draws the block at that size, from its pane's bottom-left. Emacs owns a block once the pane showing it is used, and keeps it until another client is used: the client last used sizes the block.
+_Avoid_: active client, controlling client, focus (which client has the keyboard)
 
 ## System-wide
 

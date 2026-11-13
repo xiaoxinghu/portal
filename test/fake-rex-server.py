@@ -31,8 +31,18 @@ was seen to, and as its documentation of data connections says:
   window).  A label is trimmed, and refused with bad_request when longer
   than 128 characters or with a control character.
 - Shows a block as a real server does: session.attach joins a session;
-  session.own_block, which needs that, makes the client the block's
-  owner; com.superlogical.terminal.resize sets the block's grid;
+  session.own_block, which needs that, claims the block, "take" making the
+  client its owner and "request" only if it has none, and sends
+  block_owner_changed to the clients attached to its session when the
+  owner changes; com.superlogical.terminal.resize keeps the size a client
+  asks for and sets the block's grid to it when that client owns the block
+  or nobody does, and a new owner's size applies the moment it owns the
+  block, and com.superlogical.terminal.size says the block's grid, its
+  owner and the size each client asked for; a block whose owner leaves
+  passes to the client in line that claimed it most recently, a take
+  ahead of every request; client.inspect describes a connected client as
+  its hello did, or one a claim command made up, and fails with not_found
+  for any other;
   data.connect, which needs it too, gives a ticket of 16 bytes for one data
   connection; com.superlogical.terminal.format gives the block's screen,
   in parts read with com.superlogical.terminal.blob_read when it is longer
@@ -133,6 +143,11 @@ Commands, on standard input:
         returns it, with "child", "foreground", "ancestors" and "last_exit",
         and "input_mode" as com.superlogical.terminal.input_mode does, with
         "echo", "canonical" and "signals".
+    {"claim": BLOCK, "client": ID, "mode": "take" | "request", "name": NAME,
+     "columns": C, "rows": R}
+        Claim BLOCK as the client ID, which no connection is, as another
+        app such as Rex.app does: with a size of C by R, if given, and a
+        name that client.inspect gives, if given.
     {"block_event": BLOCK, "name": NAME, "payload": {...}}
         Send the terminal event NAME of BLOCK, such as "title_changed", to
         every client that attached to BLOCK's session with session.attach,
@@ -185,6 +200,9 @@ state = {
     "chosen": {},
     "revision": 1,
     "terminals": {},
+    "desired": {},
+    "others": {},
+    "line": {},
 }
 
 
@@ -216,6 +234,7 @@ class Client:
         self.joined = set()  # Sessions it attached to.
         self.nonce = 0
         self.block = None
+        self.info = {}  # What its hello said of it.
 
     def read(self, count):
         while len(self.buffer) < count:
@@ -417,6 +436,7 @@ class Client:
                     value = None
                 if isinstance(value, dict) and value.get("type") == "hello":
                     report(hello=value, client=self.number)
+                    self.info = value.get("client") or {}
                     if state["welcome"]:
                         self.send(
                             {
@@ -443,6 +463,8 @@ class Client:
                 clients.pop(self.number, None)
                 if self.block and self in state["streams"].get(self.block, []):
                     state["streams"][self.block].remove(self)
+                if not self.data:
+                    leave(identity(self))
             try:
                 self.connection.close()
             except OSError:
@@ -478,19 +500,87 @@ def attach(client, payload):
     return {"client_id": "client:fake-%d" % client.number, "view": {"revision": 1}}
 
 
+def identity(client):
+    return "client:fake-%d" % client.number
+
+
+def owner_of(block):
+    return state["grids"].get(block, (80, 24, 0, 0, None))[4]
+
+
+def set_grid(block, size):
+    """Give BLOCK the grid SIZE, (columns, rows, cell width, cell height),
+    and tell its streams."""
+    state["grids"][block] = tuple(size) + (owner_of(block),)
+    for stream in list(state["streams"].get(block, [])):
+        stream.rex(resize_message(block))
+
+
+def set_owner(block, owner, reason):
+    """Make OWNER, a client ID or None, BLOCK's owner, telling the clients
+    attached to its session; the block takes the size OWNER asked for."""
+    previous = owner_of(block)
+    columns, rows, width, height, _ = state["grids"].get(block, (80, 24, 0, 0, None))
+    state["grids"][block] = (columns, rows, width, height, owner)
+    fields = {"block_id": block, "previous": previous, "reason": reason}
+    if owner:
+        fields["owner"] = owner
+    session = session_of(block)
+    event = {"type": "session_event", "payload": {
+        "session_id": session, "event": {"type": "block_owner_changed", "payload": fields}}}
+    for client in list(clients.values()):
+        if session in client.joined or client.attached:
+            client.seq += 1
+            client.send({"type": "event", "seq": client.seq, "payload": event})
+    wanted = state["desired"].get(block, {}).get(owner)
+    if wanted and wanted != state["grids"][block][:4]:
+        set_grid(block, wanted)
+
+
+def connected(who):
+    return who in state["others"] or any(identity(known) == who for known in clients.values())
+
+
+def leave(who):
+    """The client WHO has gone: each block it owns passes to the client in
+    line that claimed it most recently, a take ahead of every request, or
+    to nobody."""
+    for block, line in state["line"].items():
+        line[:] = [entry for entry in line if entry[0] != who]
+        if owner_of(block) == who:
+            waiting = [entry for entry in line if connected(entry[0])]
+            takes = [entry for entry in waiting if entry[1] == "take"]
+            following = (takes or waiting or [(None, None)])[-1][0]
+            set_owner(block, following, "disconnect")
+
+
+def claim(who, session, blocks, mode):
+    """Claim BLOCKS of SESSION for the client WHO in MODE, as own_block does."""
+    if mode not in ("take", "request"):
+        return error("bad_request", "session.own_block: mode must be take or request", 400)
+    owners = []
+    for block in blocks:
+        _, problem = find_block({"session_id": session, "block_id": block})
+        if problem:
+            return error("bad_request", "block %s is not in the session" % block, 400)
+        line = state["line"].setdefault(block, [])
+        line[:] = [entry for entry in line if entry[0] != who] + [(who, mode)]
+        owner = owner_of(block)
+        if owner != who and (mode == "take" or owner is None):
+            set_owner(block, who, mode)
+        entry = {"block_id": block}
+        if owner_of(block):
+            entry["owner"] = owner_of(block)
+        owners.append(entry)
+    return {"blocks": owners}
+
+
 def own_block(client, payload):
     session = payload.get("session_id")
     if session not in client.joined:
         return error("bad_request", "session.own_block: attach to the session first", 400)
-    owners = []
-    for block in payload.get("block_ids") or []:
-        found, problem = find_block({"session_id": session, "block_id": block})
-        if problem:
-            return error("bad_request", "block %s is not in the session" % block, 400)
-        columns, rows, width, height, _ = state["grids"].get(block, (80, 24, 0, 0, None))
-        state["grids"][block] = (columns, rows, width, height, "client:fake-%d" % client.number)
-        owners.append({"block_id": block, "owner": "client:fake-%d" % client.number})
-    return {"blocks": owners}
+    return claim(identity(client), session, payload.get("block_ids") or [],
+                 payload.get("mode") or "take")
 
 
 def resize(client, payload):
@@ -498,12 +588,35 @@ def resize(client, payload):
     if problem:
         return problem
     args = payload.get("args") or {}
-    _, _, _, _, owner = state["grids"].get(block, (80, 24, 0, 0, None))
-    state["grids"][block] = (args.get("columns", 80), args.get("rows", 24),
-                             args.get("cell_width_px") or 0, args.get("cell_height_px") or 0, owner)
-    for stream in list(state["streams"].get(block, [])):
-        stream.rex(resize_message(block))
+    size = (args.get("columns", 80), args.get("rows", 24),
+            args.get("cell_width_px") or 0, args.get("cell_height_px") or 0)
+    state["desired"].setdefault(block, {})[identity(client)] = size
+    if owner_of(block) in (None, identity(client)):
+        set_grid(block, size)
     return {}
+
+
+def size(client, payload):
+    block, problem = find_block(payload)
+    if problem:
+        return problem
+    columns, rows, width, height, owner = state["grids"].get(block, (80, 24, 0, 0, None))
+    answer = {"columns": columns, "rows": rows, "cell_width_px": width, "cell_height_px": height,
+              "desired": [{"client_id": who, "columns": wanted[0], "rows": wanted[1]}
+                          for who, wanted in state["desired"].get(block, {}).items()]}
+    if owner:
+        answer["owner"] = owner
+    return answer
+
+
+def inspect(client, payload):
+    who = payload.get("client_id")
+    info = state["others"].get(who)
+    if info is None:
+        info = next((known.info for known in clients.values() if identity(known) == who), None)
+    if info is None:
+        return error("not_found", "client %s not found" % who, 404)
+    return {"client": {"client_id": who, "info": info, "connection_state": "connected"}}
 
 
 def connect(client, payload):
@@ -751,6 +864,8 @@ CHANGING = {
 SHOWING = {
     "session.attach": attach,
     "session.own_block": own_block,
+    "client.inspect": inspect,
+    "com.superlogical.terminal.size": size,
     "com.superlogical.terminal.resize": resize,
     "data.connect": connect,
     "com.superlogical.terminal.format": paint,
@@ -841,6 +956,17 @@ def command(value):
             for key in ("title", "pwd", "process", "input_mode"):
                 if key in value:
                     known[key] = value[key]
+        elif "claim" in value:
+            block, who = value["claim"], value.get("client", "client:other")
+            if "name" in value:
+                state["others"][who] = {"kind": "app", "name": value["name"]}
+            state["others"].setdefault(who, {})
+            if "columns" in value:
+                state["desired"].setdefault(block, {})[who] = (
+                    value["columns"], value.get("rows", 24), 0, 0)
+            result = claim(who, session_of(block), [block], value.get("mode", "take"))
+            if "code" in result:
+                report(problem=result["message"])
         elif "block_event" in value:
             block, name = value["block_event"], value.get("name", "")
             fields = value.get("payload", {})

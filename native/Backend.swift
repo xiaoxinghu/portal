@@ -443,6 +443,15 @@ public func portalTerminalFeed(_ terminal: OpaquePointer, _ bytes: UnsafePointer
     return perform(error) { try session(terminal, as: TerminalSession.self).feed(output) } != nil
 }
 
+@_cdecl("portal_terminal_hold_grid")
+public func portalTerminalHoldGrid(_ terminal: OpaquePointer, _ columns: UInt32, _ rows: UInt32,
+                                   _ error: UnsafeMutablePointer<portal_text>) -> Bool {
+    let terminal = native(terminal)
+    return perform(error) {
+        try session(terminal, as: TerminalSession.self).holdGrid(columns: columns, rows: rows)
+    } != nil
+}
+
 @_cdecl("portal_view_focus")
 public func portalViewFocus(_ view: OpaquePointer, _ error: UnsafeMutablePointer<portal_text>) -> Bool {
     let view = native(view)

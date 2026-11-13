@@ -15,6 +15,10 @@
    malformed before the member, or has no such member.  A later duplicate
    is not looked for. */
 bool portal_json_member(portal_string object, const char *name, portal_string *value);
+/* Set *VALUE to the span of the element at INDEX, from 0, of ARRAY, a JSON
+   array, whitespace around it left out.  False when ARRAY is not an
+   array, is malformed before the element, or is shorter. */
+bool portal_json_element(portal_string array, size_t index, portal_string *value);
 
 /* Whether VALUE, a span such as portal_json_member sets, is the JSON string
    whose contents are LITERAL, written without escapes. */

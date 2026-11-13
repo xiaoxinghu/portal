@@ -175,6 +175,8 @@ record can bring them."
 
 (declare-function portal--terminal-text "portal-terminal" (target))
 (declare-function portal-test-native-key "test-terminal-input" (code flags text &optional windowless))
+(declare-function portal-test-native-target-frame "test-terminal-input" (title))
+(declare-function portal-test-native-focus-target "test-terminal-input" ())
 
 (defun portal-rex-gui-tests--state (target)
   "The state of the block shown in TARGET, as the native module reports it."
@@ -197,6 +199,21 @@ record can bring them."
                         :payload)
              :args))
 
+(defun portal-rex-gui-tests--focus (focused)
+  "Have Emacs gain the keyboard, when FOCUSED, or lose it to another app.
+A test can neither take the keyboard from Emacs nor keep it there, as the
+VM's desktop may take it back at any moment, so the frames say what they
+would, and `after-focus-change-function' runs as it would.
+`portal-rex-gui-tests--unfocus' ends this."
+  (advice-add 'frame-focus-state :override (if focused (lambda (&rest _) t) #'ignore)
+              '((name . portal-rex-gui-tests)))
+  (funcall after-focus-change-function)
+  (redisplay t))
+
+(defun portal-rex-gui-tests--unfocus ()
+  "Let the frames say again whether they have the keyboard."
+  (advice-remove 'frame-focus-state 'portal-rex-gui-tests))
+
 (defmacro portal-rex-gui-tests--showing (server &rest body)
   "Connect to SERVER, show its block in the selected window, and run BODY.
 BODY runs with `target' bound to the block's terminal once it is live,
@@ -206,6 +223,7 @@ and the buffer current."
      (unwind-protect
          (save-window-excursion
            (delete-other-windows)
+           (portal-rex-gui-tests--focus t)
            (portal-rex-connect)
            (switch-to-buffer "*rex: fake/shell*")
            (redisplay t)
@@ -214,6 +232,7 @@ and the buffer current."
              (portal-rex-gui-tests--wait
               (lambda () (equal (portal-rex-gui-tests--state target) "live")))
              ,@body))
+       (portal-rex-gui-tests--unfocus)
        (mapc #'portal-rex-disconnect (portal-rex-connections)))))
 
 (ert-deftest portal-rex-gui-shows-a-block-in-its-buffer ()
@@ -223,9 +242,12 @@ and the buffer current."
     (portal-fake-rex-command server :screen '(:block:fake-1 "\e[H\e[2Jbefore Emacs\r\n$ "))
     (portal-fake-rex-command server :paint_part 10)
     (portal-rex-gui-tests--showing server
-      ;; The sequence: attach, claim, size to the pane, stream, paint.
+      ;; The sequence: attach, claim, take it as it is in the pane in use,
+      ;; size it to the pane, stream, paint.
       (should (equal (plist-get (portal-fake-rex-request server "session.attach") :payload)
                      '(:session_id "session:fake-1")))
+      (should (equal (plist-get (portal-fake-rex-request server "session.own_block") :payload)
+                     '(:session_id "session:fake-1" :block_ids ["block:fake-1"] :mode "request")))
       (should (equal (plist-get (portal-fake-rex-request server "session.own_block") :payload)
                      '(:session_id "session:fake-1" :block_ids ["block:fake-1"] :mode "take")))
       (let ((args (plist-get (plist-get (portal-fake-rex-request
@@ -244,6 +266,7 @@ and the buffer current."
                                         :payload)
                              :args)))
         (should (equal (plist-get args :format) "vt"))
+        (should (eq (plist-get args :unwrap) t))
         ;; The terminal keeps its own theme's palette.
         (should-not (plist-member args :extra_palette)))
       (portal-fake-rex-request server "com.superlogical.terminal.blob_read")
@@ -437,6 +460,153 @@ and the buffer current."
               (should-not (string-search "Rex block" said)))
           (remove-variable-watcher 'portal-terminal--exited watcher))))))
 
+;;; Who sizes a block
+
+(defun portal-rex-gui-tests--claims (server)
+  "The modes of the claims SERVER has been sent since the last look."
+  (let (modes)
+    (while (when-let* ((report (ignore-errors
+                                 (portal-fake-rex-take
+                                  server (lambda (report)
+                                           (equal (plist-get (plist-get report :request) :method)
+                                                  "session.own_block"))
+                                  0.3))))
+             (push (plist-get (plist-get (plist-get report :request) :payload) :mode) modes)))
+    (nreverse modes)))
+
+(defun portal-rex-gui-tests--sizes (server)
+  "The grids SERVER has been asked to resize the block to since the last look."
+  (let (sizes)
+    (while (when-let* ((report (ignore-errors
+                                 (portal-fake-rex-take
+                                  server (lambda (report)
+                                           (equal (plist-get (plist-get report :request) :method)
+                                                  "com.superlogical.terminal.resize"))
+                                  0.3))))
+             (let ((args (plist-get (plist-get (plist-get report :request) :payload) :args)))
+               (push (list (plist-get args :columns) (plist-get args :rows)) sizes))))
+    (nreverse sizes)))
+
+(defun portal-rex-gui-tests--grid (target)
+  "The block's grid, as the stream last said, and the terminal's own."
+  (let ((state (portal--inspect target)))
+    (list (list (plist-get (plist-get state :rex) :columns) (plist-get (plist-get state :rex) :rows))
+          (list (plist-get state :columns) (plist-get state :rows)))))
+
+(defun portal-rex-gui-tests--mark (buffer)
+  "What BUFFER's mode line says after its mode's name."
+  (format-mode-line (buffer-local-value 'mode-line-process buffer) nil nil buffer))
+
+(ert-deftest portal-rex-gui-the-client-last-used-sizes-a-block ()
+  :tags '(:gui)
+  (portal-fake-rex-with (server)
+    ;; Rex's app has the block, at its size, when Emacs comes.
+    (portal-fake-rex-command server :claim "block:fake-1" :client "client:app" :name "Rex.app"
+                             :columns 60 :rows 15)
+    (let ((portal-rex-socket (portal-fake-rex-socket server))
+          (left (selected-window)))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (setq left (selected-window))
+            (switch-to-buffer (get-buffer-create "*rex-gui-elsewhere*"))
+            (portal-rex-gui-tests--focus t)
+            (portal-rex-connect)
+            ;; Placed in a pane that is not in use: Emacs requests the
+            ;; block, sends its pane's size for later, and draws the block
+            ;; at the app's size, saying so.
+            (let* ((right (split-window-right))
+                   (buffer (get-buffer "*rex: fake/shell*"))
+                   target)
+              (set-window-buffer right buffer)
+              (redisplay t)
+              (setq target (buffer-local-value 'portal-view--target buffer))
+              (should target)
+              (portal-rex-gui-tests--wait
+               (lambda () (equal (portal-rex-gui-tests--state target) "live")))
+              (should (equal (portal-rex-gui-tests--claims server) '("request")))
+              (let ((wanted (car (portal-rex-gui-tests--sizes server))))
+                (should wanted)
+                (should-not (equal wanted '(60 15))))
+              (portal-rex-gui-tests--wait
+               (lambda () (equal (portal-rex-gui-tests--grid target) '((60 15) (60 15)))))
+              (portal-rex-gui-tests--wait
+               (lambda () (string-search ":sized by Rex.app" (portal-rex-gui-tests--mark buffer))))
+              ;; Its pane resized: the new size goes for later, and the
+              ;; block stays the app's.
+              (with-selected-window right (enlarge-window-horizontally 8))
+              (redisplay t)
+              (should (portal-rex-gui-tests--sizes server))
+              (should-not (portal-rex-gui-tests--claims server))
+              (should (equal (portal-rex-gui-tests--grid target) '((60 15) (60 15))))
+              ;; Its pane selected: Emacs takes the block, which takes the
+              ;; pane's size, and the mark goes.
+              (select-window right)
+              (redisplay t)
+              (should (equal (portal-rex-gui-tests--claims server) '("take")))
+              (portal-rex-gui-tests--wait
+               (lambda () (let ((grid (portal-rex-gui-tests--grid target)))
+                            (and (not (equal (car grid) '(60 15))) (equal (car grid) (cadr grid))))))
+              (portal-rex-gui-tests--wait
+               (lambda () (not (string-search "sized" (portal-rex-gui-tests--mark buffer)))))
+              ;; Selecting another pane claims nothing; coming back takes
+              ;; the block again, which leaves it as it is.
+              (select-window left)
+              (redisplay t)
+              (should-not (portal-rex-gui-tests--claims server))
+              (select-window right)
+              (redisplay t)
+              (should (equal (portal-rex-gui-tests--claims server) '("take")))
+              ;; Emacs loses the keyboard with the pane selected, and the app
+              ;; takes the block: Emacs follows, and claims nothing.
+              (portal-rex-gui-tests--focus nil)
+              (portal-fake-rex-command server :claim "block:fake-1" :client "client:app"
+                                       :name "Rex.app")
+              (portal-rex-gui-tests--wait
+               (lambda () (equal (portal-rex-gui-tests--grid target) '((60 15) (60 15)))))
+              (portal-rex-gui-tests--wait
+               (lambda () (string-search ":sized by Rex.app" (portal-rex-gui-tests--mark buffer))))
+              (should-not (portal-rex-gui-tests--claims server))
+              ;; Emacs gets the keyboard back with the pane selected: it
+              ;; takes the block.
+              (portal-rex-gui-tests--focus t)
+              (should (equal (portal-rex-gui-tests--claims server) '("take")))
+              (portal-rex-gui-tests--wait
+               (lambda () (not (equal (car (portal-rex-gui-tests--grid target)) '(60 15)))))
+              ;; The app takes it while Emacs is not using the block, which
+              ;; is then switched into the pane in use: the view comes, and
+              ;; Emacs takes the block.
+              (select-window left)
+              (redisplay t)
+              (portal-fake-rex-command server :claim "block:fake-1" :client "client:app")
+              (portal-rex-gui-tests--wait
+               (lambda () (equal (car (portal-rex-gui-tests--grid target)) '(60 15))))
+              (should-not (portal-rex-gui-tests--claims server))
+              (switch-to-buffer buffer)
+              (redisplay t)
+              (should (eq (buffer-local-value 'portal-view--window buffer) left))
+              (should (equal (portal-rex-gui-tests--claims server) '("take")))
+              ;; The app takes it while Emacs keeps the keyboard, as a phone
+              ;; would: a key typed takes it back before it is written.
+              (portal-fake-rex-command server :claim "block:fake-1" :client "client:app")
+              (portal-rex-gui-tests--wait
+               (lambda () (string-search ":sized" (portal-rex-gui-tests--mark buffer))))
+              ;; Keys go to this frame by name: the VM's desktop may take
+              ;; activation back from a test's Emacs at any moment.
+              (select-frame-set-input-focus (selected-frame))
+              (should (portal-view--with-frame-title (selected-frame)
+                                                     #'portal-test-native-target-frame))
+              (portal-test-native-focus-target)
+              (portal-terminal-focus)
+              (should (portal-test-native-key 0 0 "a"))
+              (should (equal (portal-rex-gui-tests--claims server) '("take")))
+              (should (equal (portal-rex-gui-tests--written server) '(:data "a")))
+              (portal-input-unfocus)))
+        (portal-rex-gui-tests--unfocus)
+        (portal-test-native-target-frame nil)
+        (mapc #'portal-rex-disconnect (portal-rex-connections))
+        (kill-buffer "*rex-gui-elsewhere*")))))
+
 (ert-deftest portal-rex-gui-choosing-a-block-shows-it ()
   :tags '(:gui)
   (portal-fake-rex-with (server)
@@ -462,7 +632,7 @@ and the buffer current."
               (should (equal (plist-get (portal-fake-rex-request server "session.own_block")
                                         :payload)
                              '(:session_id "session:fake-1" :block_ids ["block:fake-2"]
-                               :mode "take")))
+                               :mode "request")))
               ;; It is the terminal the chooser and next and previous go by.
               (should (memq logs (portal-terminal-buffers)))
               (portal-terminal-next)

@@ -167,20 +167,39 @@ buffer. Killing the buffer closes it too.
 
 ### Size
 
-While Emacs is the only client showing a block, the block takes the size
-of the pane that shows it, and resizing the pane reflows the screen as it
-does in any terminal. When a block is shown in a pane, Emacs claims it,
-taking it from Rex's app or any other client that had it. How Emacs and
-Rex's other clients should share a block's size is
-[not built](#what-is-not-built): until it is, a block that another client
-resizes or takes back is drawn in Emacs at Emacs's size, wrongly, until
-the program next draws its whole screen.
+A block has one size, that of the Rex client last used with it, and the
+other clients draw it at that size as well as they can. Emacs uses a block
+when you select the pane that shows it, come back to Emacs with that pane
+selected, or type into it, and the block then takes the pane's size;
+leaving the pane, burying the buffer or switching to another app gives
+nothing up, so the block keeps Emacs's size until another client is used.
+A block another client sizes is drawn at that size from the pane's
+bottom-left corner, never scaled: clipped at the top and the right where it
+is larger than the pane, with the terminal's background above it and to
+its right where it is smaller, so a shell's prompt stays in view.
+
+While another client sizes a block, its buffer's mode line says so after
+the mode's name: `:sized by Rex.app`, by the name that client gives
+itself, or `:sized elsewhere` when the server cannot say, as for a client
+that has gone. The mouse over the mark shows the size. Selecting the pane
+takes the block back, and the mark goes.
+
+A pane that shows a block without being in use only asks for it: the
+block is Emacs's if no other client has it, and stays another's
+otherwise. So blocks in several panes keep Rex's app's sizes while you
+work there, and a narrower or wider pane is drawn without resizing
+anything. Emacs still sends the server each new size of the pane, which
+the server keeps and applies the moment Emacs takes the block. Hiding a
+block's view, or burying its buffer, never gives the block up: the server
+passes a block whose client goes away to the client that claimed it last.
 
 ### What the first paint loses
 
 The server sends a block's screen as the escape sequences that redraw it:
 text, history, colours, styles, hyperlinks and the modes a program set,
-such as mouse reporting or the keyboard protocol. Portal leaves out the
+such as mouse reporting or the keyboard protocol. Lines the terminal
+wrapped come as the program wrote them, so they wrap again at the next
+size as they do on the server. Portal leaves out the
 server's palette, as [Appearance](#appearance) says. Three more things do
 not come through:
 
@@ -576,7 +595,6 @@ pin when it would.
 
 Portal's Rex client is being built in steps. Not built yet:
 
-- Sharing a block's size with Rex's other clients: see [Size](#size).
 - Reconnecting, and resuming a block's output after a dropped connection.
 - Restoring the arrangement of Rex terminals with bookmarks or the desktop.
 - Servers on other machines.

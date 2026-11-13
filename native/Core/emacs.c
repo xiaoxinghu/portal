@@ -526,6 +526,16 @@ LISP_FUNCTION(Frex_show)
     return result;
 }
 
+LISP_FUNCTION(Frex_take)
+{
+    portal_text target = {0}, error = {0};
+    emacs_value result = NULL;
+    if (read_text(env, args[0], &target))
+        result = done(env, portal_rex_take(borrow(target), &error), &error);
+    free(target.data);
+    return result;
+}
+
 LISP_FUNCTION(Flauncher_show)
 {
     int64_t values[6];
@@ -992,6 +1002,8 @@ static const struct export {
     {"portal--rex-show", 4, 4, Frex_show, NULL,
      "Show the block BLOCK of SESSION, on Rex connection ID's server, in TARGET, a fed "
      "terminal, until it closes."},
+    {"portal--rex-take", 1, 1, Frex_take, NULL,
+     "Claim the block shown in TARGET with take: Emacs owns it, and sizes it, from then on."},
 };
 
 /* Run the Lisp function DATA, an export, at Emacs's request (input.h). */
