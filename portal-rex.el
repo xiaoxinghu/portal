@@ -1632,12 +1632,17 @@ This Mac's server too, when `portal-rex-connect-at-startup' says so."
                                    (unless connection (portal-rex--still-waiting server why))))
         (user-error (portal-rex--still-waiting server (cadr failure)))))))
 
-(defun portal-rex--at-startup ()
-  "Connect to the servers Emacs restores and the one it is told to, once started.
-On `emacs-startup-hook'."
-  (when (or portal-rex-connect-at-startup (portal-rex--placeholders))
-    (portal-rex--restore-soon)))
-(add-hook 'emacs-startup-hook #'portal-rex--at-startup)
+;; In the autoloads, so that the option alone is enough: Portal is not
+;; loaded unless it is set.  A desktop's placeholders connect by themselves.
+;;;###autoload
+(progn
+  (defun portal-rex-at-startup ()
+    "Connect to this Mac's Rex server, if `portal-rex-connect-at-startup' says so.
+On `emacs-startup-hook'.  Emacs does not wait for the server."
+    (when (bound-and-true-p portal-rex-connect-at-startup)
+      (require 'portal-rex)
+      (portal-rex--restore-soon)))
+  (add-hook 'emacs-startup-hook #'portal-rex-at-startup))
 
 ;;;; Bookmarks
 

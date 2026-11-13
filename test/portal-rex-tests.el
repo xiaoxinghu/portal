@@ -2358,6 +2358,35 @@ file, which restores each buffer, and runs the hook it runs after."
       (should (equal seen '(1 1)))
       (should-not (portal-rex-buffers)))))
 
+(ert-deftest portal-rex-connect-at-startup-needs-only-the-autoloads ()
+  ;; A fresh Emacs with Portal's autoloads alone: the option set, it
+  ;; connects once started; not set, Portal is not even loaded.
+  (let* ((root (file-name-directory (locate-library "portal-rex")))
+         (directory (make-temp-file "rex-autoloads" t))
+         (autoloads (expand-file-name "rex-autoloads.el" directory))
+         (run (lambda (option)
+                (with-temp-buffer
+                  (call-process
+                   (expand-file-name invocation-name invocation-directory) nil t nil
+                   "-Q" "--batch" "-L" root "-l" autoloads
+                   "--eval"
+                   (format "(progn (setq portal-rex-connect-at-startup %s
+                                          portal-rex-socket %S)
+                                   (run-hooks 'emacs-startup-hook)
+                                   (prin1 (list (featurep 'portal-rex)
+                                                (and (boundp 'portal-rex--restore-timer)
+                                                     (timerp portal-rex--restore-timer)))))"
+                           option (expand-file-name "none" directory)))
+                  (car (read-from-string
+                        (buffer-substring (line-beginning-position) (point-max))))))))
+    (unwind-protect
+        (progn
+          (let ((inhibit-message t))
+            (loaddefs-generate root autoloads))
+          (should (equal (funcall run "nil") '(nil nil)))
+          (should (equal (funcall run "t") '(t t))))
+      (delete-directory directory t))))
+
 (ert-deftest portal-rex-restore-says-once-what-it-could-not-restore ()
   (portal-rex-tests--with (server)
     (portal-rex-tests--restoring
@@ -2404,11 +2433,11 @@ file, which restores each buffer, and runs the hook it runs after."
   (portal-rex-tests--with (server)
     (portal-rex-tests--restoring
       ;; Off, as by default: nothing.
-      (portal-rex--at-startup)
+      (portal-rex-at-startup)
       (should-not portal-rex--restore-timer)
       (let ((portal-rex-connect-at-startup t)
             (portal-rex-socket (portal-fake-rex-socket server)))
-        (portal-rex--at-startup)
+        (portal-rex-at-startup)
         (should (timerp portal-rex--restore-timer))
         ;; It returns before the server has answered.
         (portal-fake-rex-command server :hold "session.attach_all")
