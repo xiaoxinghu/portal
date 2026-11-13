@@ -133,12 +133,23 @@ On `portal-view-close-hook'."
 (add-hook 'portal-view-close-hook #'portal-terminal--view-closed)
 
 (defcustom portal-terminal-confirm-kill t
-  "Whether killing a terminal buffer whose program is still running asks first.
+  "When killing a terminal's buffer, which ends its program, asks first.
+t, the default, asks while the program may be busy: a Rex block whose
+shell is at its prompt ends without a question, and anything else asks,
+naming the program in the foreground when it is known.  Portal cannot
+tell an idle shell of its own terminals from a busy one, so for them t
+asks whenever the program runs.  `always' asks for every program that
+runs, an idle one included.  nil never asks.
+
 It applies however the buffer is killed: `kill-buffer', Ibuffer and other
-buffer lists, Embark, or `portal-terminal-kill-pane'.  Emacs's own query
-for a buffer's process never asks, as Ghostty's program is not an Emacs
-process.  A terminal whose program has exited is killed without asking."
-  :type 'boolean
+buffer lists, Embark, `portal-terminal-kill-pane', and, for a Rex block,
+`portal-terminal-close' and `portal-terminal-close-all'.  Emacs's own
+query for a buffer's process never asks, as Ghostty's program is not an
+Emacs process.  A terminal whose program has exited is killed without
+asking.  Quitting Emacs asks nothing and ends no Rex block."
+  :type '(choice (const :tag "When busy" t)
+                 (const :tag "Always" always)
+                 (const :tag "Never" nil))
   :group 'portal-terminal)
 
 (define-derived-mode portal-terminal-mode special-mode "Ghostty"
@@ -155,7 +166,8 @@ it, and :exited follows it once the program has exited.
 The terminal stays in its pane, whichever pane is selected.  Another
 pane showing this buffer says the terminal is elsewhere, and RET or a
 click there brings it to that pane; switching to this buffer in a pane
-brings it too.  \\[portal-terminal-close] ends the shell and keeps the buffer."
+brings it too.  \\[portal-terminal-close] ends the shell and keeps the buffer;
+in a Rex block's buffer, it ends the block, which takes its buffer."
   (setq-local cursor-type nil)
   (add-hook 'text-scale-mode-hook #'portal-terminal--text-scaled nil t)
   (add-hook 'kill-buffer-hook #'portal-terminal--dismiss-quick nil t)
@@ -424,17 +436,32 @@ A missing program is reported by the shell inside the terminal."
 
 (defalias 'portal-terminal-unfocus #'portal-input-unfocus)
 
+(defvar-local portal-terminal--closer nil
+  "A function that ends this terminal in place of closing its view, or nil.
+Called with no argument in the terminal's buffer.  A Rex block's buffer
+ends its block this way, by killing the buffer, which asks first as
+`portal-terminal-confirm-kill' says.")
+(put 'portal-terminal--closer 'permanent-local t)
+
 ;;;###autoload
 (defun portal-terminal-close ()
-  "End this buffer's native shell.  Other terminal sessions keep running."
+  "End this buffer's native shell.  Other terminal sessions keep running.
+The buffer stays, saying that the terminal has ended.  In the buffer of
+a Rex block, end the block instead, which kills the buffer: it asks
+first as killing the buffer does, by `portal-terminal-confirm-kill'."
   (interactive)
   (portal-terminal--dismiss-quick)
-  (portal-view-close))
+  (if portal-terminal--closer
+      (funcall portal-terminal--closer)
+    (portal-view-close)))
 
 (defun portal-terminal--kill-query ()
   "Ask before this terminal's buffer is killed with its program running.
-Return non-nil to kill it.  See `portal-terminal-confirm-kill'."
+Return non-nil to kill it.  See `portal-terminal-confirm-kill'.  A
+terminal whose program runs elsewhere, a Rex block's, asks in its own
+way, as only its server can say whether it is busy."
   (or (not portal-terminal-confirm-kill)
+      portal-terminal--elsewhere
       (not (portal-terminal-metadata))
       portal-terminal--exited
       (y-or-n-p (format "Kill terminal %s and its running shell? " (buffer-name)))))
@@ -446,10 +473,15 @@ Return non-nil to kill it.  See `portal-terminal-confirm-kill'."
       (save-current-buffer (portal-terminal-quick-dismiss)))))
 
 (defun portal-terminal-close-all ()
-  "End all native shells, for Emacs shutdown or explicit cleanup."
+  "End every terminal whose view is open: Portal's shells and Rex blocks.
+Each Rex block among them ends as killing its buffer ends it, asking
+first, by name, about each that may be busy; one kept keeps its buffer.
+Rex blocks never shown in Emacs are left alone.  Quitting Emacs needs
+none of this, and ends no Rex block."
   (interactive)
   (dolist (buffer (portal-view-buffers 'terminal))
-    (with-current-buffer buffer (portal-terminal-close))))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer (portal-terminal-close)))))
 
 
 (defun portal-terminal--switch (buffer)

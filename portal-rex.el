@@ -546,17 +546,6 @@ instead, which this leaves alone."
                                   portal-rex--show-failure)
                         "Its screen is shown here once a window shows this buffer."))))))
 
-(defun portal-rex--buffer-killed ()
-  "Say what killing this block's buffer by hand leaves on its server.
-On `kill-buffer-hook' in a block's buffer.  The dead buffer stays in its
-connection's blocks, so nothing makes the block another."
-  (when (and portal-rex-block-connection (not portal-rex--killing)
-             (eq (portal-rex-block-buffer portal-rex-block-connection portal-rex-block-id)
-                 (current-buffer)))
-    (message "Killed only the buffer: block %s still runs on its Rex server, and gets a buffer again when Emacs next connects"
-             portal-rex--block-label)))
-(put 'portal-rex--buffer-killed 'permanent-local-hook t)
-
 (defun portal-rex--make-buffer (connection session-id block-id label)
   "Make and return the buffer of the block BLOCK-ID, called LABEL.
 The block is in the session SESSION-ID on CONNECTION's server.  The
@@ -576,11 +565,15 @@ the block needs, and has no view."
                 ;; Not the directory of whichever buffer was current when
                 ;; the server spoke.
                 default-directory (expand-file-name "~/"))
+          ;; Killing the buffer ends the block, asking first while it may
+          ;; be busy.  The question comes after every other, so the block
+          ;; ends only when the kill goes ahead.
+          (add-hook 'kill-buffer-query-functions #'portal-rex--kill-query 100 t)
           (add-hook 'kill-buffer-hook #'portal-rex--buffer-killed nil t)
-          ;; Killing the buffer ends no program: the block runs on.
-          (setq-local portal-terminal-confirm-kill nil)
-          ;; Its name is its block's, which renaming the terminal changes.
-          (setq portal-terminal--renamer #'portal-rex--renamer)
+          ;; Its name is its block's, which renaming the terminal changes,
+          ;; and closing the terminal ends the block.
+          (setq portal-terminal--renamer #'portal-rex--renamer
+                portal-terminal--closer #'portal-rex--close)
           (portal-rex--describe-block)
           (puthash block-id buffer (portal-rex-connection-blocks connection))
           (setq ready t))
@@ -851,6 +844,186 @@ program and exit would only go stale; its directory stays.  On
           portal-terminal--exited nil)))
 (add-hook 'portal-view-close-hook #'portal-rex--view-closed)
 
+;;; Ending a block
+
+;; Every block is a buffer, so killing a block's buffer ends the block
+;; (`block.close'): at once while its shell is at its prompt, after a
+;; question while it may be busy.  Nothing is tracked: the server is asked
+;; at kill time, with two calls sent together and a short wait.  The kills
+;; Portal makes because a block, a session or a server went bind
+;; `portal-rex--killing' and ask nothing; quitting Emacs kills no buffer.
+
+(defvar portal-rex--busy-timeout 0.25
+  "How many seconds a kill waits for the server to say whether a block is busy.
+A block that has not answered in time may be busy, so the kill asks.")
+
+(defvar-local portal-rex--ending nil
+  "Non-nil once the kill under way of this block's buffer is to end the block.")
+
+(defun portal-rex--program (process)
+  "Return the program in the foreground of PROCESS, a `process' reply, or nil.
+That is Rex's own label for it: its script, else its argv0 without a
+login shell's \"-\", else its name, as a file name without directory."
+  (when-let* ((foreground (plist-get process :foreground))
+              ((consp foreground))
+              (label (seq-find (lambda (value) (and (stringp value) (not (string-empty-p value))))
+                               (list (plist-get foreground :script)
+                                     (string-remove-prefix "-" (or (plist-get foreground :argv0) ""))
+                                     (plist-get foreground :name)))))
+    (file-name-nondirectory label)))
+
+(defun portal-rex--idle-p (mode process)
+  "Return non-nil if MODE and PROCESS say a block's shell waits at its prompt.
+MODE is the block's terminal's `input_mode' reply, PROCESS its `process'
+reply.  The foreground is the block's own shell: under login, as every
+shell block is on macOS, login's direct child; otherwise the child itself,
+a login shell.  And a line editor reads: raw input with signals.  A
+shell with jobs in the background or stopped reads as idle; nothing in
+either reply shows them."
+  (let ((child (plist-get process :child))
+        (foreground (plist-get process :foreground))
+        (ancestors (plist-get process :ancestors)))
+    (and (consp child) (consp foreground)
+         (integerp (plist-get child :pid)) (integerp (plist-get foreground :pid))
+         (eq (plist-get mode :echo) :false)
+         (eq (plist-get mode :canonical) :false)
+         (eq (plist-get mode :signals) t)
+         (if (and (equal (plist-get child :name) "login")
+                  (eql (plist-get child :user_id) 0))
+             (and (/= (plist-get foreground :pid) (plist-get child :pid))
+                  (vectorp ancestors) (= (length ancestors) 1)
+                  (eql (plist-get (aref ancestors 0) :pid) (plist-get child :pid)))
+           (and (= (plist-get foreground :pid) (plist-get child :pid))
+                (string-prefix-p "-" (or (plist-get foreground :argv0) "")))))))
+
+(defun portal-rex--block-state (connection session-id block-id)
+  "Ask CONNECTION's server whether the block BLOCK-ID of SESSION-ID is busy.
+Return a plist: `:state' is `idle', the shell at its prompt; `ended', its
+program has exited; or `busy', anything else, an answer that did not come
+within `portal-rex--busy-timeout' seconds or an error included.
+`:program' names the program in the foreground, when known, and
+`:reason' says why a block that may be idle counts as busy.  The two
+calls go out together, `input_mode' first, so that a change between
+them errs to busy."
+  (let ((block (list :session_id session-id :block_id block-id :args nil))
+        mode process failure numbers (answered 0))
+    (unwind-protect
+        (condition-case error
+            (progn
+              (let ((inhibit-quit t))
+                (dolist (method '("input_mode" "process"))
+                  (push (portal-rex--request
+                         connection (concat "com.superlogical.terminal." method) block
+                         (lambda (response)
+                           (cl-incf answered)
+                           (if-let* ((problem (plist-get response :error)))
+                               (setq failure (or failure (plist-get problem :message)))
+                             (if (equal method "process")
+                                 (setq process (plist-get response :payload))
+                               (setq mode (plist-get response :payload))))))
+                        numbers)))
+              (unless (portal-rex--await connection (lambda () (= answered 2))
+                                         portal-rex--busy-timeout)
+                (setq failure (or failure
+                                  (format "no answer within %s seconds" portal-rex--busy-timeout)))))
+          (portal-rex-error (setq failure (cadr error))))
+      ;; An answer that comes later finds no one waiting.
+      (dolist (number numbers)
+        (setf (portal-rex-connection-calls connection)
+              (assq-delete-all number (portal-rex-connection-calls connection)))))
+    (let ((program (portal-rex--program process)))
+      (cond
+       (failure (list :state 'busy :program program :reason failure))
+       ((not (memq (plist-get process :last_exit) '(nil :null)))
+        (list :state 'ended :program program))
+       ((portal-rex--idle-p mode process) (list :state 'idle :program program))
+       (t (list :state 'busy :program program))))))
+
+(defun portal-rex--kill-query ()
+  "Decide whether killing this block's buffer goes ahead, and ends the block.
+On `kill-buffer-query-functions' in a block's buffer, after every other
+function there.  An idle block, or one whose program has ended, ends
+without a question; one that may be busy asks first, naming its program.
+`portal-terminal-confirm-kill' can make it always ask, or never.  A
+buffer whose server is no longer connected only goes."
+  (setq portal-rex--ending nil)
+  (let ((buffer (current-buffer))
+        (connection portal-rex-block-connection))
+    (cond
+     ((or portal-rex--killing (not connection)
+          (not (eq (portal-rex-block-buffer connection portal-rex-block-id) buffer))
+          (not (portal-rex-live-p connection)))
+      t)
+     ((not portal-terminal-confirm-kill) (setq portal-rex--ending t))
+     (t
+      (let* ((name (format "%s/%s" (or (portal-rex-session-label) portal-rex-session-id)
+                           portal-rex--block-label))
+             (state (portal-rex--block-state connection portal-rex-session-id portal-rex-block-id))
+             (program (plist-get state :program))
+             (end (or (eq (plist-get state :state) 'ended)
+                      (and (eq (plist-get state :state) 'idle)
+                           (not (eq portal-terminal-confirm-kill 'always)))
+                      ;; The server may have gone meanwhile, and the buffer
+                      ;; with it.
+                      (and (buffer-live-p buffer)
+                           (y-or-n-p
+                            (cond
+                             ((eq (plist-get state :state) 'idle)
+                              (format "End Rex block %s, %s at its prompt? " name
+                                      (or program "its shell")))
+                             (program (format "Rex block %s is running %s; end it? " name program))
+                             ((plist-get state :reason)
+                              (format "Rex block %s may be busy (%s); end it? " name
+                                      (plist-get state :reason)))
+                             (t (format "Rex block %s may be busy; end it? " name))))))))
+        ;; A buffer that went while the server was asked, or the question
+        ;; was, has gone with its server: there is nothing left to end.
+        (and end (buffer-live-p buffer)
+             (with-current-buffer buffer (setq portal-rex--ending t))))))))
+(put 'portal-rex--kill-query 'permanent-local-hook t)
+
+(defun portal-rex--buffer-killed ()
+  "End this buffer's block, once its kill goes ahead, as the question decided.
+On `kill-buffer-hook' in a block's buffer.  A kill that asked nothing,
+as one that bound `kill-buffer-query-functions' to nil, leaves the block
+running, and says so.  The dead buffer stays in its connection's blocks
+until the block closes, so nothing makes the block another."
+  (when (and portal-rex-block-connection (not portal-rex--killing)
+             (eq (portal-rex-block-buffer portal-rex-block-connection portal-rex-block-id)
+                 (current-buffer)))
+    (if portal-rex--ending
+        (portal-rex--end-block portal-rex-block-connection portal-rex-session-id
+                               portal-rex-block-id portal-rex--block-label)
+      (message "Killed only the buffer: block %s still runs on its Rex server, and gets a buffer again when Emacs next connects"
+               portal-rex--block-label))))
+(put 'portal-rex--buffer-killed 'permanent-local-hook t)
+
+(defun portal-rex--end-block (connection session-id block-id label)
+  "Ask CONNECTION's server to close the block BLOCK-ID of SESSION-ID, called LABEL.
+It returns at once.  The `block_closed' that follows finds the buffer
+gone already.  A block the server cannot close is reported, as still
+running, and so is one whose connection ended before the server
+answered; one that has closed already is not."
+  (let ((report (lambda (why)
+                  (message "Cannot end Rex block %s: %s; it still runs, and gets a buffer again when Emacs next connects"
+                           label why))))
+    (condition-case error
+        (portal-rex--request
+         connection "block.close" (list :session_id session-id :block_id block-id)
+         (lambda (response)
+           (when-let* ((failure (plist-get response :error)))
+             (pcase (plist-get failure :code)
+               ((or "not_found" "session_not_found"))
+               ("portal_disconnected"
+                (message "Rex block %s may still run: the connection ended before the server said it had closed it"
+                         label))
+               (_ (funcall report (plist-get failure :message)))))))
+      (portal-rex-error (funcall report (cadr error))))))
+
+(defun portal-rex--close ()
+  "End this buffer's block by killing the buffer, for `portal-terminal-close'."
+  (kill-buffer (current-buffer)))
+
 ;;; Connecting
 
 (defun portal-rex--attached (connection response)
@@ -894,7 +1067,9 @@ comes with a new block, goes when its block closes or its session is
 destroyed, and is renamed with either label.  `portal-rex-buffers'
 returns them.  A buffer shows its block's screen, a terminal you can
 type in, once a window shows the buffer, and keeps it up to date from
-then on, shown or not.
+then on, shown or not.  Killing a buffer ends its block, asking first
+while the block may be busy, as `portal-terminal-confirm-kill' says;
+burying it keeps the block running.
 
 Once connected, `portal-rex-call' and `portal-rex-call-async' call the
 server's methods, and `portal-rex-event-functions' runs for each event

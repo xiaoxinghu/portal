@@ -38,9 +38,13 @@ was seen to, and as its documentation of data connections says:
   in parts read with com.superlogical.terminal.blob_read when it is longer
   than the paint part; com.superlogical.terminal.write and block.event
   answer, writing nothing anywhere.
-- Answers a terminal's com.superlogical.terminal.title, .pwd and .process
-  from what it knows of the block: no title, no directory and no process
-  until a terminal command or a block event says otherwise.
+- Answers a terminal's com.superlogical.terminal.title, .pwd, .process and
+  .input_mode from what it knows of the block: no title, no directory, no
+  process and cooked input until a terminal command or a block event says
+  otherwise.
+- Closes a block on block.close, by its block_id or its window's
+  window_id: block_closed, then window_closed and session_view_changed
+  for a block that had a window, before its answer.
 - On a data connection, answers a HELLO with the ticket's WELCOME, a nonce
   of its own, then a snapshot of two records and a Rex resize message with
   the block's grid; or with a REJECT, reason 0x01, and a close, for a
@@ -74,9 +78,9 @@ Commands, on standard input:
         now on, as given: a real server adds a placement and more, and
         sorts by block_id. A session without any has no blocks.
     {"result": METHOD, "payload": {...}}
-        Answer METHOD with this payload from now on.
+        Answer METHOD with this payload from now on, if silent before.
     {"error": METHOD, "code": CODE, "message": TEXT, "status": 400}
-        Answer METHOD with this error from now on.
+        Answer METHOD with this error from now on, if silent before.
     {"silent": METHOD}
         Never answer METHOD.
     {"hold": METHOD}
@@ -122,10 +126,13 @@ Commands, on standard input:
         Send every data connection of BLOCK this Rex message, with its nonce.
     {"end_stream": BLOCK, "code": CODE, "reason": TEXT}
         Close every data connection of BLOCK with this close frame.
-    {"terminal": BLOCK, "title": TEXT, "pwd": TEXT, "process": {...}}
+    {"terminal": BLOCK, "title": TEXT, "pwd": TEXT, "process": {...},
+     "input_mode": {...}}
         What BLOCK's terminal methods answer from now on, each given
         replacing what it had: "process" as com.superlogical.terminal.process
-        returns it, with "foreground" and "last_exit".
+        returns it, with "child", "foreground", "ancestors" and "last_exit",
+        and "input_mode" as com.superlogical.terminal.input_mode does, with
+        "echo", "canonical" and "signals".
     {"block_event": BLOCK, "name": NAME, "payload": {...}}
         Send the terminal event NAME of BLOCK, such as "title_changed", to
         every client that attached to BLOCK's session with session.attach,
@@ -547,7 +554,9 @@ def blob_read(client, payload):
 
 
 def terminal(block):
-    return state["terminals"].setdefault(block, {"title": "", "process": {"last_exit": None}})
+    return state["terminals"].setdefault(block, {
+        "title": "", "process": {"last_exit": None},
+        "input_mode": {"echo": True, "canonical": True, "signals": True}})
 
 
 def title(client, payload):
@@ -566,6 +575,11 @@ def pwd(client, payload):
 def process(client, payload):
     block, problem = find_block(payload)
     return problem or terminal(block)["process"]
+
+
+def input_mode(client, payload):
+    block, problem = find_block(payload)
+    return problem or terminal(block)["input_mode"]
 
 
 def session_of(block):
@@ -700,6 +714,28 @@ def set_block_label(client, payload):
     return {"revision": state["revision"]}
 
 
+def close_block(client, payload):
+    session = find_session(payload.get("session_id"))
+    if not session:
+        return error("session_not_found", "session %s not found" % payload.get("session_id"), 404)
+    block, window = payload.get("block_id"), payload.get("window_id")
+    if bool(block) == bool(window):
+        return error("bad_request", "block.close: send exactly one of block_id and window_id", 400)
+    blocks = state["blocks"].get(session["session_id"], [])
+    found = next((known for known in blocks
+                  if (block and known.get("block_id") == block)
+                  or (window and known.get("window_id") == window)), None)
+    if not found:
+        return error("not_found", "%s is not in the session" % (block or window), 404)
+    blocks.remove(found)
+    session_event(session["session_id"], "block_closed", block_id=found["block_id"])
+    if found.get("window_id") and found.get("placement") != "detached":
+        state["revision"] += 1
+        session_event(session["session_id"], "window_closed", window_id=found["window_id"])
+        session_event(session["session_id"], "session_view_changed", revision=state["revision"])
+    return {}
+
+
 # The methods that change what the server has, and send their events
 # before their answer, as a real server does.
 CHANGING = {
@@ -708,6 +744,7 @@ CHANGING = {
     "session.destroy": destroy,
     "session.new_window": new_window,
     "session.set_block_label": set_block_label,
+    "block.close": close_block,
 }
 
 
@@ -723,6 +760,7 @@ SHOWING = {
     "com.superlogical.terminal.title": title,
     "com.superlogical.terminal.pwd": pwd,
     "com.superlogical.terminal.process": process,
+    "com.superlogical.terminal.input_mode": input_mode,
 }
 
 
@@ -734,9 +772,11 @@ def command(value):
         elif "blocks" in value:
             state["blocks"].update(value["blocks"])
         elif "result" in value:
+            state["silent"].discard(value["result"])
             state["errors"].pop(value["result"], None)
             state["results"][value["result"]] = value.get("payload", {})
         elif "error" in value:
+            state["silent"].discard(value["error"])
             state["results"].pop(value["error"], None)
             state["errors"][value["error"]] = {
                 "code": value.get("code", "bad_request"),
@@ -798,7 +838,7 @@ def command(value):
                 client.rex(value["message"])
         elif "terminal" in value:
             known = terminal(value["terminal"])
-            for key in ("title", "pwd", "process"):
+            for key in ("title", "pwd", "process", "input_mode"):
                 if key in value:
                     known[key] = value[key]
         elif "block_event" in value:

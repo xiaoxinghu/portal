@@ -7,8 +7,9 @@ server runs your terminals' programs, so they outlive the applications that
 show them. Portal is becoming a client of that server. Today it can connect to
 one, give each of its blocks a buffer that follows the server and shows the
 block's screen, a terminal you type in with its title, directory and
-program, make, rename and destroy sessions, start new terminals in them, and
-call its methods and receive its events from Lisp; see
+program, make, rename and destroy sessions, start new terminals in them, end
+a block by killing its buffer, and call its methods and receive its events
+from Lisp; see
 [what is not built](#what-is-not-built).
 
 Rex is optional. Portal's own [terminals](terminals.md) run their shells
@@ -18,6 +19,7 @@ themselves and need no Rex installed.
 - [A buffer for every block](#a-buffer-for-every-block)
 - [A block's screen](#a-blocks-screen)
 - [Sessions and new terminals](#sessions-and-new-terminals)
+- [End a block](#end-a-block)
 - [A block's details](#a-blocks-details)
 - [Portal's terminal commands](#portals-terminal-commands)
 - [Appearance](#appearance)
@@ -87,10 +89,9 @@ A buffer is in `portal-terminal-mode`, the mode of Portal's
 and its text says which block it is; once one does, it shows
 [the block's screen](#a-blocks-screen).
 
-Killing one of these buffers yourself kills only the buffer, and Emacs says
-so, without asking first, whatever `portal-terminal-confirm-kill` says: the
-block still runs, and gets no other buffer until Emacs next connects to its
-server. Ending a block from Emacs is [not built](#what-is-not-built).
+Killing one of these buffers yourself ends its block, asking first while
+the block may be busy: see [End a block](#end-a-block). To put a terminal
+out of the way and keep it running, bury its buffer instead.
 
 Two things to know about names:
 
@@ -304,6 +305,71 @@ started outside any project asks as the default does. A Rex terminal's
 buffer is in the directory it started in, so one started from it joins the
 same project's session. Portal's tests run this example as written here.
 
+## End a block
+
+Every block is a buffer, so killing a block's buffer ends the block, with
+Rex's `block.close`, as closing its tab in Rex's app would: its program
+ends, and its tab goes from the app. There is no "keep it running" answer.
+To put a terminal out of the way without ending it, bury its buffer:
+`bury-buffer`, `quit-window`, or switch to another. Its block runs on, and
+its buffer is there in `C-x b` and Ibuffer.
+
+A kill must not cost a long-running job by accident, so it asks first when
+the block may be busy:
+
+| When it is killed, the block | Killing its buffer |
+| --- | --- |
+| Is at its shell's prompt | Ends it at once, without a question. |
+| Runs a program, an editor, an agent, `ssh` or a pager included | Asks first, naming the program: `Rex block work/api is running sleep; end it?` No keeps the buffer and the block. |
+| Cannot be told: no answer within a quarter of a second, an error, a block still starting | Asks first, as for a busy one, saying why. |
+| Has a program that has exited | Ends it, without a question. |
+
+Portal keeps no record of which blocks are busy: it asks the server at kill
+time, with two calls sent together, and waits a quarter of a second at most,
+so a server that has stopped answering costs that and a question, never a
+hang. A block is idle when its foreground is its own shell (under `login`,
+as every shell block on macOS is, its direct child) and the shell's line
+editor is reading. Anything deeper, such as a subshell, a nested shell or
+a pager under `git`, is busy, and so is a block started with a command
+rather than a shell. Two things read as idle that are not quite: a shell
+with jobs in the background or stopped, a `^Z`'d editor among them, which
+end with the block without a question; and a program reading through the
+shell's line editor, such as zsh's `vared`.
+
+`portal-terminal-confirm-kill`, the option of Portal's own terminals, says
+when to ask:
+
+| Value | Asks |
+| --- | --- |
+| `t`, the default | When the block may be busy, as above. |
+| `always` | For every block whose program runs, an idle one too: `End Rex block work/api, zsh at its prompt?` |
+| `nil` | Never, and the server is not asked whether it is busy. |
+
+The same rule holds however the buffer is killed: `C-x k`, Ibuffer, Embark,
+`portal-terminal-kill-pane`, and `portal-terminal-close` (`C-c C-k`), which
+in a block's buffer ends the block. `portal-terminal-close-all` ends every
+terminal whose view is open, the blocks shown in Emacs among them, and
+leaves blocks never shown alone. Killing several at once, as Ibuffer kills
+its marked buffers, ends the idle ones and asks about each busy one by
+name.
+
+Nothing else ends a block:
+
+- Quitting Emacs, disconnecting and a lost connection kill the buffers and
+  end nothing: connect again, and every block has its buffer again.
+- The buffers Portal kills because the server says a block closed or a
+  session was destroyed ask nothing and call nothing.
+- A server that goes while a kill asks it, or while the question waits for
+  you, takes its buffers with it, and the kill ends nothing.
+- A kill that runs no question, as when a program binds
+  `kill-buffer-query-functions` to nil, cannot know the block is idle, so it
+  kills only the buffer and says so; the block gets a buffer again when
+  Emacs next connects.
+
+Once the kill goes ahead, the buffer goes at once, and the server is asked
+to close the block without Emacs waiting for it. A server that refuses says
+why in the echo area, and the block runs on.
+
 ## A block's details
 
 A block's buffer knows what its terminal reports, as a local terminal's
@@ -360,8 +426,8 @@ moment Emacs connects:
 | `portal-terminal-new`, `-split-below`, `-split-right`, `portal-terminal-start` | Start one of Portal's own terminals, in the block's directory. `portal-rex-new-terminal` starts a block instead. |
 | `portal-terminal-focus` (`RET`) | Gives the view the keyboard, opening it first if a window shows the buffer. |
 | `portal-terminal-zoom` | Zooms the pane, as for any buffer. |
-| `portal-terminal-close` (`C-c C-k`), `portal-terminal-close-all` | Close the view and leave the block running; the view opens again when a window next shows the buffer. |
-| `portal-terminal-kill-pane`, `kill-buffer` | Kill the buffer only, without asking: the block runs on, as [above](#a-buffer-for-every-block). |
+| `portal-terminal-close` (`C-c C-k`), `portal-terminal-kill-pane`, `kill-buffer` | End the block, which kills the buffer, asking first while it may be busy, as [above](#end-a-block). |
+| `portal-terminal-close-all` | Ends every terminal whose view is open, a block shown in Emacs as `portal-terminal-close` does; blocks never shown are left alone. |
 | Embark's terminal actions | Select, rename, set the project and kill as above; Dired and copying the directory need the block's directory, known once it has been shown; "another shell" starts one of Portal's own terminals there. |
 | `portal-terminal-toggle`, the quick terminal | Never a block's buffer: a project's quick terminal is always one of Portal's own. Toggled from a block's buffer, it goes by the project being edited, as from any other. |
 
@@ -510,7 +576,6 @@ pin when it would.
 
 Portal's Rex client is being built in steps. Not built yet:
 
-- Ending a block by killing its buffer.
 - Sharing a block's size with Rex's other clients: see [Size](#size).
 - Reconnecting, and resuming a block's output after a dropped connection.
 - Restoring the arrangement of Rex terminals with bookmarks or the desktop.
