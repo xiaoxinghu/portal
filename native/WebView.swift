@@ -126,7 +126,7 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
     /// The view's target, which names it in every call to the core.
     let target: String
     /// Whether the page is a hosted app's, which keeps nothing between sessions.
-    private let hosted: Bool
+    let hosted: Bool
 
     /// What an ordinary page adds to WebKit's user agent: Safari's own
     /// suffix, as the installed Safari, which ships with the system's
@@ -339,7 +339,8 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         let request = WindowRequest(configuration: configuration)
-        return Core.window(target, request: request) ? request.page : nil
+        let url = action.request.url?.absoluteString ?? ""
+        return Core.window(target, url: url, request: request) ? request.page : nil
     }
 
     /// The page closed its window, as window.close does in a window a script opened.
@@ -393,6 +394,17 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
     /// found the first match again. The setting is lost on navigation, so
     /// each commit sets it. Without WebKit's calls, the page loses its
     /// selection as before.
+    /// The page keeps drawing while its window is covered or on another
+    /// Space, through WebKit's private `_setWindowOcclusionDetectionEnabled:`,
+    /// when this WebKit has it. Otherwise WebKit marks the page hidden
+    /// there: it receives what it is sent but paints nothing until shown.
+    func drawsWhileOccluded() {
+        let selector = NSSelectorFromString("_setWindowOcclusionDetectionEnabled:")
+        guard responds(to: selector) else { return }
+        typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+        unsafeBitCast(method(for: selector), to: Setter.self)(self, selector, false)
+    }
+
     private func keepSelection() {
         let pageRef = NSSelectorFromString("_pageRefForTransitionToWKWebView")
         guard let set = Self.maintainsInactiveSelection, responds(to: pageRef) else { return }
@@ -1298,12 +1310,18 @@ final class WebSession: PortalView {
     /// made from its configuration, which keeps the opener's data store and
     /// makes the opener the new page's. The new page gets its own scripts,
     /// and Web Inspector attaches to it when it does to the opener.
+    ///
+    /// A hosted app's window, such as a drawing's slide window, keeps drawing
+    /// while it is covered or on another Space, where WebKit would otherwise
+    /// hide its page: a window shared in a call must show the slide it was
+    /// sent, not the one it had when it was covered.
     convenience init(target: String, opener: WebSession, request: WindowRequest) {
         request.configuration.userContentController = WKUserContentController()
         var inspectable = false
         if #available(macOS 13.3, *) { inspectable = opener.page.isInspectable }
         let page = WebPage(target: target, configuration: request.configuration, hosted: false,
                            inspectable: inspectable)
+        if opener.page.hosted { page.drawsWhileOccluded() }
         self.init(page: page, appearance: opener.page.choice)
         request.page = page
     }

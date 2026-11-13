@@ -33,9 +33,11 @@
    finishes or fails.  Closing a view cancels its downloads; each keeps its
    name taken until the platform reports its end.
 
-   Windows.  A page that is not a hosted app's may open windows, as
-   window.open and links to target=_blank do: each is a new web view, which
-   Emacs hears of with an "opened NEW OPENER" record and gives a buffer.  A
+   Windows.  A page may open windows, as window.open and links to
+   target=_blank do: each is a new web view, which Emacs hears of with an
+   "opened NEW OPENER" record and gives a buffer.  A hosted app's page may
+   open one only at its own address's origin, as a drawing opens its slide
+   window; its links to other sites still go to the default browser.  A
    window may close itself, as window.close does, which Emacs hears of with
    a "closed TARGET" record; no other view can.  Each page a window commits
    sends a "web TARGET" record, and no other until Emacs has inspected the
@@ -935,12 +937,14 @@ portal_navigation portal_web_navigating(portal_string target, portal_string url,
     return PORTAL_NAVIGATION_EMACS;
 }
 
-bool portal_web_window(portal_string target, void *request)
+bool portal_web_window(portal_string target, portal_string url, void *request)
 {
     struct portal_web_state *web, *window;
     portal_string opened;
     portal_view *native = find(target, &web);
-    if (!native || web->hosted || !portal_views_open_window(native, request, &opened, &window))
+    if (!native
+        || (web->hosted && !(web->address.data && same_origin(url, borrow(web->address))))
+        || !portal_views_open_window(native, request, &opened, &window))
         return false;
     window->window = true;
     if (portal_channel_send(literal("opened"), opened, &target, 1))
