@@ -1475,6 +1475,23 @@ static void test_fresh_streams(void)
     answer_with(id, 11, "{\"content\":\"NEW\"}", NULL);
     CHECK(is_text(fresh(target), "<grid 80x24>NEWafter"));
     CHECK(strstr(rex_state(target), "\"state\":\"live\"") != NULL);
+    /* Streams that keep ending after their snapshots, before their paints,
+       show nothing, and the show gives up after three. */
+    int number = 12;
+    portal_fake_socket_sent(id);
+    for (int i = 0; i < 4; i++) {
+        portal_fake_socket_closed(portal_fake_socket_last(), 1013,
+                                  "The server closed the connection (1013: data reconnect required)");
+        if (i == 3)
+            break;
+        answer_with(id, number, "{\"ticket\":\"AAECAwQFBgcICQoLDA0ODw\"}", NULL);
+        data = portal_fake_socket_last();
+        portal_fake_socket_deliver_bytes(data, welcome, sizeof welcome);
+        portal_fake_socket_deliver_bytes(data, snapshot, sizeof snapshot - 1);
+        number += 2;
+    }
+    CHECK(strstr(rex_state(target), "\"state\":\"failed\"") != NULL);
+    CHECK(strstr(rex_state(target), "keeps ending") != NULL);
     CHECK(portal_views_close(text(target), &error));
     free(target);
     CHECK(portal_rex_close(id, &error));

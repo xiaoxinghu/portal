@@ -70,7 +70,7 @@ enum {
        past it, the stream waits unread, and so does the server. */
     HELD_MOST = 4 << 20,
     /* How many times in a row a block's stream may end before it shows
-       anything, before the show gives up. */
+       anything, a paint or live output, before the show gives up. */
     STREAM_TRIES = 3,
 };
 
@@ -1485,11 +1485,12 @@ static void stream_message(struct shown *shown, const char *bytes, size_t length
 {
     if (shown->resuming)
         return greeted(shown, (const unsigned char *) bytes, length);
-    /* Every byte after a WELCOME is the stream's, and counts for a RESUME. */
-    if (shown->stage > GREETING) {
+    /* Every byte after a WELCOME is the stream's, and counts for a RESUME.
+       Only output shown says the stream works: a snapshot alone does not. */
+    if (shown->stage > GREETING)
         shown->received += length;
+    if (shown->stage == LIVE)
         shown->tries = 0;
-    }
     switch (shown->stage) {
     case GREETING:
         return greeted(shown, (const unsigned char *) bytes, length);
@@ -1557,6 +1558,7 @@ static void paint(struct shown *shown)
     if (shown->painted_once)
         feed(shown, "\x1b" "c\x1b[3J", 6);
     shown->painted_once = true;
+    shown->tries = 0;
     hold(shown);
     feed(shown, shown->paint.data, shown->paint.length);
     clear(&shown->paint);
