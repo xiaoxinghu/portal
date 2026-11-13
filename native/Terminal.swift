@@ -188,9 +188,12 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
         var frame = pane.bounds
         if let held = heldGrid, let cell {
             // The grid, Ghostty's padding, and half a cell to spare, so that
-            // rounding never loses a row or a column.
+            // rounding never loses a row or a column. Ghostty leaves the
+            // spare below the grid and to its right, so the view hangs that
+            // much below the pane: the grid's last row sits at the pane's
+            // bottom, and a grid that fits the pane is never clipped.
             let padding = 2 * Self.padding * cell.scale
-            frame = CGRect(x: 0, y: 0,
+            frame = CGRect(x: 0, y: -cell.height / 2 / cell.scale,
                            width: (Double(held.columns) * cell.width + padding + cell.width / 2) / cell.scale,
                            height: (Double(held.rows) * cell.height + padding + cell.height / 2) / cell.scale)
         }
