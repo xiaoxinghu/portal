@@ -141,7 +141,9 @@ that gives it back to the console, with `select-frame-set-input-focus` and
 `portal-view-focus`, once the window is shown. As the page leaves Present,
 the drawing drops the windows its page opened whose `portal-web-opened`
 events still wait, and closes their views: they belong to a Present that is
-over. Closing the drawing's view does the same. While any slide window is open,
+over. Closing the drawing's view does the same, and the core closes the
+windows it opened that Emacs has not heard of yet: a hosted app's windows
+close with it. While any slide window is open,
 `frame-resize-pixelwise` is `t`, and afterwards as it was.
 
 No ending cleans up after itself: killing the slide window's buffer, or the

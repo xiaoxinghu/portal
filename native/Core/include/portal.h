@@ -725,9 +725,10 @@ void portal_web_download_finished(uint64_t download, const portal_string *error)
    opens a web view for it with portal_web_create_window, passing REQUEST
    through, and returns whether it did; the platform then gives the page
    that view.  A hosted app opens a window only at its own origin, never
-   about:blank or another site.  Emacs hears of the view with an
-   "opened NEW TARGET" record, NEW being the view's target, and gives it a
-   buffer. */
+   about:blank or another site, and its windows close with it: closing its
+   view sends a "closed" record for each still open, as portal_web_closed
+   does.  Emacs hears of the view with an "opened NEW TARGET" record, NEW
+   being the view's target, and gives it a buffer. */
 bool portal_web_window(portal_string target, portal_string url, void *request);
 /* The page in TARGET closed its window, as window.close does.  When TARGET
    is a window a page opened, the core tells Emacs with a "closed TARGET"

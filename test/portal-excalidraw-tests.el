@@ -522,6 +522,32 @@ Deleting a frame is recorded in `portal-excalidraw-test--frames'."
         (should (plist-get (portal--inspect target) :focused))
         (should-not (plist-get (portal--inspect second) :focused))))))
 
+(ert-deftest portal-excalidraw-a-slide-window-heard-of-after-the-drawing-ended-closes ()
+  ;; The page opened a window, and the drawing is killed or reopened before
+  ;; Emacs reads the window's record: the core closes a hosted app's
+  ;; windows with it, and the window goes, owned by nothing.
+  (dolist (end (list (lambda (drawing) (kill-buffer drawing))
+                     (lambda (drawing)
+                       (with-current-buffer drawing
+                         (cl-letf (((symbol-function 'portal-excalidraw--flush) #'ignore))
+                           (portal-excalidraw-reopen))))))
+    (portal-excalidraw-test--presenting
+      (let ((before (buffer-list)) records late)
+        (with-current-buffer drawing
+          (setq portal-excalidraw--ready nil)
+          (set-buffer-modified-p nil))
+        ;; Hold the records back, as a pipe Emacs has not read does.
+        (cl-letf (((symbol-function 'portal-fake-native-send)
+                   (lambda (&rest reads) (setq records (append records reads)))))
+          (setq late (portal-fake-native-open-window
+                      target "http://127.0.0.1:1/token/excalidraw/audience"))
+          (funcall end drawing))
+        (apply #'portal-fake-native-send records)
+        (portal-excalidraw-test--run-events)
+        (should-not (portal--inspect late))
+        (should-not (buffer-live-p (portal-view--target-buffer late)))
+        (should-not (cl-set-difference (buffer-list) before))))))
+
 (ert-deftest portal-excalidraw-presenting-again-after-reopening-shows-the-slide-window ()
   (portal-excalidraw-test--presenting
     ;; Present, and reopen before Emacs shows the window.

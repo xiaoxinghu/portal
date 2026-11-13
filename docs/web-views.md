@@ -319,7 +319,10 @@ are ignored. A hosted app opens a window only on the app host's own origin, as
 a drawing opens its [slide window](excalidraw.md#presenting): links to other
 sites still open in the default browser, and `about:blank` opens nothing.
 Such a window keeps drawing while another window covers it or it is on
-another Space, where WebKit would otherwise stop painting it.
+another Space, where WebKit would otherwise stop painting it. It belongs to
+the app: when the app's view closes, the window closes as if it had closed
+itself, even before Emacs gave it a buffer. Other windows outlive the page
+that opened them.
 
 A buffer whose page opens windows can choose where they show: its
 buffer-local `portal-web-window-action`, a `display-buffer` action, is used in

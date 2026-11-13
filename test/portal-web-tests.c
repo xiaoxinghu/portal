@@ -696,7 +696,31 @@ static void test_hosted_apps_open_windows_on_their_origin(void)
     portal_web_closed(text(window));
     CHECK(sent(window, "closed %s\n"));
     close_view(window);
+    /* The app's windows still open close with it, even one Emacs has not
+       heard of yet; each is closed once. */
+    CHECK(portal_web_window(text(app_view), text(asked), asked));
+    char *shown = opened(app_view);
+    CHECK(shown);
+    CHECK(portal_web_window(text(app_view), text(asked), asked));
+    char *unheard = opened(app_view);
+    CHECK(unheard);
     close_view(app_view);
+    char expected[128];
+    snprintf(expected, sizeof expected, "closed %s\nclosed %s\n", shown, unheard);
+    CHECK(sent(expected, "%s"));
+    close_view(shown);
+    close_view(unheard);
+    CHECK(sent("", ""));
+    /* An ordinary page's window outlives it. */
+    char *page = open_web(false);
+    char popup[] = "https://example.com/popup";
+    CHECK(portal_web_window(text(page), text(popup), popup));
+    char *orphan = opened(page);
+    CHECK(orphan);
+    close_view(page);
+    CHECK(sent("", ""));
+    CHECK(shows(orphan, "\"kind\":\"web\"", NULL));
+    close_view(orphan);
 }
 
 /* A window opens only for a page that may have one, and only when the

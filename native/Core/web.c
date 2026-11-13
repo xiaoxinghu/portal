@@ -38,6 +38,10 @@
    "opened NEW OPENER" record and gives a buffer.  A hosted app's page may
    open one only at its own address's origin, as a drawing opens its slide
    window; its links to other sites still go to the default browser.  A
+   hosted app's windows are its own: when its view closes, each of them
+   still open sends a "closed TARGET" record, as if it had closed itself,
+   even one Emacs has not given a buffer yet.  Other windows outlive the
+   page that opened them, as a browser's do.  A
    window may close itself, as window.close does, which Emacs hears of with
    a "closed TARGET" record; no other view can.  Each page a window commits
    sends a "web TARGET" record, and no other until Emacs has inspected the
@@ -111,6 +115,7 @@ struct portal_web_state {
     struct message *first, *last; /* Waiting messages, oldest first. */
     bool announced;              /* Whether a bridge record went out for them. */
     bool window;                 /* Whether a page opened it, as a new window. */
+    portal_text app;             /* A hosted app's window: the app's target. */
 };
 
 /* The shared scripts, embedded with C23's #embed, which Clang and GCC 15
@@ -705,6 +710,7 @@ void portal_web_state_free(struct portal_web_state *web)
     free_messages(web);
     free(web->address.data);
     free(web->page.data);
+    free(web->app.data);
     free(web);
 }
 
@@ -947,13 +953,31 @@ bool portal_web_window(portal_string target, portal_string url, void *request)
         || !portal_views_open_window(native, request, &opened, &window))
         return false;
     window->window = true;
-    if (portal_channel_send(literal("opened"), opened, &target, 1))
+    if ((!web->hosted || copy(target, &window->app))
+        && portal_channel_send(literal("opened"), opened, &target, 1))
         return true;
     /* Emacs would never hear of it, so it never gets a buffer. */
     portal_text error = {0};
     portal_views_close(opened, &error);
     free(error.data);
     return false;
+}
+
+/* Have WINDOW close if the hosted app at *APP opened it. */
+static bool close_app_window(portal_string window, struct portal_web_state *web, void *app)
+{
+    if (web->app.data && same(borrow(web->app), *(portal_string *) app)) {
+        free(web->app.data);
+        web->app = (portal_text) {0};
+        portal_channel_send(literal("closed"), window, NULL, 0);
+    }
+    return true;
+}
+
+void portal_web_closing(portal_string target, const struct portal_web_state *web)
+{
+    if (web && web->hosted)
+        portal_views_each_web_target(close_app_window, &target);
 }
 
 void portal_web_closed(portal_string target)
