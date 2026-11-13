@@ -51,6 +51,7 @@ add_custom_command(
         host/icons/portal-32.png host/icons/portal-64.png host/icons/portal-256.png
         host/package.json host/bun.lock host/tsconfig.json host/build-editor.ts
         host/editor-bootstrap.ts host/excalidraw.tsx host/excalidraw.html host/excalidraw.css host/slides.ts
+        host/audience.ts host/audience.html host/present.ts
         "${BUN}"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     COMMENT "Compiling the standalone Bun UI host"

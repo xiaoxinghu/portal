@@ -31,6 +31,13 @@ import { createRoot } from "react-dom/client";
 import "@excalidraw/excalidraw/index.css";
 import "./excalidraw.css";
 import {
+	type AudienceMessage,
+	type PresentKey,
+	presentKey,
+	type ShowMessage,
+	stepSlide,
+} from "./present";
+import {
 	type Frame,
 	moveSlide,
 	nearestSlide,
@@ -51,8 +58,8 @@ type Message = {
 	mode?: string;
 };
 
-/** The page's screen: the editor, or Arrange covering it. */
-type Mode = "draw" | "arrange";
+/** The page's screen: the editor, or Arrange or the console covering it. */
+type Mode = "draw" | "arrange" | "present";
 
 const rootElement = document.getElementById("root");
 if (!rootElement) throw new Error("Missing editor root element");
@@ -74,11 +81,43 @@ let previousFiles: BinaryFiles | undefined;
 let changeTimer: ReturnType<typeof setTimeout> | undefined;
 let setStatus: (value: string) => void = () => {};
 let setMode: (mode: Mode) => void = () => {};
-/** Arrange's keys, while it is shown; they come before the editor's. */
-let arrangeKeys: ((event: KeyboardEvent) => void) | undefined;
+/** The keys of the screen covering the editor, Arrange or the console,
+ * while it is shown; they come before the editor's. */
+let screenKeys: ((event: KeyboardEvent) => void) | undefined;
 /** Set while Arrange hands a key to the editor under it. */
 let forwarding = false;
 const post = (message: object) => window.portalBridge?.postMessage(message);
+/** Something Emacs should say, which is not a failure of the drawing. */
+const notice = (message: string) => post({ type: "notice", message });
+
+// The slide window, while presenting: a page this one opened, which shows
+// the slide it is sent and sends back the presenting keys pressed there.
+// Emacs shows it in its own frame, and closes it when presenting stops.
+let audience: Window | null = null;
+/** The slide window, once it has said it is ready. */
+let readyAudience: Window | null = null;
+let opens = 0;
+/** The console's handlers for what the slide window says. */
+let audienceReady: (() => void) | undefined;
+let audienceKey: ((key: PresentKey) => void) | undefined;
+window.addEventListener("message", (event) => {
+	if (!audience || event.source !== audience) return;
+	if (event.origin !== location.origin) return;
+	const message = event.data as Partial<AudienceMessage> | null;
+	if (message?.type === "ready") {
+		readyAudience = audience;
+		audienceReady?.();
+	} else if (message?.type === "key" && typeof message.key === "string")
+		audienceKey?.(message.key);
+});
+
+/** Open the slide window. Each Present has a window name of its own: a
+ * page of the last one can outlive its buffer for a moment, and opening a
+ * name it still has would load this one there, with no new window. */
+function openAudience() {
+	opens++;
+	return window.open("./audience", `portal-slides-${Date.now()}-${opens}`);
+}
 
 function currentJSON() {
 	if (!api || !initialized) throw new Error("The drawing is still loading");
@@ -146,23 +185,54 @@ function Editor({
 	const [status, updateStatus] = useState("Saved");
 	setStatus = updateStatus;
 	const [mode, updateMode] = useState<Mode>("draw");
-	setMode = updateMode;
+	// The slide Arrange selects and the console shows: one, so that each
+	// starts where the other left off.
+	const [slideId, setSlideId] = useState<string>();
+	const screen = useRef(mode);
+	/** Show screen NEXT. Leaving the editor starts at the slide nearest the
+	 * middle of its view. Present opens the slide window first, and does not
+	 * start without it; leaving Present forgets it, and Emacs closes it. */
+	const show = (next: Mode) => {
+		if (!api || next === screen.current) return;
+		const frames = slideFrames(api.getSceneElements());
+		if (next === "present") {
+			if (frames.length === 0)
+				return notice("This drawing has no slides: draw a frame for each");
+			audience = openAudience();
+			if (!audience) return notice("Portal did not open the slide window");
+		} else audience = null;
+		if (screen.current === "draw") {
+			const view = api.getAppState();
+			const zoom = view.zoom.value;
+			const nearest = nearestSlide(frames, {
+				x: view.width / 2 / zoom - view.scrollX,
+				y: view.height / 2 / zoom - view.scrollY,
+			});
+			setSlideId(frames[nearest]?.id);
+		}
+		screen.current = next;
+		updateMode(next);
+		// Emacs hears of every screen shown, here rather than once React has
+		// drawn it: React may draw only the last of several, and Emacs closes
+		// the slide window as the page leaves Present.
+		post({ type: "mode", mode: next });
+	};
+	setMode = show;
 	const shownMode = useRef(mode);
 	useEffect(() => {
 		if (shownMode.current === mode) return;
 		shownMode.current = mode;
-		post({ type: "mode", mode });
-		// The editor was inert under Arrange, which took its focus.
+		// The editor was inert under Arrange or the console, which took its focus.
 		if (mode === "draw")
 			document.querySelector<HTMLElement>(".excalidraw-container")?.focus();
 	}, [mode]);
 	const editSlide = (frame: Frame) => {
-		updateMode("draw");
+		show("draw");
 		api?.scrollToContent(frame, { fitToViewport: true });
 	};
 	return (
 		<>
-			<div className="portal-editor" inert={mode === "arrange"}>
+			<div className="portal-editor" inert={mode !== "draw"}>
 				<Excalidraw
 					theme={isDark ? "dark" : "light"}
 					initialData={initialData}
@@ -210,8 +280,11 @@ function Editor({
 				>
 					<MainMenu>
 						<MainMenu.Item onSelect={requestSave}>Save drawing</MainMenu.Item>
-						<MainMenu.Item onSelect={() => updateMode("arrange")}>
+						<MainMenu.Item onSelect={() => show("arrange")}>
 							Slides
+						</MainMenu.Item>
+						<MainMenu.Item onSelect={() => show("present")}>
+							Present
 						</MainMenu.Item>
 						<MainMenu.DefaultItems.ClearCanvas />
 						<MainMenu.DefaultItems.ChangeCanvasBackground />
@@ -222,8 +295,19 @@ function Editor({
 				<Arrange
 					editor={api}
 					status={status}
-					onDraw={() => updateMode("draw")}
+					selectedId={slideId}
+					onSelect={setSlideId}
+					onDraw={() => show("draw")}
 					onEdit={editSlide}
+					onPresent={() => show("present")}
+				/>
+			)}
+			{mode === "present" && api && (
+				<Present
+					editor={api}
+					slideId={slideId}
+					onSelect={setSlideId}
+					onStop={() => show("arrange")}
 				/>
 			)}
 		</>
@@ -254,8 +338,15 @@ async function renderSlide(frame: Frame, scene: Scene) {
 		files: scene.files,
 		exportingFrame: frame,
 	});
-	return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg.outerHTML)}`;
+	const text = svg.outerHTML;
+	return {
+		svg: text,
+		url: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(text)}`,
+	};
 }
+
+/** A slide's image: its SVG, for the slide window, and that as a URL. */
+type SlideImageData = Awaited<ReturnType<typeof renderSlide>>;
 
 // Images last as long as the page, so a slide that did not change since
 // Arrange was last shown is not drawn again.
@@ -266,7 +357,7 @@ function imagesChanged() {
 	imagesVersion++;
 	for (const listener of imageListeners) listener();
 }
-const slideImages = new SlideImages<string>(
+const slideImages = new SlideImages<SlideImageData>(
 	renderSlide,
 	(id) => {
 		failedSlides.delete(id);
@@ -286,7 +377,7 @@ function subscribeToImages(listener: () => void) {
 function SlideImage({ frame, alt }: { frame: Frame; alt: string }) {
 	const image = slideImages.image(frame.id);
 	// Not dragged as an image: dragging a slide moves it in the filmstrip.
-	if (image) return <img src={image} alt={alt} draggable={false} />;
+	if (image) return <img src={image.url} alt={alt} draggable={false} />;
 	return (
 		<span className="portal-slide-pending">
 			{failedSlides.has(frame.id) ? "Could not draw this slide" : ""}
@@ -356,38 +447,14 @@ type Drag = {
 	moving: boolean;
 };
 
-/** The Arrange screen: the slides in order, the selected one large, and its
- * notes. It covers the editor, which stays loaded under it. Its edits,
- * order, names and notes, are written to the frames in the editor's scene. */
-function Arrange({
-	editor,
-	status,
-	onDraw,
-	onEdit,
-}: {
-	editor: ExcalidrawImperativeAPI;
-	status: string;
-	onDraw: () => void;
-	onEdit: (frame: Frame) => void;
-}) {
+/** The editor's slides, in order, kept up to date with its scene, and the
+ * one whose id is SLIDE_ID, or the first; their images are drawn now, and
+ * again a moment after each change to the scene. SET_SCENE shows the
+ * editor's scene at once, as after an edit. */
+function useDeck(editor: ExcalidrawImperativeAPI, slideId: string | undefined) {
 	const [scene, setScene] = useState(() => currentScene(editor));
 	const frames = useMemo(() => slideFrames(scene.elements), [scene.elements]);
-	const [selectedId, setSelectedId] = useState(() => {
-		const view = editor.getAppState();
-		const zoom = view.zoom.value;
-		const index = nearestSlide(frames, {
-			x: view.width / 2 / zoom - view.scrollX,
-			y: view.height / 2 / zoom - view.scrollY,
-		});
-		return frames[index]?.id;
-	});
 	useSyncExternalStore(subscribeToImages, () => imagesVersion);
-	const found = frames.findIndex((frame) => frame.id === selectedId);
-	const index = found < 0 ? 0 : found;
-	const selected = frames[index];
-	const list = useRef<HTMLDivElement>(null);
-
-	// Draw images now, and again a moment after each change to the scene.
 	useEffect(() => {
 		slideImages.update(scene);
 	}, [scene]);
@@ -402,6 +469,38 @@ function Arrange({
 			stop();
 		};
 	}, [editor]);
+	const found = frames.findIndex((frame) => frame.id === slideId);
+	const index = found < 0 ? 0 : found;
+	return { setScene, frames, index, current: frames[index] };
+}
+
+/** The Arrange screen: the slides in order, the selected one large, and its
+ * notes. It covers the editor, which stays loaded under it. Its edits,
+ * order, names and notes, are written to the frames in the editor's scene. */
+function Arrange({
+	editor,
+	status,
+	selectedId,
+	onSelect,
+	onDraw,
+	onEdit,
+	onPresent,
+}: {
+	editor: ExcalidrawImperativeAPI;
+	status: string;
+	selectedId: string | undefined;
+	onSelect: (id: string) => void;
+	onDraw: () => void;
+	onEdit: (frame: Frame) => void;
+	onPresent: () => void;
+}) {
+	const {
+		setScene,
+		frames,
+		index,
+		current: selected,
+	} = useDeck(editor, selectedId);
+	const list = useRef<HTMLDivElement>(null);
 
 	/** Write to the frames, then show the scene at once, so that the next
 	 * edit starts from this one. */
@@ -411,7 +510,7 @@ function Arrange({
 			writeFrames(editor, fields);
 			setScene(currentScene(editor));
 		},
-		[editor],
+		[editor, setScene],
 	);
 	/** Move the slide ID to the place TO gives for where it is now. Both
 	 * come from the editor's scene as it is, not from what Arrange shows,
@@ -489,7 +588,7 @@ function Arrange({
 	}, [selected]);
 
 	useEffect(() => {
-		arrangeKeys = (event) => {
+		screenKeys = (event) => {
 			const plain =
 				!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
 			const option =
@@ -524,7 +623,7 @@ function Arrange({
 			const step = (by: number) => {
 				const next =
 					frames[Math.max(0, Math.min(frames.length - 1, index + by))];
-				if (next) setSelectedId(next.id);
+				if (next) onSelect(next.id);
 			};
 			if (plain && event.key === "ArrowUp") step(-1);
 			else if (plain && event.key === "ArrowDown") step(1);
@@ -539,9 +638,19 @@ function Arrange({
 			event.preventDefault();
 		};
 		return () => {
-			arrangeKeys = undefined;
+			screenKeys = undefined;
 		};
-	}, [editor, frames, index, selected, move, onDraw, onEdit]);
+	}, [
+		editor,
+		frames,
+		index,
+		selected,
+		move,
+		onSelect,
+		onDraw,
+		onEdit,
+		setScene,
+	]);
 
 	// Dragging a slide: the pointer goes down on it and moves; where it lets
 	// go, between which two slides, is where the slide goes.
@@ -598,7 +707,7 @@ function Arrange({
 		setTimeout(() => {
 			dragged.current = false;
 		});
-		setSelectedId(drag.id);
+		onSelect(drag.id);
 		move(drag.id, () => drag.to);
 	};
 	const dropMark = (at: number) => {
@@ -619,6 +728,9 @@ function Arrange({
 				</span>
 				<button type="button" onClick={onDraw}>
 					Draw
+				</button>
+				<button type="button" onClick={onPresent} disabled={!selected}>
+					Present
 				</button>
 			</header>
 			{selected ? (
@@ -649,7 +761,7 @@ function Arrange({
 								tabIndex={-1}
 								aria-selected={frame === selected}
 								onClick={() => {
-									if (!dragged.current) setSelectedId(frame.id);
+									if (!dragged.current) onSelect(frame.id);
 								}}
 								onDoubleClick={(event) => {
 									if (!isField(event.target)) onEdit(frame);
@@ -668,7 +780,7 @@ function Arrange({
 											: (frame.name ?? "")
 									}
 									placeholder={slideName(frame)}
-									onFocus={() => setSelectedId(frame.id)}
+									onFocus={() => onSelect(frame.id)}
 									onChange={(event) => {
 										name.current = { id: frame.id, text: event.target.value };
 										renamed((count) => count + 1);
@@ -714,6 +826,104 @@ function Arrange({
 	);
 }
 
+/** Send the slide window IMAGE, slide INDEX of COUNT, to show. */
+function showSlide(
+	image: SlideImageData | undefined,
+	index: number,
+	count: number,
+) {
+	if (!audience || audience.closed || !image) return;
+	const show: ShowMessage = { type: "show", svg: image.svg, index, count };
+	audience.postMessage(show, location.origin);
+}
+
+/** The console, while presenting: the slide the slide window shows, where
+ * it is in the deck, and the buttons that move and stop. It covers the
+ * editor, as Arrange does, and drives the slide window. */
+function Present({
+	editor,
+	slideId,
+	onSelect,
+	onStop,
+}: {
+	editor: ExcalidrawImperativeAPI;
+	slideId: string | undefined;
+	onSelect: (id: string) => void;
+	onStop: () => void;
+}) {
+	const { frames, index, current } = useDeck(editor, slideId);
+	const image = current && slideImages.image(current.id);
+	const count = frames.length;
+	const pane = useRef<HTMLDivElement>(null);
+
+	const act = (key: PresentKey) => {
+		const next = stepSlide(key, index, count);
+		if (next === undefined) onStop();
+		else if (frames[next]) onSelect(frames[next].id);
+	};
+	const actions = useRef(act);
+	actions.current = act;
+
+	// The slide window shows the current slide once it is ready, and again
+	// whenever the slide or its image changes; nothing is sent through Emacs.
+	const send = useRef(() => {});
+	send.current = () => showSlide(image, index, count);
+	useEffect(() => showSlide(image, index, count), [image, index, count]);
+	useEffect(() => {
+		audienceReady = () => send.current();
+		audienceKey = (key) => actions.current(key);
+		screenKeys = (event) => {
+			const key = presentKey(event);
+			if (!key) return;
+			event.preventDefault();
+			actions.current(key);
+		};
+		// The slide window may be ready before the console is shown.
+		if (readyAudience && readyAudience === audience) send.current();
+		pane.current?.focus();
+		return () => {
+			audienceReady = audienceKey = screenKeys = undefined;
+		};
+	}, []);
+
+	return (
+		<div ref={pane} className="portal-present" tabIndex={-1}>
+			<main className="portal-present-stage">
+				{current && (
+					<SlideImage
+						frame={current}
+						alt={`Slide ${index + 1}: ${slideName(current)}`}
+					/>
+				)}
+			</main>
+			<footer>
+				<button
+					type="button"
+					tabIndex={-1}
+					onClick={() => act("previous")}
+					disabled={index === 0}
+				>
+					Previous
+				</button>
+				<span className="portal-present-count" role="status">
+					{count ? `${index + 1} / ${count}` : "No slides"}
+				</span>
+				<button
+					type="button"
+					tabIndex={-1}
+					onClick={() => act("next")}
+					disabled={index >= count - 1}
+				>
+					Next
+				</button>
+				<button type="button" tabIndex={-1} onClick={onStop}>
+					Stop
+				</button>
+			</footer>
+		</div>
+	);
+}
+
 async function receive(message: Message) {
 	try {
 		if (message.type === "load") {
@@ -739,7 +949,11 @@ async function receive(message: Message) {
 			post({ type: "snapshot", request: message.request, json });
 		} else if (message.type === "mode") {
 			if (!api || !initialized) throw new Error("The drawing is still loading");
-			if (message.mode !== "draw" && message.mode !== "arrange")
+			if (
+				message.mode !== "draw" &&
+				message.mode !== "arrange" &&
+				message.mode !== "present"
+			)
 				throw new Error(`No such screen: ${message.mode}`);
 			setMode(message.mode);
 		} else if (message.type === "saved") {
@@ -761,9 +975,9 @@ async function receive(message: Message) {
 if (window.portalBridge) window.portalBridge.receive = receive;
 
 // Registered before the editor mounts, so these run before its own window
-// listeners. While Arrange is shown, no key reaches the editor but the undo and
-// redo keys Arrange hands it; a chord Arrange leaves alone is not prevented, so
-// it still reaches Emacs.
+// listeners. While Arrange or the console is shown, no key reaches the editor
+// but the undo and redo keys Arrange hands it; a chord they leave alone is not
+// prevented, so it still reaches Emacs.
 window.addEventListener(
 	"keydown",
 	(event) => {
@@ -772,9 +986,9 @@ window.addEventListener(
 			event.preventDefault();
 			event.stopImmediatePropagation();
 			requestSave();
-		} else if (arrangeKeys) {
+		} else if (screenKeys) {
 			event.stopImmediatePropagation();
-			arrangeKeys(event);
+			screenKeys(event);
 		}
 	},
 	true,
@@ -782,7 +996,7 @@ window.addEventListener(
 window.addEventListener(
 	"keyup",
 	(event) => {
-		if (arrangeKeys) event.stopImmediatePropagation();
+		if (screenKeys) event.stopImmediatePropagation();
 	},
 	true,
 );

@@ -315,8 +315,19 @@ opener in. `g` reloads the page it shows. When the page closes itself with
 `window.close()`, as sign-in popups do once done, its buffer is killed and its
 pane goes back to what it showed before. Killing the buffer closes the page,
 and the opener's buffer is independent of it. Window sizes the page asks for
-are ignored. Hosted apps open no windows: links to other sites still open in
-the default browser.
+are ignored. A hosted app opens a window only on the app host's own origin, as
+a drawing opens its [slide window](excalidraw.md#presenting): links to other
+sites still open in the default browser, and `about:blank` opens nothing.
+Such a window keeps drawing while another window covers it or it is on
+another Space, where WebKit would otherwise stop painting it. It belongs to
+the app: when the app's view closes, the window closes as if it had closed
+itself, even before Emacs gave it a buffer. Other windows outlive the page
+that opened them.
+
+A buffer whose page opens windows can choose where they show: its
+buffer-local `portal-web-window-action`, a `display-buffer` action, is used in
+place of the pane beside it. Each window's buffer names its opener's in
+`portal-web-opener`.
 
 WebKit has a known bug in which a popup's `window.opener` is null on some
 macOS versions ([759487](https://developer.apple.com/forums/thread/759487),

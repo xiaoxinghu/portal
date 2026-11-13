@@ -171,8 +171,11 @@ Batch Emacs formats no mode line; the graphical tests read the real one."
     (should (equal (portal-excalidraw-test--screen-tag) ":Arrange"))
     ;; The keyboard's light still comes first.
     (should (eq (cadr mode-line-process) 'portal-input-mode-line-process))
-    (portal-excalidraw--message '(:type "mode" :mode "present"))
-    (should (equal portal-excalidraw--mode "arrange"))
+    (let ((unread-command-events nil))
+      (portal-excalidraw--message '(:type "mode" :mode "present")))
+    (should (equal (portal-excalidraw-test--screen-tag) ":Present"))
+    (portal-excalidraw--message '(:type "mode" :mode "slideshow"))
+    (should (equal portal-excalidraw--mode "present"))
     (should-not portal-excalidraw--error)
     (portal-excalidraw--message '(:type "mode" :mode "draw"))
     (should (equal (portal-excalidraw-test--screen-tag) ""))
@@ -236,5 +239,348 @@ Batch Emacs formats no mode line; the graphical tests read the real one."
             (set-buffer-modified-p nil))
           (kill-buffer buffer))
         (should-not (portal-fake-native-targets))))))
+
+;; Presenting: the slide window, its frame, and each way it ends.  The fake
+;; module opens the window as WebKit would when the page calls window.open,
+;; and a pane stands in for the frame, which batch Emacs cannot make.
+
+(ert-deftest portal-excalidraw-present-asks-the-page-and-stops-presenting-asks-back ()
+  (portal-excalidraw-test--buffer
+    (let (sent)
+      (cl-letf (((symbol-function 'portal-web-send) (lambda (message) (push message sent))))
+        (should-error (portal-excalidraw-present) :type 'user-error)
+        (setq portal-excalidraw--ready t)
+        (portal-excalidraw-present)
+        (should (equal (pop sent) '(:type "mode" :mode "present")))
+        (should-error (portal-excalidraw-stop-presenting) :type 'user-error)
+        (should-not sent)
+        ;; A notice is said, and is no failure of the drawing.
+        (let ((inhibit-message t))
+          (portal-excalidraw--message '(:type "notice" :message "No slides")))
+        (should-not portal-excalidraw--error)))))
+
+(defvar portal-excalidraw-test--frames nil
+  "The frames presenting asked to delete, newest first.")
+(defvar portal-excalidraw-test--alist nil
+  "The `display-buffer' alist the slide window was shown with.")
+
+(defmacro portal-excalidraw-test--presenting (&rest body)
+  "Run BODY with a drawing presenting, its slide window open.
+In BODY, `drawing' is the drawing's buffer, `target' its view, `slides'
+the slide window's buffer, `window' its view and `frame' the frame its
+pane is in, and `pixelwise' what `frame-resize-pixelwise' was before.
+Deleting a frame is recorded in `portal-excalidraw-test--frames'."
+  (declare (indent 0))
+  `(let ((initial-buffers (buffer-list))
+         (pixelwise frame-resize-pixelwise)
+         (portal-excalidraw-test--frames nil)
+         (portal-excalidraw-test--alist nil)
+         (display-buffer-alist nil)
+         (unread-command-events nil))
+     (portal-fake-native-reset)
+     (cl-letf (((symbol-function 'portal-start-server) #'ignore)
+               ((symbol-function 'portal-server-url) (lambda () "http://127.0.0.1:1/token"))
+               ((symbol-function 'display-buffer-pop-up-frame)
+                (lambda (buffer alist)
+                  (setq portal-excalidraw-test--alist alist)
+                  (or (display-buffer-pop-up-window buffer alist)
+                      (display-buffer-use-some-window
+                       buffer (cons '(inhibit-same-window . t) alist)))))
+               ((symbol-function 'delete-frame)
+                (lambda (frame &rest _)
+                  (push frame portal-excalidraw-test--frames)
+                  (run-hook-with-args 'delete-frame-functions frame))))
+       (save-window-excursion
+         (delete-other-windows)
+         (unwind-protect
+             (progn
+               (portal-excalidraw)
+               (let* ((drawing (current-buffer))
+                      (target (portal-view-target)))
+                 (portal-fake-native-post
+                  target (json-serialize (list :type "loaded" :json portal-excalidraw--empty)))
+                 (portal-fake-native-send (format "bridge %s\n" target))
+                 (should portal-excalidraw--ready)
+                 (portal-view-sync)
+                 (portal-excalidraw-present)
+                 ;; The page opens the slide window, then shows the console.
+                 (let ((window (portal-fake-native-open-window
+                                target "http://127.0.0.1:1/token/excalidraw/audience")))
+                   (portal-fake-native-post target "{\"type\":\"mode\",\"mode\":\"present\"}")
+                   (portal-fake-native-send (format "bridge %s\n" target))
+                   (portal-excalidraw-test--run-events)
+                   (let* ((slides (portal-view--target-buffer window))
+                          (frame (window-frame (get-buffer-window slides))))
+                     ,@body))))
+           (dolist (buffer (cl-set-difference (buffer-list) initial-buffers))
+             (when (buffer-live-p buffer) ; A drawing kills its slide window.
+               (with-current-buffer buffer
+                 (when (derived-mode-p 'portal-excalidraw-mode)
+                   (setq portal-excalidraw--ready nil)
+                   (set-buffer-modified-p nil)))
+               (kill-buffer buffer)))
+           (setq frame-resize-pixelwise pixelwise))))
+     (should-not (portal-fake-native-targets))))
+
+(defun portal-excalidraw-test--run-events ()
+  "Run the commands that native records queued, as the command loop would."
+  (while unread-command-events
+    (let ((event (pop unread-command-events)))
+      (funcall (lookup-key global-map (vector (car event))) event))))
+
+(defun portal-excalidraw-test--sent (target)
+  "The messages Emacs sent TARGET's page, oldest first, as plists."
+  (mapcar (lambda (call) (json-parse-string (cadr call) :object-type 'plist))
+          (seq-filter (lambda (call) (equal (car call) target))
+                      (portal-fake-native-calls 'portal--web-send))))
+
+(defun portal-excalidraw-test--told-to-arrange (target)
+  "Whether TARGET's page was last told to show Arrange."
+  (equal (car (last (portal-excalidraw-test--sent target))) '(:type "mode" :mode "arrange")))
+
+(defun portal-excalidraw-test--gone (drawing slides frame)
+  "Check that DRAWING's slide window SLIDES and its FRAME are gone."
+  (should-not (buffer-live-p slides))
+  (should (equal portal-excalidraw-test--frames (list frame)))
+  (when (buffer-live-p drawing)
+    (with-current-buffer drawing
+      (should-not portal-excalidraw--slides)
+      (should-not portal-excalidraw--slides-frame)
+      (should-not (buffer-modified-p)))))
+
+(ert-deftest portal-excalidraw-presenting-shows-the-slide-window-in-a-bare-frame ()
+  (portal-excalidraw-test--presenting
+    ;; The drawing keeps its slide window, a page with no bridge.
+    (should (equal (buffer-local-value 'portal-web-opener slides) drawing))
+    (with-current-buffer drawing
+      (should (eq portal-excalidraw--slides slides))
+      (should (eq portal-excalidraw--slides-frame frame))
+      (should (equal portal-excalidraw--mode "present")))
+    ;; Its frame has nothing of Emacs, and resizes to the pixel.
+    (let ((parameters (alist-get 'pop-up-frame-parameters portal-excalidraw-test--alist)))
+      (should (assq 'minibuffer parameters))
+      (should-not (alist-get 'minibuffer parameters))
+      (should (equal (alist-get 'tool-bar-lines parameters) 0))
+      (should (equal (alist-get 'name parameters)
+                     (format "%s: Slides" (buffer-name drawing)))))
+    (should (eq (window-parameter (get-buffer-window slides) 'mode-line-format) 'none))
+    (should frame-resize-pixelwise)
+    ;; The console has the keyboard back.
+    (should (eq (window-buffer) drawing))
+    (should (plist-get (portal--inspect target) :focused))
+    (should-not (plist-get (portal--inspect window) :focused))
+    (should-not (buffer-modified-p drawing))))
+
+(ert-deftest portal-excalidraw-stopping-closes-the-slide-window ()
+  (portal-excalidraw-test--presenting
+    (with-current-buffer drawing (portal-excalidraw-stop-presenting))
+    (portal-excalidraw-test--gone drawing slides frame)
+    (should (portal-excalidraw-test--told-to-arrange target))
+    ;; The page answers that it shows Arrange.
+    (portal-fake-native-post target "{\"type\":\"mode\",\"mode\":\"arrange\"}")
+    (portal-fake-native-send (format "bridge %s\n" target))
+    (with-current-buffer drawing
+      (should (equal portal-excalidraw--mode "arrange"))
+      (should-not portal-excalidraw--error))
+    (should (equal portal-excalidraw-test--frames (list frame)))))
+
+(ert-deftest portal-excalidraw-the-page-stopping-closes-the-slide-window ()
+  ;; Escape or Stop in the console, or Escape in the slide window.
+  (portal-excalidraw-test--presenting
+    (let ((told (length (portal-excalidraw-test--sent target))))
+      (portal-fake-native-post target "{\"type\":\"mode\",\"mode\":\"arrange\"}")
+      (portal-fake-native-send (format "bridge %s\n" target))
+      (portal-excalidraw-test--gone drawing slides frame)
+      ;; The page is in Arrange already, and is not told again.
+      (should (= (length (portal-excalidraw-test--sent target)) told)))))
+
+(ert-deftest portal-excalidraw-killing-the-slide-window-stops-presenting ()
+  (portal-excalidraw-test--presenting
+    (kill-buffer slides)
+    (portal-excalidraw-test--gone drawing slides frame)
+    (should (portal-excalidraw-test--told-to-arrange target))))
+
+(ert-deftest portal-excalidraw-deleting-the-slide-frame-stops-presenting ()
+  (portal-excalidraw-test--presenting
+    ;; The frame goes by itself: only Emacs hears it.
+    (run-hook-with-args 'delete-frame-functions frame)
+    (should-not (buffer-live-p slides))
+    (should-not portal-excalidraw-test--frames)
+    (with-current-buffer drawing
+      (should-not portal-excalidraw--slides)
+      (should-not portal-excalidraw--slides-frame))
+    (should (portal-excalidraw-test--told-to-arrange target))))
+
+(ert-deftest portal-excalidraw-the-slide-window-closing-itself-stops-presenting ()
+  (portal-excalidraw-test--presenting
+    (portal-fake-native-send (format "closed %s\n" window))
+    (portal-excalidraw-test--run-events)
+    (should-not (portal--inspect window))
+    (should-not (buffer-live-p slides))
+    (with-current-buffer drawing (should-not portal-excalidraw--slides))
+    (should (memq frame portal-excalidraw-test--frames))
+    (should (portal-excalidraw-test--told-to-arrange target))))
+
+(ert-deftest portal-excalidraw-killing-the-drawing-kills-its-slide-window ()
+  (portal-excalidraw-test--presenting
+    (with-current-buffer drawing
+      (setq portal-excalidraw--ready nil)
+      (set-buffer-modified-p nil))
+    (kill-buffer drawing)
+    (portal-excalidraw-test--gone drawing slides frame)
+    (should-not (portal--inspect window))
+    ;; Frames resize as they did before presenting.
+    (should (eq frame-resize-pixelwise pixelwise))))
+
+(ert-deftest portal-excalidraw-a-new-major-mode-kills-the-slide-window ()
+  (portal-excalidraw-test--presenting
+    (with-current-buffer drawing
+      (setq portal-excalidraw--ready nil)
+      (fundamental-mode))
+    (portal-excalidraw-test--gone drawing slides frame)))
+
+(ert-deftest portal-excalidraw-reopening-the-drawing-kills-its-slide-window ()
+  (portal-excalidraw-test--presenting
+    (with-current-buffer drawing
+      (cl-letf (((symbol-function 'portal-excalidraw--flush) #'ignore))
+        (portal-excalidraw-reopen))
+      (should (equal portal-excalidraw--mode "draw")))
+    (portal-excalidraw-test--gone drawing slides frame)))
+
+(ert-deftest portal-excalidraw-a-slide-window-not-shown-when-presenting-stopped-closes ()
+  ;; Present, then Escape at once: the page opens the window and leaves
+  ;; Present before Emacs gets to show the window.
+  (portal-excalidraw-test--presenting
+    (with-current-buffer drawing (portal-excalidraw-stop-presenting))
+    (portal-fake-native-post target "{\"type\":\"mode\",\"mode\":\"arrange\"}")
+    (portal-fake-native-send (format "bridge %s\n" target))
+    (setq portal-excalidraw-test--frames nil)
+    (let ((late (portal-fake-native-open-window
+                 target "http://127.0.0.1:1/token/excalidraw/audience")))
+      (dolist (mode '("present" "arrange"))
+        (portal-fake-native-post target (json-serialize (list :type "mode" :mode mode)))
+        (portal-fake-native-send (format "bridge %s\n" target)))
+      (portal-excalidraw-test--run-events)
+      ;; It is closed without being shown.
+      (should-not (portal--inspect late))
+      (should-not (portal-view--target-buffer late))
+      (should-not portal-excalidraw-test--frames)
+      (with-current-buffer drawing
+        (should-not portal-excalidraw--slides)
+        (should (equal portal-excalidraw--mode "arrange"))))
+    ;; The next Present's window stays, even shown before the page says so.
+    (let ((next (portal-fake-native-open-window
+                 target "http://127.0.0.1:1/token/excalidraw/audience")))
+      (portal-excalidraw-test--run-events)
+      (should (buffer-live-p (portal-view--target-buffer next)))
+      (with-current-buffer drawing
+        (should (eq portal-excalidraw--slides (portal-view--target-buffer next)))))))
+
+(ert-deftest portal-excalidraw-ending-a-drawing-closes-slide-windows-not-yet-shown ()
+  ;; The page opened a window, and Emacs has not shown it when the drawing's
+  ;; view closes: it must not outlive the drawing as a buffer of its own.
+  (dolist (end (list (lambda (drawing) (kill-buffer drawing))
+                     (lambda (drawing) (with-current-buffer drawing (fundamental-mode)))
+                     (lambda (drawing)
+                       (with-current-buffer drawing
+                         (cl-letf (((symbol-function 'portal-excalidraw--flush) #'ignore))
+                           (portal-excalidraw-reopen))))))
+    (portal-excalidraw-test--presenting
+      (let ((late (portal-fake-native-open-window
+                   target "http://127.0.0.1:1/token/excalidraw/audience"))
+            (buffers (length (buffer-list))))
+        (with-current-buffer drawing
+          (setq portal-excalidraw--ready nil)
+          (set-buffer-modified-p nil))
+        (funcall end drawing)
+        (portal-excalidraw-test--run-events)
+        (should-not (portal--inspect late))
+        (should-not (portal-view--target-buffer late))
+        (should-not (buffer-live-p slides))
+        ;; Only the slide window's buffer went, and the drawing's if killed.
+        (should (<= (length (buffer-list)) (1- buffers)))))))
+
+(ert-deftest portal-excalidraw-the-console-keeps-the-keyboard-after-present-stop-present ()
+  ;; Present, Stop and Present before Emacs drains the records: the page's
+  ;; three mode messages arrive together, before the second window's record.
+  (portal-excalidraw-test--presenting
+    (with-current-buffer drawing (portal-excalidraw-stop-presenting))
+    (portal-fake-native-post target "{\"type\":\"mode\",\"mode\":\"arrange\"}")
+    (portal-fake-native-send (format "bridge %s\n" target))
+    (let ((first (portal-fake-native-open-window
+                  target "http://127.0.0.1:1/token/excalidraw/audience")))
+      (dolist (mode '("present" "arrange" "present"))
+        (portal-fake-native-post target (json-serialize (list :type "mode" :mode mode))))
+      (portal-fake-native-send (format "bridge %s\n" target))
+      (let ((second (portal-fake-native-open-window
+                     target "http://127.0.0.1:1/token/excalidraw/audience")))
+        (portal-excalidraw-test--run-events)
+        (should-not (portal--inspect first))
+        (with-current-buffer drawing
+          (should (eq portal-excalidraw--slides (portal-view--target-buffer second))))
+        (should (eq (window-buffer) drawing))
+        (should (plist-get (portal--inspect target) :focused))
+        (should-not (plist-get (portal--inspect second) :focused))))))
+
+(ert-deftest portal-excalidraw-a-slide-window-heard-of-after-the-drawing-ended-closes ()
+  ;; The page opened a window, and the drawing is killed or reopened before
+  ;; Emacs reads the window's record: the core closes a hosted app's
+  ;; windows with it, and the window goes, owned by nothing.
+  (dolist (end (list (lambda (drawing) (kill-buffer drawing))
+                     (lambda (drawing)
+                       (with-current-buffer drawing
+                         (cl-letf (((symbol-function 'portal-excalidraw--flush) #'ignore))
+                           (portal-excalidraw-reopen))))))
+    (portal-excalidraw-test--presenting
+      (let ((before (buffer-list)) records late)
+        (with-current-buffer drawing
+          (setq portal-excalidraw--ready nil)
+          (set-buffer-modified-p nil))
+        ;; Hold the records back, as a pipe Emacs has not read does.
+        (cl-letf (((symbol-function 'portal-fake-native-send)
+                   (lambda (&rest reads) (setq records (append records reads)))))
+          (setq late (portal-fake-native-open-window
+                      target "http://127.0.0.1:1/token/excalidraw/audience"))
+          (funcall end drawing))
+        (apply #'portal-fake-native-send records)
+        (portal-excalidraw-test--run-events)
+        (should-not (portal--inspect late))
+        (should-not (buffer-live-p (portal-view--target-buffer late)))
+        (should-not (cl-set-difference (buffer-list) before))))))
+
+(ert-deftest portal-excalidraw-presenting-again-after-reopening-shows-the-slide-window ()
+  (portal-excalidraw-test--presenting
+    ;; Present, and reopen before Emacs shows the window.
+    (with-current-buffer drawing (portal-excalidraw-stop-presenting))
+    (portal-fake-native-post target "{\"type\":\"mode\",\"mode\":\"arrange\"}")
+    (portal-fake-native-send (format "bridge %s\n" target))
+    (portal-fake-native-open-window target "http://127.0.0.1:1/token/excalidraw/audience")
+    (portal-fake-native-post target "{\"type\":\"mode\",\"mode\":\"present\"}")
+    (portal-fake-native-send (format "bridge %s\n" target))
+    (with-current-buffer drawing
+      (cl-letf (((symbol-function 'portal-excalidraw--flush) #'ignore))
+        (portal-excalidraw-reopen)))
+    (portal-excalidraw-test--run-events)
+    ;; The new page presents.
+    (let ((page (buffer-local-value 'portal-view--target drawing)))
+      (portal-fake-native-post
+       page (json-serialize (list :type "loaded" :json portal-excalidraw--empty)))
+      (portal-fake-native-send (format "bridge %s\n" page))
+      (let ((window (portal-fake-native-open-window
+                     page "http://127.0.0.1:1/token/excalidraw/audience")))
+        (portal-fake-native-post page "{\"type\":\"mode\",\"mode\":\"present\"}")
+        (portal-fake-native-send (format "bridge %s\n" page))
+        (portal-excalidraw-test--run-events)
+        (should (buffer-live-p (portal-view--target-buffer window)))
+        (with-current-buffer drawing
+          (should (eq portal-excalidraw--slides (portal-view--target-buffer window)))
+          (should (equal portal-excalidraw--mode "present")))))))
+
+(ert-deftest portal-excalidraw-a-page-that-loads-again-ends-presenting ()
+  (portal-excalidraw-test--presenting
+    (portal-fake-native-post target "{\"type\":\"ready\"}")
+    (portal-fake-native-send (format "bridge %s\n" target))
+    (portal-excalidraw-test--gone drawing slides frame)
+    (with-current-buffer drawing (should (equal portal-excalidraw--mode "draw")))))
 
 (provide 'portal-excalidraw-tests)

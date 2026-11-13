@@ -167,9 +167,13 @@ A page may open a window, as `window.open` and links to `target=_blank` do.
 WebKit asks for the new view at once and requires it to be made from the
 configuration it passes, which carries the opener's data store and opener
 relationship, so the platform reports the request with `portal_web_window`
-from inside WebKit's callback. The core decides (hosted apps open none),
+from inside WebKit's callback, with the URL asked for. The core decides,
 gives the view a target, and has the platform make it with
-`portal_web_create_window`, before sending `opened NEW OPENER`. This is the
+`portal_web_create_window`, before sending `opened NEW OPENER`. A hosted app
+opens a window only on its own address's origin, as a drawing opens its slide
+window, and that window is an ordinary web view, with no bridge. It closes
+with the app: closing the app's view sends `closed TARGET` for each of its
+windows still open, which Lisp handles as a window closing itself. This is the
 one view Lisp does not open: `portal-web.el` gives the target a buffer with
 `portal-view-adopt`, after which it is like any other view. Each page a
 window commits sends `web TARGET`, one record until Lisp inspects the view,

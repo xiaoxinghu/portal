@@ -225,6 +225,7 @@ bool portal_views_close(portal_string target, portal_text *error)
     }
     if (view->fed)
         portal_rex_closed(target);
+    portal_web_closing((portal_string) {view->target, view->length}, view->web);
     portal_web_state_free(view->web);
     free(view);
     return true;
@@ -313,6 +314,17 @@ bool portal_views_each_web(bool (*visit)(portal_view *native, struct portal_web_
 {
     for (struct view *view = views.first; view; view = view->next)
         if (view->kind == PORTAL_WEB && !visit(view->native, view->web, context))
+            return false;
+    return true;
+}
+
+bool portal_views_each_web_target(bool (*visit)(portal_string target,
+                                                struct portal_web_state *state, void *context),
+                                  void *context)
+{
+    for (struct view *view = views.first; view; view = view->next)
+        if (view->kind == PORTAL_WEB
+            && !visit((portal_string) {view->target, view->length}, view->web, context))
             return false;
     return true;
 }

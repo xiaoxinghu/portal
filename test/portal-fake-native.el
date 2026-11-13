@@ -114,8 +114,18 @@ The selected frame is kept."
 
 (defun portal--close (target)
   (portal-fake-native--call 'portal--close target)
-  (portal-fake-native--view target)
-  (remhash target portal-fake-native--views)
+  (let ((hosted (plist-get (plist-get (portal-fake-native--view target) :options) :hosted))
+        windows)
+    (remhash target portal-fake-native--views)
+    ;; A hosted app's windows close with it, as the core closes them.
+    (when hosted
+      (maphash (lambda (window view)
+                 (when (equal (plist-get (plist-get view :options) :opener) target)
+                   (push window windows)))
+               portal-fake-native--views)
+      (when (process-live-p portal-fake-native-channel)
+        (dolist (window (sort windows #'string<))
+          (portal-fake-native-send (format "closed %s\n" window))))))
   t)
 
 (defun portal--web-load (target url)

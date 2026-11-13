@@ -616,7 +616,7 @@ static void test_pages_open_windows(void)
     CHECK(load(page, "https://example.com/", &error));
     char asked[] = "https://example.com/popup";
     struct portal_fake_calls before = portal_fake_calls();
-    CHECK(portal_web_window(text(page), asked));
+    CHECK(portal_web_window(text(page), text(asked), asked));
     CHECK(portal_fake_calls().created == before.created + 1);
     char *window = opened(page);
     CHECK(window);
@@ -642,7 +642,7 @@ static void test_pages_open_windows(void)
     CHECK(sent(page, ""));
     /* Windows open windows too. */
     char blank[] = "about:blank";
-    CHECK(portal_web_window(text(window), blank));
+    CHECK(portal_web_window(text(window), text(blank), blank));
     char *nested = opened(window);
     CHECK(nested);
     /* Only a window closes itself. */
@@ -657,21 +657,85 @@ static void test_pages_open_windows(void)
     close_view(page);
 }
 
+/* A hosted app opens a window only at its own origin, as a drawing opens
+   its slide window: an ordinary web view, with no bridge.  Its links to
+   other sites, and pages with no origin, open none. */
+static void test_hosted_apps_open_windows_on_their_origin(void)
+{
+    char *app_view = open_app();
+    struct portal_fake_calls before = portal_fake_calls();
+    const char *refused[] = {
+        "http://127.0.0.1:9090/0123/other", "https://127.0.0.1:8080/0123/other",
+        "http://localhost:8080/0123/other", "https://example.com/", "about:blank",
+        "file:///etc/passwd", "data:text/html,hello", "",
+    };
+    for (size_t i = 0; i < sizeof refused / sizeof *refused; i++) {
+        char asked[64];
+        snprintf(asked, sizeof asked, "%s", refused[i]);
+        if (portal_web_window(text(app_view), text(asked), asked)) {
+            fprintf(stderr, "A hosted app opened a window at \"%s\"\n", asked);
+            CHECK(false);
+        }
+    }
+    CHECK(same_calls(before, portal_fake_calls()));
+    CHECK(sent(app_view, ""));
+    char asked[] = "http://127.0.0.1:8080/0123/excalidraw/audience";
+    CHECK(portal_web_window(text(app_view), text(asked), asked));
+    char *window = opened(app_view);
+    CHECK(window);
+    CHECK(shows(window, "\"kind\":\"web\"",
+                "\"request\":\"http://127.0.0.1:8080/0123/excalidraw/audience\"", NULL));
+    /* It is no hosted app: it has no bridge, and goes where it likes. */
+    portal_text error = {0};
+    CHECK(!portal_web_views_send(text(window), text("{\"type\":\"show\"}"), &error));
+    CHECK(error.data && strstr(error.data, "is not a hosted app"));
+    free(error.data);
+    CHECK(portal_web_navigating(text(window), text("https://example.com/"), true, false)
+          == PORTAL_NAVIGATION_ALLOW);
+    /* A window closes itself as any other does. */
+    portal_web_closed(text(window));
+    CHECK(sent(window, "closed %s\n"));
+    close_view(window);
+    /* The app's windows still open close with it, even one Emacs has not
+       heard of yet; each is closed once. */
+    CHECK(portal_web_window(text(app_view), text(asked), asked));
+    char *shown = opened(app_view);
+    CHECK(shown);
+    CHECK(portal_web_window(text(app_view), text(asked), asked));
+    char *unheard = opened(app_view);
+    CHECK(unheard);
+    close_view(app_view);
+    char expected[128];
+    snprintf(expected, sizeof expected, "closed %s\nclosed %s\n", shown, unheard);
+    CHECK(sent(expected, "%s"));
+    close_view(shown);
+    close_view(unheard);
+    CHECK(sent("", ""));
+    /* An ordinary page's window outlives it. */
+    char *page = open_web(false);
+    char popup[] = "https://example.com/popup";
+    CHECK(portal_web_window(text(page), text(popup), popup));
+    char *orphan = opened(page);
+    CHECK(orphan);
+    close_view(page);
+    CHECK(sent("", ""));
+    CHECK(shows(orphan, "\"kind\":\"web\"", NULL));
+    close_view(orphan);
+}
+
 /* A window opens only for a page that may have one, and only when the
    platform makes it: otherwise nothing opens and Emacs hears nothing. */
 static void test_windows_that_do_not_open(void)
 {
-    char *app_view = open_app();
     char asked[] = "http://127.0.0.1:8080/0123/other";
-    struct portal_fake_calls before = portal_fake_calls();
-    CHECK(!portal_web_window(text(app_view), asked));
-    CHECK(!portal_web_window(text("web:0"), asked));
+    struct portal_fake_calls before;
+    CHECK(!portal_web_window(text("web:0"), text(asked), asked));
     char *page = open_web(false);
     before = portal_fake_calls();
     char failing[] = "fail";
-    CHECK(!portal_web_window(text(page), failing));
+    CHECK(!portal_web_window(text(page), text(failing), failing));
     portal_fake_refuse(true);
-    CHECK(!portal_web_window(text(page), asked));
+    CHECK(!portal_web_window(text(page), text(asked), asked));
     portal_fake_refuse(false);
     CHECK(same_calls(before, portal_fake_calls()));
     CHECK(sent(page, ""));
@@ -679,7 +743,6 @@ static void test_windows_that_do_not_open(void)
     portal_web_closed(text("web:0"));
     CHECK(sent(page, ""));
     close_view(page);
-    close_view(app_view);
 }
 
 /* Whether DOWNLOAD's file, from portal_web_download_started, is NAME in
@@ -1183,6 +1246,7 @@ int main(void)
     test_appearance_at_open();
     test_an_appearance_reaches_every_web_view();
     test_pages_open_windows();
+    test_hosted_apps_open_windows_on_their_origin();
     test_windows_that_do_not_open();
     test_downloads();
     test_finding();

@@ -81,6 +81,16 @@ bool portal_web_state_hosted(const struct portal_web_state *state);
 /* Free STATE and any messages still waiting in it. */
 void portal_web_state_free(struct portal_web_state *state);
 
+/* For views.c: web view TARGET, whose state is STATE, has closed.  When it
+   was a hosted app's, each window the app opened that is still open sends
+   a "closed" record, and Emacs closes it. */
+void portal_web_closing(portal_string target, const struct portal_web_state *state);
+/* For web.c, from views.c: call VISIT with each open web view's target and
+   state, oldest first, until it returns false; return whether every call
+   returned true.  VISIT must not open or close views. */
+bool portal_views_each_web_target(bool (*visit)(portal_string target,
+                                                struct portal_web_state *state, void *context),
+                                  void *context);
 /* For web.c, from views.c: call VISIT with each open web view and its
    state, oldest first, until it returns false; return whether every call
    returned true.  VISIT may call platform primitives but must not open or

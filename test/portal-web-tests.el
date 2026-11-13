@@ -1129,6 +1129,30 @@ Markdown FILE gets its preview URL, and any other a file: URL."
             (should-not (get-buffer "*portal: example.com*"))
             (should (equal (portal-view-target) orphan))))))))
 
+(ert-deftest portal-web-an-opener-chooses-where-its-windows-show ()
+  (portal-web-test--environment
+    (let ((display-buffer-alist nil) shown)
+      (portal-open-url "https://example.com/")
+      (portal-view-sync)
+      (let* ((opener (current-buffer))
+             (origin (selected-window))
+             (target (portal-view-target)))
+        (setq-local portal-web-window-action
+                    (list (lambda (buffer alist)
+                            (setq shown (list buffer (buffer-local-value 'portal-web-opener buffer)))
+                            (display-buffer-same-window buffer alist))))
+        (let ((window (portal-fake-native-open-window target "https://example.com/slides")))
+          (portal-web-test--run-events)
+          ;; The opener's action showed it, in the opener's own pane here,
+          ;; and the new buffer knows its opener.
+          (should (eq (selected-window) origin))
+          (should (equal (portal-view-target) window))
+          (should (equal shown (list (current-buffer) opener)))
+          (should (eq portal-web-opener opener))
+          ;; The window outlives its opener, which it still names.
+          (kill-buffer opener)
+          (should-not (buffer-live-p portal-web-opener)))))))
+
 (ert-deftest portal-web-click-selects-the-views-pane ()
   (portal-web-test--environment
     (portal-open-url "about:blank")
