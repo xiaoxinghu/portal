@@ -502,7 +502,10 @@ function Arrange({
 				if (event.isComposing) return;
 				if (undo) document.execCommand(event.shiftKey ? "redo" : "undo");
 				else if (plain && event.key === "Escape") {
-					if (field instanceof HTMLInputElement) name.current = undefined;
+					if (field instanceof HTMLInputElement) {
+						name.current = undefined;
+						renamed((count) => count + 1);
+					}
 				} else if (
 					!(plain && event.key === "Enter" && field instanceof HTMLInputElement)
 				)

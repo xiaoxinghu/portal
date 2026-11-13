@@ -425,8 +425,16 @@ The page sends it on its own; nothing here asks it to."
     (portal-excalidraw-gui--type "hi")
     (portal-excalidraw-gui--buffer-deck
      '(("closing" "Closing" 0 nil) ("middle" "Middle" 1 "hi") ("opening" "Opening" 2 "Welcome")))
-    ;; A slide's name is typed in the filmstrip; Return writes it.
+    ;; A slide's name is typed in the filmstrip; Escape drops it, and Return
+    ;; writes it.
     (portal-excalidraw-gui--key 53 0 "\e")
+    (portal-excalidraw-gui--focus "#portal-slide-closing input")
+    (portal-excalidraw-gui--type "hi")
+    (portal-excalidraw-gui--key 53 0 "\e")
+    (portal-terminal-test--wait
+     (lambda () (equal (portal-excalidraw-gui--js
+                        "return document.querySelector('#portal-slide-closing input').value;")
+                       "Closing")))
     (portal-excalidraw-gui--focus "#portal-slide-closing input")
     (portal-excalidraw-gui--type "end")
     (portal-excalidraw-gui--key 36 0 "\r")
