@@ -1324,9 +1324,12 @@ static void test_coming_back(void)
     portal_fake_fire_timers();
     again = portal_fake_socket_last();
     CHECK(is_text(portal_fake_socket_sent(again), expected));
-    /* The stream drops meanwhile: it waits for the connection. */
+    /* The stream drops meanwhile: it waits for the connection.  The pane
+       changes size too, which nothing can tell the server yet. */
     portal_fake_socket_end(data, "The connection to the server was lost");
     CHECK(portal_fake_socket_last() == again);
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 400, 160}, text("frame"), &error));
+    CHECK(is_text(portal_fake_socket_sent(again), ""));
     /* Back as the same client: Emacs gets the welcome, with what came
        after it, and the core's messages from before it are dropped. */
     portal_fake_socket_deliver(again, "{\"type\":\"event\",\"seq\":9}");
@@ -1343,8 +1346,11 @@ static void test_coming_back(void)
     CHECK(portal_rex_resume(id, &error));
     CHECK(is_text(sent(), record));
     CHECK(strstr(rex_state(target), "\"state\":\"live\"") != NULL);
-    /* It asks again what the terminal reports, and resumes the stream. */
-    portal_fake_socket_sent(again);
+    /* It asks again what the terminal reports, sizes the block to the
+       pane it has now, and resumes the stream. */
+    CHECK(strstr(portal_fake_socket_sent(again),
+                 "\"method\":\"com.superlogical.terminal.resize\",\"payload\":" ON_BLOCK
+                 ",\"args\":{\"columns\":50,\"rows\":10,") != NULL);
     data = portal_fake_socket_last();
     CHECK(is_text(portal_fake_socket_sent(data), resume_hex(0, TAKEN(5))));
     welcome_with(renewed, 9);
@@ -1352,6 +1358,7 @@ static void test_coming_back(void)
     portal_fake_socket_deliver(data, "!");
     CHECK(is_text(fresh(target), "!"));
     number += 3;
+    answer_with(again, number++, "{}", NULL);
     portal_terminal_input(text(target), "y", 1);
     CHECK(asked(again, number++, "com.superlogical.terminal.write", ON_BLOCK ",\"args\":{\"data\":\"y\"}}"));
 

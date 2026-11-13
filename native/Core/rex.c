@@ -1639,7 +1639,9 @@ static void free_operation(struct operation *operation)
    take. */
 static void queue(struct shown *shown, struct operation operation)
 {
-    if (shown->stage >= FAILED)
+    /* Nothing goes while the connection is lost: what is typed is lost,
+       and the size is sent again when the block resumes. */
+    if (shown->stage >= FAILED || shown->offline)
         return free_operation(&operation);
     struct operation *last = shown->queued ? &shown->operations[shown->queued - 1] : NULL;
     if (last && last->kind == WRITE && operation.kind == WRITE) {
@@ -2313,10 +2315,14 @@ bool portal_rex_resume(uint64_t id, portal_text *error)
         if (shown->restart) {
             restart_show(shown);
         } else {
-            /* Events were lost meanwhile: ask again what they said. */
+            /* Events were lost meanwhile: ask again what they said; and
+               the pane may have changed size. */
             ask_details(shown);
             if (shown->waiting)
                 resume_stream(shown);
+            memset(shown->sized, 0, sizeof shown->sized);
+            if (shown->stage > RESIZING && shown->stage < FAILED)
+                queue(shown, (struct operation) {.kind = RESIZE});
         }
         announce(shown);
     }
