@@ -382,6 +382,15 @@ asks and never calls the server. A buffer killed by hand stays, dead, in
 its connection's table until its block closes, so that the block gets no
 second buffer.
 
+**Changes made from Emacs go through the server.** The commands that make,
+rename and destroy sessions, start a terminal or relabel a block call the
+server and change no buffer themselves: the buffers follow the server's
+events, as they follow any other client's change. Each command waits until
+Emacs has followed it, so that what it made is there when it returns: a
+new session's event, a new block's listing. A detached block's new label
+sends no event, so relabelling a block asks for its session's blocks. Which
+session a new terminal joins is a user option's, never a rule of Portal's.
+
 A connection takes its messages two ways, which share one path from
 `portal--rex-receive` on. With Emacs idle, the reader's thread reports from
 the main run loop, the core sends the record, and the pipe's filter
