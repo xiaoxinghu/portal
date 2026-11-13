@@ -2343,6 +2343,21 @@ file, which restores each buffer, and runs the hook it runs after."
                                  (list first second))))
               (set-frame-parameter nil 'tabs old-tabs))))))))
 
+(ert-deftest portal-rex-exiting-disconnects-after-what-saves-the-arrangement ()
+  ;; desktop-save-mode saves from `kill-emacs-query-functions', before this
+  ;; hook; a configuration that saves from the hook itself, added before or
+  ;; after Emacs connects, still runs while the blocks have buffers.
+  (portal-rex-tests--with (server)
+    (let* ((kill-emacs-hook nil)
+           seen
+           (save (lambda () (push (length (portal-rex-buffers)) seen))))
+      (add-hook 'kill-emacs-hook save)
+      (portal-rex-tests--connect server)
+      (add-hook 'kill-emacs-hook (lambda () (funcall save)))
+      (run-hooks 'kill-emacs-hook)
+      (should (equal seen '(1 1)))
+      (should-not (portal-rex-buffers)))))
+
 (ert-deftest portal-rex-restore-says-once-what-it-could-not-restore ()
   (portal-rex-tests--with (server)
     (portal-rex-tests--restoring

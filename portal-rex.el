@@ -1256,7 +1256,9 @@ Call this with quitting inhibited, so that Emacs knows every connection."
                      :id (portal--rex-open socket "Portal" (or (portal-build-version) "0"))
                      :socket socket)))
     (setq portal-rex--connections (append portal-rex--connections (list connection)))
-    (add-hook 'kill-emacs-hook #'portal-rex--disconnect-all)
+    ;; Late, so that whatever saves Emacs's arrangement as it exits, such
+    ;; as a desktop saved from this hook, still finds the blocks' buffers.
+    (add-hook 'kill-emacs-hook #'portal-rex--disconnect-all 90)
     (add-hook 'window-buffer-change-functions #'portal-rex--show-shown)
     (portal-rex--follow-use t)
     connection))
