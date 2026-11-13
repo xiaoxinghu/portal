@@ -621,10 +621,18 @@ the block needs, and has no view."
   "Name BUFFER after its session's label and its block's, which is now LABEL."
   (with-current-buffer buffer
     (when label (setq portal-rex--block-label label))
-    (rename-buffer (portal-rex--buffer-name portal-rex-block-connection portal-rex-session-id
-                                            portal-rex--block-label)
-                   t)
+    (portal-rex--rename (portal-rex--buffer-name portal-rex-block-connection portal-rex-session-id
+                                                 portal-rex--block-label)
+                        t)
     (portal-rex--describe-block)))
+
+(defun portal-rex--rename (name &optional unique)
+  "Rename the current buffer NAME, as `rename-buffer' does with UNIQUE.
+The tabs that name it in their saved windows follow."
+  (let ((old (buffer-name)))
+    (rename-buffer name unique)
+    (unless (equal old (buffer-name))
+      (portal-rex--rename-in-tabs old (buffer-name)))))
 
 (defun portal-rex--untangle-names (connection session-id)
   "Give SESSION-ID's buffers on CONNECTION their plain names where they are free.
@@ -636,7 +644,7 @@ relabelled or closes.  A name given by hand stays."
       (let ((plain (portal-rex--buffer-name connection session-id portal-rex--block-label)))
         (when (and (string-match-p (concat "\\`" (regexp-quote plain) "<[0-9]+>\\'") (buffer-name))
                    (not (get-buffer plain)))
-          (rename-buffer plain))))))
+          (portal-rex--rename plain))))))
 
 (defun portal-rex--kill-buffer (connection block-id)
   "Forget CONNECTION's block BLOCK-ID, and kill its buffer if it has one.
@@ -1520,13 +1528,14 @@ was relabelled meanwhile is told the new name."
                                         portal-rex--block-label))
         (old (buffer-name)))
     (unless (string-match-p (concat "\\`" (regexp-quote plain) "\\(?:<[0-9]+>\\)?\\'") old)
-      (rename-buffer plain t)
-      (portal-rex--rename-in-tabs old (buffer-name)))))
+      (portal-rex--rename plain t))))
 
 (defun portal-rex--rename-in-tabs (old new)
   "Make the tabs that name the buffer OLD in their saved windows name NEW.
-Only a tab restored from a desktop and not yet selected names buffers;
-the others hold them."
+A tab restored from a desktop and not yet selected finds its buffers by
+these names; the others hold the buffers too.  Every rename of a block's
+buffer comes here, in order, so the names follow the buffers through
+the clashes of a restore."
   (dolist (frame (frame-list))
     (dolist (tab (frame-parameter frame 'tabs))
       (when-let* ((state (alist-get 'ws (cdr-safe tab))))
@@ -1708,7 +1717,10 @@ which it starts doing once idle.  Restoring never waits for a server."
 ;;;###autoload
 (with-eval-after-load 'desktop
   (dolist (mode '(portal-terminal-mode portal-rex-placeholder-mode))
-    (add-to-list 'desktop-buffer-mode-handlers (cons mode #'portal-rex-desktop-restore)))
+    (add-to-list 'desktop-buffer-mode-handlers (cons mode #'portal-rex-desktop-restore))))
+
+;; Not autoloaded: the handler loads this file before any buffer needs it.
+(with-eval-after-load 'desktop
   (add-hook 'desktop-after-read-hook #'portal-rex--desktop-read))
 
 ;; Portal's major modes turn it on: a placeholder needs no keyboard light.

@@ -2308,6 +2308,41 @@ file, which restores each buffer, and runs the hook it runs after."
                                        "*rex: work/api-2*"))))
                   (set-frame-parameter nil 'tabs old-tabs))))))))))
 
+(ert-deftest portal-rex-restored-tabs-follow-blocks-that-swapped-labels ()
+  ;; Two blocks swap labels while Emacs is not running: each placeholder
+  ;; meets the other's name as it is restored, and a tab saved in the
+  ;; desktop still finds each block where it was.
+  (portal-rex-tests--with (server)
+    (portal-rex-tests--restoring
+      (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+      (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "b")
+                                (portal-rex-tests--block "2" "a"))
+      (let* ((socket (abbreviate-file-name (portal-fake-rex-socket server)))
+             (first (portal-rex-desktop-restore
+                     nil "*rex: work/a*" (portal-rex-tests--record socket "1" "a" "a" "work")))
+             (second (portal-rex-desktop-restore
+                      nil "*rex: work/b*" (portal-rex-tests--record socket "2" "a" "b" "work")))
+             (old-tabs (frame-parameter nil 'tabs)))
+        (save-window-excursion
+          (delete-other-windows)
+          (switch-to-buffer first)
+          (set-window-buffer (split-window) second)
+          (let ((saved (window-state-get (frame-root-window) t)))
+            (unwind-protect
+                (progn
+                  (set-frame-parameter nil 'tabs `((current-tab (name . "here"))
+                                                   (tab (name . "there") (ws . ,saved))))
+                  (portal-rex-tests--restore)
+                  (should (equal (buffer-name first) "*rex: work/b*"))
+                  (should (equal (buffer-name second) "*rex: work/a*"))
+                  (switch-to-buffer "*scratch*")
+                  (delete-other-windows)
+                  (window-state-put (alist-get 'ws (cdr (nth 1 (frame-parameter nil 'tabs))))
+                                    (frame-root-window))
+                  (should (equal (mapcar #'window-buffer (window-list nil 'nomini))
+                                 (list first second))))
+              (set-frame-parameter nil 'tabs old-tabs))))))))
+
 (ert-deftest portal-rex-restore-says-once-what-it-could-not-restore ()
   (portal-rex-tests--with (server)
     (portal-rex-tests--restoring
