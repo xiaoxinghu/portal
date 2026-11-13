@@ -32,9 +32,11 @@ import "@excalidraw/excalidraw/index.css";
 import "./excalidraw.css";
 import {
 	type AudienceMessage,
+	elapsed,
 	type PresentKey,
 	presentKey,
 	type ShowMessage,
+	slideBy,
 	stepSlide,
 } from "./present";
 import {
@@ -56,6 +58,16 @@ type Message = {
 	name?: string;
 	message?: string;
 	mode?: string;
+	delta?: number;
+};
+
+/** The page to Emacs while presenting: the current slide, INDEX from 0,
+ * of COUNT, and its NAME. */
+type SlideMessage = {
+	type: "slide";
+	index: number;
+	count: number;
+	name: string;
 };
 
 /** The page's screen: the editor, or Arrange or the console covering it. */
@@ -100,6 +112,8 @@ let opens = 0;
 /** The console's handlers for what the slide window says. */
 let audienceReady: (() => void) | undefined;
 let audienceKey: ((key: PresentKey) => void) | undefined;
+/** The console's handler for Emacs's next and previous, while presenting. */
+let presentDelta: ((delta: number) => void) | undefined;
 window.addEventListener("message", (event) => {
 	if (!audience || event.source !== audience) return;
 	if (event.origin !== location.origin) return;
@@ -837,9 +851,27 @@ function showSlide(
 	audience.postMessage(show, location.origin);
 }
 
-/** The console, while presenting: the slide the slide window shows, where
- * it is in the deck, and the buttons that move and stop. It covers the
- * editor, as Arrange does, and drives the slide window. */
+/** The time now, in milliseconds, again at each second's turn. */
+function useClock() {
+	const [now, setNow] = useState(() => Date.now());
+	useEffect(() => {
+		let timer: ReturnType<typeof setTimeout>;
+		const tick = () => {
+			const time = Date.now();
+			setNow(time);
+			timer = setTimeout(tick, 1000 - (time % 1000));
+		};
+		timer = setTimeout(tick, 1000 - (Date.now() % 1000));
+		return () => clearTimeout(timer);
+	}, []);
+	return now;
+}
+
+/** The console, while presenting: the slide the slide window shows, large;
+ * the next one, small; its notes; where it is in the deck; the time of day
+ * and the time since presenting started; and the buttons that move and
+ * stop. It covers the editor, as Arrange does, drives the slide window and
+ * tells Emacs which slide shows. It edits nothing. */
 function Present({
 	editor,
 	slideId,
@@ -854,48 +886,116 @@ function Present({
 	const { frames, index, current } = useDeck(editor, slideId);
 	const image = current && slideImages.image(current.id);
 	const count = frames.length;
+	const following = frames[index + 1];
+	const name = current ? slideName(current) : "";
+	const notes = current ? slideNotes(current) : "";
 	const pane = useRef<HTMLDivElement>(null);
+	const now = useClock();
+	// Neither clock is saved: presenting again starts this one at zero.
+	const [started, setStarted] = useState(() => Date.now());
 
-	const act = (key: PresentKey) => {
-		const next = stepSlide(key, index, count);
-		if (next === undefined) onStop();
-		else if (frames[next]) onSelect(frames[next].id);
+	const goTo = (to: number | undefined) => {
+		if (to === undefined) onStop();
+		else if (frames[to]) onSelect(frames[to].id);
 	};
-	const actions = useRef(act);
-	actions.current = act;
+	const act = (key: PresentKey) => goTo(stepSlide(key, index, count));
+	const actions = useRef({ act, goTo, index, count });
+	actions.current = { act, goTo, index, count };
 
 	// The slide window shows the current slide once it is ready, and again
 	// whenever the slide or its image changes; nothing is sent through Emacs.
 	const send = useRef(() => {});
 	send.current = () => showSlide(image, index, count);
 	useEffect(() => showSlide(image, index, count), [image, index, count]);
+	// Emacs shows where presenting is in the mode line.
+	useEffect(() => {
+		if (!count) return;
+		const slide: SlideMessage = { type: "slide", index, count, name };
+		post(slide);
+	}, [index, count, name]);
 	useEffect(() => {
 		audienceReady = () => send.current();
-		audienceKey = (key) => actions.current(key);
+		audienceKey = (key) => actions.current.act(key);
+		presentDelta = (delta) => {
+			const { goTo, index, count } = actions.current;
+			goTo(slideBy(index, delta, count));
+		};
 		screenKeys = (event) => {
 			const key = presentKey(event);
 			if (!key) return;
 			event.preventDefault();
-			actions.current(key);
+			actions.current.act(key);
 		};
 		// The slide window may be ready before the console is shown.
 		if (readyAudience && readyAudience === audience) send.current();
 		pane.current?.focus();
 		return () => {
-			audienceReady = audienceKey = screenKeys = undefined;
+			audienceReady = audienceKey = presentDelta = screenKeys = undefined;
 		};
 	}, []);
 
 	return (
 		<div ref={pane} className="portal-present" tabIndex={-1}>
-			<main className="portal-present-stage">
-				{current && (
-					<SlideImage
-						frame={current}
-						alt={`Slide ${index + 1}: ${slideName(current)}`}
-					/>
-				)}
-			</main>
+			<header>
+				<span className="portal-present-count" role="status">
+					{count ? `${index + 1} / ${count}` : "No slides"}
+				</span>
+				<span className="portal-present-name">{name}</span>
+				<span className="portal-present-clock">
+					<time className="portal-present-time" title="Time of day">
+						{new Date(now).toLocaleTimeString([], {
+							hour: "numeric",
+							minute: "2-digit",
+						})}
+					</time>
+					<span
+						className="portal-present-elapsed"
+						role="timer"
+						aria-label="Time presenting"
+					>
+						{elapsed(now - started)}
+					</span>
+					<button
+						type="button"
+						tabIndex={-1}
+						title="Set the time presenting back to zero"
+						onClick={() => setStarted(Date.now())}
+					>
+						Reset
+					</button>
+				</span>
+			</header>
+			<div className="portal-present-body">
+				<main className="portal-present-stage">
+					{current && (
+						<SlideImage
+							frame={current}
+							alt={`Slide ${index + 1}: ${slideName(current)}`}
+						/>
+					)}
+				</main>
+				<aside className="portal-present-side">
+					<section className="portal-present-next">
+						<h2>Next</h2>
+						<div className="portal-present-next-image">
+							{following ? (
+								<SlideImage
+									frame={following}
+									alt={`Slide ${index + 2}: ${slideName(following)}`}
+								/>
+							) : (
+								<span className="portal-present-end">End</span>
+							)}
+						</div>
+					</section>
+					<section className="portal-present-notes">
+						<h2>Notes</h2>
+						<div className="portal-present-notes-text">
+							{notes || <span className="portal-present-none">No notes.</span>}
+						</div>
+					</section>
+				</aside>
+			</div>
 			<footer>
 				<button
 					type="button"
@@ -905,9 +1005,6 @@ function Present({
 				>
 					Previous
 				</button>
-				<span className="portal-present-count" role="status">
-					{count ? `${index + 1} / ${count}` : "No slides"}
-				</span>
 				<button
 					type="button"
 					tabIndex={-1}
@@ -916,7 +1013,12 @@ function Present({
 				>
 					Next
 				</button>
-				<button type="button" tabIndex={-1} onClick={onStop}>
+				<button
+					type="button"
+					tabIndex={-1}
+					className="portal-present-stop"
+					onClick={onStop}
+				>
 					Stop
 				</button>
 			</footer>
@@ -956,6 +1058,12 @@ async function receive(message: Message) {
 			)
 				throw new Error(`No such screen: ${message.mode}`);
 			setMode(message.mode);
+		} else if (message.type === "slide") {
+			// Next and previous from Emacs, while presenting.
+			if (typeof message.delta !== "number" || !Number.isInteger(message.delta))
+				throw new Error(`Not a number of slides: ${message.delta}`);
+			if (presentDelta) presentDelta(message.delta);
+			else notice("The drawing is not being presented");
 		} else if (message.type === "saved") {
 			savedJSON = message.json?.trim() ?? "";
 			setStatus(currentJSON() === savedJSON ? "Saved" : "Modified");
