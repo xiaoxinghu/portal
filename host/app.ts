@@ -2,6 +2,7 @@
 
 import { assets } from "./.generated/assets";
 import { about } from "./about";
+import audience from "./audience.html" with { type: "text" };
 import dialogs from "./dialogs.html" with { type: "text" };
 import editor from "./excalidraw.html" with { type: "text" };
 import hello from "./hello.html" with { type: "text" };
@@ -14,6 +15,12 @@ const editorPolicy =
 	"default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; " +
 	"style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; " +
 	"connect-src 'self'; worker-src 'self' blob:; base-uri 'none'; form-action 'none'; frame-src 'none'";
+
+// The slide window's page runs its one script and shows the slides it is
+// handed as blob: images; a slide's own fonts and images are data: URLs.
+const audiencePolicy =
+	"default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; " +
+	"img-src blob: data:; font-src data:; base-uri 'none'; form-action 'none'; frame-src 'none'";
 
 async function dispatch(
 	request: Request,
@@ -37,6 +44,7 @@ async function dispatch(
 		route !== "/markdown" &&
 		route !== "/image" &&
 		route !== "/excalidraw/" &&
+		route !== "/excalidraw/audience" &&
 		!asset
 	) {
 		return new Response("Not found", { status: 404 });
@@ -64,6 +72,13 @@ async function dispatch(
 			headers: {
 				"Content-Type": "text/html; charset=utf-8",
 				"Content-Security-Policy": editorPolicy,
+			},
+		});
+	if (route === "/excalidraw/audience")
+		return new Response(audience, {
+			headers: {
+				"Content-Type": "text/html; charset=utf-8",
+				"Content-Security-Policy": audiencePolicy,
 			},
 		});
 	return new Response(hello, {

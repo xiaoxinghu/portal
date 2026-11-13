@@ -34,12 +34,31 @@ await Bun.write(
 	),
 );
 
+// The slide window's page has its own small bundle, built apart so that it
+// shares no chunk with the editor's and never loads Excalidraw.
+const audienceDir = join(generated, "audience");
+await rm(audienceDir, { recursive: true, force: true });
+const audience = await Bun.build({
+	entrypoints: [join(root, "audience.ts")],
+	outdir: audienceDir,
+	target: "browser",
+	minify: true,
+	naming: { entry: "[name].[ext]" },
+});
+if (!audience.success)
+	throw new AggregateError(audience.logs, "Slide window build failed");
+
 // Explicit file imports make Bun embed every lazy chunk and font in the host.
 // The executable remains relocatable and needs no adjacent node_modules/assets.
 const paths: [string, string][] = result.outputs.map((output) => [
 	`/excalidraw/assets/${relative(outdir, output.path)}`,
 	output.path,
 ]);
+for (const output of audience.outputs)
+	paths.push([
+		`/excalidraw/${relative(audienceDir, output.path)}`,
+		output.path,
+	]);
 const fonts = join(root, "node_modules/@excalidraw/excalidraw/dist/prod/fonts");
 for await (const path of new Bun.Glob("**/*").scan({
 	cwd: fonts,
