@@ -17,6 +17,8 @@
 (defvar-local portal-excalidraw--request 0)
 (defvar-local portal-excalidraw--reply nil)
 (defvar-local portal-excalidraw--flushing nil)
+(defvar-local portal-excalidraw--mode "draw"
+  "The drawing page's screen, as the page last said: \"draw\" or \"arrange\".")
 
 (defconst portal-excalidraw--empty
   "{\"type\":\"excalidraw\",\"version\":2,\"source\":\"portal\",\"elements\":[],\"appState\":{},\"files\":{}}\n")
@@ -36,7 +38,10 @@ Command-S or C-x C-s saves; a chord the drawing does not use reaches Emacs.
 `portal-input-escape-key' returns to Emacs; RET returns to the drawing.
 The view stays in its pane, whichever pane is selected; RET or a click
 in another pane showing this buffer brings it there, as switching to the
-buffer in a pane does.  It keeps its undo history while hidden."
+buffer in a pane does.  It keeps its undo history while hidden.
+\[portal-excalidraw-arrange] shows the drawing's slides, its frames, and
+\[portal-excalidraw-draw] goes back to the editor; the mode line says
+:Arrange while the slides are shown."
   (when (and buffer-file-name (file-remote-p buffer-file-name))
     (user-error "Excalidraw currently supports local files only"))
   (when (= (buffer-size) 0)
@@ -50,6 +55,9 @@ buffer in a pane does.  It keeps its undo history while hidden."
   (setq-local require-final-newline t)
   (setq-local buffer-file-coding-system 'utf-8-unix)
   (setq-local buffer-offer-save t)
+  ;; After the light `portal-input-mode' puts first, as the terminal's :exited.
+  (setq mode-line-process
+        '(:eval (and (equal portal-excalidraw--mode "arrange") ":Arrange")))
   (portal-input-mode 1)
   (setq portal-excalidraw--saved (unless (buffer-modified-p) (buffer-string)))
   ;; Emacs deliberately catches before-save-hook errors and may still write.
@@ -100,12 +108,15 @@ Never prompt in this function."
   (condition-case err
       (pcase (plist-get message :type)
         ("ready"
+         ;; A page, new or reloaded, starts in the editor.
+         (portal-excalidraw--screen "draw")
          (portal-web-send (list :type "load" :json (buffer-string)
                                 :name (file-name-base (or buffer-file-name (buffer-name))))))
         ("loaded"
          (portal-excalidraw--scene (plist-get message :json) t)
          (setq portal-excalidraw--ready t portal-excalidraw--error nil))
         ("dirty" (set-buffer-modified-p t))
+        ("mode" (portal-excalidraw--screen (plist-get message :mode)))
         ("change" (portal-excalidraw--scene (plist-get message :json)))
         ("snapshot"
          (when (eql (plist-get message :request) portal-excalidraw--request)
@@ -121,6 +132,37 @@ Never prompt in this function."
                                   (list (current-buffer) (plist-get message :type))))))))
     (error (setq portal-excalidraw--error (error-message-string err))
            (message "Drawing: %s" portal-excalidraw--error))))
+
+(defun portal-excalidraw--screen (mode)
+  "Record MODE as the page's screen, and show it in the mode line."
+  (if (not (member mode '("draw" "arrange")))
+      (message "Drawing: unknown screen %S" mode)
+    (setq portal-excalidraw--mode mode)
+    (force-mode-line-update)))
+
+(defun portal-excalidraw--show (mode)
+  "Ask the drawing's page to show MODE, then give it the keyboard.
+The page answers with the screen it shows, which the mode line follows."
+  (unless (derived-mode-p 'portal-excalidraw-mode)
+    (user-error "This buffer is not a drawing"))
+  (cond (portal-excalidraw--error
+         (user-error "The drawing stopped; %s reopens it"
+                     (substitute-command-keys "\\[portal-excalidraw-reopen]")))
+        ((not portal-excalidraw--ready) (user-error "The drawing is still loading")))
+  (portal-web-send (list :type "mode" :mode mode))
+  (when (eq (window-buffer) (current-buffer)) (portal-view-focus)))
+
+(defun portal-excalidraw-arrange ()
+  "Show the drawing's slides: its frames, in order, each as its image.
+Up and Down select a slide; Return, or a double click, edits it in the
+editor; Escape goes back to the editor where it was."
+  (interactive nil portal-excalidraw-mode)
+  (portal-excalidraw--show "arrange"))
+
+(defun portal-excalidraw-draw ()
+  "Go back from the drawing's slides to its editor, where it was."
+  (interactive nil portal-excalidraw-mode)
+  (portal-excalidraw--show "draw"))
 
 (defun portal-excalidraw--dispatch (event)
   "Run the command in EVENT, which a drawing's app asked for, in its buffer."
@@ -197,7 +239,8 @@ Never prompt in this function."
 (defun portal-excalidraw--close ()
   "Close the drawing's web view.  The buffer keeps the drawing."
   (portal-view-close)
-  (setq portal-excalidraw--ready nil))
+  (setq portal-excalidraw--ready nil)
+  (portal-excalidraw--screen "draw"))
 
 (defun portal-excalidraw-reopen ()
   "Reopen the drawing's web view from the buffer, resetting its undo history.

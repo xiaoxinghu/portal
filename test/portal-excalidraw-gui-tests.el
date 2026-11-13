@@ -225,4 +225,97 @@ The file holds ELEMENTS and FILES; without ELEMENTS, it is a new drawing.
       (should (file-exists-p file))
       (should-not (buffer-modified-p)))))
 
+(defun portal-excalidraw-gui--frame (id name order x y width height)
+  "A frame ID called NAME, slide ORDER in its deck, at X Y, WIDTH by HEIGHT."
+  (list :type "frame" :id id :name name :x x :y y :width width :height height
+        :customData (list :slidesOrder order)))
+
+(defun portal-excalidraw-gui--slides ()
+  "The slides Arrange shows, each as (NAME SELECTED IMAGED), in order."
+  (append (portal-excalidraw-gui--js
+           "return [...document.querySelectorAll('.portal-filmstrip [role=option]')].map(slide =>
+              [slide.querySelector('.portal-slide-name').textContent,
+               slide.getAttribute('aria-selected') === 'true',
+               !!slide.querySelector('img')?.src.startsWith('data:image/svg+xml')]);")
+          nil))
+
+(defun portal-excalidraw-gui--key (code flags text)
+  "Type the key CODE with FLAGS, which types TEXT, into the page."
+  (should (portal-test-native-key code flags text))
+  (redisplay t))
+
+(defconst portal-excalidraw-gui--down
+  (list 125 (logior (ash 1 23) (ash 1 21)) (string #xF701))
+  "The Down arrow, as AppKit reports it: a function key on the keypad.")
+
+(ert-deftest portal-excalidraw-gui-arrange-shows-the-slides-and-edits-one ()
+  :tags '(:gui)
+  ;; The second slide comes first on the page and is small, so the view the
+  ;; drawing opens at is nearest the first.
+  (portal-excalidraw-gui--drawing
+      (list (portal-excalidraw-gui--frame "closing" "Closing" 1 2000 2000 400 225)
+            (portal-excalidraw-gui--frame "opening" "Opening" 0 0 0 1600 900)
+            (append (portal-excalidraw-gui--text "hello" "Hello") '(:frameId "opening"))
+            (append (portal-excalidraw-gui--text "bye" "Bye") '(:frameId "closing" :x 2050 :y 2050)))
+      nil
+    (let ((arrange (lambda (enter)
+                     (funcall enter)
+                     (portal-excalidraw--wait (lambda () (equal portal-excalidraw--mode "arrange")))
+                     (portal-terminal-test--wait
+                      (lambda () (equal (portal-excalidraw-gui--js
+                                         "return document.hasFocus() && document.querySelectorAll('.portal-filmstrip img').length;")
+                                        2)))))
+          (draw (lambda () (portal-excalidraw--wait (lambda () (equal portal-excalidraw--mode "draw")))
+                  (should (equal (portal-excalidraw-gui--js
+                                  "return !document.querySelector('.portal-arrange') && !document.querySelector('.portal-editor').inert;")
+                                 t)))))
+      (funcall arrange #'portal-excalidraw-arrange)
+      (should (equal (portal-excalidraw-gui--slides)
+                     '(["Opening" t t] ["Closing" nil t])))
+      (should (string-match-p ":Arrange" (format-mode-line mode-line-process)))
+      (should (equal (portal-excalidraw-gui--js
+                      "return document.querySelector('.portal-editor').inert;")
+                     t))
+      (should-not (buffer-modified-p))
+      ;; Command-S still saves; the page asks Emacs to.
+      (portal-excalidraw-gui--key 1 (ash 1 20) "s")
+      (let ((event (aref (with-timeout (5 (ert-fail "Command-S did not reach Emacs"))
+                           (read-key-sequence-vector nil))
+                         0)))
+        (should (equal (car-safe event) 'portal-excalidraw-command))
+        (portal-excalidraw--dispatch event))
+      (should (equal portal-excalidraw--mode "arrange"))
+      (should-not (buffer-modified-p))
+      ;; Down selects the second slide, and Return edits it.
+      (apply #'portal-excalidraw-gui--key portal-excalidraw-gui--down)
+      (portal-terminal-test--wait
+       (lambda () (equal (portal-excalidraw-gui--slides) '(["Opening" nil t] ["Closing" t t]))))
+      (portal-excalidraw-gui--key 36 0 "\r")
+      (funcall draw)
+      (should-not (string-match-p "Arrange" (format-mode-line mode-line-process)))
+      (should-not (buffer-modified-p))
+      ;; The editor shows that slide now, so Arrange, entered from the
+      ;; editor's menu, starts at it.
+      (funcall arrange
+               (lambda ()
+                 (should (eq t (portal-excalidraw-gui--js
+                  "const button = document.querySelector('.main-menu-trigger');
+                   if (!button) return 'no menu button';
+                   button.click();
+                   for (let tries = 0; tries < 100; tries++) {
+                     const item = [...document.querySelectorAll('.dropdown-menu-item')]
+                       .find(item => item.textContent.trim() === 'Slides');
+                     if (item) { item.click(); return true; }
+                     await new Promise(resolve => setTimeout(resolve, 20));
+                   }
+                   return [...document.querySelectorAll('.dropdown-menu-item')]
+                     .map(item => item.textContent.trim());")))))
+      (should (equal (portal-excalidraw-gui--slides)
+                     '(["Opening" nil t] ["Closing" t t])))
+      ;; Escape goes back as it was.
+      (portal-excalidraw-gui--key 53 0 "\e")
+      (funcall draw)
+      (portal-excalidraw--flush)
+      (should-not (buffer-modified-p)))))
+
 (provide 'portal-excalidraw-gui-tests)
