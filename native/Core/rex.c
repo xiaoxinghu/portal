@@ -8,17 +8,20 @@
    time, that messages wait.  Lisp parses the server's welcome, responses
    and events, and decides what a session or a block is (portal-rex.el).
 
-   The core reads only the responses to its own requests, which it takes
-   out of what the server sends before Emacs sees it: those that show a
-   block in a terminal.  A block's bytes, its first paint and its typing
-   never cross Emacs.  The order of that work, and what each step guards
+   The core reads the responses to its own requests, which it takes out of
+   what the server sends before Emacs sees it: those that show a block in a
+   terminal.  It also reads the events of the blocks it shows, for what
+   their terminals report, and passes them on to Emacs.  A block's bytes,
+   its first paint and its typing never cross Emacs.  The order of that work, and what each step guards
    against, is in rex.h; the protocol is the server's own documentation
    ("Data Connections" in the server's /llms.txt). */
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "channel.h"
 #include "core.h"
@@ -52,6 +55,11 @@ enum {
     /* A Rex message longer than this is a program's look-alike that never
        ends, and is shown as output. */
     LONGEST_MESSAGE = 1 << 20,
+    /* How long a block whose program exited is given to close before its
+       terminal says it has exited: a block closes when its program ends,
+       unless it was made to stay, and the server sends the two events one
+       after the other. */
+    EXIT_MILLISECONDS = 250,
 };
 
 /* Bytes that grow. */
@@ -164,7 +172,24 @@ struct shown {
     struct operation *operations;
     size_t queued;
     bool sending; /* An operation's request is out. */
+    /* What the block's terminal reports, from its events and, once, from
+       its own methods; each kept with the seq of the message that last set
+       it, since an event can overtake the response to an earlier request. */
+    portal_text title;    /* As a program last set it. */
+    portal_text reported; /* The last directory reported from this Mac. */
+    portal_text cwd;      /* The foreground process's working directory. */
+    portal_text program;  /* The foreground process, as Rex labels one. */
+    uint64_t seqs[3];     /* Of the title, the reported directory, the process. */
+    bool exited;          /* Its program has exited, and the block stays. */
+    bool child_exited;    /* The server said its program exited. */
+    bool closed;          /* The server said the block closed. */
+    bool exiting;         /* Either: EXIT_TIMER runs, and the stream's end waits. */
+    bool end_waits;       /* The stream ended while exiting: told after it. */
+    uint64_t exit_timer;
 };
+
+/* Which of a shown block's details a seq is for. */
+enum detail { TITLE, DIRECTORY, PROCESS };
 
 static struct {
     struct shown **items;
@@ -495,7 +520,12 @@ static void end_show(struct shown *shown, enum stage stage, const char *reason,
     clear(&shown->held);
     clear(&shown->paint);
     clear(&shown->tail);
-    announce(shown);
+    /* A block whose program has exited closes, and its buffer goes: its
+       stream's end is news only if it stays. */
+    if (shown->exiting)
+        shown->end_waits = true;
+    else
+        announce(shown);
 }
 
 /* Close SHOWN's stream, if open; a close says the stream is done with. */
@@ -538,6 +568,286 @@ static void put_resize(struct json *json, struct shown *shown, const uint32_t va
     memcpy(shown->sized, values, sizeof shown->sized);
 }
 
+/* What the block's terminal reports. */
+
+/* Tell Emacs that what SHOWN's terminal describes changed, as any
+   terminal's platform does. */
+static void changed(struct shown *shown)
+{
+    portal_views_announce(view(shown->target), PORTAL_TERMINAL, "terminal");
+}
+
+/* Set *FIELD to VALUE; whether that changed it. */
+static bool set_text(portal_text *field, portal_string value)
+{
+    if (same(*field, value) || (!field->data && !value.length))
+        return false;
+    portal_text copied = {0};
+    if (!copy(value, &copied))
+        return false;
+    free(field->data);
+    *field = copied;
+    return true;
+}
+
+/* Whether HOST, the host of a file:// URL, is this Mac: empty, localhost,
+   or its name, with or without ".local". */
+static bool this_host(portal_string host)
+{
+    char name[256] = {0};
+    if (!host.length || (host.length == 9 && !strncasecmp(host.data, "localhost", 9)))
+        return true;
+    if (gethostname(name, sizeof name - 1))
+        return false;
+    size_t length = strlen(name);
+    if (length > 6 && !strcasecmp(name + length - 6, ".local"))
+        length -= 6;
+    if (host.length > 6 && !strncasecmp(host.data + host.length - 6, ".local", 6))
+        host.length -= 6;
+    return host.length == length && !strncasecmp(host.data, name, length);
+}
+
+static int hex_digit(char c)
+{
+    return c >= '0' && c <= '9' ? c - '0'
+        : c >= 'a' && c <= 'f'  ? c - 'a' + 10
+        : c >= 'A' && c <= 'F'  ? c - 'A' + 10
+                                : -1;
+}
+
+/* PWD, a directory a program reported, as a path on this Mac in *PATH:
+   a file:// URL from this Mac, percent-decoded, or an absolute path as it
+   is.  False for any other, such as a URL from a shell reached by ssh. */
+static bool local_path(portal_string pwd, portal_text *path)
+{
+    static const char scheme[] = "file://";
+    if (pwd.length && pwd.data[0] == '/')
+        return copy(pwd, path);
+    if (pwd.length <= sizeof scheme - 1 || strncasecmp(pwd.data, scheme, sizeof scheme - 1))
+        return false;
+    const char *host = pwd.data + sizeof scheme - 1, *end = pwd.data + pwd.length;
+    const char *slash = memchr(host, '/', (size_t) (end - host));
+    if (!slash || !this_host((portal_string) {host, (size_t) (slash - host)}))
+        return false;
+    char *decoded = malloc((size_t) (end - slash) + 1);
+    if (!decoded)
+        return false;
+    size_t length = 0;
+    for (const char *at = slash; at < end; at++) {
+        int high, low;
+        if (*at == '%' && end - at > 2 && (high = hex_digit(at[1])) >= 0
+            && (low = hex_digit(at[2])) >= 0) {
+            decoded[length++] = (char) (high << 4 | low);
+            at += 2;
+        } else {
+            decoded[length++] = *at;
+        }
+    }
+    decoded[length] = '\0';
+    /* A path holds no NUL. */
+    if (memchr(decoded, '\0', length)) {
+        free(decoded);
+        return false;
+    }
+    *path = (portal_text) {decoded, length};
+    return true;
+}
+
+/* The directory SHOWN's block is in: the last its program reported from
+   this Mac, and until one does, its foreground process's. */
+static portal_string directory(struct shown *shown)
+{
+    return shown->reported.length ? view(shown->reported)
+        : shown->cwd.data         ? view(shown->cwd)
+                                  : literal("");
+}
+
+/* The title TITLE, a JSON string, set at SEQ. */
+static bool take_title(struct shown *shown, portal_string title, uint64_t seq)
+{
+    portal_text text = {0};
+    if (seq < shown->seqs[TITLE] || !portal_json_string(title, &text))
+        return false;
+    shown->seqs[TITLE] = seq;
+    bool moved = set_text(&shown->title, view(text));
+    free(text.data);
+    return moved;
+}
+
+/* The directory PWD, a JSON string, reported at SEQ. */
+static bool take_directory(struct shown *shown, portal_string pwd, uint64_t seq)
+{
+    portal_text text = {0}, path = {0};
+    if (seq < shown->seqs[DIRECTORY] || !portal_json_string(pwd, &text))
+        return false;
+    shown->seqs[DIRECTORY] = seq;
+    bool moved = local_path(view(text), &path) && set_text(&shown->reported, view(path));
+    free(text.data);
+    free(path.data);
+    return moved;
+}
+
+/* The foreground process FOREGROUND, a JSON object or null, at SEQ.  It
+   is labelled by Rex's own rule: its script, else its argv0, else its
+   name; a login shell's argv0 without its "-". */
+static bool take_process(struct shown *shown, portal_string foreground, uint64_t seq)
+{
+    static const char *const names[] = {"script", "argv0", "name"};
+    if (seq < shown->seqs[PROCESS])
+        return false;
+    shown->seqs[PROCESS] = seq;
+    portal_string value;
+    portal_text label = {0}, cwd = {0};
+    for (size_t i = 0; !label.length && i < sizeof names / sizeof *names; i++) {
+        free(label.data);
+        label = (portal_text) {0};
+        if (portal_json_member(foreground, names[i], &value))
+            portal_json_string(value, &label);
+    }
+    portal_string name = label.data ? view(label) : literal("");
+    if (name.length > 1 && name.data[0] == '-') {
+        name.data++;
+        name.length--;
+    }
+    bool moved = !shown->exited && set_text(&shown->program, name);
+    if (portal_json_member(foreground, "cwd", &value) && portal_json_string(value, &cwd)
+        && cwd.length && cwd.data[0] == '/')
+        moved = set_text(&shown->cwd, view(cwd)) || moved;
+    free(label.data);
+    free(cwd.data);
+    return moved;
+}
+
+/* SHOWN's program has exited, or its block closed: give the block a
+   moment to close before its terminal says the program exited, so that a
+   buffer about to go never shows it. */
+static void exit_later(struct shown *shown)
+{
+    if (!shown->exiting) {
+        shown->exiting = true;
+        shown->exit_timer = portal_channel_timer(EXIT_MILLISECONDS);
+    }
+}
+
+/* The moment is over: a block that stayed says its program exited. */
+static void exited(struct shown *shown)
+{
+    shown->exiting = false;
+    shown->exit_timer = 0;
+    if (shown->child_exited && !shown->closed && !shown->exited) {
+        shown->exited = true;
+        set_text(&shown->program, literal(""));
+        changed(shown);
+    }
+    if (shown->end_waits) {
+        shown->end_waits = false;
+        announce(shown);
+    }
+}
+
+/* The seq of MESSAGE, a response or an event, or 0. */
+static uint64_t seq_of(portal_string message)
+{
+    portal_string value;
+    int64_t seq = 0;
+    return portal_json_member(message, "seq", &value) && portal_json_integer(value, &seq) && seq > 0
+        ? (uint64_t) seq
+        : 0;
+}
+
+/* An answer to one of the terminal's methods asked when the show began:
+   its payload, or false for a refusal, which leaves the details to the
+   events, as for an older server. */
+static bool told(const char *response, size_t length, portal_string *payload)
+{
+    portal_text error = {0};
+    if (refused(response, length, &error)) {
+        free(error.data);
+        return false;
+    }
+    return portal_json_member((portal_string) {response, length}, "payload", payload);
+}
+
+static void told_title(struct shown *shown, const char *response, size_t length)
+{
+    portal_string payload, title;
+    if (told(response, length, &payload) && portal_json_member(payload, "title", &title)
+        && take_title(shown, title, seq_of((portal_string) {response, length})))
+        changed(shown);
+}
+
+static void told_directory(struct shown *shown, const char *response, size_t length)
+{
+    portal_string payload, pwd;
+    if (told(response, length, &payload) && portal_json_member(payload, "pwd", &pwd)
+        && take_directory(shown, pwd, seq_of((portal_string) {response, length})))
+        changed(shown);
+}
+
+static void told_process(struct shown *shown, const char *response, size_t length)
+{
+    portal_string payload, foreground, last_exit;
+    if (!told(response, length, &payload))
+        return;
+    if (!portal_json_member(payload, "foreground", &foreground))
+        foreground = literal("null");
+    if (take_process(shown, foreground, seq_of((portal_string) {response, length})))
+        changed(shown);
+    /* A block made to stay after its program ends, shown since. */
+    if (portal_json_member(payload, "last_exit", &last_exit) && !is(last_exit, "null")) {
+        shown->child_exited = true;
+        exit_later(shown);
+    }
+}
+
+/* Ask for what SHOWN's terminal reports now: its title, the directory it
+   reported and its processes.  Events tell of each change from here on. */
+static void ask_details(struct shown *shown)
+{
+    static const struct {
+        const char *method;
+        answer *answer;
+    } details[] = {
+        {"com.superlogical.terminal.title", told_title},
+        {"com.superlogical.terminal.pwd", told_directory},
+        {"com.superlogical.terminal.process", told_process},
+    };
+    for (size_t i = 0; i < sizeof details / sizeof *details && shown->stage < FAILED; i++) {
+        struct json json = {0};
+        put_block(&json, shown);
+        put_text(&json, ",\"args\":{}}");
+        ask(shown, details[i].method, &json, details[i].answer);
+    }
+}
+
+/* EVENT, a block event's payload with its "name" and "payload", from the
+   block SHOWN shows, at SEQ. */
+static void terminal_event(struct shown *shown, portal_string event, uint64_t seq)
+{
+    portal_string creator, name, fields, value;
+    if (!portal_json_member(event, "creator_name", &creator)
+        || !portal_json_is(creator, "com.superlogical.terminal")
+        || !portal_json_member(event, "name", &name)
+        || !portal_json_member(event, "payload", &fields))
+        return;
+    bool moved = false;
+    if (portal_json_is(name, "title_changed"))
+        moved = portal_json_member(fields, "title", &value) && take_title(shown, value, seq);
+    else if (portal_json_is(name, "pwd_changed"))
+        moved = portal_json_member(fields, "pwd", &value) && take_directory(shown, value, seq);
+    else if (portal_json_is(name, "process_changed"))
+        moved = take_process(shown, portal_json_member(fields, "foreground", &value)
+                                        ? value
+                                        : literal("null"),
+                             seq);
+    else if (portal_json_is(name, "child_exited")) {
+        shown->child_exited = true;
+        exit_later(shown);
+    }
+    if (moved)
+        changed(shown);
+}
+
 static answer attached, owned, resized, connected, painted, read_part, operated;
 
 static void own(struct shown *shown)
@@ -550,6 +860,7 @@ static void own(struct shown *shown)
     put_text(&json, "],\"mode\":\"take\"}");
     shown->stage = OWNING;
     ask(shown, "session.own_block", &json, owned);
+    ask_details(shown);
 }
 
 static void attached(struct shown *shown, const char *response, size_t length)
@@ -692,13 +1003,21 @@ static void output(struct shown *shown, const char *bytes, size_t length)
 
 /* One of Rex's own messages, a JSON object, from SHOWN's stream.  A resize
    gives the block's grid, which the terminal has already: while Emacs owns
-   the block, the server takes the size of the terminal's pane.  Its other
-   messages are another task's. */
+   the block, the server takes the size of the terminal's pane.  A
+   child_exited says the block's program has ended.  Its theme is left
+   out: the terminal keeps Portal's theme. */
 static void message(struct shown *shown, portal_string json)
 {
     portal_string type, value;
     int64_t columns, rows;
-    if (!portal_json_member(json, "type", &type) || !portal_json_is(type, "resize"))
+    if (!portal_json_member(json, "type", &type))
+        return;
+    /* The stream says so as well as an event, in either order. */
+    if (portal_json_is(type, "child_exited")) {
+        shown->child_exited = true;
+        return exit_later(shown);
+    }
+    if (!portal_json_is(type, "resize"))
         return;
     if (portal_json_member(json, "cols", &value) && portal_json_integer(value, &columns)
         && portal_json_member(json, "rows", &value) && portal_json_integer(value, &rows)
@@ -792,7 +1111,7 @@ done:;
     put_block(&json, shown);
     put_text(&json, ",\"args\":{\"format\":\"vt\",\"extra_charsets\":true,\"extra_cursor\":true,"
                     "\"extra_hyperlink\":true,\"extra_keyboard\":true,"
-                    "\"extra_kitty_keyboard\":true,\"extra_modes\":true,\"extra_palette\":true,"
+                    "\"extra_kitty_keyboard\":true,\"extra_modes\":true,"
                     "\"extra_protection\":true,\"extra_pwd\":true,"
                     "\"extra_scrolling_region\":true,\"extra_style\":true,"
                     "\"extra_tabstops\":true,\"max_bytes\":");
@@ -1141,6 +1460,8 @@ void portal_rex_timer(uint64_t token)
                 size(shown);
             return;
         }
+        if (shown->exit_timer == token)
+            return exited(shown);
     }
 }
 
@@ -1209,12 +1530,23 @@ void portal_rex_describe(portal_string target, struct json *json)
     if (!shown)
         return;
     shown->announced = false;
+    /* Every server Portal reaches is on this Mac, so the block's directory
+       is the terminal's. */
+    put_text(json, ",\"title\":");
+    put_string(json, shown->title.data ? view(shown->title) : literal(""));
+    put_text(json, ",\"pwd\":");
+    put_string(json, directory(shown));
+    put_text(json, ",\"program\":");
+    put_string(json, shown->program.data ? view(shown->program) : literal(""));
+    put_text(json, shown->exited ? ",\"exited\":true" : ",\"exited\":false");
     put_text(json, ",\"rex\":{\"state\":");
     put_string(json, literal(states[shown->stage]));
     put_text(json, ",\"columns\":");
     put_number(json, shown->columns);
     put_text(json, ",\"rows\":");
     put_number(json, shown->rows);
+    put_text(json, ",\"directory\":");
+    put_string(json, directory(shown));
     if (shown->stage >= FAILED) {
         put_text(json, ",\"reason\":");
         put_string(json, shown->reason.data ? view(shown->reason) : literal(""));
@@ -1241,6 +1573,10 @@ void portal_rex_closed(portal_string target)
         free(shown->session.data);
         free(shown->block.data);
         free(shown->reason.data);
+        free(shown->title.data);
+        free(shown->reported.data);
+        free(shown->cwd.data);
+        free(shown->program.data);
         free(shown);
         return;
     }
@@ -1274,6 +1610,39 @@ static bool own_response(struct connection *connection, portal_text message)
         return true;
     }
     return false;
+}
+
+/* MESSAGE, if it is an event of a block shown on CONNECTION, tells the
+   show what the block reported: what its terminal says of itself, or that
+   the block closed.  It goes on to Emacs all the same. */
+static void block_event(struct connection *connection, portal_text message)
+{
+    bool showing = false;
+    for (size_t i = 0; !showing && i < shows.count; i++)
+        showing = shows.items[i]->connection == connection->id;
+    portal_string whole = view(message), type, payload, fields, event, kind, block;
+    portal_text id = {0};
+    if (!showing || !portal_json_member(whole, "type", &type) || !portal_json_is(type, "event")
+        || !portal_json_member(whole, "payload", &payload)
+        || !portal_json_member(payload, "type", &type) || !portal_json_is(type, "session_event")
+        || !portal_json_member(payload, "payload", &fields)
+        || !portal_json_member(fields, "event", &event)
+        || !portal_json_member(event, "type", &kind)
+        || !portal_json_member(event, "payload", &fields)
+        || !portal_json_member(fields, "block_id", &block) || !portal_json_string(block, &id))
+        return;
+    for (size_t i = 0; i < shows.count; i++) {
+        struct shown *shown = shows.items[i];
+        if (shown->connection != connection->id || !same(shown->block, view(id)))
+            continue;
+        if (portal_json_is(kind, "block_event")) {
+            terminal_event(shown, fields, seq_of(whole));
+        } else if (portal_json_is(kind, "block_closed")) {
+            shown->closed = true;
+            exit_later(shown);
+        }
+    }
+    free(id.data);
 }
 
 /* CONNECTION's end, for the core's own requests and shows. */
@@ -1318,6 +1687,7 @@ static void pump(struct connection *connection)
             free(messages[i].data);
             continue;
         }
+        block_event(connection, messages[i]);
         portal_text *grown = realloc(connection->inbox, (connection->waiting + 1) * sizeof *grown);
         if (!grown) {
             free(messages[i].data); /* No memory: lost, as the platform's limit loses one. */

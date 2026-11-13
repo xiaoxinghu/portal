@@ -38,6 +38,9 @@ was seen to, and as its documentation of data connections says:
   in parts read with com.superlogical.terminal.blob_read when it is longer
   than the paint part; com.superlogical.terminal.write and block.event
   answer, writing nothing anywhere.
+- Answers a terminal's com.superlogical.terminal.title, .pwd and .process
+  from what it knows of the block: no title, no directory and no process
+  until a terminal command or a block event says otherwise.
 - On a data connection, answers a HELLO with the ticket's WELCOME, a nonce
   of its own, then a snapshot of two records and a Rex resize message with
   the block's grid; or with a REJECT, reason 0x01, and a close, for a
@@ -119,6 +122,15 @@ Commands, on standard input:
         Send every data connection of BLOCK this Rex message, with its nonce.
     {"end_stream": BLOCK, "code": CODE, "reason": TEXT}
         Close every data connection of BLOCK with this close frame.
+    {"terminal": BLOCK, "title": TEXT, "pwd": TEXT, "process": {...}}
+        What BLOCK's terminal methods answer from now on, each given
+        replacing what it had: "process" as com.superlogical.terminal.process
+        returns it, with "foreground" and "last_exit".
+    {"block_event": BLOCK, "name": NAME, "payload": {...}}
+        Send the terminal event NAME of BLOCK, such as "title_changed", to
+        every client that attached to BLOCK's session with session.attach,
+        as a session_event wrapping a block_event; and take what it says
+        into what BLOCK's terminal methods answer.
 """
 
 import base64
@@ -165,6 +177,7 @@ state = {
     "made": 0,
     "chosen": {},
     "revision": 1,
+    "terminals": {},
 }
 
 
@@ -533,6 +546,35 @@ def blob_read(client, payload):
     return {"id": args.get("id"), "data": data, "total": total, "eof": eof}
 
 
+def terminal(block):
+    return state["terminals"].setdefault(block, {"title": "", "process": {"last_exit": None}})
+
+
+def title(client, payload):
+    block, problem = find_block(payload)
+    return problem or {"title": terminal(block)["title"]}
+
+
+def pwd(client, payload):
+    block, problem = find_block(payload)
+    if problem:
+        return problem
+    known = terminal(block)
+    return {"pwd": known["pwd"]} if "pwd" in known else {}
+
+
+def process(client, payload):
+    block, problem = find_block(payload)
+    return problem or terminal(block)["process"]
+
+
+def session_of(block):
+    for session, blocks in state["blocks"].items():
+        if any(known.get("block_id") == block for known in blocks):
+            return session
+    return None
+
+
 def answer_block(client, payload):
     _, problem = find_block(payload)
     if problem:
@@ -678,6 +720,9 @@ SHOWING = {
     "com.superlogical.terminal.blob_read": blob_read,
     "com.superlogical.terminal.write": answer_block,
     "block.event": answer_block,
+    "com.superlogical.terminal.title": title,
+    "com.superlogical.terminal.pwd": pwd,
+    "com.superlogical.terminal.process": process,
 }
 
 
@@ -751,6 +796,33 @@ def command(value):
         elif "rex" in value:
             for client in list(state["streams"].get(value["rex"], [])):
                 client.rex(value["message"])
+        elif "terminal" in value:
+            known = terminal(value["terminal"])
+            for key in ("title", "pwd", "process"):
+                if key in value:
+                    known[key] = value[key]
+        elif "block_event" in value:
+            block, name = value["block_event"], value.get("name", "")
+            fields = value.get("payload", {})
+            known = terminal(block)
+            if name == "title_changed":
+                known["title"] = fields.get("title", "")
+            elif name == "pwd_changed":
+                known["pwd"] = fields.get("pwd", "")
+            elif name == "process_changed":
+                known["process"] = dict(known["process"], foreground=fields.get("foreground"))
+            elif name == "child_exited":
+                known["process"] = dict(known["process"], last_exit=fields)
+            session = session_of(block)
+            event = {"type": "session_event", "payload": {
+                "session_id": session,
+                "event": {"type": "block_event", "payload": {
+                    "block_id": block, "creator_name": "com.superlogical.terminal",
+                    "name": name, "payload": fields}}}}
+            for client in everyone:
+                if session in client.joined:
+                    client.seq += 1
+                    client.send({"type": "event", "seq": client.seq, "payload": event})
         elif "end_stream" in value:
             for client in list(state["streams"].get(value["end_stream"], [])):
                 client.closing = True

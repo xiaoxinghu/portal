@@ -10,7 +10,9 @@
    that text instead, for tests of how the core reads descriptions.
 
    A fed terminal's "fed" is all it has been fed, as a string, and it
-   reports a grid of 8 by 16 cells in the size it is attached at.
+   reports a grid of 8 by 16 cells in the size it is attached at.  It
+   describes no "title", "pwd", "program" or "exited", which the core
+   describes for it.
 
    A terminal describes the facts every platform's terminal reports, "ready",
    "title", "pwd", "program", "columns", "rows" and "exited", which is true
@@ -294,14 +296,21 @@ bool portal_view_create(portal_kind kind, portal_string target, const portal_opt
         abort();
     all[view_count++] = view;
     set_flag(view, "attached", false);
+    bool fed = false;
+    for (size_t i = 0; i < count; i++)
+        if (is(options[i].name, "fed"))
+            fed = options[i].flag || options[i].is_string;
     if (kind == PORTAL_TERMINAL) {
         set_flag(view, "ready", true);
-        set_string(view, "title", "Fake terminal", 13);
-        set_string(view, "pwd", "", 0);
-        set_string(view, "program", "", 0);
+        if (!fed) {
+            set_string(view, "title", "Fake terminal", 13);
+            set_string(view, "pwd", "", 0);
+            set_string(view, "program", "", 0);
+        }
         set_integer(view, "columns", 80);
         set_integer(view, "rows", 24);
-        set_flag(view, "exited", false);
+        if (!fed)
+            set_flag(view, "exited", false);
     }
     for (size_t i = 0; i < count; i++) {
         struct property *entry = property(view, options[i].name.data, options[i].name.length);

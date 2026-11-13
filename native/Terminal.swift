@@ -101,14 +101,16 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
         refreshProgram()
         session?.changed()
     }
+    // A fed terminal's title and directory are the core's to describe,
+    // from its program's own reports (portal.h).
     func terminalDidChangeTitle(_ title: String) {
-        guard title != terminalTitle else { return }
+        guard fed == nil, title != terminalTitle else { return }
         terminalTitle = title
         refreshProgram()
         session?.changed()
     }
     func terminalDidChangeWorkingDirectory(_ path: String) {
-        guard path != workingDirectory else { return }
+        guard fed == nil, path != workingDirectory else { return }
         workingDirectory = path
         refreshProgram()
         session?.changed()
@@ -255,11 +257,13 @@ final class TerminalSession: PortalView {
     func close() { terminal.stopSamplingProgram() }
 
     func describe() -> [(String, ViewValue)] {
-        [("ready", .flag(terminal.terminalSurface != nil)),
-         ("title", .string(terminal.terminalTitle)),
-         ("pwd", .string(terminal.workingDirectory)),
-         ("program", .string(terminal.program)),
-         ("exited", .flag(terminal.exited)),
+        // A fed terminal's program runs elsewhere: the core describes it.
+        let program: [(String, ViewValue)] = terminal.fed != nil ? [] :
+            [("title", .string(terminal.terminalTitle)),
+             ("pwd", .string(terminal.workingDirectory)),
+             ("program", .string(terminal.program)),
+             ("exited", .flag(terminal.exited))]
+        return [("ready", .flag(terminal.terminalSurface != nil))] + program + [
          ("progress", .string(terminal.progress)),
          ("columns", .integer(Int(terminal.grid?.columns ?? 0))),
          ("rows", .integer(Int(terminal.grid?.rows ?? 0))),
