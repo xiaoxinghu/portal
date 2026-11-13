@@ -1421,6 +1421,59 @@ static void test_giving_up(void)
     sent();
 }
 
+static void test_fresh_streams(void)
+{
+    portal_text error = {0};
+    uint64_t id = open_connection("/tmp/rex/server.sock", &error);
+    portal_fake_socket_sent(id);
+    char *target = fed_terminal(&error);
+    CHECK(portal_rex_show(id, text(target), text(SESSION), text(BLOCK), &error));
+    answer_with(id, 1, "{}", NULL);
+    answer_with(id, 2, "{}", NULL);
+    portal_fake_fire_timers();
+    answer_with(id, 6, "{}", NULL);
+    answer_with(id, 7, "{\"ticket\":\"AAECAwQFBgcICQoLDA0ODw\"}", NULL);
+    uint64_t data = portal_fake_socket_last();
+    portal_fake_socket_deliver_bytes(data, welcome, sizeof welcome);
+    /* A record of 30 bytes walked, and the stream ends before the
+       snapshot does: the next stream's snapshot is walked from its own
+       start. */
+    static const char first[] = "GHOSTSNP\x01\x00\x01\x00\x1e\x00\x00\x00\x00\x00\x00\x00"
+                                "0123456789012345678901234567890123456789";
+    portal_fake_socket_deliver_bytes(data, first, 10 + 10 + 30);
+    portal_fake_socket_sent(id);
+    portal_fake_socket_closed(data, 1013, "The server closed the connection (1013: data reconnect required)");
+    CHECK(asked(id, 8, "data.connect",
+                ON_BLOCK ",\"data_ref_id\":\"terminal\",\"subprotocol\":\"rex.data.terminal.v1\"}"));
+    answer_with(id, 8, "{\"ticket\":\"AAECAwQFBgcICQoLDA0ODw\"}", NULL);
+    data = portal_fake_socket_last();
+    portal_fake_socket_deliver_bytes(data, welcome, sizeof welcome);
+    portal_fake_socket_deliver_bytes(data, snapshot, sizeof snapshot - 1);
+    CHECK(strstr(portal_fake_socket_sent(id), "\"id\":\"9\",\"method\":\"com.superlogical.terminal.format\"")
+          != NULL);
+    /* The stream ends again while its paint is asked: the old paint's
+       answer, when it comes, paints nothing and starts nothing. */
+    portal_fake_socket_closed(data, 1013, "The server closed the connection (1013: data reconnect required)");
+    CHECK(asked(id, 10, "data.connect",
+                ON_BLOCK ",\"data_ref_id\":\"terminal\",\"subprotocol\":\"rex.data.terminal.v1\"}"));
+    answer_with(id, 9, "{\"content\":\"OLD\"}", NULL);
+    CHECK(is_text(fresh(target), ""));
+    CHECK(strstr(rex_state(target), "\"state\":\"starting\"") != NULL);
+    answer_with(id, 10, "{\"ticket\":\"AAECAwQFBgcICQoLDA0ODw\"}", NULL);
+    data = portal_fake_socket_last();
+    portal_fake_socket_deliver_bytes(data, welcome, sizeof welcome);
+    portal_fake_socket_deliver_bytes(data, snapshot, sizeof snapshot - 1);
+    portal_fake_socket_deliver(data, grid_message);
+    portal_fake_socket_deliver(data, "after");
+    answer_with(id, 11, "{\"content\":\"NEW\"}", NULL);
+    CHECK(is_text(fresh(target), "<grid 80x24>NEWafter"));
+    CHECK(strstr(rex_state(target), "\"state\":\"live\"") != NULL);
+    CHECK(portal_views_close(text(target), &error));
+    free(target);
+    CHECK(portal_rex_close(id, &error));
+    sent();
+}
+
 int main(void)
 {
     int ends[2];
@@ -1444,6 +1497,7 @@ int main(void)
     test_resuming();
     test_coming_back();
     test_giving_up();
+    test_fresh_streams();
     if (failures) {
         fprintf(stderr, "%d checks failed\n", failures);
         return 1;

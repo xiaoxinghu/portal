@@ -116,6 +116,7 @@ struct pending {
     answer *answer;
     uint64_t shown; /* By ID: the show may be gone by the time it is answered. */
     uint64_t paint; /* The show's paint it was asked for, which a later one discards. */
+    uint64_t generation; /* The show's stream when asked: see struct shown. */
 };
 
 /* A connection.  Its first socket has its number; one that connects again
@@ -235,6 +236,9 @@ struct shown {
     bool typed;               /* Something was typed meanwhile, since described. */
     bool painted_once;        /* The terminal has had a paint, which a new one resets. */
     unsigned tries;           /* Stream ends in a row before it showed anything. */
+    /* Counts the streams the show has started: an answer to a request made
+       for an earlier one, such as a paint, drives nothing. */
+    uint64_t generation;
 };
 
 /* Which of a shown block's details a seq is for. */
@@ -514,9 +518,9 @@ static bool ask(struct shown *shown, const char *method, struct json *payload, a
         free(error.data);
         return false;
     }
-    connection->pending[connection->asked++] =
-        (struct pending) {.number = request, .answer = answer, .shown = shown->id,
-                          .paint = shown->paints};
+    connection->pending[connection->asked++] = (struct pending) {
+        .number = request, .answer = answer, .shown = shown->id, .paint = shown->paints,
+        .generation = shown->generation};
     return true;
 }
 
@@ -1020,6 +1024,7 @@ static void terminal_event(struct shown *shown, portal_string event, uint64_t se
 }
 
 static answer attached, owned, resized, connected, painted, read_part, operated, taken;
+static answer told_title, told_directory, told_process;
 static bool open_stream(struct shown *shown, const unsigned char *handshake, size_t length);
 
 /* The arguments of a claim of SHOWN's block in MODE, "request" or "take". */
@@ -1395,6 +1400,26 @@ static void greeted(struct shown *shown, const unsigned char *bytes, size_t leng
     end_show(shown, FAILED, "The server refused the block's stream: ", literal(reason));
 }
 
+/* Drop all SHOWN has of its stream, for a new one: what came of its
+   snapshot, its cursor in it, what was held for a paint and the paint so
+   far, and its token.  Answers to what the old stream asked drive
+   nothing from here on. */
+static void fresh_stream(struct shown *shown)
+{
+    stop_stream(shown);
+    shown->resuming = shown->waiting = shown->tokened = false;
+    /* The new stream says its grid again, which its paint is for. */
+    shown->columns = shown->rows = 0;
+    shown->walked = 0;
+    shown->received = 0;
+    shown->blob = 0;
+    clear(&shown->snapshot);
+    clear(&shown->tail);
+    clear(&shown->held);
+    clear(&shown->paint);
+    shown->generation++;
+}
+
 /* SHOWN's stream is to continue on a new data connection, from the byte
    after those it has taken, once its connection is up; else it starts
    over. */
@@ -1425,15 +1450,7 @@ static void resume_stream(struct shown *shown)
 static void start_over(struct shown *shown, portal_string why)
 {
     struct connection *connection = find(shown->connection, NULL);
-    stop_stream(shown);
-    shown->resuming = shown->waiting = false;
-    shown->tokened = false;
-    /* The new stream says its grid again, which its paint is for. */
-    shown->columns = shown->rows = 0;
-    clear(&shown->snapshot);
-    clear(&shown->tail);
-    clear(&shown->held);
-    clear(&shown->paint);
+    fresh_stream(shown);
     if (connection && connection->lost) {
         shown->restart = true;
         return;
@@ -1882,16 +1899,11 @@ static void begin(struct shown *shown)
    connection that is back: what the server knew of Emacs may be gone. */
 static void restart_show(struct shown *shown)
 {
-    stop_stream(shown);
-    shown->restart = shown->waiting = shown->resuming = shown->tokened = false;
-    shown->columns = shown->rows = 0;
+    fresh_stream(shown);
+    shown->restart = false;
     shown->sending = false;
     shown->timer = 0;
     shown->tries = 0;
-    clear(&shown->snapshot);
-    clear(&shown->tail);
-    clear(&shown->held);
-    clear(&shown->paint);
     begin(shown);
 }
 
@@ -2042,10 +2054,16 @@ static bool own_response(struct connection *connection, portal_text message)
                 (--connection->asked - i) * sizeof *connection->pending);
         struct shown *shown = shown_by_id(pending.shown);
         /* A show that has failed takes no more answers, but its typing's;
-           nor does a paint that a later one replaced. */
+           nor does a paint that a later one replaced; and one that started
+           a new stream none of the old one's steps: what its terminal
+           reports, who owns it, and its typing hold for either. */
         bool stale = (pending.answer == painted || pending.answer == read_part)
             && pending.paint != shown_paints(shown);
-        if (shown && !stale
+        bool current = shown && shown->generation == pending.generation;
+        bool lasting = pending.answer == operated || pending.answer == taken
+            || pending.answer == named || pending.answer == told_title
+            || pending.answer == told_directory || pending.answer == told_process;
+        if (shown && !stale && (current || lasting)
             && (shown->stage < FAILED || pending.answer == operated || pending.answer == taken))
             pending.answer(shown, message.data, message.length);
         return true;
