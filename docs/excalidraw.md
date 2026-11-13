@@ -28,6 +28,30 @@ saves it. Existing `.excalidraw` files opened with `C-x C-f` or Dired enter
   Use it after a host restart if more Excalidraw assets need loading. Stopping
   the host leaves open drawings loaded.
 
+## Slides
+
+A drawing's slides are its frames. **Slides** in the drawing's menu, or
+`M-x portal-excalidraw-arrange`, covers the editor with Arrange, which shows
+them in order: a filmstrip with each slide's number, image and frame name, the
+selected slide large, and its presenter notes. The mode line says `:Arrange`
+after the mode's name meanwhile. A drawing without frames says so.
+
+- Slides follow the number in each frame's `customData.slidesOrder`, the key
+  Excalidraw+ uses; frames with the same number, then frames without one, go
+  top to bottom, then left to right. Notes are the frame's
+  `customData.presenterNotes`. Arrange shows them; it does not change them yet.
+- A slide's image is the frame alone, cut at its edge, on the drawing's
+  background, and looks the same in a light or dark Emacs. Arrange draws again
+  only the slides whose frame or contents changed since it last drew them.
+- Arrange opens at the slide nearest the middle of the editor's view. `Up` and
+  `Down` select a slide; `Return`, or a double click, edits it: the editor comes
+  back showing that frame. `Escape`, the **Draw** button or
+  `M-x portal-excalidraw-draw` go back to the editor where it was.
+- Command-S and `C-x C-s` save in Arrange too. Other keys never reach the
+  editor under it; chords Arrange does not use reach Emacs.
+- Looking at slides never modifies the buffer. `C-c C-r` and `revert-buffer`
+  reopen the drawing in the editor.
+
 `portal-host` bundles Excalidraw 0.18.1, React, CSS, lazy modules and fonts. Bun
 installs pinned npm dependencies at build time; runtime needs neither npm
 packages nor internet. The page blocks external assets, CDN font fallbacks and
