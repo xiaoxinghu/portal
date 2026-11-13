@@ -6,12 +6,14 @@ import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
 import type { BinaryFiles } from "@excalidraw/excalidraw/types";
 import {
 	type Frame,
+	moveSlide,
 	nearestSlide,
 	type Scene,
 	SlideImages,
 	slideFrames,
 	slideName,
 	slideNotes,
+	withNotes,
 } from "./slides";
 
 // Excalidraw fills in what a drawing's file leaves out; these carry what the
@@ -119,6 +121,91 @@ test("a slide's name and notes", () => {
 	).toBe("");
 });
 
+// The numbers a move writes, as frame id and number.
+const moved = (
+	frames: readonly ExcalidrawElement[],
+	from: number,
+	to: number,
+) =>
+	moveSlide(slideFrames(frames), from, to).map(
+		({ frame: each, order: number }) => [each.id, number],
+	);
+
+test("a move numbers every slide in its new order", () => {
+	const deck = [
+		frame("a", order(0)),
+		frame("b", order(1)),
+		frame("c", order(2)),
+		frame("d", order(3)),
+	];
+	// Down past one: the two that swap are written, the rest kept.
+	expect(moved(deck, 1, 2)).toEqual([
+		["c", 1],
+		["b", 2],
+	]);
+	// Up to the top: everything before the moved slide shifts down one.
+	expect(moved(deck, 3, 0)).toEqual([
+		["d", 0],
+		["a", 1],
+		["b", 2],
+		["c", 3],
+	]);
+	expect(moved(deck, 0, 3)).toEqual([
+		["b", 0],
+		["c", 1],
+		["d", 2],
+		["a", 3],
+	]);
+});
+
+test("a move settles duplicate and missing numbers", () => {
+	// Duplicated frames share a number; frames never numbered have none.
+	const deck = [
+		frame("first", order(0)),
+		frame("copy-left", order(4)),
+		frame("copy-right", { ...order(4), x: 900 }),
+		frame("loose", { y: 900 }),
+	];
+	expect(moved(deck, 3, 2)).toEqual([
+		["copy-left", 1],
+		["loose", 2],
+		["copy-right", 3],
+	]);
+	expect(moved([frame("a"), frame("b", { y: 900 })], 1, 0)).toEqual([
+		["b", 0],
+		["a", 1],
+	]);
+});
+
+test("a move to where the slide is, or past the ends, stops at the end", () => {
+	const deck = [frame("a", order(0)), frame("b", order(1))];
+	expect(moved(deck, 1, 1)).toEqual([]);
+	expect(moved(deck, 1, 5)).toEqual([]);
+	expect(moved(deck, 0, -1)).toEqual([]);
+	expect(moved(deck, 0, 9)).toEqual([
+		["b", 0],
+		["a", 1],
+	]);
+	expect(moved([], 0, 1)).toEqual([]);
+});
+
+test("notes keep the frame's other data, and empty notes remove theirs", () => {
+	const noted = (customData: unknown, notes: string) =>
+		withNotes(frame("a", { customData }) as Frame, notes);
+	expect(noted(undefined, "Hello")).toEqual({ presenterNotes: "Hello" });
+	expect(noted({ slidesOrder: 2, other: [1] }, "Hi")).toEqual({
+		slidesOrder: 2,
+		other: [1],
+		presenterNotes: "Hi",
+	});
+	expect(noted({ slidesOrder: 2, presenterNotes: "Old" }, "")).toEqual({
+		slidesOrder: 2,
+	});
+	// An empty object, not undefined, which the editor would not write.
+	expect(noted({ presenterNotes: "Old" }, "")).toEqual({});
+	expect(noted(undefined, "")).toEqual({});
+});
+
 test("the nearest slide is the one whose centre is closest", () => {
 	const frames = slideFrames([
 		frame("a", { x: 0, y: 0 }),
@@ -181,7 +268,9 @@ test("a change renders again only the slides it touches", async () => {
 	// The frame itself changed.
 	expect(
 		await update(
-			scene(deck({ "in-two": { version: 2 }, one: { version: 2 } })),
+			scene(
+				deck({ "in-two": { version: 2 }, one: { width: 900, version: 2 } }),
+			),
 		),
 	).toEqual(["one"]);
 	// Something outside every slide changed.
@@ -190,8 +279,28 @@ test("a change renders again only the slides it touches", async () => {
 			scene(
 				deck({
 					"in-two": { version: 2 },
-					one: { version: 2 },
+					one: { width: 900, version: 2 },
 					far: { version: 2 },
+				}),
+			),
+		),
+	).toEqual([]);
+});
+
+test("a slide's name, number and notes are not in its image", async () => {
+	const { update } = renderer();
+	await update(scene(deck()));
+	expect(
+		await update(
+			scene(
+				deck({
+					one: {
+						name: "Intro",
+						customData: { slidesOrder: 1, presenterNotes: "Hi" },
+						version: 2,
+						versionNonce: 7,
+						updated: 2,
+					},
 				}),
 			),
 		),

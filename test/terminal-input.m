@@ -82,6 +82,31 @@ static emacs_value click(emacs_env *env, ptrdiff_t nargs, emacs_value *args, voi
     return env->intern(env, "nil");
 }
 
+/* Drag in the visible native webview from X1 Y1 to X2 Y2, points from its
+   top-left corner: a press, moves on the way, then a release. */
+static emacs_value drag(emacs_env *env, ptrdiff_t nargs, emacs_value *args, void *data)
+{
+    (void)nargs; (void)data;
+    NSPoint from = NSMakePoint(env->extract_integer(env, args[0]), env->extract_integer(env, args[1]));
+    NSPoint to = NSMakePoint(env->extract_integer(env, args[2]), env->extract_integer(env, args[3]));
+    NSWindow *window = activeWindow();
+    for (NSView *view in descendants(window.contentView)) {
+        if (![view isKindOfClass:WKWebView.class] || view.isHiddenOrHasHiddenAncestor) continue;
+        const int steps = 10;
+        for (int step = 0; step <= steps + 1; step++) {
+            NSEventType type = step == 0 ? NSEventTypeLeftMouseDown
+                : step <= steps ? NSEventTypeLeftMouseDragged : NSEventTypeLeftMouseUp;
+            double part = MIN(step, steps) / (double)steps;
+            NSPoint offset = NSMakePoint(from.x + (to.x - from.x) * part, from.y + (to.y - from.y) * part);
+            [NSApp sendEvent:[NSEvent mouseEventWithType:type location:[view convertPoint:offset toView:nil]
+                modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime
+                windowNumber:window.windowNumber context:nil eventNumber:0 clickCount:1 pressure:1]];
+        }
+        return env->intern(env, "t");
+    }
+    return env->intern(env, "nil");
+}
+
 static emacs_value key(emacs_env *env, ptrdiff_t nargs, emacs_value *args, void *data)
 {
     emacs_value nilValue = env->intern(env, "nil");
@@ -429,6 +454,10 @@ int emacs_module_init(struct emacs_runtime *runtime)
     args[0] = env->intern(env, "portal-test-native-click");
     args[1] = env->make_function(env, 2, 2, click,
         "Click the visible native webview X Y points from its top-left corner.", NULL);
+    env->funcall(env, env->intern(env, "fset"), 2, args);
+    args[0] = env->intern(env, "portal-test-native-drag");
+    args[1] = env->make_function(env, 4, 4, drag,
+        "Drag in the visible native webview from X1 Y1 to X2 Y2, points from its top-left corner.", NULL);
     env->funcall(env, env->intern(env, "fset"), 2, args);
     args[0] = env->intern(env, "portal-test-web-eval");
     args[1] = env->make_function(env, 1, 1, webEval,

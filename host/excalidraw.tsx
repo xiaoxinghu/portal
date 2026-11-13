@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import {
+	CaptureUpdateAction,
 	Excalidraw,
 	exportToSvg,
 	loadFromBlob,
 	MainMenu,
+	newElementWith,
 	serializeAsJSON,
 } from "@excalidraw/excalidraw";
 import type {
@@ -17,6 +19,8 @@ import type {
 	ExcalidrawImperativeAPI,
 } from "@excalidraw/excalidraw/types";
 import {
+	type PointerEvent as ReactPointerEvent,
+	useCallback,
 	useEffect,
 	useMemo,
 	useRef,
@@ -28,12 +32,14 @@ import "@excalidraw/excalidraw/index.css";
 import "./excalidraw.css";
 import {
 	type Frame,
+	moveSlide,
 	nearestSlide,
 	type Scene,
 	SlideImages,
 	slideFrames,
 	slideName,
 	slideNotes,
+	withNotes,
 } from "./slides";
 
 type Message = {
@@ -70,6 +76,8 @@ let setStatus: (value: string) => void = () => {};
 let setMode: (mode: Mode) => void = () => {};
 /** Arrange's keys, while it is shown; they come before the editor's. */
 let arrangeKeys: ((event: KeyboardEvent) => void) | undefined;
+/** Set while Arrange hands a key to the editor under it. */
+let forwarding = false;
 const post = (message: object) => window.portalBridge?.postMessage(message);
 
 function currentJSON() {
@@ -277,7 +285,8 @@ function subscribeToImages(listener: () => void) {
 
 function SlideImage({ frame, alt }: { frame: Frame; alt: string }) {
 	const image = slideImages.image(frame.id);
-	if (image) return <img src={image} alt={alt} />;
+	// Not dragged as an image: dragging a slide moves it in the filmstrip.
+	if (image) return <img src={image} alt={alt} draggable={false} />;
 	return (
 		<span className="portal-slide-pending">
 			{failedSlides.has(frame.id) ? "Could not draw this slide" : ""}
@@ -285,8 +294,71 @@ function SlideImage({ frame, alt }: { frame: Frame; alt: string }) {
 	);
 }
 
+/** What Arrange writes to a frame. */
+type FrameFields = Pick<Frame, "name" | "customData">;
+
+/** Write FIELDS to the frames they name, as one step of the editor's undo
+ * history. The editor reports it as it does any change, so it reaches the
+ * buffer. No frame moves on the canvas. */
+function writeFrames(
+	editor: ExcalidrawImperativeAPI,
+	fields: ReadonlyMap<string, Partial<FrameFields>>,
+) {
+	if (!fields.size) return;
+	editor.updateScene({
+		elements: editor.getSceneElementsIncludingDeleted().map((element) => {
+			const change = fields.get(element.id);
+			return change ? newElementWith(element, change) : element;
+		}),
+		captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+	});
+}
+
+/** Hand EVENT, a key pressed in Arrange, to the editor under it, as if it
+ * were pressed there. True when the editor used it. */
+function forwardToEditor(event: KeyboardEvent) {
+	const container = document.querySelector(".excalidraw-container");
+	if (!container) return false;
+	const copy = new KeyboardEvent("keydown", {
+		key: event.key,
+		code: event.code,
+		metaKey: event.metaKey,
+		ctrlKey: event.ctrlKey,
+		altKey: event.altKey,
+		shiftKey: event.shiftKey,
+		bubbles: true,
+		cancelable: true,
+	});
+	forwarding = true;
+	try {
+		container.dispatchEvent(copy);
+	} finally {
+		forwarding = false;
+	}
+	return copy.defaultPrevented;
+}
+
+const isField = (target: EventTarget | null) =>
+	target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
+
+/** Notes write after this long without typing, and when the box loses the
+ * keyboard. */
+const NOTES_DELAY = 500;
+
+/** A slide being dragged in the filmstrip: where it was, where it would go,
+ * and whether the pointer has moved far enough to be a drag yet. */
+type Drag = {
+	id: string;
+	pointer: number;
+	startY: number;
+	from: number;
+	to: number;
+	moving: boolean;
+};
+
 /** The Arrange screen: the slides in order, the selected one large, and its
- * notes. It covers the editor, which stays loaded under it. */
+ * notes. It covers the editor, which stays loaded under it. Its edits,
+ * order, names and notes, are written to the frames in the editor's scene. */
 function Arrange({
 	editor,
 	status,
@@ -331,6 +403,81 @@ function Arrange({
 		};
 	}, [editor]);
 
+	/** Write to the frames, then show the scene at once, so that the next
+	 * edit starts from this one. */
+	const write = useCallback(
+		(fields: ReadonlyMap<string, Partial<FrameFields>>) => {
+			if (!fields.size) return;
+			writeFrames(editor, fields);
+			setScene(currentScene(editor));
+		},
+		[editor],
+	);
+	/** Move the slide ID to the place TO gives for where it is now. Both
+	 * come from the editor's scene as it is, not from what Arrange shows,
+	 * which can be a moment behind it, as after an undo. */
+	const move = useCallback(
+		(id: string, to: (from: number) => number) => {
+			const current = slideFrames(editor.getSceneElements());
+			const from = current.findIndex((frame) => frame.id === id);
+			if (from < 0) return;
+			write(
+				new Map(
+					moveSlide(current, from, to(from)).map(({ frame, order }) => [
+						frame.id,
+						{ customData: { ...frame.customData, slidesOrder: order } },
+					]),
+				),
+			);
+		},
+		[editor, write],
+	);
+
+	// The notes being typed, until they are written.
+	const [notes, setNotes] = useState<{ id: string; text: string }>();
+	const notesRef = useRef(notes);
+	notesRef.current = notes;
+	const notesTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+	const writeNotes = useCallback(() => {
+		clearTimeout(notesTimer.current);
+		const typed = notesRef.current;
+		if (!typed) return;
+		notesRef.current = undefined;
+		setNotes(undefined);
+		const frame = slideFrames(editor.getSceneElements()).find(
+			(each) => each.id === typed.id,
+		);
+		if (frame && slideNotes(frame) !== typed.text)
+			write(
+				new Map([[frame.id, { customData: withNotes(frame, typed.text) }]]),
+			);
+	}, [editor, write]);
+	// Notes typed for one slide are written before another is shown, and
+	// before Arrange goes.
+	useEffect(() => writeNotes, [writeNotes]);
+	useEffect(() => {
+		if (notesRef.current && notesRef.current.id !== selected?.id) writeNotes();
+	}, [selected, writeNotes]);
+
+	// A name being typed, until it is written; Escape drops it. Like notes,
+	// it is written before Arrange goes, which takes the field away without
+	// its losing the keyboard.
+	const name = useRef<{ id: string; text: string }>(undefined);
+	const [, renamed] = useState(0);
+	const writeName = useCallback(() => {
+		const typed = name.current;
+		if (!typed) return;
+		name.current = undefined;
+		renamed((count) => count + 1);
+		const frame = slideFrames(editor.getSceneElements()).find(
+			(each) => each.id === typed.id,
+		);
+		const text = typed.text.trim() || null;
+		if (frame && text !== frame.name)
+			write(new Map([[frame.id, { name: text }]]));
+	}, [editor, write]);
+	useEffect(() => writeName, [writeName]);
+
 	useEffect(() => {
 		list.current?.focus();
 	}, []);
@@ -345,6 +492,35 @@ function Arrange({
 		arrangeKeys = (event) => {
 			const plain =
 				!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+			const option =
+				event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey;
+			const undo =
+				(event.metaKey || event.ctrlKey) &&
+				!event.altKey &&
+				event.key.toLowerCase() === "z";
+			const field = isField(event.target)
+				? (event.target as HTMLElement)
+				: undefined;
+			if (field) {
+				// Fields take their keys, and an input method its own; Return in
+				// a name and Escape leave them. Undo and redo are the field's:
+				// WebKit leaves those keys to the app, which would give them to
+				// Emacs.
+				if (event.isComposing) return;
+				if (undo) document.execCommand(event.shiftKey ? "redo" : "undo");
+				else if (plain && event.key === "Escape") {
+					if (field instanceof HTMLInputElement) {
+						name.current = undefined;
+						renamed((count) => count + 1);
+					}
+				} else if (
+					!(plain && event.key === "Enter" && field instanceof HTMLInputElement)
+				)
+					return;
+				event.preventDefault();
+				if (!undo) list.current?.focus();
+				return;
+			}
 			const step = (by: number) => {
 				const next =
 					frames[Math.max(0, Math.min(frames.length - 1, index + by))];
@@ -352,15 +528,84 @@ function Arrange({
 			};
 			if (plain && event.key === "ArrowUp") step(-1);
 			else if (plain && event.key === "ArrowDown") step(1);
+			else if (option && event.key === "ArrowUp" && selected)
+				move(selected.id, (at) => at - 1);
+			else if (option && event.key === "ArrowDown" && selected)
+				move(selected.id, (at) => at + 1);
 			else if (plain && event.key === "Enter" && selected) onEdit(selected);
 			else if (plain && event.key === "Escape") onDraw();
+			else if (undo && forwardToEditor(event)) setScene(currentScene(editor));
 			else return;
 			event.preventDefault();
 		};
 		return () => {
 			arrangeKeys = undefined;
 		};
-	}, [frames, index, selected, onDraw, onEdit]);
+	}, [editor, frames, index, selected, move, onDraw, onEdit]);
+
+	// Dragging a slide: the pointer goes down on it and moves; where it lets
+	// go, between which two slides, is where the slide goes.
+	const [drag, setDrag] = useState<Drag>();
+	const dragged = useRef(false);
+	const dropAt = (y: number) => {
+		const options = [
+			...(list.current?.querySelectorAll<HTMLElement>("[role=option]") ?? []),
+		];
+		const before = options.findIndex((option) => {
+			const box = option.getBoundingClientRect();
+			return y < box.top + box.height / 2;
+		});
+		return before < 0 ? options.length : before;
+	};
+	const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+		const option = (event.target as Element).closest<HTMLElement>(
+			"[role=option]",
+		);
+		if (event.button !== 0 || !option || isField(event.target)) return;
+		const from = frames.findIndex((frame) => frame.id === option.dataset.id);
+		if (from < 0) return;
+		setDrag({
+			id: option.dataset.id ?? "",
+			pointer: event.pointerId,
+			startY: event.clientY,
+			from,
+			to: from,
+			moving: false,
+		});
+	};
+	const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+		if (!drag || event.pointerId !== drag.pointer) return;
+		if (!drag.moving && Math.abs(event.clientY - drag.startY) < 5) return;
+		if (!drag.moving) list.current?.setPointerCapture(event.pointerId);
+		// Near either end, the filmstrip scrolls.
+		const box = list.current?.getBoundingClientRect();
+		if (box && event.clientY < box.top + 24) list.current?.scrollBy(0, -12);
+		else if (box && event.clientY > box.bottom - 24)
+			list.current?.scrollBy(0, 12);
+		const before = dropAt(event.clientY);
+		setDrag({
+			...drag,
+			moving: true,
+			to: before > drag.from ? before - 1 : before,
+		});
+	};
+	const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+		if (!drag || event.pointerId !== drag.pointer) return;
+		setDrag(undefined);
+		if (!drag.moving) return;
+		// The click that ends a drag does not select.
+		dragged.current = true;
+		setTimeout(() => {
+			dragged.current = false;
+		});
+		setSelectedId(drag.id);
+		move(drag.id, () => drag.to);
+	};
+	const dropMark = (at: number) => {
+		if (!drag?.moving || drag.to === drag.from) return undefined;
+		if (at !== drag.to) return undefined;
+		return drag.to > drag.from ? "after" : "before";
+	};
 
 	return (
 		<div className="portal-arrange">
@@ -385,23 +630,51 @@ function Arrange({
 						aria-label="Slides"
 						aria-activedescendant={`portal-slide-${selected.id}`}
 						tabIndex={0}
+						onPointerDown={onPointerDown}
+						onPointerMove={onPointerMove}
+						onPointerUp={onPointerUp}
+						onPointerCancel={() => setDrag(undefined)}
 					>
 						{frames.map((frame, at) => (
 							// biome-ignore lint/a11y/useKeyWithClickEvents: the list takes the keys.
 							<div
 								key={frame.id}
 								id={`portal-slide-${frame.id}`}
+								data-id={frame.id}
+								data-drop={dropMark(at)}
+								data-dragging={
+									drag?.moving && drag.id === frame.id ? "" : undefined
+								}
 								role="option"
 								tabIndex={-1}
 								aria-selected={frame === selected}
-								onClick={() => setSelectedId(frame.id)}
-								onDoubleClick={() => onEdit(frame)}
+								onClick={() => {
+									if (!dragged.current) setSelectedId(frame.id);
+								}}
+								onDoubleClick={(event) => {
+									if (!isField(event.target)) onEdit(frame);
+								}}
 							>
 								<span className="portal-slide-number">{at + 1}</span>
 								<span className="portal-slide-image">
 									<SlideImage frame={frame} alt="" />
 								</span>
-								<span className="portal-slide-name">{slideName(frame)}</span>
+								<input
+									className="portal-slide-name"
+									aria-label={`Name of slide ${at + 1}`}
+									value={
+										name.current?.id === frame.id
+											? name.current.text
+											: (frame.name ?? "")
+									}
+									placeholder={slideName(frame)}
+									onFocus={() => setSelectedId(frame.id)}
+									onChange={(event) => {
+										name.current = { id: frame.id, text: event.target.value };
+										renamed((count) => count + 1);
+									}}
+									onBlur={writeName}
+								/>
 							</div>
 						))}
 					</div>
@@ -412,9 +685,23 @@ function Arrange({
 								alt={`Slide ${index + 1}: ${slideName(selected)}`}
 							/>
 						</div>
-						<section className="portal-notes" aria-label="Notes">
-							<h2>Notes</h2>
-							<p>{slideNotes(selected) || "No notes."}</p>
+						<section className="portal-notes">
+							<label htmlFor="portal-notes-text">Notes</label>
+							<textarea
+								id="portal-notes-text"
+								placeholder="No notes."
+								value={
+									notes?.id === selected.id ? notes.text : slideNotes(selected)
+								}
+								onChange={(event) => {
+									const typed = { id: selected.id, text: event.target.value };
+									notesRef.current = typed;
+									setNotes(typed);
+									clearTimeout(notesTimer.current);
+									notesTimer.current = setTimeout(writeNotes, NOTES_DELAY);
+								}}
+								onBlur={writeNotes}
+							/>
 						</section>
 					</main>
 				</div>
@@ -474,11 +761,13 @@ async function receive(message: Message) {
 if (window.portalBridge) window.portalBridge.receive = receive;
 
 // Registered before the editor mounts, so these run before its own window
-// listeners. While Arrange is shown, no key reaches the editor; a chord Arrange
-// leaves alone is not prevented, so it still reaches Emacs.
+// listeners. While Arrange is shown, no key reaches the editor but the undo and
+// redo keys Arrange hands it; a chord Arrange leaves alone is not prevented, so
+// it still reaches Emacs.
 window.addEventListener(
 	"keydown",
 	(event) => {
+		if (forwarding) return;
 		if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
 			event.preventDefault();
 			event.stopImmediatePropagation();

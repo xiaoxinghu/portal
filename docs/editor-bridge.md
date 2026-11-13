@@ -102,6 +102,20 @@ when Arrange is entered and 150 ms after each scene change while it is shown.
 While Arrange is shown, a capture listener on the window, registered before
 the editor mounts, stops every key before the editor's own listeners.
 
+Arrange's edits need no message of their own. Each is one
+`api.updateScene({elements, captureUpdate: CaptureUpdateAction.IMMEDIATELY})`
+replacing the frames it changes with `newElementWith(frame, {name})` or
+`{customData}`, which keeps the frame's other `customData` keys. That is one
+step of the editor's undo history, and the editor reports it as any change, so
+`dirty` and `change` carry it to the buffer. `moveSlide` in `host/slides.ts`
+says which frames a move renumbers. Arrange hands Command-Z and
+Shift-Command-Z to the editor by dispatching a copy of the key on its
+container, where Excalidraw's own key handler listens; the capture listener
+lets that copy pass. In the notes box or a name field, Arrange runs them as
+`document.execCommand("undo")` and `"redo"` instead: WebKit leaves those keys
+unhandled in a field, so they would reach Emacs, where the drawing's buffer
+has no undo.
+
 ## Saving and input
 
 Before saving, Emacs sends `snapshot` with a monotonically increasing request ID.

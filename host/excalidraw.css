@@ -141,12 +141,42 @@ body {
 	max-height: 100%;
 	object-fit: contain;
 }
+/* A slide's name reads as a caption until it has the keyboard. */
 .portal-slide-name {
+	grid-column: 2;
+	box-sizing: border-box;
+	width: 100%;
+	min-width: 0;
+	margin-top: 4px;
+	padding: 2px 4px;
+	border: 1px solid transparent;
+	border-radius: 4px;
+	background: transparent;
+	color: inherit;
+	font: inherit;
 	font-size: 12px;
-	padding-top: 4px;
-	overflow: hidden;
 	text-overflow: ellipsis;
-	white-space: nowrap;
+}
+.portal-slide-name::placeholder {
+	color: var(--arrange-muted);
+}
+.portal-slide-name:hover {
+	border-color: var(--arrange-border);
+}
+.portal-slide-name:focus {
+	border-color: var(--arrange-selected);
+	background: var(--arrange-panel);
+	outline: none;
+}
+/* While a slide is dragged: it fades, and a line marks where it would go. */
+.portal-filmstrip [role="option"][data-dragging] {
+	opacity: 0.4;
+}
+.portal-filmstrip [role="option"][data-drop="before"] {
+	box-shadow: 0 -4px 0 -1px var(--arrange-selected);
+}
+.portal-filmstrip [role="option"][data-drop="after"] {
+	box-shadow: 0 4px 0 -1px var(--arrange-selected);
 }
 .portal-slide-pending {
 	padding: 8px;
@@ -174,23 +204,37 @@ body {
 }
 .portal-notes {
 	flex: 0 0 auto;
-	max-height: 30%;
-	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	height: 25%;
+	min-height: 96px;
 	padding: 10px 14px;
 	border: 1px solid var(--arrange-border);
 	border-radius: 8px;
 	background: var(--arrange-panel);
 }
-.portal-notes h2 {
+.portal-notes:focus-within {
+	border-color: var(--arrange-selected);
+}
+.portal-notes label {
 	margin: 0 0 6px;
 	font-size: 12px;
 	font-weight: 600;
 	color: var(--arrange-muted);
 }
-.portal-notes p {
-	margin: 0;
+.portal-notes textarea {
+	flex: 1;
+	resize: none;
+	border: none;
+	padding: 0;
+	background: transparent;
+	color: inherit;
+	font: inherit;
 	font-size: 14px;
-	white-space: pre-wrap;
+	outline: none;
+}
+.portal-notes textarea::placeholder {
+	color: var(--arrange-muted);
 }
 .portal-arrange-empty {
 	margin: auto;

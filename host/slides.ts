@@ -45,6 +45,41 @@ export function slideNotes(frame: Frame): string {
 	return typeof notes === "string" ? notes : "";
 }
 
+/** A frame's new number in a deck. */
+export type Renumber = { frame: Frame; order: number };
+
+/** What moving the slide at FROM to TO writes: FRAMES, the slides in order,
+ * numbered 0, 1, 2 ... in their new order, less the frames that have that
+ * number already. Positions past either end are the end; a move to where the
+ * slide is writes nothing. */
+export function moveSlide(
+	frames: readonly Frame[],
+	from: number,
+	to: number,
+): Renumber[] {
+	const clamp = (at: number) => Math.max(0, Math.min(frames.length - 1, at));
+	const [source, target] = [clamp(from), clamp(to)];
+	if (source === target) return [];
+	const moved = [...frames];
+	const [frame] = moved.splice(source, 1);
+	if (frame) moved.splice(target, 0, frame);
+	return moved
+		.map((each, order) => ({ frame: each, order }))
+		.filter(({ frame: each, order }) => slidesOrder(each) !== order);
+}
+
+/** FRAME's `customData` with NOTES as its presenter notes, or without any
+ * when NOTES is empty; its other keys are kept. Never undefined, even with
+ * nothing left: Excalidraw's `newElementWith` skips undefined values, so an
+ * update to undefined would leave the old notes in place. */
+export function withNotes(
+	frame: Frame,
+	notes: string,
+): Record<string, unknown> {
+	const { presenterNotes: _, ...rest } = frame.customData ?? {};
+	return notes ? { ...rest, presenterNotes: notes } : rest;
+}
+
 /** The index of the slide whose frame's centre is nearest POINT, a point on
  * the canvas, or -1 without slides. */
 export function nearestSlide(
@@ -102,14 +137,23 @@ function overlaps(element: ExcalidrawElement, frame: Frame) {
 }
 
 /** What FRAME's image is made of, as text that changes when its image may:
- * the frame's version, then each element drawn in it, in scene order, with
- * its version. Those are its children, by `frameId`, and the elements in no
+ * the frame, less what an image of it does not show, its name, slide number
+ * and notes, then each element drawn in it, in scene order, with its
+ * version. Those are its children, by `frameId`, and the elements in no
  * frame that reach into it, which an export of the frame draws too. */
 export function frameStamp(
 	frame: Frame,
 	elements: readonly ExcalidrawElement[],
 ): string {
-	const parts = [`${frame.id}:${frame.version}`];
+	const {
+		name: _name,
+		customData: _customData,
+		version: _version,
+		versionNonce: _versionNonce,
+		updated: _updated,
+		...drawn
+	} = frame;
+	const parts = [JSON.stringify(drawn)];
 	for (const element of elements) {
 		if (element.isDeleted || element.id === frame.id) continue;
 		if (
