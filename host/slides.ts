@@ -69,15 +69,15 @@ export function moveSlide(
 }
 
 /** FRAME's `customData` with NOTES as its presenter notes, or without any
- * when NOTES is empty; its other keys are kept. Undefined when nothing is
- * left. */
+ * when NOTES is empty; its other keys are kept. Never undefined, even with
+ * nothing left: Excalidraw's `newElementWith` skips undefined values, so an
+ * update to undefined would leave the old notes in place. */
 export function withNotes(
 	frame: Frame,
 	notes: string,
-): Record<string, unknown> | undefined {
+): Record<string, unknown> {
 	const { presenterNotes: _, ...rest } = frame.customData ?? {};
-	const data = notes ? { ...rest, presenterNotes: notes } : rest;
-	return Object.keys(data).length ? data : undefined;
+	return notes ? { ...rest, presenterNotes: notes } : rest;
 }
 
 /** The index of the slide whose frame's centre is nearest POINT, a point on

@@ -201,8 +201,9 @@ test("notes keep the frame's other data, and empty notes remove theirs", () => {
 	expect(noted({ slidesOrder: 2, presenterNotes: "Old" }, "")).toEqual({
 		slidesOrder: 2,
 	});
-	expect(noted({ presenterNotes: "Old" }, "")).toBeUndefined();
-	expect(noted(undefined, "")).toBeUndefined();
+	// An empty object, not undefined, which the editor would not write.
+	expect(noted({ presenterNotes: "Old" }, "")).toEqual({});
+	expect(noted(undefined, "")).toEqual({});
 });
 
 test("the nearest slide is the one whose centre is closest", () => {
