@@ -5,6 +5,7 @@
 (require 'portal-terminal-tests)
 (declare-function portal-test-web-eval "test-terminal-input" (script))
 (declare-function portal-test-native-target-frame "test-terminal-input" (title))
+(declare-function portal-test-native-drag "test-terminal-input" (x1 y1 x2 y2))
 
 (defun portal-excalidraw-gui--js (script)
   "Run SCRIPT in the actual webview, returning its result.
@@ -225,16 +226,18 @@ The file holds ELEMENTS and FILES; without ELEMENTS, it is a new drawing.
       (should (file-exists-p file))
       (should-not (buffer-modified-p)))))
 
-(defun portal-excalidraw-gui--frame (id name order x y width height)
-  "A frame ID called NAME, slide ORDER in its deck, at X Y, WIDTH by HEIGHT."
+(defun portal-excalidraw-gui--frame (id name order x y width height &optional notes)
+  "A frame ID called NAME, slide ORDER in its deck, at X Y, WIDTH by HEIGHT.
+NOTES are its presenter notes."
   (list :type "frame" :id id :name name :x x :y y :width width :height height
-        :customData (list :slidesOrder order)))
+        :customData (append (list :slidesOrder order)
+                            (and notes (list :presenterNotes notes)))))
 
 (defun portal-excalidraw-gui--slides ()
   "The slides Arrange shows, each as (NAME SELECTED IMAGED), in order."
   (append (portal-excalidraw-gui--js
            "return [...document.querySelectorAll('.portal-filmstrip [role=option]')].map(slide =>
-              [slide.querySelector('.portal-slide-name').textContent,
+              [slide.querySelector('.portal-slide-name').value,
                slide.getAttribute('aria-selected') === 'true',
                !!slide.querySelector('img')?.src.startsWith('data:image/svg+xml')]);")
           nil))
@@ -316,6 +319,146 @@ The file holds ELEMENTS and FILES; without ELEMENTS, it is a new drawing.
       (portal-excalidraw-gui--key 53 0 "\e")
       (funcall draw)
       (portal-excalidraw--flush)
+      (should-not (buffer-modified-p)))))
+
+(defun portal-excalidraw-gui--deck (json)
+  "The frames in JSON, a drawing, each as (ID NAME ORDER NOTES), by ORDER."
+  (sort (mapcan (lambda (element)
+                  (when (equal (plist-get element :type) "frame")
+                    (let ((data (plist-get element :customData)))
+                      (list (list (plist-get element :id) (plist-get element :name)
+                                  (plist-get data :slidesOrder)
+                                  (plist-get data :presenterNotes))))))
+                (append (plist-get (json-parse-string json :object-type 'plist
+                                                      :null-object nil)
+                                   :elements)
+                        nil))
+        (lambda (a b) (< (or (nth 2 a) 99) (or (nth 2 b) 99)))))
+
+(defun portal-excalidraw-gui--buffer-deck (deck)
+  "Wait until the buffer's drawing has DECK, as `portal-excalidraw-gui--deck'.
+The page sends it on its own; nothing here asks it to."
+  (portal-terminal-test--wait
+   (lambda () (equal (portal-excalidraw-gui--deck (buffer-string)) deck)))
+  (should (equal (portal-excalidraw-gui--deck (buffer-string)) deck)))
+
+(defun portal-excalidraw-gui--focus (selector)
+  "Give the field SELECTOR the page's keyboard, its text selected."
+  (should (eq t (portal-excalidraw-gui--js
+                 (format "const field = document.querySelector(%S);
+                          field.spellcheck = false;
+                          field.focus(); field.select();
+                          return document.activeElement === field;"
+                         selector)))))
+
+(defun portal-excalidraw-gui--type (text)
+  "Type TEXT, lower-case letters, into the page."
+  (dolist (char (string-to-list text))
+    (portal-excalidraw-gui--key
+     (alist-get char '((?d . 2) (?e . 14) (?h . 4) (?i . 34) (?n . 45))) 0 (string char))))
+
+(defconst portal-excalidraw-gui--option-down
+  (list 125 (logior (ash 1 23) (ash 1 21) (ash 1 19)) (string #xF701))
+  "Option-Down, as AppKit reports it.")
+
+(defconst portal-excalidraw-gui--command-z (list 6 (ash 1 20) "z")
+  "Command-Z.")
+
+(ert-deftest portal-excalidraw-gui-arrange-edits-reach-the-file ()
+  :tags '(:gui)
+  (portal-excalidraw-gui--drawing
+      (list (portal-excalidraw-gui--frame "opening" "Opening" 0 0 0 1600 900 "Welcome")
+            (portal-excalidraw-gui--frame "middle" "Middle" 1 2000 0 400 225)
+            (portal-excalidraw-gui--frame "closing" "Closing" 2 2000 2000 400 225))
+      nil
+    (portal-excalidraw-arrange)
+    (portal-excalidraw--wait (lambda () (equal portal-excalidraw--mode "arrange")))
+    (portal-terminal-test--wait
+     (lambda () (equal (portal-excalidraw-gui--js
+                        "return document.hasFocus() && document.querySelectorAll('.portal-filmstrip img').length;")
+                       3)))
+    ;; The notes saved in the file are shown.
+    (should (equal (portal-excalidraw-gui--js
+                    "return document.getElementById('portal-notes-text').value;")
+                   "Welcome"))
+    (should-not (buffer-modified-p))
+    ;; Command-Z in the notes box is the box's own undo.
+    (let ((notes (lambda () (portal-excalidraw-gui--js
+                             "return document.getElementById('portal-notes-text').value;"))))
+      (portal-excalidraw-gui--js
+       "const box = document.getElementById('portal-notes-text');
+        box.spellcheck = false; box.focus(); box.setSelectionRange(7, 7);
+        return true;")
+      (portal-excalidraw-gui--type "hi")
+      (portal-terminal-test--wait (lambda () (equal (funcall notes) "Welcomehi")))
+      (apply #'portal-excalidraw-gui--key portal-excalidraw-gui--command-z)
+      (portal-terminal-test--wait (lambda () (equal (funcall notes) "Welcome")))
+      (portal-excalidraw-gui--key 53 0 "\e"))
+    ;; Option-Down moves the first slide down one, and every slide is
+    ;; numbered in the new order.
+    (apply #'portal-excalidraw-gui--key portal-excalidraw-gui--option-down)
+    (portal-excalidraw-gui--buffer-deck
+     '(("middle" "Middle" 0 nil) ("opening" "Opening" 1 "Welcome") ("closing" "Closing" 2 nil)))
+    (should (buffer-modified-p))
+    (should (equal (portal-excalidraw-gui--slides)
+                   '(["Middle" nil t] ["Opening" t t] ["Closing" nil t])))
+    ;; Dragging the last slide above the first puts it first.
+    (let ((points (portal-excalidraw-gui--js
+                   "const box = slide => document.getElementById('portal-slide-' + slide)
+                                        .querySelector('.portal-slide-image').getBoundingClientRect();
+                    const from = box('closing'), to = box('middle');
+                    return [from.left + from.width / 2, from.top + from.height / 2,
+                            to.left + to.width / 2, to.top + 4].map(Math.round);")))
+      (should (apply #'portal-test-native-drag (append points nil))))
+    (portal-excalidraw-gui--buffer-deck
+     '(("closing" "Closing" 0 nil) ("middle" "Middle" 1 nil) ("opening" "Opening" 2 "Welcome")))
+    (portal-terminal-test--wait
+     (lambda () (equal (portal-excalidraw-gui--slides)
+                       '(["Closing" t t] ["Middle" nil t] ["Opening" nil t]))))
+    ;; Notes typed for the second slide are written once typing stops.
+    (apply #'portal-excalidraw-gui--key portal-excalidraw-gui--down)
+    (portal-terminal-test--wait
+     (lambda () (equal (portal-excalidraw-gui--js
+                        "return document.getElementById('portal-notes-text').value;")
+                       "")))
+    (portal-excalidraw-gui--focus "#portal-notes-text")
+    (portal-excalidraw-gui--type "hi")
+    (portal-excalidraw-gui--buffer-deck
+     '(("closing" "Closing" 0 nil) ("middle" "Middle" 1 "hi") ("opening" "Opening" 2 "Welcome")))
+    ;; A slide's name is typed in the filmstrip; Return writes it.
+    (portal-excalidraw-gui--key 53 0 "\e")
+    (portal-excalidraw-gui--focus "#portal-slide-closing input")
+    (portal-excalidraw-gui--type "end")
+    (portal-excalidraw-gui--key 36 0 "\r")
+    (portal-excalidraw-gui--buffer-deck
+     '(("closing" "end" 0 nil) ("middle" "Middle" 1 "hi") ("opening" "Opening" 2 "Welcome")))
+    (should (equal (portal-excalidraw-gui--js "return document.activeElement.getAttribute('role');") "listbox"))
+    ;; Command-Z in Arrange takes back the last edit, the name, and in Draw
+    ;; the one before, the notes.
+    (apply #'portal-excalidraw-gui--key portal-excalidraw-gui--command-z)
+    (portal-excalidraw-gui--buffer-deck
+     '(("closing" "Closing" 0 nil) ("middle" "Middle" 1 "hi") ("opening" "Opening" 2 "Welcome")))
+    (should (equal portal-excalidraw--mode "arrange"))
+    (portal-excalidraw-gui--key 53 0 "\e")
+    (portal-excalidraw--wait (lambda () (equal portal-excalidraw--mode "draw")))
+    (portal-terminal-test--wait
+     (lambda () (portal-excalidraw-gui--js
+                 "return document.activeElement?.classList.contains('excalidraw-container');")))
+    (apply #'portal-excalidraw-gui--key portal-excalidraw-gui--command-z)
+    (let ((deck '(("closing" "Closing" 0 nil) ("middle" "Middle" 1 nil)
+                  ("opening" "Opening" 2 "Welcome"))))
+      (portal-excalidraw-gui--buffer-deck deck)
+      ;; Saved, the file has them; reopened in the editor, so does the buffer.
+      (portal-excalidraw-save)
+      (should-not (buffer-modified-p))
+      (let ((file buffer-file-name))
+        (should (equal (portal-excalidraw-gui--deck
+                        (with-temp-buffer (insert-file-contents file) (buffer-string)))
+                       deck)))
+      (portal-excalidraw-reopen)
+      (portal-excalidraw--wait (lambda () portal-excalidraw--ready))
+      (portal-excalidraw--flush)
+      (should (equal (portal-excalidraw-gui--deck (buffer-string)) deck))
       (should-not (buffer-modified-p)))))
 
 (provide 'portal-excalidraw-gui-tests)
