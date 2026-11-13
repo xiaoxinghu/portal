@@ -598,6 +598,28 @@ show SLIDE of 2."
           (portal-excalidraw--flush)
           (should-not (buffer-modified-p)))))))
 
+(ert-deftest portal-excalidraw-gui-present-and-stop-at-once-leave-no-slide-window ()
+  :tags '(:gui)
+  ;; Both reach the page before React draws either screen.
+  (portal-excalidraw-gui--drawing
+      (list (portal-excalidraw-gui--frame "opening" "Opening" 0 0 0 1600 900))
+      nil
+    (let ((frames (length (frame-list))))
+      (should (eq (portal-excalidraw-gui--js
+                   "window.portalBridge.receive({type: 'mode', mode: 'present'});
+                    window.portalBridge.receive({type: 'mode', mode: 'arrange'});
+                    return true;")
+                  t))
+      (portal-excalidraw--wait (lambda () (equal portal-excalidraw--mode "arrange")))
+      ;; The window the page opened is closed before Emacs shows it.
+      (should-not (seq-find (lambda (event) (eq (car-safe event) 'portal-web-opened))
+                            unread-command-events))
+      (should (equal (portal-view-buffers 'web) (list document)))
+      (should-not portal-excalidraw--slides)
+      (should (= (length (frame-list)) frames))
+      (portal-excalidraw--flush)
+      (should-not (buffer-modified-p)))))
+
 (defun portal-excalidraw-gui--page-size (frame console)
   "The size of the page the slide window in FRAME shows, as [WIDTH HEIGHT]."
   (portal-excalidraw-gui--in-frame frame "return [innerWidth, innerHeight];" console))

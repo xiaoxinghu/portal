@@ -212,13 +212,16 @@ function Editor({
 		}
 		screen.current = next;
 		updateMode(next);
+		// Emacs hears of every screen shown, here rather than once React has
+		// drawn it: React may draw only the last of several, and Emacs closes
+		// the slide window as the page leaves Present.
+		post({ type: "mode", mode: next });
 	};
 	setMode = show;
 	const shownMode = useRef(mode);
 	useEffect(() => {
 		if (shownMode.current === mode) return;
 		shownMode.current = mode;
-		post({ type: "mode", mode });
 		// The editor was inert under Arrange or the console, which took its focus.
 		if (mode === "draw")
 			document.querySelector<HTMLElement>(".excalidraw-container")?.focus();
