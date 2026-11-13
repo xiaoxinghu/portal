@@ -103,6 +103,7 @@ struct pending {
     uint64_t number;
     answer *answer;
     uint64_t shown; /* By ID: the show may be gone by the time it is answered. */
+    uint64_t paint; /* The show's paint it was asked for, which a later one discards. */
 };
 
 /* A connection.  The platform knows it by the same number, as a socket. */
@@ -194,6 +195,8 @@ struct shown {
     portal_text owner_name; /* What the owner calls itself, "" until known. */
     bool taking;            /* A take is queued or unanswered. */
     uint32_t drawn[2];      /* The grid last given the terminal, 0 by 0 before any. */
+    uint64_t paints;        /* How many first paints were asked for: the last counts. */
+    uint32_t painted[2];    /* PAINTING: the grid the paint is for, 0 by 0 until known. */
 };
 
 /* Which of a shown block's details a seq is for. */
@@ -407,6 +410,7 @@ static void free_operation(struct operation *operation);
 static void end_show(struct shown *shown, enum stage stage, const char *reason,
                      portal_string detail);
 static void next_operation(struct shown *shown);
+static bool ask_paint(struct shown *shown);
 
 /* Ask SHOWN's connection to run METHOD with PAYLOAD, for ANSWER.  A request
    that cannot go fails the show. */
@@ -437,7 +441,8 @@ static bool ask(struct shown *shown, const char *method, struct json *payload, a
         return false;
     }
     connection->pending[connection->asked++] =
-        (struct pending) {.number = request, .answer = answer, .shown = shown->id};
+        (struct pending) {.number = request, .answer = answer, .shown = shown->id,
+                          .paint = shown->paints};
     return true;
 }
 
@@ -1148,8 +1153,21 @@ static void message(struct shown *shown, portal_string json)
         && columns >= 0 && rows >= 0 && columns <= UINT32_MAX && rows <= UINT32_MAX) {
         shown->columns = (uint32_t) columns;
         shown->rows = (uint32_t) rows;
-        if (shown->stage == LIVE)
+        if (shown->stage == LIVE) {
             hold(shown);
+        } else if (shown->stage == PAINTING) {
+            /* The stream's first resize says the grid the paint is for.  A
+               later one, to another grid, comes between output laid out for
+               two grids, and the paint may be for either: it is asked for
+               again, and only output from here on is held for after it. */
+            if (!shown->painted[0] && !shown->painted[1]) {
+                shown->painted[0] = shown->columns;
+                shown->painted[1] = shown->rows;
+            } else if (shown->painted[0] != shown->columns || shown->painted[1] != shown->rows) {
+                clear(&shown->held);
+                ask_paint(shown);
+            }
+        }
     }
 }
 
@@ -1200,6 +1218,28 @@ static void stream_bytes(struct shown *shown, const char *bytes, size_t length)
     clear(&joined);
 }
 
+/* Ask for the first paint, the screen in VT form, for the grid the block
+   has now: any paint asked for before is discarded. */
+static bool ask_paint(struct shown *shown)
+{
+    struct json json = {0};
+    shown->paints++;
+    shown->painted[0] = shown->columns;
+    shown->painted[1] = shown->rows;
+    clear(&shown->paint);
+    shown->blob = 0;
+    put_block(&json, shown);
+    put_text(&json, ",\"args\":{\"format\":\"vt\",\"extra_charsets\":true,\"extra_cursor\":true,"
+                    "\"extra_hyperlink\":true,\"extra_keyboard\":true,"
+                    "\"extra_kitty_keyboard\":true,\"extra_modes\":true,"
+                    "\"extra_protection\":true,\"extra_pwd\":true,"
+                    "\"extra_scrolling_region\":true,\"extra_style\":true,"
+                    "\"extra_tabstops\":true,\"unwrap\":true,\"max_bytes\":");
+    put_number(&json, PAINT_BYTES);
+    put_text(&json, "}}");
+    return ask(shown, "com.superlogical.terminal.format", &json, painted);
+}
+
 /* Read the stream's snapshot as far as it has come: "GHOSTSNP", a version
    of two bytes, then records with a header of ten bytes, a tag of two and a
    length of four among them, up to and including the one tagged 6.  It is
@@ -1233,17 +1273,7 @@ done:;
     *snapshot = (struct bytes) {0};
     shown->walked = 0;
     shown->stage = PAINTING;
-    struct json json = {0};
-    put_block(&json, shown);
-    put_text(&json, ",\"args\":{\"format\":\"vt\",\"extra_charsets\":true,\"extra_cursor\":true,"
-                    "\"extra_hyperlink\":true,\"extra_keyboard\":true,"
-                    "\"extra_kitty_keyboard\":true,\"extra_modes\":true,"
-                    "\"extra_protection\":true,\"extra_pwd\":true,"
-                    "\"extra_scrolling_region\":true,\"extra_style\":true,"
-                    "\"extra_tabstops\":true,\"unwrap\":true,\"max_bytes\":");
-    put_number(&json, PAINT_BYTES);
-    put_text(&json, "}}");
-    if (ask(shown, "com.superlogical.terminal.format", &json, painted))
+    if (ask_paint(shown))
         stream_bytes(shown, rest.data + from, rest.length - from);
     clear(&rest);
 }
@@ -1765,6 +1795,11 @@ void portal_rex_closed(portal_string target)
 
 /* Reading the control connection. */
 
+static uint64_t shown_paints(struct shown *shown)
+{
+    return shown ? shown->paints : 0;
+}
+
 /* The response MESSAGE answers one of CONNECTION's own requests: take it
    out, and give it to its show.  False for anything else. */
 static bool own_response(struct connection *connection, portal_text message)
@@ -1785,8 +1820,12 @@ static bool own_response(struct connection *connection, portal_text message)
         memmove(connection->pending + i, connection->pending + i + 1,
                 (--connection->asked - i) * sizeof *connection->pending);
         struct shown *shown = shown_by_id(pending.shown);
-        /* A show that has failed takes no more answers, but its typing's. */
-        if (shown && (shown->stage < FAILED || pending.answer == operated || pending.answer == taken))
+        /* A show that has failed takes no more answers, but its typing's;
+           nor does a paint that a later one replaced. */
+        bool stale = (pending.answer == painted || pending.answer == read_part)
+            && pending.paint != shown_paints(shown);
+        if (shown && !stale
+            && (shown->stage < FAILED || pending.answer == operated || pending.answer == taken))
             pending.answer(shown, message.data, message.length);
         return true;
     }

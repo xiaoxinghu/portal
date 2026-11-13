@@ -966,6 +966,68 @@ static void test_owning(void)
     sent();
 }
 
+/* Whether the last thing the core sent on ID is the first paint's request,
+   numbered NUMBER. */
+static bool paint_asked(uint64_t id, int number)
+{
+    char expected[96];
+    snprintf(expected, sizeof expected,
+             "{\"type\":\"request\",\"id\":\"%d\",\"method\":\"com.superlogical.terminal.format\"",
+             number);
+    const char *got = portal_fake_socket_sent(id);
+    if (strncmp(got, expected, strlen(expected)) || strchr(got, '\n')) {
+        fprintf(stderr, "Expected a paint request %d, got \"%s\"\n", number, got);
+        return false;
+    }
+    return true;
+}
+
+static void test_resizing_while_painting(void)
+{
+    portal_text error = {0};
+    uint64_t id = open_connection("/tmp/rex/server.sock", &error);
+    portal_fake_socket_sent(id);
+    welcome_me(id);
+    char *target = fed_terminal(&error);
+    CHECK(portal_rex_show(id, text(target), text(SESSION), text(BLOCK), &error));
+    answer_with(id, 1, "{}", NULL);
+    answer_with(id, 2, OWNED_BY("client:app"), NULL);
+    portal_fake_fire_timers();
+    answer_with(id, 7, "{}", NULL);
+    answer_with(id, 8, "{\"ticket\":\"AAECAwQFBgcICQoLDA0ODw\"}", NULL);
+    portal_fake_socket_sent(id);
+    uint64_t data = portal_fake_socket_last();
+    portal_fake_socket_deliver_bytes(data, welcome, sizeof welcome);
+    /* The snapshot, then the stream's first resize, which says the grid
+       the paint is for, and output. */
+    static const char snapshot[] = "GHOSTSNP\x01\x00\x06\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+    portal_fake_socket_deliver_bytes(data, snapshot, sizeof snapshot - 1);
+    CHECK(paint_asked(id, 9));
+    portal_fake_socket_deliver(data, "\x1b_rex1;42;{\"type\":\"resize\",\"cols\":60,\"rows\":15}\x1b\\early ");
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
+    /* The same grid again changes nothing. */
+    portal_fake_socket_deliver(data, "\x1b_rex1;42;{\"type\":\"resize\",\"cols\":60,\"rows\":15}\x1b\\still ");
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
+    /* Another client resizes the block before the paint comes: output on
+       either side of it is laid out for a different grid, so the paint is
+       asked for again, and only output after the resize waits for it. */
+    portal_fake_socket_deliver(data, "\x1b_rex1;42;{\"type\":\"resize\",\"cols\":90,\"rows\":25}\x1b\\late");
+    CHECK(paint_asked(id, 10));
+    /* The first paint, answered late, is not drawn; nor are its parts. */
+    answer_with(id, 9, "{\"content\":\"OLD\",\"id\":1,\"total\":9,\"eof\":false}", NULL);
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
+    CHECK(is_text(portal_fake_fed(target), ""));
+    answer_with(id, 10, "{\"content\":\"NEW \"}", NULL);
+    CHECK(is_text(portal_fake_fed(target), "<grid 90x25>NEW late"));
+    CHECK(strstr(rex_state(target), "\"state\":\"live\",\"columns\":90,\"rows\":25") != NULL);
+    sent();
+    received(id);
+    CHECK(portal_views_close(text(target), &error));
+    free(target);
+    CHECK(portal_rex_close(id, &error));
+    sent();
+}
+
 int main(void)
 {
     int ends[2];
@@ -984,6 +1046,7 @@ int main(void)
     test_typing();
     test_details();
     test_owning();
+    test_resizing_while_painting();
     if (failures) {
         fprintf(stderr, "%d checks failed\n", failures);
         return 1;
