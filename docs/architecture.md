@@ -526,7 +526,11 @@ anything fail the show. While the connection is lost, the block takes no
 typing, says so when something is typed, and waits: `portal--rex-resume`
 resumes a stream that dropped meanwhile, and starts again from the
 beginning a block the server no longer knows Emacs showed, a new client's
-or one that was not live yet.
+or one that was not live yet. A fresh stream drops everything of the old
+one, and answers to what the old one asked drive nothing. Size and focus
+are sent as they change, and their changes while lost go nowhere, so
+every way back ends in one step that sends both as they are now, once the
+block is claimed.
 
 **A block's details are the terminal's.** A terminal's title, directory,
 program and exit reach Lisp the same way whatever runs it: the terminal

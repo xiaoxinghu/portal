@@ -240,6 +240,7 @@ struct shown {
     /* Counts the streams the show has started: an answer to a request made
        for an earlier one, such as a paint, drives nothing. */
     uint64_t generation;
+    bool resync; /* Started again: once claimed, it is brought up to date. */
 };
 
 /* Which of a shown block's details a seq is for. */
@@ -482,6 +483,7 @@ static void end_show(struct shown *shown, enum stage stage, const char *reason,
 static void next_operation(struct shown *shown);
 static bool ask_paint(struct shown *shown);
 static void paint(struct shown *shown);
+static void queue(struct shown *shown, struct operation operation);
 
 /* Ask SHOWN's connection to run METHOD with PAYLOAD, for ANSWER.  A request
    that cannot go fails the show. */
@@ -1073,6 +1075,21 @@ static void attached(struct shown *shown, const char *response, size_t length)
     own(shown);
 }
 
+/* Tell SHOWN's block how its terminal is now, whatever the server was
+   last told: its grid, once it has been sized, and whether it has the
+   keyboard.  A change of either while the connection was lost went
+   nowhere, so every way back after a loss ends here, once the block is
+   claimed. */
+static void bring_up_to_date(struct shown *shown)
+{
+    memset(shown->sized, 0, sizeof shown->sized);
+    if (shown->stage > RESIZING && shown->stage < FAILED)
+        queue(shown, (struct operation) {.kind = RESIZE});
+    struct portal_input *input = portal_views_input(view(shown->target));
+    if (input)
+        queue(shown, (struct operation) {.kind = FOCUS, .in = input->focused});
+}
+
 static void owned(struct shown *shown, const char *response, size_t length)
 {
     portal_string payload;
@@ -1081,6 +1098,11 @@ static void owned(struct shown *shown, const char *response, size_t length)
     take_owners(shown, payload, seq_of((portal_string) {response, length}));
     shown->stage = SIZING;
     settle(shown);
+    /* Its first size follows once the grid settles. */
+    if (shown->resync) {
+        shown->resync = false;
+        bring_up_to_date(shown);
+    }
     /* What waited for the claim, such as a take. */
     next_operation(shown);
 }
@@ -1905,6 +1927,7 @@ static void begin(struct shown *shown)
 static void restart_show(struct shown *shown)
 {
     fresh_stream(shown);
+    shown->resync = true;
     shown->restart = false;
     shown->sending = false;
     shown->timer = 0;
@@ -2318,18 +2341,11 @@ bool portal_rex_resume(uint64_t id, portal_text *error)
         if (shown->restart) {
             restart_show(shown);
         } else {
-            /* Events were lost meanwhile: ask again what they said; and
-               the pane may have changed size. */
+            /* Events were lost meanwhile: ask again what they said. */
             ask_details(shown);
             if (shown->waiting)
                 resume_stream(shown);
-            memset(shown->sized, 0, sizeof shown->sized);
-            if (shown->stage > RESIZING && shown->stage < FAILED)
-                queue(shown, (struct operation) {.kind = RESIZE});
-            /* So may who has the keyboard: the block hears how it is now. */
-            struct portal_input *input = portal_views_input(view(shown->target));
-            if (input)
-                queue(shown, (struct operation) {.kind = FOCUS, .in = input->focused});
+            bring_up_to_date(shown);
         }
         announce(shown);
     }

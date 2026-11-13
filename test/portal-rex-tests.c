@@ -1095,6 +1095,10 @@ static char show_fed[256];
    already, and which attaches to its session if ATTACH; until it is live,
    painted with PAINT; return its stream's socket.  *NUMBER is the next
    request's number after it. */
+/* Whether show_on's block, claimed, is told next that it has the
+   keyboard, as one that starts again after a loss is. */
+static bool told_focus;
+
 static uint64_t show_on(uint64_t id, uint64_t control, const char *target, int *number,
                         bool started, bool attach, const char *paint)
 {
@@ -1112,6 +1116,11 @@ static uint64_t show_on(uint64_t id, uint64_t control, const char *target, int *
     CHECK(claimed(control, *number));
     answer_with(control, *number, claim_answer, NULL);
     *number += 4;
+    if (told_focus) {
+        CHECK(asked(control, *number, "block.event",
+                    ON_BLOCK ",\"event\":{\"type\":\"focus\",\"payload\":{\"action\":\"in\"}}}"));
+        answer_with(control, (*number)++, "{}", NULL);
+    }
     portal_fake_fire_timers();
     answer_with(control, (*number)++, "{}", NULL);
     answer_with(control, (*number)++, "{\"ticket\":\"AAECAwQFBgcICQoLDA0ODw\"}", NULL);
@@ -1390,8 +1399,12 @@ static void test_coming_back(void)
     CHECK(asked(again, number, "session.attach", "{\"session_id\":\"" SESSION "\"}"));
     sent();
     claim_answer = OWNED_BY("client:2");
+    /* Claimed again, it is told it has the keyboard, which it had all
+       along, as it may have changed while the connection was lost. */
+    told_focus = true;
     data = show_on(id, again, target, &number, true, true, "FRESH");
     claim_answer = "{}";
+    told_focus = false;
     CHECK(is_text(show_fed, "\x1b" "c\x1b[3JFRESH"));
     /* Disconnecting while lost ends it all for good. */
     portal_fake_socket_end(again, "The connection to the server was lost");
