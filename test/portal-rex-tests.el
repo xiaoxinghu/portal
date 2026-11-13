@@ -2487,6 +2487,35 @@ in its order, giving the frame TABS where its frameset would."
         (should (timerp portal-rex--restore-timer))
         (should (equal (mapcar #'buffer-name (portal-rex--placeholders)) '("*rex: home/far*")))))))
 
+(ert-deftest portal-rex-desktop-read-while-listing-waits-only-for-its-session ()
+  ;; Connected, with another session's blocks still being listed: a block
+  ;; whose own session was listed without it has closed, and says so; one
+  ;; whose session is still being listed waits for the answer.
+  (portal-rex-tests--with (server)
+    (portal-rex-tests--restoring
+      (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")
+                                                 (:session_id "session:b" :label "play")])
+      (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api"))
+      (portal-rex-tests--blocks server "b" (portal-rex-tests--block "2" "shell"))
+      (let* ((connection (portal-rex-tests--connect server))
+             (socket (abbreviate-file-name (portal-fake-rex-socket server))))
+        (portal-fake-rex-command server :hold "session.list_blocks")
+        (portal-rex-tests--session-event server "b" "session_view_changed" :revision 2)
+        (portal-rex-tests--until connection
+                                 (lambda () (assoc "session:b" (portal-rex-connection-lists connection))))
+        (should-not (portal-rex-desktop-restore
+                     nil "*rex: work/old*" (portal-rex-tests--record socket "9" "a" "old" "work")))
+        (should (equal (portal-rex-tests--said) "Could not restore Rex block work/old: it has closed"))
+        (let ((waiting (portal-rex-desktop-restore
+                        nil "*rex: play/new*" (portal-rex-tests--record socket "3" "b" "new" "play"))))
+          (should (eq (buffer-local-value 'major-mode waiting) 'portal-rex-placeholder-mode))
+          ;; The answer lists no such block: the placeholder goes, said once.
+          (portal-fake-rex-command server :release "session.list_blocks")
+          (portal-rex-tests--settle connection)
+          (should-not (buffer-live-p waiting))
+          (should (equal (portal-rex-tests--said)
+                         "Could not restore Rex block play/new: it has closed")))))))
+
 (ert-deftest portal-rex-restore-says-once-what-it-could-not-restore ()
   (portal-rex-tests--with (server)
     (portal-rex-tests--restoring

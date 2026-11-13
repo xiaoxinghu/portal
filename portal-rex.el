@@ -1705,7 +1705,7 @@ which it starts doing once idle.  Restoring never waits for a server."
           (add-hook 'desktop-delay-hook #'portal-rex--desktop-named)
           buffer))
        ;; Its session's blocks are still being listed.
-       ((portal-rex-connection-lists connection)
+       ((assoc (alist-get 'session record) (portal-rex-connection-lists connection))
         (portal-rex--make-placeholder name record "Emacs is asking its server for it."))
        (t (portal-rex--note-unrestored "it has closed" (portal-rex--record-name record))
           nil)))))
