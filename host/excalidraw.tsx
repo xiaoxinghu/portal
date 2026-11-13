@@ -2,20 +2,39 @@
 
 import {
 	Excalidraw,
+	exportToSvg,
 	loadFromBlob,
 	MainMenu,
 	serializeAsJSON,
 } from "@excalidraw/excalidraw";
-import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
+import type {
+	ExcalidrawElement,
+	NonDeleted,
+} from "@excalidraw/excalidraw/element/types";
 import type {
 	AppState,
 	BinaryFiles,
 	ExcalidrawImperativeAPI,
 } from "@excalidraw/excalidraw/types";
-import { useState, useSyncExternalStore } from "react";
+import {
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+	useSyncExternalStore,
+} from "react";
 import { createRoot } from "react-dom/client";
 import "@excalidraw/excalidraw/index.css";
 import "./excalidraw.css";
+import {
+	type Frame,
+	nearestSlide,
+	type Scene,
+	SlideImages,
+	slideFrames,
+	slideName,
+	slideNotes,
+} from "./slides";
 
 type Message = {
 	type: string;
@@ -23,7 +42,11 @@ type Message = {
 	request?: number;
 	name?: string;
 	message?: string;
+	mode?: string;
 };
+
+/** The page's screen: the editor, or Arrange covering it. */
+type Mode = "draw" | "arrange";
 
 const rootElement = document.getElementById("root");
 if (!rootElement) throw new Error("Missing editor root element");
@@ -44,6 +67,9 @@ let contentKey = "";
 let previousFiles: BinaryFiles | undefined;
 let changeTimer: ReturnType<typeof setTimeout> | undefined;
 let setStatus: (value: string) => void = () => {};
+let setMode: (mode: Mode) => void = () => {};
+/** Arrange's keys, while it is shown; they come before the editor's. */
+let arrangeKeys: ((event: KeyboardEvent) => void) | undefined;
 const post = (message: object) => window.portalBridge?.postMessage(message);
 
 function currentJSON() {
@@ -111,58 +137,293 @@ function Editor({
 	);
 	const [status, updateStatus] = useState("Saved");
 	setStatus = updateStatus;
+	const [mode, updateMode] = useState<Mode>("draw");
+	setMode = updateMode;
+	const shownMode = useRef(mode);
+	useEffect(() => {
+		if (shownMode.current === mode) return;
+		shownMode.current = mode;
+		post({ type: "mode", mode });
+		// The editor was inert under Arrange, which took its focus.
+		if (mode === "draw")
+			document.querySelector<HTMLElement>(".excalidraw-container")?.focus();
+	}, [mode]);
+	const editSlide = (frame: Frame) => {
+		updateMode("draw");
+		api?.scrollToContent(frame, { fitToViewport: true });
+	};
 	return (
-		<Excalidraw
-			theme={isDark ? "dark" : "light"}
-			initialData={initialData}
-			name={name}
-			excalidrawAPI={(value) => {
-				api = value;
-				// Initial data is applied after the imperative API becomes available.
-				// The first onChange below establishes the normalized document baseline.
-			}}
-			onChange={(elements, state, files) => {
-				if (state.isLoading) return;
-				if (!initialized) {
-					initialized = true;
-					contentKey = serializeAsJSON(elements, state, {}, "local");
-					previousFiles = files;
-					savedJSON = lastJSON = serializeAsJSON(
-						elements,
-						state,
-						files,
-						"local",
-					);
-					post({ type: "loaded", json: lastJSON });
-				} else onChange(elements, state, files);
-			}}
-			autoFocus
-			validateEmbeddable={false}
-			onLinkOpen={(_element, event) => event.preventDefault()}
-			UIOptions={{
-				canvasActions: {
-					loadScene: false,
-					saveToActiveFile: false,
-					export: false,
-					saveAsImage: false,
-				},
-				welcomeScreen: false,
-			}}
-			renderTopRightUI={() => (
-				<div className="portal-save">
-					<span role="status">{status}</span>
-					<button type="button" onClick={requestSave}>
-						Save
-					</button>
-				</div>
+		<>
+			<div className="portal-editor" inert={mode === "arrange"}>
+				<Excalidraw
+					theme={isDark ? "dark" : "light"}
+					initialData={initialData}
+					name={name}
+					excalidrawAPI={(value) => {
+						api = value;
+						// Initial data is applied after the imperative API becomes available.
+						// The first onChange below establishes the normalized document baseline.
+					}}
+					onChange={(elements, state, files) => {
+						if (state.isLoading) return;
+						if (!initialized) {
+							initialized = true;
+							contentKey = serializeAsJSON(elements, state, {}, "local");
+							previousFiles = files;
+							savedJSON = lastJSON = serializeAsJSON(
+								elements,
+								state,
+								files,
+								"local",
+							);
+							post({ type: "loaded", json: lastJSON });
+						} else onChange(elements, state, files);
+					}}
+					autoFocus
+					validateEmbeddable={false}
+					onLinkOpen={(_element, event) => event.preventDefault()}
+					UIOptions={{
+						canvasActions: {
+							loadScene: false,
+							saveToActiveFile: false,
+							export: false,
+							saveAsImage: false,
+						},
+						welcomeScreen: false,
+					}}
+					renderTopRightUI={() => (
+						<div className="portal-save">
+							<span role="status">{status}</span>
+							<button type="button" onClick={requestSave}>
+								Save
+							</button>
+						</div>
+					)}
+				>
+					<MainMenu>
+						<MainMenu.Item onSelect={requestSave}>Save drawing</MainMenu.Item>
+						<MainMenu.Item onSelect={() => updateMode("arrange")}>
+							Slides
+						</MainMenu.Item>
+						<MainMenu.DefaultItems.ClearCanvas />
+						<MainMenu.DefaultItems.ChangeCanvasBackground />
+					</MainMenu>
+				</Excalidraw>
+			</div>
+			{mode === "arrange" && api && (
+				<Arrange
+					editor={api}
+					status={status}
+					onDraw={() => updateMode("draw")}
+					onEdit={editSlide}
+				/>
 			)}
-		>
-			<MainMenu>
-				<MainMenu.Item onSelect={requestSave}>Save drawing</MainMenu.Item>
-				<MainMenu.DefaultItems.ClearCanvas />
-				<MainMenu.DefaultItems.ChangeCanvasBackground />
-			</MainMenu>
-		</Excalidraw>
+		</>
+	);
+}
+
+/** The scene's slides are made of, as the editor has it now. */
+function currentScene(editor: ExcalidrawImperativeAPI): Scene {
+	return {
+		elements: editor.getSceneElements(),
+		files: editor.getFiles(),
+		background: editor.getAppState().viewBackgroundColor,
+	};
+}
+
+/** A slide's image: the frame alone, on the scene's background, never in
+ * dark mode, so it looks the same whichever Emacs shows it. */
+async function renderSlide(frame: Frame, scene: Scene) {
+	const svg = await exportToSvg({
+		elements: scene.elements.filter(
+			(element): element is NonDeleted<ExcalidrawElement> => !element.isDeleted,
+		),
+		appState: {
+			exportBackground: true,
+			exportWithDarkMode: false,
+			viewBackgroundColor: scene.background,
+		},
+		files: scene.files,
+		exportingFrame: frame,
+	});
+	return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg.outerHTML)}`;
+}
+
+// Images last as long as the page, so a slide that did not change since
+// Arrange was last shown is not drawn again.
+let imagesVersion = 0;
+const imageListeners = new Set<() => void>();
+const failedSlides = new Set<string>();
+function imagesChanged() {
+	imagesVersion++;
+	for (const listener of imageListeners) listener();
+}
+const slideImages = new SlideImages<string>(
+	renderSlide,
+	(id) => {
+		failedSlides.delete(id);
+		imagesChanged();
+	},
+	(id, error) => {
+		console.error(`Slide ${id}:`, error);
+		failedSlides.add(id);
+		imagesChanged();
+	},
+);
+function subscribeToImages(listener: () => void) {
+	imageListeners.add(listener);
+	return () => imageListeners.delete(listener);
+}
+
+function SlideImage({ frame, alt }: { frame: Frame; alt: string }) {
+	const image = slideImages.image(frame.id);
+	if (image) return <img src={image} alt={alt} />;
+	return (
+		<span className="portal-slide-pending">
+			{failedSlides.has(frame.id) ? "Could not draw this slide" : ""}
+		</span>
+	);
+}
+
+/** The Arrange screen: the slides in order, the selected one large, and its
+ * notes. It covers the editor, which stays loaded under it. */
+function Arrange({
+	editor,
+	status,
+	onDraw,
+	onEdit,
+}: {
+	editor: ExcalidrawImperativeAPI;
+	status: string;
+	onDraw: () => void;
+	onEdit: (frame: Frame) => void;
+}) {
+	const [scene, setScene] = useState(() => currentScene(editor));
+	const frames = useMemo(() => slideFrames(scene.elements), [scene.elements]);
+	const [selectedId, setSelectedId] = useState(() => {
+		const view = editor.getAppState();
+		const zoom = view.zoom.value;
+		const index = nearestSlide(frames, {
+			x: view.width / 2 / zoom - view.scrollX,
+			y: view.height / 2 / zoom - view.scrollY,
+		});
+		return frames[index]?.id;
+	});
+	useSyncExternalStore(subscribeToImages, () => imagesVersion);
+	const found = frames.findIndex((frame) => frame.id === selectedId);
+	const index = found < 0 ? 0 : found;
+	const selected = frames[index];
+	const list = useRef<HTMLDivElement>(null);
+
+	// Draw images now, and again a moment after each change to the scene.
+	useEffect(() => {
+		slideImages.update(scene);
+	}, [scene]);
+	useEffect(() => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const stop = editor.onChange(() => {
+			clearTimeout(timer);
+			timer = setTimeout(() => setScene(currentScene(editor)), 150);
+		});
+		return () => {
+			clearTimeout(timer);
+			stop();
+		};
+	}, [editor]);
+
+	useEffect(() => {
+		list.current?.focus();
+	}, []);
+	useEffect(() => {
+		if (selected)
+			document
+				.getElementById(`portal-slide-${selected.id}`)
+				?.scrollIntoView({ block: "nearest" });
+	}, [selected]);
+
+	useEffect(() => {
+		arrangeKeys = (event) => {
+			const plain =
+				!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+			const step = (by: number) => {
+				const next =
+					frames[Math.max(0, Math.min(frames.length - 1, index + by))];
+				if (next) setSelectedId(next.id);
+			};
+			if (plain && event.key === "ArrowUp") step(-1);
+			else if (plain && event.key === "ArrowDown") step(1);
+			else if (plain && event.key === "Enter" && selected) onEdit(selected);
+			else if (plain && event.key === "Escape") onDraw();
+			else return;
+			event.preventDefault();
+		};
+		return () => {
+			arrangeKeys = undefined;
+		};
+	}, [frames, index, selected, onDraw, onEdit]);
+
+	return (
+		<div className="portal-arrange">
+			<header>
+				<h1>Slides</h1>
+				<span className="portal-arrange-count">
+					{frames.length === 1 ? "1 slide" : `${frames.length} slides`}
+				</span>
+				<span className="portal-arrange-status" role="status">
+					{status}
+				</span>
+				<button type="button" onClick={onDraw}>
+					Draw
+				</button>
+			</header>
+			{selected ? (
+				<div className="portal-arrange-body">
+					<div
+						ref={list}
+						className="portal-filmstrip"
+						role="listbox"
+						aria-label="Slides"
+						aria-activedescendant={`portal-slide-${selected.id}`}
+						tabIndex={0}
+					>
+						{frames.map((frame, at) => (
+							// biome-ignore lint/a11y/useKeyWithClickEvents: the list takes the keys.
+							<div
+								key={frame.id}
+								id={`portal-slide-${frame.id}`}
+								role="option"
+								tabIndex={-1}
+								aria-selected={frame === selected}
+								onClick={() => setSelectedId(frame.id)}
+								onDoubleClick={() => onEdit(frame)}
+							>
+								<span className="portal-slide-number">{at + 1}</span>
+								<span className="portal-slide-image">
+									<SlideImage frame={frame} alt="" />
+								</span>
+								<span className="portal-slide-name">{slideName(frame)}</span>
+							</div>
+						))}
+					</div>
+					<main className="portal-stage">
+						<div className="portal-stage-image">
+							<SlideImage
+								frame={selected}
+								alt={`Slide ${index + 1}: ${slideName(selected)}`}
+							/>
+						</div>
+						<section className="portal-notes" aria-label="Notes">
+							<h2>Notes</h2>
+							<p>{slideNotes(selected) || "No notes."}</p>
+						</section>
+					</main>
+				</div>
+			) : (
+				<p className="portal-arrange-empty">
+					This drawing has no slides. Draw a frame for each slide.
+				</p>
+			)}
+		</div>
 	);
 }
 
@@ -189,6 +450,11 @@ async function receive(message: Message) {
 			const json = currentJSON();
 			publish(json);
 			post({ type: "snapshot", request: message.request, json });
+		} else if (message.type === "mode") {
+			if (!api || !initialized) throw new Error("The drawing is still loading");
+			if (message.mode !== "draw" && message.mode !== "arrange")
+				throw new Error(`No such screen: ${message.mode}`);
+			setMode(message.mode);
 		} else if (message.type === "saved") {
 			savedJSON = message.json?.trim() ?? "";
 			setStatus(currentJSON() === savedJSON ? "Saved" : "Modified");
@@ -207,14 +473,27 @@ async function receive(message: Message) {
 
 if (window.portalBridge) window.portalBridge.receive = receive;
 
-document.addEventListener(
+// Registered before the editor mounts, so these run before its own window
+// listeners. While Arrange is shown, no key reaches the editor; a chord Arrange
+// leaves alone is not prevented, so it still reaches Emacs.
+window.addEventListener(
 	"keydown",
 	(event) => {
 		if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
 			event.preventDefault();
 			event.stopImmediatePropagation();
 			requestSave();
+		} else if (arrangeKeys) {
+			event.stopImmediatePropagation();
+			arrangeKeys(event);
 		}
+	},
+	true,
+);
+window.addEventListener(
+	"keyup",
+	(event) => {
+		if (arrangeKeys) event.stopImmediatePropagation();
 	},
 	true,
 );

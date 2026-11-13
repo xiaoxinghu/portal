@@ -82,6 +82,26 @@ update the buffer and its modified flag. Selection, viewport and other state
 outside the document do not modify it. Image data is included using
 Excalidraw's `serializeAsJSON(..., "local")`.
 
+## Slides
+
+The page has two screens, the editor and Arrange
+([slides](excalidraw.md#slides)). Arrange covers the editor, which stays
+mounted, sized and `inert` under it, so its scene stays the only copy of the
+drawing and keeps its undo history. Emacs sends `mode` with `mode` `draw` or
+`arrange` to switch; the page sends `mode` back whenever its screen changed,
+whoever changed it, and `portal-excalidraw.el` keeps that in
+`portal-excalidraw--mode` for the mode line. A page that loads, or reloads,
+starts in the editor. `snapshot`, `save` and `saved` work on either screen.
+
+`host/slides.ts` is the deck, kept apart from the page and React: the frames
+in slide order, and slide images kept per frame. A frame's image is made again
+only when the frame, an element in it by `frameId`, or an element in no frame
+reaching into it changed version, or when the drawing's files or background
+changed. Images come from Excalidraw's `exportToSvg` with `exportingFrame`,
+when Arrange is entered and 150 ms after each scene change while it is shown.
+While Arrange is shown, a capture listener on the window, registered before
+the editor mounts, stops every key before the editor's own listeners.
+
 ## Saving and input
 
 Before saving, Emacs sends `snapshot` with a monotonically increasing request ID.
@@ -118,7 +138,8 @@ Excalidraw assets and checks TypeScript.
 native module, `test/portal-web-tests.el` checks ordered `bridge` delivery to the
 buffer's bridge function. `test/portal-excalidraw-tests.el` covers opening the
 Excalidraw hosted app, bridge loading, scene persistence, save failures, stale
-replies and revert.
+replies, revert, and switching screens. `host/slides.test.ts` covers slide
+order and which images a change makes stale.
 
 `ctest --test-dir build -R web-core` runs `test/portal-web-tests.c`, the core's bridge and
 web rules against the fake platform: message order and coalescing, draining
@@ -134,7 +155,8 @@ Graphical tests require a disposable graphical Emacs with the
 [test event injector](testing.md#input-graphical-checks) loaded.
 Load `test/portal-excalidraw-gui-tests.el`; run `M-x ert` with selector
 `^portal-excalidraw-gui-`. Coverage includes real WKWebView, paste,
-image round trips, several drawings, revert, hidden-state retention, and rapid
-`C-x C-s` delivery to Emacs. The test-only JavaScript evaluator is absent from
+image round trips, several drawings, revert, hidden-state retention, rapid
+`C-x C-s` delivery to Emacs, and Arrange: slides in order, keys, editing a
+slide and saving from it. The test-only JavaScript evaluator is absent from
 the production module. That the editor works offline, loading its modules and
 fonts only from the app host, is an [app host check](testing.md#app-host-checks).

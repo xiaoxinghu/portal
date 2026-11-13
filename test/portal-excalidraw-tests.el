@@ -154,6 +154,62 @@
           (should-not (buffer-modified-p)))
       (delete-file file))))
 
+(defun portal-excalidraw-test--screen-tag ()
+  "What the drawing's own part of `mode-line-process' says.
+Batch Emacs formats no mode line; the graphical tests read the real one."
+  (mapconcat (lambda (part)
+               (or (and (eq (car-safe part) :eval) (eval (cadr part) t)) ""))
+             mode-line-process ""))
+
+(ert-deftest portal-excalidraw-mode-line-follows-the-screen-the-page-shows ()
+  (portal-excalidraw-test--buffer
+    (portal-excalidraw--message (list :type "loaded" :json portal-excalidraw--empty))
+    (should (equal portal-excalidraw--mode "draw"))
+    (should (equal (portal-excalidraw-test--screen-tag) ""))
+    (portal-excalidraw--message '(:type "mode" :mode "arrange"))
+    (should (equal portal-excalidraw--mode "arrange"))
+    (should (equal (portal-excalidraw-test--screen-tag) ":Arrange"))
+    ;; The keyboard's light still comes first.
+    (should (eq (cadr mode-line-process) 'portal-input-mode-line-process))
+    (portal-excalidraw--message '(:type "mode" :mode "present"))
+    (should (equal portal-excalidraw--mode "arrange"))
+    (should-not portal-excalidraw--error)
+    (portal-excalidraw--message '(:type "mode" :mode "draw"))
+    (should (equal (portal-excalidraw-test--screen-tag) ""))
+    (should-not (buffer-modified-p))))
+
+(ert-deftest portal-excalidraw-arrange-and-draw-ask-the-page-for-their-screen ()
+  (portal-excalidraw-test--buffer
+    (let (sent)
+      (cl-letf (((symbol-function 'portal-web-send) (lambda (message) (push message sent))))
+        (should-error (portal-excalidraw-arrange) :type 'user-error)
+        (should-not sent)
+        (setq portal-excalidraw--ready t)
+        (portal-excalidraw-arrange)
+        (should (equal (pop sent) '(:type "mode" :mode "arrange")))
+        ;; The mode line waits for the page to say so.
+        (should (equal portal-excalidraw--mode "draw"))
+        (portal-excalidraw-draw)
+        (should (equal (pop sent) '(:type "mode" :mode "draw")))
+        (setq portal-excalidraw--error "WebKit stopped")
+        (should-error (portal-excalidraw-arrange) :type 'user-error)
+        (should-not sent)
+        (should-not (buffer-modified-p))))))
+
+(ert-deftest portal-excalidraw-reopened-drawing-comes-back-in-the-editor ()
+  (portal-excalidraw-test--buffer
+    (setq portal-excalidraw--ready t)
+    (portal-excalidraw--message '(:type "mode" :mode "arrange"))
+    (cl-letf (((symbol-function 'portal-excalidraw--flush) #'ignore)
+              ((symbol-function 'portal-excalidraw--start) #'ignore))
+      (portal-excalidraw-reopen))
+    (should (equal portal-excalidraw--mode "draw"))
+    ;; So does a page that loads again by itself.
+    (portal-excalidraw--message '(:type "mode" :mode "arrange"))
+    (cl-letf (((symbol-function 'portal-web-send) #'ignore))
+      (portal-excalidraw--message '(:type "ready")))
+    (should (equal portal-excalidraw--mode "draw"))))
+
 (ert-deftest portal-excalidraw-loads-the-drawing-into-its-hosted-app-over-the-bridge ()
   (portal-fake-native-reset)
   (cl-letf (((symbol-function 'portal-start-server) #'ignore)
