@@ -220,6 +220,8 @@ Its one block runs cat, without a login shell."
 (declare-function portal--terminal-text "portal-terminal" (target))
 (declare-function portal--terminal-paste "portal-terminal" (target text &optional enter))
 (declare-function portal-test-native-key "test-terminal-input" (code flags text &optional windowless))
+(declare-function portal-test-native-target-frame "test-terminal-input" (title))
+(declare-function portal-test-native-focus-target "test-terminal-input" ())
 
 (defun portal-rex-server-gui-tests--screen (server session block)
   "Return the screen and history of BLOCK in SESSION as SERVER has them, as text."
@@ -274,6 +276,11 @@ Its one block runs cat, without a login shell."
                                (list (plist-get state :columns) (plist-get state :rows)))))
               ;; Typed in Emacs, it reaches the shell, and its output Emacs.
               (select-frame-set-input-focus (selected-frame))
+              ;; Keys go to this frame by name: the VM's desktop may take
+              ;; activation back from a test's Emacs at any moment.
+              (should (portal-view--with-frame-title (selected-frame)
+                                                     #'portal-test-native-target-frame))
+              (portal-test-native-focus-target)
               (portal-terminal-focus)
               (portal-rex-server-gui-tests--keys '(14 0 "e") '(8 0 "c") '(4 0 "h") '(31 0 "o")
                                                  '(49 0 " ") '(17 0 "t") '(16 0 "y")
@@ -304,6 +311,7 @@ Its one block runs cat, without a login shell."
               (let ((ours (portal--terminal-text target)))
                 (dolist (line '("before-42" "typed" "after-vim"))
                   (should (string-match-p (format "^%s$" line) ours))))))
+        (portal-test-native-target-frame nil)
         (mapc #'portal-rex-disconnect (portal-rex-connections))))))
 
 (provide 'portal-rex-server-gui-tests)
