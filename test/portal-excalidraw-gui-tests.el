@@ -544,7 +544,7 @@ show SLIDE of 2."
       (portal-excalidraw-present)
       (portal-web-gui--run-until 'portal-web-opened)
       (portal-web-gui--run-until 'portal-excalidraw-command)
-      (should (equal portal-excalidraw--mode "present"))
+      (portal-excalidraw--wait (lambda () (equal portal-excalidraw--mode "present")))
       (let ((slides portal-excalidraw--slides)
             (frame portal-excalidraw--slides-frame))
         (should (buffer-live-p slides))
