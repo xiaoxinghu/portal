@@ -441,8 +441,10 @@ one, and after [moving the Rex pin](test-vm.md#move-the-rex-pin). With
 
 [portal-rex-parity.el](../test/portal-rex-parity.el) holds checks that run
 against both servers: the handshake, `server.version`, `session.list`,
-`session.list_blocks` with the buffers made of it, an unknown method, and
-the calls the core makes to show a block, with the shapes of their answers. The `rex` suite runs them against the fake, the tier against
+`session.list_blocks` with the buffers made of it, an unknown method, the
+calls the core makes to show a block, with the shapes of their answers, and
+an idle block ended by killing its buffer, with the two replies that say it
+is idle. The `rex` suite runs them against the fake, the tier against
 a real server. When only the tier's run fails, the real server has moved:
 bring the fake, and Portal, into line with it. Add a check there when the fake
 can answer it as cheaply as the real server.

@@ -97,7 +97,7 @@ other TUIs use the real protocol engine, not Emacs text, WebKit or Bun.
 - `quit-window`, buffer switching and frame deletion only hide terminals;
   redisplay returns the same running shell. Buffer kill or
   `portal-terminal-close` ends its shell; `portal-terminal-close-all` ends all
-  embedded shells.
+  embedded shells, and the [Rex blocks](rex.md#end-a-block) shown in Emacs.
 
 These commands have no keys; bind them in Emacs, using Command chords for
 access inside terminals:
@@ -224,8 +224,12 @@ leaving the panel visible; cancelling returns to it.
 Killing a buffer with a running program always asks first, whether through
 `C-x k`, Ibuffer, Embark or `portal-terminal-kill-pane`. Ghostty programs are
 not Emacs processes, so Emacs's own process question never appears. Set
-`portal-terminal-confirm-kill` to nil to skip confirmation. Exited programs need
-none; quick reset/forget retain their own questions. `M-x portal-terminal-select`
+`portal-terminal-confirm-kill` to nil to skip confirmation. Its default, t,
+asks while the program may be busy: Portal cannot tell a shell of its own at
+its prompt from a busy one, so it asks for every running program, as
+`always` does, while a [Rex block](rex.md#end-a-block) at its prompt ends
+without a question. Exited programs need none; quick reset/forget retain
+their own questions. `M-x portal-terminal-select`
 selects by name, where terminals of its kind show.
 
 ### Consult and Embark

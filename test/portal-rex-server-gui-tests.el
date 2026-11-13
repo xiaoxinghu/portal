@@ -383,5 +383,65 @@ Its one block runs cat, without a login shell."
         (remove-variable-watcher 'portal-terminal--exited watcher)
         (mapc #'portal-rex-disconnect (portal-rex-connections))))))
 
+(ert-deftest portal-rex-server-gui-killing-a-blocks-buffer-ends-it ()
+  :tags '(:gui)
+  ;; What only a real server shows: that its replies read as idle for a
+  ;; shell at its prompt, so killing its buffer ends the block without a
+  ;; question, and as busy while the shell runs a program, so it asks.
+  ;; The shells are the account's, started as Portal starts a terminal,
+  ;; under login.
+  (portal-real-rex-with (server)
+    (let* ((home (expand-file-name "home" (portal-real-rex-directory server)))
+           (connection (portal-rex-connect (portal-real-rex-socket server)))
+           (session (portal-rex-session-create connection "kill"))
+           (state (lambda (buffer)
+                    (portal-rex--block-state connection session
+                                             (buffer-local-value 'portal-rex-block-id buffer))))
+           (listed (lambda ()
+                     (mapcar (lambda (block) (plist-get block :block_id))
+                             (plist-get (portal-rex-server-gui-tests--api
+                                         server "session.list_blocks" :session_id session)
+                                        :blocks))))
+           (prompt (lambda ()
+                     (save-window-excursion
+                       (let ((buffer (portal-rex-new-terminal connection session home)))
+                         ;; A block that is starting reads as busy.
+                         (portal-rex-server-gui-tests--wait
+                          (lambda () (eq (plist-get (funcall state buffer) :state) 'idle)))
+                         buffer))))
+           idle busy block asked)
+      ;; No startup files would start zsh's questions for a new user.
+      (with-temp-file (expand-file-name ".zshrc" home) (insert "PS1='%# '\n"))
+      (unwind-protect
+          (progn
+            (setq idle (funcall prompt))
+            (portal-rex-parity-check-kill connection session
+                                          (buffer-local-value 'portal-rex-block-id idle))
+            ;; Its window went with it: the session has none left.
+            (should-not (funcall listed))
+            ;; Another, running sleep.
+            (setq busy (funcall prompt)
+                  block (buffer-local-value 'portal-rex-block-id busy))
+            (portal-rex-server-gui-tests--api server "com.superlogical.terminal.write"
+                                              :session_id session :block_id block
+                                              :args '(:data "sleep 600\r"))
+            (portal-rex-server-gui-tests--wait
+             (lambda () (equal (funcall state busy) '(:state busy :program "sleep"))))
+            ;; Asked, naming it; no keeps the buffer and the block.
+            (let ((answers (list nil t))
+                  (question (format "Rex block kill/%s is running sleep; end it? "
+                                    (buffer-local-value 'portal-rex--block-label busy))))
+              (cl-letf (((symbol-function 'y-or-n-p)
+                         (lambda (prompt) (push prompt asked) (pop answers))))
+                (should-not (kill-buffer busy))
+                (should (buffer-live-p busy))
+                (should (equal (funcall listed) (list block)))
+                ;; Yes ends it.
+                (should (kill-buffer busy)))
+              (should (equal asked (list question question))))
+            (portal-rex-server-gui-tests--wait (lambda () (null (funcall listed))))
+            (should-not (portal-rex-buffers connection session)))
+        (mapc #'portal-rex-disconnect (portal-rex-connections))))))
+
 (provide 'portal-rex-server-gui-tests)
 ;;; portal-rex-server-gui-tests.el ends here

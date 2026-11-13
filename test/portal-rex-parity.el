@@ -185,5 +185,47 @@ parity-made beforehand, and nothing else changes it meanwhile."
     (should-not (seq-find (lambda (known) (equal (plist-get known :session_id) session))
                           (plist-get (portal-rex-call connection "session.list") :sessions)))))
 
+(defun portal-rex-parity-check-kill (connection session-id block-id)
+  "Check that killing the buffer of an idle block ends it, without a question.
+The block BLOCK-ID of SESSION-ID on CONNECTION's server runs a shell at
+its prompt, under login, as a shell block on macOS does; nothing else
+changes the session meanwhile.  The two replies Portal asks for have the
+shapes it relies on, the block reads as idle, its buffer goes at once,
+and the block closes on the server."
+  (let* ((block (list :session_id session-id :block_id block-id :args nil))
+         (mode (portal-rex-call connection "com.superlogical.terminal.input_mode" block))
+         (process (portal-rex-call connection "com.superlogical.terminal.process" block))
+         (child (plist-get process :child))
+         (foreground (plist-get process :foreground))
+         (buffer (portal-rex-block-buffer connection block-id))
+         (blocks (portal-rex-connection-blocks connection)))
+    ;; A line editor reads: raw input, with signals.
+    (should (equal (list (plist-get mode :echo) (plist-get mode :canonical) (plist-get mode :signals))
+                   '(:false :false t)))
+    ;; The shell is login's direct child.
+    (should (eq (plist-get process :last_exit) :null))
+    (should (equal (plist-get child :name) "login"))
+    (should (eql (plist-get child :user_id) 0))
+    (should (integerp (plist-get foreground :pid)))
+    (should (string-prefix-p "-" (plist-get foreground :argv0)))
+    (should (equal (mapcar (lambda (process) (plist-get process :pid))
+                           (plist-get process :ancestors))
+                   (list (plist-get child :pid))))
+    (should (equal (portal-rex--block-state connection session-id block-id)
+                   (list :state 'idle :program (file-name-nondirectory
+                                                (substring (plist-get foreground :argv0) 1)))))
+    ;; Killed with the option at its default, it asks nothing, and goes.
+    (cl-letf (((symbol-function 'y-or-n-p)
+               (lambda (prompt) (ert-fail (list "Asked" prompt)))))
+      (let ((portal-terminal-confirm-kill t))
+        (should (kill-buffer buffer))))
+    (should-not (buffer-live-p buffer))
+    ;; The block closes, and its event finds the buffer gone.
+    (should (portal-rex--await connection (lambda () (not (gethash block-id blocks))) 5))
+    (should-not (seq-find (lambda (listed) (equal (plist-get listed :block_id) block-id))
+                          (plist-get (portal-rex-call connection "session.list_blocks"
+                                                      (list :session_id session-id))
+                                     :blocks)))))
+
 (provide 'portal-rex-parity)
 ;;; portal-rex-parity.el ends here

@@ -45,7 +45,7 @@ A named group of blocks on a Rex server, with an ID and a label, which another s
 _Avoid_: project, workspace; calling a connection a session. The "terminal session" a terminal view runs, its own shell, is not one.
 
 **Block**:
-One program on a Rex server with its screen, such as a shell: what one terminal shows. It belongs to one session for its whole life, and its ID never changes and is never reused. While Emacs is connected to its server it has exactly one buffer, named from its session's label and its own, which comes and goes with the block. Once a window shows that buffer, a terminal view in it shows the block's screen, and keeps it current until the buffer goes, shown or not.
+One program on a Rex server with its screen, such as a shell: what one terminal shows. It belongs to one session for its whole life, and its ID never changes and is never reused. While Emacs is connected to its server it has exactly one buffer, named from its session's label and its own, which comes and goes with the block: killing the buffer ends the block, after a question while it may be busy, and burying it keeps the block running. Once a window shows that buffer, a terminal view in it shows the block's screen, and keeps it current until the buffer goes, shown or not.
 _Avoid_: pane, tab, window (Rex's own layout terms), terminal (the view kind that shows it)
 
 **Fed terminal**:

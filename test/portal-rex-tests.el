@@ -145,7 +145,9 @@ Connections that BODY leaves are closed, and none may remain."
     (portal-fake-rex-command server :screen '(:block:fake-1 "\e[H\e[2J$ fake screen, long enough"))
     (let ((connection (portal-rex-tests--connect server)))
       (portal-rex-parity-check connection)
-      (portal-rex-parity-check-block connection "session:fake-1" "block:fake-1"))))
+      (portal-rex-parity-check-block connection "session:fake-1" "block:fake-1")
+      (portal-rex-tests--idle server "block:fake-1")
+      (portal-rex-parity-check-kill connection "session:fake-1" "block:fake-1"))))
 
 (ert-deftest portal-rex-call-returns-the-result ()
   (portal-rex-tests--with (server)
@@ -764,6 +766,57 @@ Each is returned once: a later call returns those asked for since."
             (mapcar (lambda (report) (plist-get (plist-get report :request) :method))
                     requests))))
 
+(defun portal-rex-tests--shell (pid &optional depth)
+  "Return a process reply for a zsh block under login, its shell PID.
+DEPTH programs run under the shell, the last in the foreground: each a
+list (NAME ARGV0 . MORE), MORE more of the process's fields."
+  (let* ((login (list :pid (1- pid) :user_id 0 :user "root" :name "login" :path "/usr/bin/login"))
+         (shell (list :pid pid :user_id 501 :name "zsh" :path "/bin/zsh" :argv0 "-zsh"
+                      :cwd "/Users/someone"))
+         (chain (cons shell (cl-loop for (name argv0 . more) in depth
+                                     for number from (1+ pid)
+                                     collect (append (list :pid number :user_id 501 :name name
+                                                           :argv0 argv0)
+                                                     more)))))
+    (list :child login :foreground (car (last chain))
+          :ancestors (vconcat (cdr (reverse chain)) (list login))
+          :home "/Users/someone" :last_exit :null)))
+
+(defconst portal-rex-tests--raw '(:echo :false :canonical :false :signals t)
+  "The input mode of a line editor at a prompt.")
+
+(defconst portal-rex-tests--cooked '(:echo t :canonical t :signals t)
+  "The input mode of a shell running a program, or its own code.")
+
+(defun portal-rex-tests--terminal (server block mode process)
+  "Make the fake SERVER's BLOCK answer `input_mode' with MODE, `process' with PROCESS."
+  (portal-fake-rex-command server :terminal block :input_mode mode :process process))
+
+(defun portal-rex-tests--idle (server block)
+  "Make the fake SERVER say that BLOCK's zsh waits at its prompt."
+  (portal-rex-tests--terminal server block portal-rex-tests--raw (portal-rex-tests--shell 40)))
+
+(defun portal-rex-tests--sleeping (server block)
+  "Make the fake SERVER say that BLOCK's shell runs sleep."
+  (portal-rex-tests--terminal server block portal-rex-tests--cooked
+                              (portal-rex-tests--shell 40 '(("sleep" "sleep")))))
+
+(defmacro portal-rex-tests--asking (answers &rest body)
+  "Run BODY with `y-or-n-p' giving ANSWERS, in turn, and return its prompts.
+With no answer left, a question fails the test."
+  (declare (indent 1))
+  `(let ((answers ,answers) asked)
+     (cl-letf (((symbol-function 'y-or-n-p)
+                (lambda (prompt)
+                  (push prompt asked)
+                  (if answers (pop answers) (ert-fail (list "Asked once too often" prompt))))))
+       ,@body)
+     (nreverse asked)))
+
+(defconst portal-rex-tests--asks
+  '("com.superlogical.terminal.input_mode" "com.superlogical.terminal.process")
+  "What a kill asks the server, in order.")
+
 (ert-deftest portal-rex-connect-makes-a-buffer-for-every-block ()
   (portal-rex-tests--with (server)
     (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")
@@ -805,8 +858,9 @@ Each is returned once: a later call returns those asked for since."
         (should (string-match-p "\\`Rex block api, in session work\\.\nblock:1 on the server at "
                                 (buffer-string)))
         (should (string-search "once a window shows this buffer" (buffer-string)))
-        ;; Killing it ends no program, so nothing asks.
-        (should-not portal-terminal-confirm-kill)
+        ;; Killing it ends its block, after the server says whether it is busy.
+        (should (memq #'portal-rex--kill-query kill-buffer-query-functions))
+        (should (eq portal-terminal--closer #'portal-rex--close))
         (should buffer-read-only)
         (should-not (buffer-modified-p))
         (should (equal default-directory (expand-file-name "~/"))))
@@ -851,9 +905,13 @@ Each is returned once: a later call returns those asked for since."
                                  (substring-no-properties
                                   (caar (portal-terminal--candidates (list buffer))))))
         (should-not (portal-terminal--annotation buffer))
+        ;; Its own question is the block's, not a local terminal's.
         (should (portal-terminal--kill-query))
-        ;; Closing the terminal there is none of ends nothing.
-        (portal-terminal-close)
+        ;; Closing the terminal ends the block, asking first as killing the
+        ;; buffer does: the fake says nothing of its program, so it may be
+        ;; busy.  Kept, it stays.
+        (should (equal (portal-rex-tests--asking '(nil) (portal-terminal-close))
+                       '("Rex block fake/shell may be busy; end it? ")))
         (should (buffer-live-p buffer))
         ;; Another mode leaves it the block's buffer, but not a terminal.
         (fundamental-mode)
@@ -1173,7 +1231,7 @@ Each is returned once: a later call returns those asked for since."
         (should (equal (portal-rex-tests--names again)
                        '("*rex: left/one*" "*rex: left/two*")))))))
 
-(ert-deftest portal-rex-killing-a-buffer-by-hand-leaves-its-block ()
+(ert-deftest portal-rex-killing-a-buffer-asking-nothing-leaves-its-block ()
   (portal-rex-tests--with (server)
     (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
     (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api")
@@ -1181,8 +1239,13 @@ Each is returned once: a later call returns those asked for since."
     (let* ((connection (portal-rex-tests--connect server))
            (buffer (portal-rex-block-buffer connection "block:1")))
       (portal-rex-tests--asked server connection)
-      ;; It only kills the buffer, and says so.
-      (should (equal (portal-rex-tests--messages (should (kill-buffer buffer)))
+      ;; A kill that runs no question, as when a caller binds the questions
+      ;; away, cannot know the block is idle: it only kills the buffer, and
+      ;; says so.
+      (should (equal (portal-rex-tests--messages
+                       (with-current-buffer buffer
+                         (let ((kill-buffer-query-functions nil))
+                           (should (kill-buffer buffer)))))
                      "Killed only the buffer: block api still runs on its Rex server, and gets a buffer again when Emacs next connects\n"))
       (should-not (portal-rex-block-buffer connection "block:1"))
       (should-not (portal-rex-tests--asked server connection))
@@ -1207,6 +1270,365 @@ Each is returned once: a later call returns those asked for since."
       (portal-rex-disconnect connection)
       (should (equal (portal-rex-tests--names (portal-rex-tests--connect server))
                      '("*rex: work/api*"))))))
+
+;;; Ending a block by killing its buffer
+
+(ert-deftest portal-rex-idle-is-a-shell-at-its-prompt ()
+  ;; The cases the idle spike tried (portal/rex-block-idle-detection.md in
+  ;; the notes): only a block's own shell, reading with its line editor,
+  ;; is idle.
+  (let ((login (lambda (&rest depth) (portal-rex-tests--shell 40 depth)))
+        (alone (lambda (name argv0)
+                 (let ((child (list :pid 7 :user_id 501 :name name :argv0 argv0)))
+                   (list :child child :foreground child :last_exit :null))))
+        (raw portal-rex-tests--raw)
+        (cooked portal-rex-tests--cooked)
+        (pager '(:echo :false :canonical :false :signals t))
+        (editor '(:echo :false :canonical :false :signals :false)))
+    (dolist (case `((t ,raw ,(funcall login))
+                    ;; A shell with jobs, which neither reply shows.
+                    (t ,raw ,(funcall login))
+                    ;; A login shell started with no login above it.
+                    (t ,raw ,(funcall alone "zsh" "-zsh"))
+                    ;; A program, or the shell busy with its own code.
+                    (nil ,cooked ,(funcall login '("sleep" "sleep")))
+                    (nil ,cooked ,(funcall login))
+                    (nil ,editor ,(funcall login '("vim" "vim")))
+                    (nil ,pager ,(funcall login '("git" "git") '("less" "less")))
+                    ;; A nested shell and a subshell, deeper than the shell.
+                    (nil ,raw ,(funcall login '("zsh" "/bin/zsh")))
+                    (nil ,cooked ,(funcall login '("zsh" "-zsh")))
+                    ;; A program the shell exec'd: login in the foreground.
+                    (nil ,cooked ,(let ((reply (funcall login)))
+                                    (plist-put (plist-put reply :foreground (plist-get reply :child))
+                                               :ancestors nil)))
+                    ;; A block started with a command, and a shell not a login one.
+                    (nil ,editor ,(funcall alone "nvim" "nvim"))
+                    (nil ,raw ,(funcall alone "zsh" "zsh"))
+                    ;; A block starting, or between programs: no foreground.
+                    (nil ,raw (:child (:pid 3 :user_id 0 :name "login") :foreground :null
+                               :last_exit :null))
+                    (nil ,raw (:child :null :foreground :null :last_exit :null))
+                    ;; Replies without what the test needs.
+                    (nil nil ,(funcall login))
+                    (nil ,raw nil)))
+      (should (eq (and (portal-rex--idle-p (nth 1 case) (nth 2 case)) t) (car case)))))
+  ;; A program is named as Rex labels it.
+  (should (equal (portal-rex--program (portal-rex-tests--shell 40)) "zsh"))
+  (should (equal (portal-rex--program (portal-rex-tests--shell 40 '(("vim" "/usr/bin/vim"))))
+                 "vim"))
+  (should (equal (portal-rex--program (portal-rex-tests--shell
+                                       40 '(("node" "node" :script "/work/agent.js"))))
+                 "agent.js"))
+  ;; Root's login, in the foreground while a block starts or for a program
+  ;; the shell exec'd, names nothing.
+  (should-not (portal-rex--program '(:foreground (:pid 1 :user_id 0 :name "login"))))
+  (should (equal (portal-rex--program '(:foreground (:pid 1 :user_id 501 :name "login"))) "login"))
+  (should-not (portal-rex--program '(:foreground :null))))
+
+(ert-deftest portal-rex-killing-an-idle-blocks-buffer-ends-it ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+    (portal-rex-tests--blocks server "a"
+                              (append (portal-rex-tests--block "1" "api") '(:window_id "window:1"))
+                              (portal-rex-tests--block "2" "logs")
+                              (portal-rex-tests--block "3" "done"))
+    (let* ((connection (portal-rex-tests--connect server))
+           (api (portal-rex-block-buffer connection "block:1"))
+           (done (portal-rex-block-buffer connection "block:3"))
+           (blocks (portal-rex-connection-blocks connection)))
+      (portal-rex-tests--idle server "block:1")
+      (portal-rex-tests--asked server connection)
+      ;; At its prompt, it ends at once: no question, and nothing said.
+      (should (equal (portal-rex-tests--messages
+                       (should-not (portal-rex-tests--asking nil (should (kill-buffer api)))))
+                     ""))
+      (should-not (buffer-live-p api))
+      (should (equal (portal-rex-tests--request server "block.close")
+                     '(:session_id "session:a" :block_id "block:1")))
+      ;; Its block_closed, and the change to the session's windows, find
+      ;; nothing to do.
+      (portal-rex-tests--until connection (lambda () (not (gethash "block:1" blocks))))
+      (portal-rex-tests--settle connection)
+      (should (equal (portal-rex-tests--names) '("*rex: work/done*" "*rex: work/logs*")))
+      (should (equal (portal-rex-tests--asked server connection)
+                     (append portal-rex-tests--asks '("session.list_blocks"))))
+      ;; A block whose program has exited ends without a question too, the
+      ;; option set to always ask included.
+      (portal-rex-tests--terminal server "block:3" portal-rex-tests--cooked
+                                  '(:child :null :foreground :null :last_exit (:exit_code 0)))
+      (let ((portal-terminal-confirm-kill 'always))
+        (should-not (portal-rex-tests--asking nil (should (kill-buffer done)))))
+      (should (equal (portal-rex-tests--request server "block.close")
+                     '(:session_id "session:a" :block_id "block:3")))
+      (portal-rex-tests--until connection (lambda () (not (gethash "block:3" blocks))))
+      (should (equal (portal-rex-tests--names) '("*rex: work/logs*"))))))
+
+(ert-deftest portal-rex-killing-a-busy-blocks-buffer-asks-first ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api")
+                              (portal-rex-tests--block "2" "agent"))
+    (let* ((connection (portal-rex-tests--connect server))
+           (api (portal-rex-block-buffer connection "block:1"))
+           (agent (portal-rex-block-buffer connection "block:2")))
+      (portal-rex-tests--sleeping server "block:1")
+      (portal-rex-tests--terminal server "block:2" '(:echo :false :canonical :false :signals :false)
+                                  (portal-rex-tests--shell
+                                   40 '(("node" "node" :script "/work/agent.js"))))
+      (portal-rex-tests--asked server connection)
+      ;; Asked, naming the block and its program; no keeps both.
+      (should (equal (portal-rex-tests--asking '(nil) (should-not (kill-buffer api)))
+                     '("Rex block work/api is running sleep; end it? ")))
+      (should (buffer-live-p api))
+      (should (equal (portal-rex-tests--asked server connection) portal-rex-tests--asks))
+      ;; Yes ends it.
+      (should (equal (portal-rex-tests--asking '(t) (should (kill-buffer api)))
+                     '("Rex block work/api is running sleep; end it? ")))
+      (should-not (buffer-live-p api))
+      (should (equal (portal-rex-tests--asked server connection)
+                     (append portal-rex-tests--asks '("block.close"))))
+      ;; An agent is named by its script.
+      (should (equal (portal-rex-tests--asking '(nil) (kill-buffer agent))
+                     '("Rex block work/agent is running agent.js; end it? ")))
+      (should (buffer-live-p agent)))))
+
+(ert-deftest portal-rex-killing-asks-when-the-server-cannot-say ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api"))
+    (let* ((connection (portal-rex-tests--connect server))
+           (api (portal-rex-block-buffer connection "block:1"))
+           (portal-rex--busy-timeout 0.2))
+      (portal-rex-tests--idle server "block:1")
+      (portal-rex-tests--asked server connection)
+      ;; No answer in time: it may be busy, so it asks, saying why, after
+      ;; waiting no longer than the timeout.
+      (portal-fake-rex-command server :silent "com.superlogical.terminal.process")
+      (let ((start (float-time)))
+        (should (equal (portal-rex-tests--asking '(nil) (should-not (kill-buffer api)))
+                       '("Rex block work/api may be busy (no answer within 0.2 seconds); end it? ")))
+        (should (< (- (float-time) start) 1)))
+      (should (buffer-live-p api))
+      ;; The answer that comes too late is forgotten.
+      (should-not (portal-rex-connection-calls connection))
+      (should (equal (portal-rex-tests--asked server connection) portal-rex-tests--asks))
+      ;; An error: the same, in the server's words.
+      (portal-fake-rex-command server :result "com.superlogical.terminal.process"
+                               :payload (portal-rex-tests--shell 40))
+      (portal-fake-rex-command server :error "com.superlogical.terminal.input_mode"
+                               :code "method_not_found" :message "no handler for input_mode"
+                               :status 404)
+      (should (equal (portal-rex-tests--asking '(nil) (should-not (kill-buffer api)))
+                     '("Rex block work/api is running zsh; end it? ")))
+      ;; Named, when the process is known; otherwise by the error.
+      (portal-fake-rex-command server :error "com.superlogical.terminal.process"
+                               :code "not_found" :message "block is gone" :status 404)
+      (should (equal (portal-rex-tests--asking '(nil) (should-not (kill-buffer api)))
+                     '("Rex block work/api may be busy (no handler for input_mode); end it? ")))
+      (should (buffer-live-p api))
+      (should (equal (portal-rex-tests--asked server connection)
+                     (append portal-rex-tests--asks portal-rex-tests--asks)))
+      ;; Yes ends it all the same.
+      (portal-rex-tests--asking '(t) (should (kill-buffer api)))
+      (should (equal (portal-rex-tests--request server "block.close")
+                     '(:session_id "session:a" :block_id "block:1"))))))
+
+(ert-deftest portal-rex-killing-follows-the-option ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "idle")
+                              (portal-rex-tests--block "2" "busy"))
+    (let* ((connection (portal-rex-tests--connect server))
+           (idle (portal-rex-block-buffer connection "block:1"))
+           (busy (portal-rex-block-buffer connection "block:2")))
+      (portal-rex-tests--idle server "block:1")
+      (portal-rex-tests--sleeping server "block:2")
+      (portal-rex-tests--asked server connection)
+      ;; always: an idle block asks too.
+      (let ((portal-terminal-confirm-kill 'always))
+        (should (equal (portal-rex-tests--asking '(nil) (should-not (kill-buffer idle)))
+                       '("End Rex block work/idle, zsh at its prompt? ")))
+        (should (equal (portal-rex-tests--asking '(nil) (should-not (kill-buffer busy)))
+                       '("Rex block work/busy is running sleep; end it? "))))
+      (should (equal (portal-rex-tests--asked server connection)
+                     (append portal-rex-tests--asks portal-rex-tests--asks)))
+      ;; nil: nothing asks, and the server is not asked whether it is busy.
+      (let ((portal-terminal-confirm-kill nil))
+        (should-not (portal-rex-tests--asking nil (should (kill-buffer busy)))))
+      (should (equal (portal-rex-tests--asked server connection) '("block.close")))
+      (should-not (buffer-live-p busy)))))
+
+(ert-deftest portal-rex-killing-ends-nothing-once-the-server-goes ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api"))
+    ;; The server goes while Emacs waits for it to say whether the block is
+    ;; busy: the kill returns, and the buffer has gone with its server.
+    (let* ((connection (portal-rex-tests--connect server))
+           (api (portal-rex-block-buffer connection "block:1"))
+           (portal-rex--busy-timeout 2)
+           (start (float-time)))
+      (portal-fake-rex-command server :hold "com.superlogical.terminal.process")
+      (portal-fake-rex-command server :after "com.superlogical.terminal.process"
+                               :then [(:drop t)])
+      (should (string-match-p
+               "\\`Lost the Rex server at .*\n\\'"
+               (portal-rex-tests--messages
+                 (should-not (portal-rex-tests--asking nil (should-not (kill-buffer api)))))))
+      (should (< (- (float-time) start) 1.5))
+      (should-not (buffer-live-p api))
+      (should-not (portal-rex-live-p connection)))
+    ;; It goes while the question waits for an answer: yes ends nothing,
+    ;; as there is no buffer left and no server to tell.
+    (portal-fake-rex-command server :release "com.superlogical.terminal.process")
+    (portal-fake-rex-take server :disconnected)
+    (let* ((connection (portal-rex-tests--connect server))
+           (api (portal-rex-block-buffer connection "block:1")))
+      (portal-rex-tests--sleeping server "block:1")
+      (cl-letf (((symbol-function 'y-or-n-p)
+                 (lambda (_prompt)
+                   (portal-fake-rex-command server :drop t)
+                   (let ((inhibit-message t))
+                     (portal-rex-tests--until
+                      connection (lambda () (not (portal-rex-connection-id connection)))))
+                   t)))
+        (should-not (kill-buffer api)))
+      (should-not (buffer-live-p api))
+      (portal-fake-rex-take server :disconnected)
+      (should-not (cl-find-if (lambda (report)
+                                (equal (plist-get (plist-get report :request) :method) "block.close"))
+                              (portal-fake-rex-reports server))))
+    ;; A server that takes the end and never answers costs no wait.
+    (portal-fake-rex-command server :silent "block.close")
+    (let* ((connection (portal-rex-tests--connect server))
+           (api (portal-rex-block-buffer connection "block:1"))
+           (start (float-time)))
+      (portal-rex-tests--idle server "block:1")
+      (should (kill-buffer api))
+      (should (< (- (float-time) start) 1))
+      (should (equal (portal-rex-tests--request server "block.close")
+                     '(:session_id "session:a" :block_id "block:1")))
+      ;; Disconnecting before it answers leaves the end in doubt, and says so.
+      (should (equal (portal-rex-tests--messages (portal-rex-disconnect connection))
+                     "Rex block api may still run: the connection ended before the server said it had closed it\n")))
+    ;; One that refuses it says so, and the block keeps running.  (The
+    ;; silent close above closed the block, as a server that never answers
+    ;; might.)
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api"))
+    (portal-fake-rex-command server :error "block.close" :code "conflict"
+                             :message "the block is busy placing" :status 409)
+    (let* ((connection (portal-rex-tests--connect server))
+           (api (portal-rex-block-buffer connection "block:1")))
+      (should api)
+      (should (equal (portal-rex-tests--messages
+                       (should (kill-buffer api))
+                       (portal-rex-tests--settle connection))
+                     "Cannot end Rex block api: the block is busy placing; it still runs, and gets a buffer again when Emacs next connects\n")))))
+
+(ert-deftest portal-rex-kills-the-server-makes-end-nothing ()
+  ;; The buffers Portal kills because a block, a session or a server went
+  ;; ask nothing and end nothing, whatever the option says.
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")
+                                               (:session_id "session:b" :label "play")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "closed")
+                              (portal-rex-tests--block "2" "unlisted")
+                              (portal-rex-tests--block "3" "kept"))
+    (portal-rex-tests--blocks server "b" (portal-rex-tests--block "4" "destroyed"))
+    (dolist (block '("block:1" "block:2" "block:3" "block:4"))
+      (portal-rex-tests--sleeping server block))
+    (let ((portal-terminal-confirm-kill 'always)
+          (connection (portal-rex-tests--connect server)))
+      (portal-rex-tests--asked server connection)
+      (should-not
+       (portal-rex-tests--asking nil
+         (portal-rex-tests--session-event server "a" "block_closed" :block_id "block:1")
+         (portal-rex-tests--blocks server "a" (portal-rex-tests--block "3" "kept"))
+         (portal-rex-tests--session-event server "a" "session_view_changed" :revision 2)
+         (portal-fake-rex-command server :event '(:type "session_destroyed"
+                                                  :payload (:session_id "session:b")))
+         (portal-rex-tests--settle connection)
+         (should (equal (portal-rex-tests--names) '("*rex: work/kept*")))
+         (portal-rex-disconnect connection)
+         (should-not (portal-rex-buffers))
+         ;; A lost connection too.
+         (setq connection (portal-rex-tests--connect server))
+         (portal-fake-rex-command server :drop t)
+         (let ((inhibit-message t))
+           (portal-rex-tests--until connection
+                                    (lambda () (not (portal-rex-connection-id connection)))))
+         (should-not (portal-rex-buffers))))
+      (should-not (cl-intersection (cons "block.close" portal-rex-tests--asks)
+                                   (mapcar (lambda (report)
+                                             (plist-get (plist-get report :request) :method))
+                                           (portal-fake-rex-reports server))
+                                   :test #'equal)))))
+
+(ert-deftest portal-rex-every-way-of-killing-asks-the-same ()
+  (require 'ibuf-ext)
+  (require 'portal-terminal-embark)
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "one")
+                              (portal-rex-tests--block "2" "two")
+                              (portal-rex-tests--block "3" "three")
+                              (portal-rex-tests--block "4" "four"))
+    (let* ((connection (portal-rex-tests--connect server))
+           (buffers (mapcar (lambda (n) (portal-rex-block-buffer connection (format "block:%d" n)))
+                            '(1 2 3 4)))
+           (ask (lambda (name) (format "Rex block work/%s is running sleep; end it? " name)))
+           ;; The blocks it was asked to close since last asked, sorted.
+           (closed (lambda ()
+                     (portal-rex-tests--settle connection)
+                     (let (ids)
+                       (while (cl-find-if (lambda (report)
+                                            (equal (plist-get (plist-get report :request) :method)
+                                                   "block.close"))
+                                          (progn (portal-fake-rex-command server :fragment 0)
+                                                 (portal-fake-rex-reports server)))
+                         (push (plist-get (plist-get (portal-fake-rex-request server "block.close")
+                                                     :payload)
+                                          :block_id)
+                               ids))
+                       (sort ids #'string<)))))
+      (dolist (block '("block:1" "block:2" "block:3" "block:4"))
+        (portal-rex-tests--sleeping server block))
+      ;; Each command asks, naming its block, and no keeps it.
+      (save-window-excursion
+        (switch-to-buffer (nth 0 buffers))
+        (should (equal (portal-rex-tests--asking '(nil) (portal-terminal-close))
+                       (list (funcall ask "one"))))
+        (should (equal (portal-rex-tests--asking '(nil) (portal-terminal-kill-pane))
+                       (list (funcall ask "one"))))
+        (should (equal (portal-rex-tests--asking '(nil)
+                         (portal-terminal-embark-kill (buffer-name (nth 0 buffers))))
+                       (list (funcall ask "one")))))
+      (should (cl-every #'buffer-live-p buffers))
+      (should-not (funcall closed))
+      ;; Several at once, as Ibuffer kills its marked buffers, ask about
+      ;; each busy one by name; an idle one ends without a question.
+      (portal-rex-tests--idle server "block:4")
+      (save-window-excursion
+        (ibuffer nil "*portal-rex-ibuffer*")
+        (unwind-protect
+            (let ((ibuffer-expert t))
+              (ibuffer-mark-on-buffer (lambda (buffer) (memq buffer (cdr buffers))) ?D)
+              (should (equal (portal-rex-tests--asking '(t nil)
+                               (ibuffer-do-kill-on-deletion-marks))
+                             (list (funcall ask "two") (funcall ask "three")))))
+          (kill-buffer "*portal-rex-ibuffer*")))
+      (should (equal (mapcar #'buffer-live-p buffers) '(t nil t nil)))
+      (should (equal (funcall closed) '("block:2" "block:4")))
+      ;; Closing every terminal: those with views, which a graphical Emacs
+      ;; opens as windows show them, the same way.
+      (portal-rex-tests--idle server "block:3")
+      (cl-letf (((symbol-function 'portal-view-buffers)
+                 (lambda (&optional _kind) (list (nth 0 buffers) (nth 2 buffers)))))
+        (should (equal (portal-rex-tests--asking '(t) (portal-terminal-close-all))
+                       (list (funcall ask "one")))))
+      (should-not (cl-some #'buffer-live-p buffers))
+      (should (equal (funcall closed) '("block:1" "block:3"))))))
 
 (ert-deftest portal-rex-connect-does-not-wait-for-ever-for-the-blocks ()
   (portal-rex-tests--with (server)

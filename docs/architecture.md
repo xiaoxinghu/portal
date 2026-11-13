@@ -381,7 +381,12 @@ when the answer comes, since that answer may be the older. An answer can
 also list a block that closed after the server wrote it, so the blocks
 closed while a question is out are remembered and get no buffer, which is
 safe because an ID is never reused. Killing a buffer for the server never
-asks and never calls the server. A buffer killed by hand stays, dead, in
+asks and never calls the server. A buffer killed by hand ends its block: a
+`kill-buffer-query-functions` entry, run after every other, asks the server
+whether the block is busy (`input_mode` and `process`, sent together, a
+quarter of a second at most) and asks the user when it may be, and only
+once the kill goes ahead does `kill-buffer-hook` send `block.close`, without
+waiting. Nothing records which blocks are busy. The dead buffer stays in
 its connection's table until its block closes, so that the block gets no
 second buffer.
 
