@@ -275,7 +275,9 @@ bool portal_web_print(portal_view *web, const portal_string *file, portal_text *
    change.  It answers no query in its output, as whoever produced that
    output has answered it: a second answer would reach the program as
    typing.  It takes neither :command nor :argv, its :directory is
-   optional, its "program" is always "" and it never exits by itself.
+   optional, and it never exits by itself.  It describes no "title",
+   "pwd", "program" or "exited" and reports no change of them: the core
+   describes those of the program it is fed from (rex.h).
 
    A terminal describes itself with "ready", whether its engine can draw and
    take input; "title", which the running program may set, "" until it does;

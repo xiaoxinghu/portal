@@ -239,12 +239,13 @@ and the buffer current."
         (should (equal (plist-get (plist-get state :rex) :columns) (plist-get args :columns))))
       (portal-fake-rex-request server "data.connect")
       (should (equal (plist-get (portal-fake-rex-take server :stream) :stream) "block:fake-1"))
-      (should (equal (plist-get (plist-get (plist-get (portal-fake-rex-request
-                                                       server "com.superlogical.terminal.format")
-                                                      :payload)
-                                           :args)
-                                :format)
-                     "vt"))
+      (let ((args (plist-get (plist-get (portal-fake-rex-request
+                                         server "com.superlogical.terminal.format")
+                                        :payload)
+                             :args)))
+        (should (equal (plist-get args :format) "vt"))
+        ;; The terminal keeps its own theme's palette.
+        (should-not (plist-member args :extra_palette)))
       (portal-fake-rex-request server "com.superlogical.terminal.blob_read")
       (portal-rex-gui-tests--shows target "before Emacs")
       ;; The program's output, split anywhere, with Rex's messages cut out.
@@ -319,6 +320,155 @@ and the buffer current."
                                 :payload)
                      '(:action "out")))
       (portal-rex-gui-tests--none server "com.superlogical.terminal.write"))))
+
+;;; A block's details
+
+(defun portal-rex-gui-tests--event (server name &rest payload)
+  "Have SERVER's block report the terminal event NAME with PAYLOAD."
+  (portal-fake-rex-command server :block_event "block:fake-1" :name name :payload payload))
+
+(defun portal-rex-gui-tests--fact (key)
+  "The fact KEY of the current buffer's terminal, as Portal has it."
+  (plist-get (portal-terminal-metadata) key))
+
+(ert-deftest portal-rex-gui-a-blocks-details-reach-its-buffer ()
+  :tags '(:gui)
+  (portal-fake-rex-with (server)
+    (let* ((base (file-name-as-directory (file-truename (make-temp-file "rex-gui" t))))
+           (start (file-name-as-directory (expand-file-name "start" base)))
+           (spaced (file-name-as-directory (expand-file-name "a b" base))))
+      (make-directory start)
+      (make-directory spaced)
+      (unwind-protect
+          (progn
+            ;; What the block's terminal says before Emacs shows it.
+            (portal-fake-rex-command
+             server :terminal "block:fake-1" :title "before"
+             :process `(:foreground (:pid 7 :name "zsh" :argv0 "-zsh"
+                                     :cwd ,(directory-file-name start))
+                        :last_exit :null))
+            (portal-rex-gui-tests--showing server
+              (let ((buffer (current-buffer)))
+                ;; Asked once, as the block is claimed.
+                (portal-rex-gui-tests--wait
+                 (lambda () (equal (portal-rex-gui-tests--fact :title) "before")))
+                (should (equal (portal-rex-gui-tests--fact :program) "zsh"))
+                (should (equal (portal-rex-gui-tests--fact :directory) start))
+                (should (equal default-directory start))
+                (should (equal portal-rex-block-directory (directory-file-name start)))
+                ;; A program sets the title, and one starts.
+                (portal-rex-gui-tests--event server "title_changed" :title "vim notes.txt"
+                                             :owner '(:pid 9 :name "vim"))
+                (portal-rex-gui-tests--event server "process_changed" :generation 3
+                                             :foreground `(:pid 9 :name "vim" :argv0 "vim"
+                                                           :cwd ,(directory-file-name start)))
+                (portal-rex-gui-tests--wait
+                 (lambda () (equal (portal-rex-gui-tests--fact :program) "vim")))
+                (should (equal (portal-rex-gui-tests--fact :title) "vim notes.txt"))
+                (should (equal (substring-no-properties (portal-terminal--annotation buffer))
+                               "  vim"))
+                ;; The shell reports a new directory: C-x C-f starts there.
+                (portal-rex-gui-tests--event
+                 server "pwd_changed"
+                 :pwd (concat "file://localhost"
+                             (string-replace " " "%20" (directory-file-name spaced))))
+                (portal-rex-gui-tests--wait (lambda () (equal default-directory spaced)))
+                (should (equal (portal-rex-gui-tests--fact :directory) spaced))
+                (should (equal (car (portal-terminal--context)) nil))
+                (should (equal (cdr (portal-terminal--context)) spaced))
+                ;; One from another machine, as from ssh inside the block,
+                ;; is not this Mac's.
+                (portal-rex-gui-tests--event server "pwd_changed"
+                                             :pwd "file://elsewhere.example/srv")
+                (portal-rex-gui-tests--event server "title_changed" :title "after ssh")
+                (portal-rex-gui-tests--wait
+                 (lambda () (equal (portal-rex-gui-tests--fact :title) "after ssh")))
+                (should (equal default-directory spaced))
+                ;; The chooser lists it, by its title and directory.
+                (should (memq buffer (portal-terminal-buffers)))
+                (let ((candidate (car (rassq buffer (portal-terminal--candidates
+                                                     (portal-terminal-buffers))))))
+                  (should (string-search "after ssh" candidate))
+                  (should (string-search (abbreviate-file-name (directory-file-name spaced))
+                                         candidate)))
+                ;; A block made to stay after its program ends says so.
+                (portal-rex-gui-tests--event server "child_exited" :exit_code 0)
+                (portal-rex-gui-tests--wait (lambda () (portal-rex-gui-tests--fact :exited)))
+                (should-not (portal-rex-gui-tests--fact :program))
+                (should (string-search ":exited" (format-mode-line mode-line-process)))
+                (should (buffer-live-p buffer)))))
+        (delete-directory base t)))))
+
+(ert-deftest portal-rex-gui-a-block-whose-program-ends-takes-its-buffer ()
+  :tags '(:gui)
+  (portal-fake-rex-with (server)
+    (portal-rex-gui-tests--showing server
+      (let* ((buffer (current-buffer))
+             exits
+             (watcher (lambda (_symbol value operation where)
+                        (when (and (eq operation 'set) (eq where buffer) value)
+                          (push value exits)))))
+        (add-variable-watcher 'portal-terminal--exited watcher)
+        (unwind-protect
+            (let ((said
+                   (portal-rex-gui-tests--messages
+                    (lambda ()
+                      ;; The shell exits: the server says so, ends the
+                      ;; block's stream and closes the block, as a real
+                      ;; one was seen to, in that order.
+                      (portal-rex-gui-tests--event server "child_exited" :exit_code 0)
+                      (portal-fake-rex-command server :rex "block:fake-1"
+                                               :message '(:type "child_exited" :exit_code 0))
+                      (portal-fake-rex-command server :end_stream "block:fake-1" :code 4000
+                                               :reason "block closed")
+                      (portal-fake-rex-command server :blocks '(:session:fake-1 []))
+                      (portal-fake-rex-command
+                       server :event '(:type "session_event"
+                                       :payload (:session_id "session:fake-1"
+                                                 :event (:type "block_closed"
+                                                         :payload (:block_id "block:fake-1")))))
+                      (portal-rex-gui-tests--wait (lambda () (not (buffer-live-p buffer))))
+                      ;; Long past the moment a block that stayed would say so.
+                      (let ((deadline (+ (float-time) 0.5)))
+                        (while (< (float-time) deadline) (accept-process-output nil 0.05)))))))
+              ;; Its buffer went with it, never having shown that the program
+              ;; exited, nor that the stream ended.
+              (should-not exits)
+              (should-not (string-search "Rex block" said)))
+          (remove-variable-watcher 'portal-terminal--exited watcher))))))
+
+(ert-deftest portal-rex-gui-choosing-a-block-shows-it ()
+  :tags '(:gui)
+  (portal-fake-rex-with (server)
+    (portal-fake-rex-command
+     server :blocks '(:session:fake-1
+                      [(:block_id "block:fake-1" :label "shell" :placement "placed")
+                       (:block_id "block:fake-2" :label "logs" :placement "placed")]))
+    (let ((portal-rex-socket (portal-fake-rex-socket server)))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (switch-to-buffer (get-buffer-create "*rex-gui-elsewhere*"))
+            (portal-rex-connect)
+            (let ((logs (get-buffer "*rex: fake/logs*")))
+              ;; Listed among the terminals before any window shows it.
+              (should (memq logs (portal-terminal-buffers)))
+              (should-not (buffer-local-value 'portal-view--target logs))
+              ;; Chosen, it is shown, and so opens its view.
+              (portal-terminal--visit logs)
+              (should (eq (window-buffer) logs))
+              (redisplay t)
+              (should (buffer-local-value 'portal-view--target logs))
+              (should (equal (plist-get (portal-fake-rex-request server "session.own_block")
+                                        :payload)
+                             '(:session_id "session:fake-1" :block_ids ["block:fake-2"]
+                               :mode "take")))
+              ;; It is the terminal the chooser and next and previous go by.
+              (should (memq logs (portal-terminal-buffers)))
+              (portal-terminal-next)
+              (should (equal (buffer-name) "*rex: fake/shell*"))))
+        (mapc #'portal-rex-disconnect (portal-rex-connections))
+        (kill-buffer "*rex-gui-elsewhere*")))))
 
 (provide 'portal-rex-gui-tests)
 ;;; portal-rex-gui-tests.el ends here

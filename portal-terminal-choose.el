@@ -50,7 +50,8 @@ The string also carries its buffer as its `portal-terminal' property."
                         (propertize
                          (string-join
                           (delq nil (list "" (or project "-")
-                                          (abbreviate-file-name (plist-get entry :directory))
+                                          (and (plist-get entry :directory)
+                                               (abbreviate-file-name (plist-get entry :directory)))
                                           (and title (replace-regexp-in-string
                                                       "[[:cntrl:]]" " " title))))
                           "  ")
@@ -60,9 +61,13 @@ The string also carries its buffer as its `portal-terminal' property."
      buffers data)))
 
 (defun portal-terminal--annotation (buffer)
-  "Return the facts about terminal BUFFER that its candidate leaves out, or nil."
+  "Return the facts about terminal BUFFER that its candidate leaves out, or nil.
+They are the program in its foreground, by its file name, and whether it
+is quick or has exited."
   (when-let* ((entry (and (bufferp buffer) (portal-terminal-metadata buffer)))
-              (facts (delq nil (list (and (plist-get entry :quick) "quick")
+              (facts (delq nil (list (and (plist-get entry :program)
+                                          (file-name-nondirectory (plist-get entry :program)))
+                                     (and (plist-get entry :quick) "quick")
                                      (and (plist-get entry :exited) "exited")))))
     (propertize (concat "  " (string-join facts " ")) 'face 'completions-annotations)))
 
@@ -85,10 +90,13 @@ unless the caller asks it not to, as previews do."
 In a terminal, they are its assigned project and its directory.  Elsewhere,
 DIRECTORY is the frame's editing context, the directory of the file or
 Dired buffer selected last, and PROJECT is its project, or nil."
-  (if (portal-terminal-metadata)
-      (cons portal-terminal--project portal-terminal--directory)
-    (let ((directory (expand-file-name (or (portal-project-context) default-directory))))
-      (cons (portal-project-root directory) directory))))
+  (let ((editing (lambda () (expand-file-name (or (portal-project-context) default-directory)))))
+    (if (portal-terminal-metadata)
+        ;; A terminal whose directory is not known yet starts new ones in
+        ;; the editing context's.
+        (cons portal-terminal--project (or portal-terminal--directory (funcall editing)))
+      (let ((directory (funcall editing)))
+        (cons (portal-project-root directory) directory)))))
 
 (defun portal-terminal--place-name (project directory)
   "Return a short name for PROJECT's root, or for DIRECTORY without one."
@@ -157,7 +165,7 @@ Return the chosen buffer, or `new' or `named'."
   "Select terminal BUFFER where terminals of its kind are shown.
 A quick terminal opens in the quick panel, with keyboard focus.  Any other
 opens in the selected window, or in the editing window behind a quick panel."
-  (unless (and (buffer-live-p buffer) (memq buffer (portal-view-buffers 'terminal)))
+  (unless (portal-terminal--p buffer)
     (user-error "That terminal has closed"))
   (if (buffer-local-value 'portal-terminal--quick-root buffer)
       (progn (portal-terminal-quick--display buffer)

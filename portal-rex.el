@@ -436,6 +436,14 @@ A block's ID never changes and is never reused.")
 A block stays in one session for its whole life.  `portal-rex-session-label'
 returns what the session is called now.")
 
+(defvar-local portal-rex-block-directory nil
+  "The directory of this buffer's block on its Rex server's machine, or nil.
+It is the last directory the block's program reported, or, until one
+does, that of its foreground process; nil until the buffer is first
+shown.  On this Mac's server it is also the buffer's `default-directory',
+as a terminal's directory is.  A block on another machine would keep its
+path here alone, leaving `default-directory' as it is.")
+
 (defvar-local portal-rex--block-label nil
   "The label of this buffer's block, as its server last gave it.")
 
@@ -444,11 +452,14 @@ returns what the session is called now.")
 
 ;; A buffer is its block's whatever mode it is put in.
 (dolist (variable '(portal-rex-block-connection portal-rex-block-id portal-rex-session-id
-                    portal-rex--block-label portal-rex--show-failure))
+                    portal-rex-block-directory portal-rex--block-label portal-rex--show-failure))
   (put variable 'permanent-local t))
 
 (defvar portal-rex--killing nil
   "Non-nil while Portal kills a block's buffer because its block or server went.")
+
+(defvar portal-rex--made 0
+  "How many blocks' buffers have been made: the order of the latest.")
 
 (defun portal-rex-buffers (&optional connection session-id)
   "Return the buffers of the blocks on CONNECTION's Rex server.
@@ -560,6 +571,8 @@ the block needs, and has no view."
                 portal-rex-block-id block-id
                 portal-rex-session-id session-id
                 portal-rex--block-label label
+                ;; A terminal from the start, before its view opens.
+                portal-terminal--elsewhere (cl-incf portal-rex--made)
                 ;; Not the directory of whichever buffer was current when
                 ;; the server spoke.
                 default-directory (expand-file-name "~/"))
@@ -810,6 +823,33 @@ says why; one whose stream ended keeps its last screen."
 
 (setf (alist-get "rex-block" portal-view-record-handlers nil nil #'equal)
       #'portal-rex--block-shown)
+
+;; What the block's terminal reports, its title, directory, program and
+;; exit, reaches its buffer as a terminal's does: the native module follows
+;; the block's events and describes them as the terminal's, so
+;; `portal-terminal-metadata' has them, and a directory from this Mac
+;; becomes `default-directory'.
+
+(defun portal-rex--terminal-changed (state)
+  "Note the block's directory in STATE, what its terminal described.
+On `portal-terminal--changed-functions'."
+  (when portal-rex-block-connection
+    (let ((directory (plist-get (plist-get state :rex) :directory)))
+      (when (and (stringp directory) (not (string-empty-p directory)))
+        (setq portal-rex-block-directory directory)))))
+(add-hook 'portal-terminal--changed-functions #'portal-rex--terminal-changed)
+
+(defun portal-rex--view-closed ()
+  "Forget what a block reported once its buffer's view has closed.
+Nothing follows the block until the view opens again, so its title,
+program and exit would only go stale; its directory stays.  On
+`portal-view-close-hook'."
+  (when portal-rex-block-connection
+    (setq portal-terminal--title nil
+          portal-terminal--program nil
+          portal-terminal--progress nil
+          portal-terminal--exited nil)))
+(add-hook 'portal-view-close-hook #'portal-rex--view-closed)
 
 ;;; Connecting
 
@@ -1176,8 +1216,13 @@ Rex's app, which does not become the session's active one."
     (setq buffer (or (portal-rex-block-buffer connection block-id)
                      (user-error "Started block %s in Rex session %s, but its buffer has not come"
                                  block-id name)))
+    ;; It starts as a terminal started there does: in that directory, and
+    ;; in its project, which the shell changing directory never changes.
     (with-current-buffer buffer
-      (setq default-directory directory))
+      (setq default-directory directory
+            list-buffers-directory directory
+            portal-terminal--directory directory
+            portal-terminal--project (portal-project-root directory)))
     (pop-to-buffer-same-window buffer)
     ;; A graphical Emacs opens the block's view as it shows the buffer.
     (when (display-graphic-p)

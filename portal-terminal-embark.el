@@ -39,9 +39,15 @@ the minibuffer returns to."
   (with-current-buffer (portal-terminal-embark--buffer name)
     (call-interactively #'portal-terminal-rename)))
 
+(defun portal-terminal-embark--directory (name)
+  "Return the directory of the terminal named NAME, or signal that it is unknown.
+A Rex block's is unknown until its buffer is first shown."
+  (or (plist-get (portal-terminal-metadata (portal-terminal-embark--buffer name)) :directory)
+      (user-error "Its directory is not known until it is shown")))
+
 (defun portal-terminal-embark-dired (name)
   "Open Dired in the directory of the terminal named NAME."
-  (dired (plist-get (portal-terminal-metadata (portal-terminal-embark--buffer name)) :directory)))
+  (dired (portal-terminal-embark--directory name)))
 
 (defun portal-terminal-embark-new (name)
   "Start another shell in the directory of the terminal named NAME.
@@ -52,8 +58,7 @@ project of that directory, as any terminal started there does."
 
 (defun portal-terminal-embark-copy-directory (name)
   "Copy the directory of the terminal named NAME to the kill ring."
-  (let ((directory (plist-get (portal-terminal-metadata (portal-terminal-embark--buffer name))
-                              :directory)))
+  (let ((directory (portal-terminal-embark--directory name)))
     (kill-new directory)
     (message "Copied %s" directory)))
 

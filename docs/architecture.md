@@ -110,7 +110,9 @@ active. The macOS platform owns Ghostty types, binding strings such as
 `select_all`, and the system-appearance default theme.
 
 Every platform reports a terminal's `:ready`, `:title`, `:pwd`, `:program`,
-`:columns`, `:rows`, `:points`, a number that may be fractional, and `:exited`. `:title` and `:pwd` hold values last set and
+`:columns`, `:rows`, `:points`, a number that may be fractional, and `:exited`;
+for a [fed terminal](#rex-connections) the core reports `:title`, `:pwd`,
+`:program` and `:exited` instead, those of the block it shows. `:title` and `:pwd` hold values last set and
 reported by the running program, initially `""`; Ghostty forwards only
 percent-decoded working directories reported from this host. `:program` is the
 executable of the pty's foreground process group, `""` until known and once the
@@ -335,9 +337,10 @@ the server translates and Portal never sees another; each request's
 envelope and number; and the one outstanding `rex ID` record. As with a
 hosted app's bridge, messages stay out of the pipe: they wait in the core,
 the first one waiting sends the record, and no other goes until Emacs has
-received them all. The core reads only the responses to requests it made
+received them all. The core reads the responses to requests it made
 itself, to show a block (below), and takes them out before Emacs sees the
-rest; for those it reads the few values it needs with `native/Core/json.c`,
+rest, and the events of the blocks it shows, which it passes on; for those
+it reads the few values it needs with `native/Core/json.c`,
 which finds a member by skipping what comes before it. `portal--rex-open`,
 `portal--rex-request`, `portal--rex-receive`, `portal--rex-wait`,
 `portal--rex-close` and `portal--rex-show` are its Lisp functions.
@@ -452,6 +455,27 @@ owns may draw at the wrong size, which a later task settles. Once a
 stream has failed or ended, what was queued is dropped and nothing more is
 typed: the terminal's last screen no longer changes, and must not run
 commands unseen.
+
+**A block's details are the terminal's.** A terminal's title, directory,
+program and exit reach Lisp the same way whatever runs it: the terminal
+record, then `portal--inspect`, which `portal-terminal.el` caches. For a
+fed terminal the platform describes none of them, since its replica's
+parse would know only part, and the core describes the block's. As it
+claims the block, the core asks the block's terminal once for its
+`title`, `pwd` and `process`, and from then on reads the block's events
+on the control connection, which arrive because it has attached to the
+session: `title_changed`, `pwd_changed`, `process_changed` and
+`child_exited`, and `block_closed`. An event can overtake the answer to
+an earlier request, so each detail keeps the `seq` of what set it, and
+an older one changes nothing. A reported directory counts when it comes
+from this Mac, as Ghostty's own rule has it, and the foreground process's
+working directory stands in until one has. The label of a process is
+Rex's own: its script, else its argv0, else its name. A block's program
+usually ends just before its block closes, which kills its buffer, so the
+core waits a quarter of a second after `child_exited` before it reports
+the exit, or a stream that ended meanwhile, and reports neither once the
+block has closed: a buffer about to go never shows them. The first paint
+asks for no palette, so the terminal keeps its theme's.
 
 The stream and its terminal stay until the buffer goes, shown or not, so
 the first paint happens once per block per Emacs, and a buffer shown again

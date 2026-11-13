@@ -9,7 +9,8 @@
    that names no open connection fails with "No Rex connection ID".
 
    The core owns what every connection says first and how a request is
-   written; it does not read what the server sends.  Messages wait with the
+   written; of what the server sends, it reads only the answers to its own
+   requests and the events of the blocks it shows.  Messages wait with the
    platform, outside the pipe, so a long result never crosses it: the first
    one waiting sends Emacs the record "rex ID", and no other goes until
    Emacs has received them all.  Lisp parses them (portal-rex.el). */
@@ -77,7 +78,15 @@ bool portal_rex_close(uint64_t id, portal_text *error);
    arrives in order, except the terminal's own reports of focus, size and
    colour scheme, which the server makes for itself; a change of who has
    the keyboard is sent as a "focus" block event, and a change of TARGET's
-   grid resizes the block.
+   grid resizes the block.  The paint leaves the server's palette out, so
+   TARGET keeps its own theme's colours.
+
+   As it claims the block, the core also asks for the terminal's title,
+   reported directory and processes, once, and from then on follows the
+   block's events of each: title_changed, pwd_changed, process_changed and
+   child_exited.  An event that overtakes an answer wins, by its seq.  A
+   change tells Emacs with a "terminal TARGET" record, as a terminal's
+   platform does (portal.h).
 
    Fails, starting nothing, for a closed connection, a TARGET that names no
    open fed terminal or shows a block already, or a block that another
@@ -86,15 +95,32 @@ bool portal_rex_close(uint64_t id, portal_text *error);
 bool portal_rex_show(uint64_t id, portal_string target, portal_string session,
                      portal_string block, portal_text *error);
 
-/* For views.c: what TARGET shows, if it shows a block, as the member
-   ,"rex":{"state":STATE,"columns":C,"rows":R} appended to JSON, with
-   "reason" after them once it has failed or ended.  STATE is "starting"
-   until the first paint, then "live", or "failed" or "ended" once the
-   stream will bring nothing more; C and R are the block's grid as the
-   stream last said, 0 until it has.  The core sends Emacs the record
-   "rex-block TARGET" when the state becomes live, failed or ended, and
-   no other until TARGET is described.  Appends nothing for a TARGET that
-   shows no block. */
+/* For views.c: what TARGET shows, if it shows a block, as the members
+   ,"title":T,"pwd":P,"program":G,"exited":E,
+   "rex":{"state":STATE,"columns":C,"rows":R,"directory":P} appended to
+   JSON, with "reason" after them once it has failed or ended.
+
+   T, P, G and E are what a terminal's platform describes of a terminal
+   with its own pty (portal.h), for the block's program: T its title, ""
+   until one is set; P the block's directory, the last its program
+   reported (OSC 7) from this Mac, percent-decoded, and until one does,
+   the working directory of its foreground process, "" until known; G its
+   foreground process, by Rex's label (its script, else its argv0 without
+   a login shell's "-", else its name), "" until known and once the
+   program has exited; and E whether the program has exited and the block
+   stayed.  A block whose program exits usually closes at once, so E waits
+   a quarter of a second for that, and never becomes true for a block that
+   closes.  The block's directory is also the terminal's, as every server
+   Portal reaches is on this Mac.
+
+   STATE is "starting" until the first paint, then "live", or "failed" or
+   "ended" once the stream will bring nothing more; C and R are the
+   block's grid as the stream last said, 0 until it has.  The core sends
+   Emacs the record "rex-block TARGET" when the state becomes live, failed
+   or ended, and no other until TARGET is described; a stream that ends as
+   its program exits or its block closes says so only once the quarter of
+   a second has passed.  Appends nothing for a TARGET that shows no
+   block. */
 void portal_rex_describe(portal_string target, struct json *json);
 
 /* For views.c: TARGET has closed.  Its block's stream ends, and the block

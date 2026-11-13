@@ -6,9 +6,10 @@
 server runs your terminals' programs, so they outlive the applications that
 show them. Portal is becoming a client of that server. Today it can connect to
 one, give each of its blocks a buffer that follows the server and shows the
-block's screen, a terminal you type in, make, rename and destroy sessions,
-start new terminals in them, and call its methods and receive its events from
-Lisp; see [what is not built](#what-is-not-built).
+block's screen, a terminal you type in with its title, directory and
+program, make, rename and destroy sessions, start new terminals in them, and
+call its methods and receive its events from Lisp; see
+[what is not built](#what-is-not-built).
 
 Rex is optional. Portal's own [terminals](terminals.md) run their shells
 themselves and need no Rex installed.
@@ -17,6 +18,9 @@ themselves and need no Rex installed.
 - [A buffer for every block](#a-buffer-for-every-block)
 - [A block's screen](#a-blocks-screen)
 - [Sessions and new terminals](#sessions-and-new-terminals)
+- [A block's details](#a-blocks-details)
+- [Portal's terminal commands](#portals-terminal-commands)
+- [Appearance](#appearance)
 - [Call the server](#call-the-server)
 - [Receive events](#receive-events)
 - [When a connection is lost](#when-a-connection-is-lost)
@@ -107,6 +111,7 @@ mode clears:
 | `portal-rex-block-connection` | The connection to the block's server. It is nil in every other buffer. |
 | `portal-rex-block-id` | The block's ID, such as `"block:01a1…"`, which never changes and is never reused. |
 | `portal-rex-session-id` | The ID of the block's session. A block stays in one session for its whole life. |
+| `portal-rex-block-directory` | The block's directory on its server's machine, as [its details](#a-blocks-details) give it, or nil until a window has shown the buffer. |
 
 A session is an attribute of a buffer, as a directory is: it has no buffer of
 its own, and every grouping is yours to build from these.
@@ -148,8 +153,8 @@ history above it. Typing in the view types into the block's program,
 which runs on the server, so a shell, vim or an agent behaves as in any
 terminal. The view is an ordinary terminal view in every other way: it
 stays in its pane, takes the keyboard with RET or a click, follows the
-frame's text size and `portal-terminal-theme`, and other panes showing the
-buffer show where it is.
+frame's text size and [`portal-terminal-theme`](#appearance), and other
+panes showing the buffer show where it is.
 
 From then on the view keeps up with the block while Emacs is connected,
 whether a window shows the buffer or not, so a buffer you bury and show
@@ -174,8 +179,9 @@ the program next draws its whole screen.
 
 The server sends a block's screen as the escape sequences that redraw it:
 text, history, colours, styles, hyperlinks and the modes a program set,
-such as mouse reporting or the keyboard protocol. Three things do not come
-through:
+such as mouse reporting or the keyboard protocol. Portal leaves out the
+server's palette, as [Appearance](#appearance) says. Three more things do
+not come through:
 
 - **The cursor's shape.** A program that set a bar or an underline cursor
   shows a block until it sets it again.
@@ -298,6 +304,81 @@ started outside any project asks as the default does. A Rex terminal's
 buffer is in the directory it started in, so one started from it joins the
 same project's session. Portal's tests run this example as written here.
 
+## A block's details
+
+A block's buffer knows what its terminal reports, as a local terminal's
+buffer does: its title, its directory, the program in its foreground, and
+whether that program has exited. `portal-terminal-metadata` returns them,
+[choosing a terminal](terminals.md#choosing-terminals) shows them, and the
+directory becomes the buffer's `default-directory`, so `C-x C-f`, Dired and
+a new terminal start where the block's shell is. They come from the
+server, which watches the block's program, not from Emacs:
+
+| Detail | What it is |
+| --- | --- |
+| `:title` | The title a program set last. |
+| `:directory` | The directory the block's program last reported from this Mac, as a shell with Ghostty's integration does at each prompt (OSC 7). Until it reports one, the working directory of the program in the foreground, which follows a plain `cd` too. A directory reported from another machine, such as by a shell reached with ssh inside the block, changes nothing. |
+| `:program` | The program in the foreground, named as Rex names one: the script an interpreter runs, else the name it was started under, else its executable's, a login shell's without its leading `-`. So it is `zsh`, `vim` or `/opt/tool/cli.js`, not always a path as for a local terminal. |
+| `:exited` | Whether the block's program has ended and the block stayed. |
+
+A block whose program ends usually ends with it: `exit` at its shell
+closes the block, and Emacs kills its buffer, with nothing shown on the
+way. A block made to stay after its program ends, such as one started with
+`rex run --keep-open`, keeps its buffer, and its mode line shows
+`:exited` a quarter of a second later, as a local terminal's does.
+
+Until a window first shows a block's buffer, Portal knows none of these:
+the buffer is listed by its name and project alone, and its directory is
+the one a terminal started from Emacs started in, or unknown, with your
+home as its `default-directory`, for a block made elsewhere. Emacs hears of a block's details only
+from the sessions it has attached to, which it does as it shows their
+blocks; asking every block when Emacs connects would cost three questions
+per block for answers that would then go stale. When a window first shows
+the buffer, Portal asks the block for each detail once, and follows its
+changes from then on, whether a window shows it or not. Closing the view
+with `C-c C-k` forgets the title, program and exit until the view opens
+again; the directory stays.
+
+`portal-rex-block-directory` holds the block's directory as a path on its
+server's machine. Every server Portal connects to is on this Mac, so it is
+also the buffer's `default-directory`. Portal never makes a TRAMP
+directory of it.
+
+## Portal's terminal commands
+
+A block's buffer is a terminal to Portal's own terminal commands, from the
+moment Emacs connects:
+
+| Command | On a block's buffer |
+| --- | --- |
+| `portal-terminal-choose`, `portal-terminal-select`, the Consult source | Listed with the other terminals, whether shown yet or not, and annotated with its program. Choosing one shows it, which opens its view; so does previewing one in Consult, which claims the block. |
+| `portal-terminal-choose-project` | Lists it when it belongs to the project: a block started with `portal-rex-new-terminal` belongs to the project it started in, and one made elsewhere to none, until `portal-terminal-set-project` assigns it. |
+| `portal-terminal-next`, `-previous`, `-last`, `-select-index` | Go to it in turn: terminals with views in the order they opened, then the buffers of blocks not yet shown, in the order they were made. |
+| `portal-terminal` | Returns to the first terminal, which may be a block's. |
+| `portal-terminal-set-project` | Assigns it to a project, or to none. |
+| `portal-terminal-rename` | Relabels the block on its server, and the buffer takes its new name, as [above](#sessions-and-new-terminals). |
+| `portal-terminal-new`, `-split-below`, `-split-right`, `portal-terminal-start` | Start one of Portal's own terminals, in the block's directory. `portal-rex-new-terminal` starts a block instead. |
+| `portal-terminal-focus` (`RET`) | Gives the view the keyboard, opening it first if a window shows the buffer. |
+| `portal-terminal-zoom` | Zooms the pane, as for any buffer. |
+| `portal-terminal-close` (`C-c C-k`), `portal-terminal-close-all` | Close the view and leave the block running; the view opens again when a window next shows the buffer. |
+| `portal-terminal-kill-pane`, `kill-buffer` | Kill the buffer only, without asking: the block runs on, as [above](#a-buffer-for-every-block). |
+| Embark's terminal actions | Select, rename, set the project and kill as above; Dired and copying the directory need the block's directory, known once it has been shown; "another shell" starts one of Portal's own terminals there. |
+| `portal-terminal-toggle`, the quick terminal | Never a block's buffer: a project's quick terminal is always one of Portal's own. Toggled from a block's buffer, it goes by the project being edited, as from any other. |
+
+## Appearance
+
+A block's view is drawn with Portal's terminal theme and the frame's text
+size, as any terminal view is: `portal-terminal-theme` and
+`text-scale-adjust` apply to it, and change it at once.
+
+Portal's theme wins over the server's. The server's first paint carries its
+terminal's whole palette, which would give a block Rex's sixteen colours on
+Portal's background and text colours, so Portal asks for the paint without
+it, and leaves out the default colours the server sends on the stream. What
+you see is a block in the same colours as every other terminal in Emacs,
+whatever theme Rex's app uses. A palette a program sets while the view is
+open still applies; one it set before the view opened is not repainted.
+
 ## Call the server
 
 `portal-rex-call` calls one of the server's methods and returns its result:
@@ -352,7 +433,10 @@ A connection receives the events of the server and of every session on it:
 sessions created, renamed and destroyed, blocks created and closed, windows
 changing. It asks for them with `session.attach_all` and the scope `session`,
 which leaves out what a block reports about its own terminal, such as its
-title. [Rex's event reference](https://www.superlogical.com/rex/docs/reference/events)
+title. Once a window has shown one of a session's blocks, Emacs is
+attached to that session too, and its blocks' own events, such as
+`block_event` with `title_changed`, reach the hook as well.
+[Rex's event reference](https://www.superlogical.com/rex/docs/reference/events)
 lists them.
 
 Each event runs `portal-rex-event-functions` with the connection and the
@@ -426,7 +510,6 @@ pin when it would.
 
 Portal's Rex client is being built in steps. Not built yet:
 
-- Titles, directories and programs of Rex terminals, from the server.
 - Ending a block by killing its buffer.
 - Sharing a block's size with Rex's other clients: see [Size](#size).
 - Reconnecting, and resuming a block's output after a dropped connection.

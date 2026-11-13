@@ -73,9 +73,11 @@ meanwhile."
 (defun portal-rex-parity-check-block (connection session-id block-id)
   "Check the calls that show the block BLOCK-ID of SESSION-ID, as the core makes them.
 The native module makes these calls itself, on CONNECTION, and reads
-their answers: attaching, claiming the block, sizing it, a ticket for its
-stream, its screen in VT form read in parts, typing and a focus event.
-The block's screen in VT form, with its palette, is longer than 16 bytes."
+their answers: attaching, claiming the block, asking its terminal's
+title, directory and processes, sizing it, a ticket for its stream, its
+screen in VT form read in parts, typing and a focus event.  The block's
+program runs and has set no title; its screen in VT form, with its
+palette, is longer than 16 bytes."
   (let ((attached (portal-rex-call connection "session.attach" (list :session_id session-id))))
     (should (string-prefix-p "client:" (plist-get attached :client_id)))
     (should (plist-member attached :view)))
@@ -85,6 +87,21 @@ The block's screen in VT form, with its palette, is longer than 16 bytes."
                            :blocks)))
     (should (equal (plist-get (aref owners 0) :block_id) block-id)))
   (let ((block (list :session_id session-id :block_id block-id)))
+    ;; What the terminal reports, which its events then follow.
+    (should (equal (portal-rex-call connection "com.superlogical.terminal.title"
+                                    (append block '(:args nil)))
+                   '(:title "")))
+    (let ((pwd (portal-rex-call connection "com.superlogical.terminal.pwd"
+                                (append block '(:args nil)))))
+      (should (or (null pwd) (stringp (plist-get pwd :pwd)))))
+    (let* ((process (portal-rex-call connection "com.superlogical.terminal.process"
+                                     (append block '(:args nil))))
+           (foreground (plist-get process :foreground)))
+      (should (eq (plist-get process :last_exit) :null))
+      (when foreground
+        (should (integerp (plist-get foreground :pid)))
+        (should (stringp (or (plist-get foreground :script) (plist-get foreground :argv0)
+                             (plist-get foreground :name))))))
     (should-not (portal-rex-call connection "com.superlogical.terminal.resize"
                                  (append block '(:args (:columns 81 :rows 25 :cell_width_px 8
                                                         :cell_height_px 16)))))
