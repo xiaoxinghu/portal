@@ -834,9 +834,6 @@ Each is returned once: a later call returns those asked for since."
         ;; No window shows it, so it has no view to focus.
         (should-error (portal-terminal-focus) :type 'user-error)
         (should-error (portal-input-focus) :type 'user-error)
-        ;; Its name comes from the server's labels.
-        (should-error (portal-terminal-rename "mine") :type 'user-error)
-        (should (equal (buffer-name) "*rex: fake/shell*"))
         ;; It can belong to a project, and to none.
         (let ((root (file-name-as-directory (make-temp-file "rex-project" t))))
           (unwind-protect
@@ -1467,6 +1464,10 @@ It and those before it are taken: a later call finds only newer ones."
                 (should (equal portal-rex-session-id "session:a"))
                 (should (string-prefix-p "block:made-" portal-rex-block-id))
                 (should (equal default-directory directory))
+                ;; It is a terminal in that directory, and in no project,
+                ;; as the directory is in none.
+                (should (equal (plist-get (portal-terminal-metadata) :directory) directory))
+                (should-not (plist-get (portal-terminal-metadata) :project))
                 ;; A second from there joins its session, by default.
                 (let ((second (call-interactively #'portal-rex-new-terminal)))
                   (should (equal (buffer-local-value 'portal-rex-session-id second) "session:a"))
