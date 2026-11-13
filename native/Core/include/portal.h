@@ -275,7 +275,11 @@ bool portal_web_print(portal_view *web, const portal_string *file, portal_text *
    its output is laid out for, whatever the size of its pane; until the
    core gives one, it fills its pane.  It reports the grid its pane would
    hold, at its text's cell size, with portal_terminal_grid, once it can
-   and at each change.  It answers no query in its output, as whoever
+   and at each change.  It parses off the module thread, and reports with
+   portal_terminal_backlog when the output fed and not yet parsed passes
+   PORTAL_TERMINAL_BACKLOG bytes, and again when it falls back to a quarter
+   of that, so that the core stops feeding it meanwhile.  It answers no
+   query in its output, as whoever
    produced that output has answered it: a second answer would reach the
    program as typing.  It takes neither :command nor :argv, its :directory is
    optional, and it never exits by itself.  It describes no "title",
@@ -341,6 +345,9 @@ bool portal_terminal_hold_grid(portal_view *terminal, uint32_t columns, uint32_t
 /* The size of a terminal's text, in points: the one it starts at without
    :points, and the smallest and largest it is shown at. */
 enum {
+    /* A fed terminal's output waiting to be parsed, in bytes, at which it
+       reports a backlog. */
+    PORTAL_TERMINAL_BACKLOG = 1 << 19,
     PORTAL_TERMINAL_POINTS = 14,
     PORTAL_TERMINAL_MIN_POINTS = 6,
     PORTAL_TERMINAL_MAX_POINTS = 72,
@@ -403,8 +410,14 @@ bool portal_view_paste(portal_view *view, portal_text *error);
    replaced, or on a binary socket the bytes it sent, as they are.  Read sets *ENDED to whether the connection has ended, so that
    these messages are its last, and then *REASON to why, for people: the
    server could not be reached, refused the upgrade, closed the connection,
-   broke the protocol, or went away.  A connection ends once, and nothing
-   arrives after it; otherwise *REASON stays unset.
+   broke the protocol, or went away; and *CODE to the status of the
+   server's close frame, such as 1000, or 0 when the connection ended
+   without one, as when it dropped.  A connection ends once, and nothing
+   arrives after it; otherwise *REASON stays unset and *CODE 0.
+
+   What arrives on a binary socket and has not been read is bounded: past
+   PORTAL_SOCKET_UNREAD bytes, the platform stops reading the socket until
+   the core reads, so a core that stops reading holds the server back.
 
    Wait returns once Read would return a message or the end, or after
    MILLISECONDS, whichever comes first, and sets *READY to which: the one
@@ -422,7 +435,8 @@ bool portal_socket_open(uint64_t socket, portal_string path, portal_string resou
                         portal_string protocol, bool binary, portal_text *error);
 bool portal_socket_send(uint64_t socket, portal_string text, portal_text *error);
 bool portal_socket_read(uint64_t socket, portal_text **messages, size_t *count, bool *ended,
-                        portal_text *reason, portal_text *error);
+                        int *code, portal_text *reason, portal_text *error);
+enum { PORTAL_SOCKET_UNREAD = 1 << 20 };
 bool portal_socket_wait(uint64_t socket, uint64_t milliseconds, bool *ready, portal_text *error);
 bool portal_socket_close(uint64_t socket, portal_text *error);
 
@@ -557,6 +571,11 @@ void portal_terminal_input(portal_string target, const char *bytes, size_t lengt
    size alone included. */
 void portal_terminal_grid(portal_string target, uint32_t columns, uint32_t rows,
                           uint32_t cell_width, uint32_t cell_height);
+/* TARGET, a fed terminal, has more output waiting to be parsed than
+   PORTAL_TERMINAL_BACKLOG bytes (BACKLOGGED), or no more than a quarter of
+   that again.  Reported at each change, the last report saying how it is
+   now.  The core ignores a call for a target that names no fed terminal. */
+void portal_terminal_backlog(portal_string target, bool backlogged);
 /* POINTS, a terminal's text size from Lisp, clamped to
    PORTAL_TERMINAL_MIN_POINTS to PORTAL_TERMINAL_MAX_POINTS: the size a new
    terminal starts at.  Lisp derives sizes from Emacs's fonts, so one out of

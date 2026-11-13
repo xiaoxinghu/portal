@@ -32,6 +32,7 @@
 (declare-function portal--rex-close "portal-rex" (id))
 (declare-function portal--rex-show "portal-rex" (id target session-id block-id))
 (declare-function portal--rex-take "portal-rex" (target))
+(declare-function portal--rex-resume "portal-rex" (id))
 (declare-function portal--inspect "portal-view" (target))
 (declare-function ibuffer-current-buffer "ibuffer" (&optional must-be-live))
 (declare-function ibuffer-update "ibuffer" (arg &optional silent))
@@ -86,7 +87,9 @@ is called.")
   (id nil :documentation "The native module's number for it, or nil once it has ended.")
   (socket nil :documentation "The server's Unix socket, an absolute file name.")
   (state 'connecting
-         :documentation "`connecting', `attaching', `ready' or `closed'.")
+         :documentation "`connecting', `attaching', `ready', `lost' or `closed'.
+A connection that is lost connects again by itself, and is `attaching'
+again once its server has taken it back.")
   (welcome nil :documentation "The server's welcome, with the `:api_revision' it speaks.")
   (sessions nil
             :documentation "The server's sessions, a vector of plists with `:session_id' and
@@ -106,6 +109,13 @@ comes, and the IDs of the blocks closed since asking.")
   (opening nil
            :documentation "While it opens without anyone waiting, (FUNCTION . TIMER): who to
 tell once it is ready, or has failed, and the timer that gives up.")
+  (dropped nil
+           :documentation "Whether the module has said the connection was lost, and it is
+not back: the loss is known before it is handled, behind earlier events.")
+  (gone nil
+        :documentation "While the connection comes back after a loss, the blocks it had
+then, as (BLOCK-ID . NAME): those that are gone once the buffers match
+the server again are named in one message.")
   (reason nil :documentation "Why it ended, once it has, when anything said."))
 
 (defvar portal-rex--connections nil
@@ -117,7 +127,8 @@ tell once it is ready, or has failed, and the timer that gives up.")
 
 (defun portal-rex-live-p (connection)
   "Return non-nil if CONNECTION takes calls and delivers events."
-  (and (portal-rex--ready-p connection) (portal-rex-connection-id connection) t))
+  (and (portal-rex--ready-p connection) (portal-rex-connection-id connection)
+       (not (portal-rex-connection-dropped connection))))
 
 (defun portal-rex--ready-p (connection)
   "Return non-nil if CONNECTION's events run the hook.
@@ -171,7 +182,10 @@ them.  It takes effect once this returns, in whoever waits."
       (when reason (setf (portal-rex-connection-id connection) nil))
       (while texts
         (if-let* ((message (portal-rex--parse (pop texts))))
-            (push message messages)
+            (progn
+              (when (equal (plist-get message :type) "portal_lost")
+                (setf (portal-rex-connection-dropped connection) t))
+              (push message messages))
           ;; A server that sends anything else is not one to go on with:
           ;; what it sent after that is dropped with the connection.
           (when (portal-rex-connection-id connection)
@@ -188,8 +202,8 @@ them.  It takes effect once this returns, in whoever waits."
 (defun portal-rex--next (connection)
   "Remove and return the next of CONNECTION's waiting messages to handle.
 That is the oldest, except while an event's functions run: then it is
-the oldest that is not an event, and the end of the connection stays
-where it is, behind the events before it, once it has failed the
+the oldest that is not an event, and the end or loss of the connection
+stays where it is, behind the events before it, once it has failed the
 requests still waiting, so that whoever waits for one returns."
   (let ((inbox (portal-rex-connection-inbox connection)))
     (if (not (portal-rex-connection-handling connection))
@@ -197,7 +211,7 @@ requests still waiting, so that whoever waits for one returns."
       (when-let* ((message (cl-find-if-not (lambda (waiting)
                                              (equal (plist-get waiting :type) "event"))
                                            inbox)))
-        (if (eq (plist-get message :type) 'ended)
+        (if (member (plist-get message :type) '(ended "portal_lost"))
             (ignore (portal-rex--fail-calls connection (plist-get message :reason)))
           (setf (portal-rex-connection-inbox connection) (delq message inbox))
           message)))))
@@ -231,19 +245,26 @@ connection again: its messages, the end among them, are in Emacs already."
   "Handle what was left of CONNECTION's messages, or of its failing requests."
   (setf (portal-rex-connection-resume connection) nil)
   (let ((inhibit-quit t))
-    (if (eq (portal-rex-connection-state connection) 'closed)
-        (portal-rex--fail-calls connection (portal-rex-connection-reason connection))
+    (when (memq (portal-rex-connection-state connection) '(lost closed))
+      (portal-rex--fail-calls connection (portal-rex-connection-reason connection)))
+    (unless (eq (portal-rex-connection-state connection) 'closed)
       (portal-rex--drain connection))))
 
 (defun portal-rex--handle (connection message)
   "Handle MESSAGE, which arrived on CONNECTION."
   (pcase (plist-get message :type)
     ("welcome"
-     (setf (portal-rex-connection-welcome connection) message)
-     ;; Opening without anyone waiting, it attaches as soon as it is welcomed.
-     (when (and (portal-rex-connection-opening connection)
-                (eq (portal-rex-connection-state connection) 'connecting))
-       (portal-rex--attach connection)))
+     (let ((lost (eq (portal-rex-connection-state connection) 'lost)))
+       (setf (portal-rex-connection-welcome connection) message)
+       (cond
+        (lost (portal-rex--back connection))
+        ;; Opening without anyone waiting, it attaches as soon as it is welcomed.
+        ((and (portal-rex-connection-opening connection)
+              (eq (portal-rex-connection-state connection) 'connecting))
+         (portal-rex--attach connection)))))
+    ;; The module's own message: the connection dropped, and it connects
+    ;; again by itself.
+    ("portal_lost" (portal-rex--lost connection (plist-get message :reason)))
     ("response"
      (let* ((id (plist-get message :id))
             (call (and (stringp id)
@@ -307,6 +328,7 @@ server.  Every request still waiting fails, oldest first."
           (inhibit-quit t))
       (setf (portal-rex-connection-id connection) nil
             (portal-rex-connection-state connection) 'closed
+            (portal-rex-connection-gone connection) nil
             (portal-rex-connection-reason connection) reason
             (portal-rex-connection-inbox connection) nil
             (portal-rex-connection-held connection) nil
@@ -319,6 +341,76 @@ server.  Every request still waiting fails, oldest first."
       (portal-rex--run #'portal-rex--forget-blocks connection)
       (portal-rex--fail-calls connection reason)
       (portal-rex--opened connection (portal-rex--cannot connection reason)))))
+
+(defvar-local portal-rex--disconnected nil
+  "Non-nil in a block's buffer while its server is lost, and Emacs connects again.")
+(put 'portal-rex--disconnected 'permanent-local t)
+
+(defun portal-rex--lost (connection reason)
+  "Note that CONNECTION was lost because of REASON, and connects again by itself.
+Unlike an end, a loss keeps the blocks' buffers and their screens: each
+is marked disconnected, and typing in one goes nowhere.  Requests still
+waiting fail, and new ones fail until the server is back.  Said once in
+the echo area, however long the tries take."
+  (unless (memq (portal-rex-connection-state connection) '(lost closed))
+    (let ((ready (portal-rex--ready-p connection))
+          (inhibit-quit t))
+      (setf (portal-rex-connection-state connection) 'lost
+            (portal-rex-connection-reason connection) reason
+            (portal-rex-connection-lists connection) nil
+            (portal-rex-connection-held connection) nil)
+      ;; A loss while coming back keeps the blocks of the first.
+      (unless (portal-rex-connection-gone connection)
+        (setf (portal-rex-connection-gone connection)
+              (or (mapcar (lambda (buffer)
+                            (cons (buffer-local-value 'portal-rex-block-id buffer)
+                                  (buffer-name buffer)))
+                          (portal-rex-buffers connection))
+                  (list nil))))
+      (portal-rex--run #'portal-rex--mark connection t)
+      (when ready
+        (message "Lost the Rex server at %s: %s; connecting again"
+                 (portal-rex--named connection) reason))
+      (portal-rex--fail-calls connection reason))))
+
+(defun portal-rex--back (connection)
+  "Attach CONNECTION again, now that its server has taken it back.
+Its sessions and buffers are then made to match the server, as on first
+connecting, and the blocks it shows resume (`portal-rex--reconciled')."
+  (setf (portal-rex-connection-dropped connection) nil)
+  (portal-rex--run #'portal-rex--attach connection))
+
+(defun portal-rex--reconciled (connection)
+  "Finish CONNECTION's return: its buffers match the server again.
+The blocks it shows resume, those a window shows get their views, and
+one message says what went meanwhile."
+  (let* ((before (delq nil (mapcar #'car (portal-rex-connection-gone connection))))
+         (went (cl-remove-if (lambda (block-id)
+                               (portal-rex-block-buffer connection block-id))
+                             before))
+         (names (mapcar (lambda (block-id)
+                          (cdr (assoc block-id (portal-rex-connection-gone connection))))
+                        went)))
+    (setf (portal-rex-connection-gone connection) nil)
+    (portal-rex--mark connection nil)
+    ;; Lost again meanwhile, it resumes when it is next back.
+    (when-let* ((id (portal-rex-connection-id connection)))
+      (ignore-errors (portal--rex-resume id)))
+    (portal-rex--show-shown)
+    (message "Back on the Rex server at %s%s" (portal-rex--named connection)
+             (pcase (length went)
+               (0 "")
+               (1 (format "; its block %s went meanwhile" (car names)))
+               (count (format "; %d of its blocks went meanwhile: %s" count
+                              (string-join names ", ")))))))
+
+(defun portal-rex--mark (connection disconnected)
+  "Mark the buffers of CONNECTION's blocks DISCONNECTED, or not."
+  (dolist (buffer (portal-rex-buffers connection))
+    (with-current-buffer buffer
+      (setq portal-rex--disconnected disconnected)
+      (portal-rex--describe-block)
+      (force-mode-line-update))))
 
 (defun portal-rex--record (id &rest _)
   "Handle the record that messages wait on the native connection ID."
@@ -341,6 +433,8 @@ between them, never while messages are taken and handled."
     (portal-rex--pump connection)
     (while (and (not (setq result (funcall done)))
                 (portal-rex-connection-id connection)
+                ;; A lost connection answers nothing until it is back.
+                (not (portal-rex-connection-dropped connection))
                 (< (float-time) deadline))
       (portal--rex-wait (portal-rex-connection-id connection)
                         (max 1 (min 50 (ceiling (* 1000 (- deadline (float-time)))))))
@@ -352,8 +446,9 @@ between them, never while messages are taken and handled."
 (defun portal-rex--request (connection method payload function)
   "Ask CONNECTION's server to run METHOD with PAYLOAD; return the request's number.
 FUNCTION is called with the response, a plist, once it arrives; if the
-connection ends first, with one whose `:error' says so."
-  (unless (portal-rex-connection-id connection)
+connection ends first, or is lost, with one whose `:error' says so."
+  (unless (and (portal-rex-connection-id connection)
+               (not (portal-rex-connection-dropped connection)))
     (signal 'portal-rex-error
             (list (format "%s: not connected to the Rex server at %s" method
                           (portal-rex--named connection))
@@ -564,10 +659,13 @@ instead, which this leaves alone."
                       (or (portal-rex-session-label) portal-rex-session-id)
                       portal-rex-block-id
                       (portal-rex--named portal-rex-block-connection)
-                      (if portal-rex--show-failure
-                          (format "Its screen could not be shown: %s\nShowing the buffer again tries again."
-                                  portal-rex--show-failure)
-                        "Its screen is shown here once a window shows this buffer."))))))
+                      (cond
+                       (portal-rex--disconnected
+                        "The server is lost: Emacs is connecting again by itself.")
+                       (portal-rex--show-failure
+                        (format "Its screen could not be shown: %s\nShowing the buffer again tries again."
+                                portal-rex--show-failure))
+                       (t "Its screen is shown here once a window shows this buffer.")))))))
 
 (defun portal-rex--make-buffer (connection session-id block-id label)
   "Make and return the buffer of the block BLOCK-ID, called LABEL.
@@ -607,6 +705,8 @@ the block needs, and has no view."
                 portal-terminal--closer #'portal-rex--close)
           (portal-rex--restorable)
           (when placeholder (portal-rex--keep-name))
+          (setq mode-line-process
+                (append mode-line-process '((portal-rex--disconnected ":disconnected"))))
           (portal-rex--describe-block)
           (puthash block-id buffer (portal-rex-connection-blocks connection))
           (setq ready t))
@@ -661,7 +761,7 @@ The block has gone, or the connection has: nothing asks, whatever is on
 One request for a session is out at a time.  Asked for again meanwhile,
 the session is asked once more when that answer comes, as the answer may
 be older than the change that asked."
-  (when (portal-rex-connection-id connection)
+  (when (portal-rex-live-p connection)
     (if-let* ((asked (assoc session-id (portal-rex-connection-lists connection))))
         (setcar (cdr asked) t)
       (portal-rex--request connection "session.list_blocks" (list :session_id session-id)
@@ -715,7 +815,15 @@ was killed by hand."
                                           (equal (alist-get 'session record) session-id)))))
       (when (cadr asked)
         (portal-rex--list-blocks connection session-id))
-      (portal-rex--check-opened connection))))
+      (portal-rex--check-opened connection)
+      (portal-rex--settled connection))))
+
+(defun portal-rex--settled (connection)
+  "Finish CONNECTION's return once every session's blocks are listed."
+  (when (and (portal-rex-connection-gone connection)
+             (portal-rex-live-p connection)
+             (null (portal-rex-connection-lists connection)))
+    (portal-rex--reconciled connection)))
 
 (defun portal-rex--follow (connection event)
   "Bring CONNECTION's sessions and its blocks' buffers up to date with EVENT.
@@ -799,6 +907,8 @@ A buffer whose view could not open waits until a window shows it again."
   (dolist (window (window-list-1 nil 'nomini t))
     (let ((buffer (window-buffer window)))
       (when (and (buffer-local-value 'portal-rex-block-connection buffer)
+                 (portal-rex-live-p (buffer-local-value 'portal-rex-block-connection buffer))
+                 (not (buffer-local-value 'portal-rex--disconnected buffer))
                  (not (buffer-local-value 'portal-view--target buffer))
                  (not (memq buffer portal-rex--failed-shows))
                  (eq (portal-rex-block-buffer
@@ -854,7 +964,11 @@ says why; one whose stream ended keeps its last screen."
        (message "Cannot show Rex block %s: %s" portal-rex--block-label portal-rex--show-failure))
       ("ended"
        ;; A block that closed takes its buffer with it, as its event says.
-       (message "Rex block %s: %s" portal-rex--block-label (plist-get state :reason))))))
+       (message "Rex block %s: %s" portal-rex--block-label (plist-get state :reason)))
+      ("disconnected"
+       (when (eq (plist-get state :typed) t)
+         (message "Rex block %s is not connected: what you type goes nowhere until its server is back"
+                  portal-rex--block-label))))))
 
 (setf (alist-get "rex-block" portal-view-record-handlers nil nil #'equal)
       #'portal-rex--block-shown)
@@ -1002,7 +1116,8 @@ On `kill-buffer-query-functions' in a block's buffer, after every other
 function there.  An idle block, or one whose program has ended, ends
 without a question; one that may be busy asks first, naming its program.
 `portal-terminal-confirm-kill' can make it always ask, or never.  A
-buffer whose server is no longer connected only goes."
+buffer whose server is no longer connected only goes, as does one whose
+server is lost while Emacs asks it, or asks the user."
   (setq portal-rex--ending nil)
   (let ((buffer (current-buffer))
         (connection portal-rex-block-connection))
@@ -1017,7 +1132,8 @@ buffer whose server is no longer connected only goes."
                            portal-rex--block-label))
              (state (portal-rex--block-state connection portal-rex-session-id portal-rex-block-id))
              (program (plist-get state :program))
-             (end (or (eq (plist-get state :state) 'ended)
+             (end (or (not (portal-rex-live-p connection))
+                      (eq (plist-get state :state) 'ended)
                       (and (eq (plist-get state :state) 'idle)
                            (not (eq portal-terminal-confirm-kill 'always)))
                       ;; The server may have gone meanwhile, and the buffer
@@ -1035,8 +1151,10 @@ buffer whose server is no longer connected only goes."
                              (t (format "Rex block %s may be busy; end it? " name))))))))
         ;; A buffer that went while the server was asked, or the question
         ;; was, has gone with its server: there is nothing left to end.
-        (and end (buffer-live-p buffer)
-             (with-current-buffer buffer (setq portal-rex--ending t))))))))
+        ;; One whose server was lost meanwhile can end nothing.
+        (and end (buffer-live-p buffer) (portal-rex-live-p connection)
+             (with-current-buffer buffer (setq portal-rex--ending t)))
+        end)))))
 (put 'portal-rex--kill-query 'permanent-local-hook t)
 
 (defun portal-rex--buffer-killed ()
@@ -1168,13 +1286,20 @@ Each session is asked for its blocks, which makes their buffers."
             (nconc (cl-delete-if-not (lambda (event) (> (or (plist-get event :seq) 0) seq))
                                      held)
                    (portal-rex-connection-inbox connection)))
+      ;; Back after a loss: the blocks of sessions that went, as on a
+      ;; server that restarted, go too.
+      (dolist (buffer (portal-rex-buffers connection))
+        (unless (portal-rex--session connection
+                                     (buffer-local-value 'portal-rex-session-id buffer))
+          (portal-rex--kill-buffer connection (buffer-local-value 'portal-rex-block-id buffer))))
       (seq-doseq (session (portal-rex-connection-sessions connection))
         (portal-rex--list-blocks connection (plist-get session :session_id)))
       ;; A placeholder of a session the server no longer has waits for nothing.
       (portal-rex--give-up connection (lambda (record)
                                         (not (portal-rex--session connection
                                                                   (alist-get 'session record)))))
-      (portal-rex--check-opened connection))))
+      (portal-rex--check-opened connection)
+      (portal-rex--settled connection))))
 
 (defun portal-rex--attach (connection)
   "Ask CONNECTION's server, which has welcomed it, for every session's events.
@@ -1227,7 +1352,10 @@ of the server and of its sessions.  The connection's
         (user-error "%s" (portal-rex--cannot existing (portal-rex-connection-reason existing)))))
      (existing
       (when (called-interactively-p 'any)
-        (message "Already connected to the Rex server at %s" (portal-rex--named existing)))
+        (message (if (portal-rex-live-p existing)
+                     "Already connected to the Rex server at %s"
+                   "The Rex server at %s is lost; Emacs is connecting again by itself")
+                 (portal-rex--named existing)))
       existing)
      ((not (file-exists-p socket))
       (user-error "No Rex server is running: there is no socket at %s"
@@ -1356,8 +1484,9 @@ have their buffers yet; they come when the server's answers do."
 
 (defun portal-rex--read-connection (&optional prompt)
   "Return the live connection the user means, reading it if there are several.
-PROMPT reads it, by default for disconnecting."
-  (let ((connections (portal-rex-connections)))
+PROMPT reads it.  Without PROMPT, it is for disconnecting, which takes a
+lost connection too."
+  (let ((connections (if prompt (portal-rex-connections) portal-rex--connections)))
     (cond
      ((null connections)
       (user-error "Not connected to a Rex server; use M-x portal-rex-connect"))

@@ -377,10 +377,14 @@ Connections that BODY leaves are closed, and none may remain."
   ;; connection ends.  The function's call returns, the events that had
   ;; arrived still run, in order, and only then is the connection lost.
   (dolist (case '((:silent [(:event (:type "two")) (:event (:type "three")) (:drop t)]
-                   "portal_disconnected" "The connection to the server was lost")
+                   "portal_disconnected" "The connection to the server was lost" lost)
                   ;; The same when the server answers first, then closes.
                   (:result [(:event (:type "two")) (:event (:type "three")) (:close 1000)]
-                   answered "The server closed the connection (1000)")))
+                   answered "The server closed the connection (1000)" lost)
+                  ;; And when it ends the connection for good.
+                  (:result [(:event (:type "two")) (:event (:type "three"))
+                            (:close 1002 :reason "protocol error")]
+                   answered "The server closed the connection (1002: protocol error)" closed)))
     (portal-rex-tests--with (server)
       (let* ((connection (portal-rex-tests--connect server))
              seen outcome live
@@ -399,10 +403,11 @@ Connections that BODY leaves are closed, and none may remain."
         (should (equal (portal-rex-tests--messages
                          (portal-rex-tests--until
                           connection
-                          (lambda () (eq (portal-rex-connection-state connection) 'closed))))
-                       (format "Lost the Rex server at %s: %s\n"
+                          (lambda () (eq (portal-rex-connection-state connection) (nth 4 case)))))
+                       (format "Lost the Rex server at %s: %s%s\n"
                                (abbreviate-file-name (portal-fake-rex-socket server))
-                               (nth 3 case))))
+                               (nth 3 case)
+                               (if (eq (nth 4 case) 'lost) "; connecting again" ""))))
         (should (equal outcome (nth 2 case)))
         (should (equal (reverse seen) '("one" "returned" "two" "three")))
         ;; Once its call has failed, the function sees that the connection is gone.
@@ -443,12 +448,12 @@ Connections that BODY leaves are closed, and none may remain."
                         ;; The first request's function quits too, out of the timer.
                         (condition-case nil (accept-process-output nil 0.05) (quit nil)))))))
         (should (equal said
-                       (format "Lost the Rex server at %s: The connection to the server was lost\n"
+                       (format "Lost the Rex server at %s: The connection to the server was lost; connecting again\n"
                                (abbreviate-file-name (portal-fake-rex-socket server))))))
       (should (equal (reverse seen) '("one" "two" "three")))
       (should (equal (reverse answers)
                      '((first "portal_disconnected") (second "portal_disconnected"))))
-      (should (eq (portal-rex-connection-state connection) 'closed))
+      (should (eq (portal-rex-connection-state connection) 'lost))
       (should-not (portal-rex-connection-resume connection)))))
 
 (ert-deftest portal-rex-quit-while-a-call-waits-loses-no-message ()
@@ -533,10 +538,10 @@ arrives as C-g does, by `quit-flag', the first time NATIVE is called."
       (portal-fake-rex-command server :drop t)
       (should (equal (portal-rex-tests--messages
                        (portal-rex-tests--until
-                        connection (lambda () (not (portal-rex-connection-id connection))))
+                        connection (lambda () (eq (portal-rex-connection-state connection) 'lost)))
                        ;; Handling it again, as a late record would, says nothing more.
                        (portal-rex--pump connection))
-                     (format "Lost the Rex server at %s: The connection to the server was lost\n"
+                     (format "Lost the Rex server at %s: The connection to the server was lost; connecting again\n"
                              name)))
       ;; Every waiting request fails, oldest first.
       (should (equal (reverse answers)
@@ -554,19 +559,24 @@ arrives as C-g does, by `quit-flag', the first time NATIVE is called."
                                 :code)
                      "portal_disconnected"))
       (should-error (portal-rex-call nil "session.list") :type 'user-error)
+      ;; Connecting again to it gives the connection that is coming back.
+      (should (eq (portal-rex-tests--connect server) connection))
+      ;; Disconnecting ends it for good, and then a new one works.
+      (portal-rex-disconnect connection)
+      (should (eq (portal-rex-connection-state connection) 'closed))
       (let ((again (portal-rex-tests--connect server)))
         (should-not (eq again connection))
         (should (portal-rex-call again "session.list"))
-        ;; A server that says goodbye gives its reason.
-        (portal-fake-rex-command server :close 1001 :reason "going away")
+        ;; A server that ends the connection for good gives its reason.
+        (portal-fake-rex-command server :close 1002 :reason "protocol error")
         (portal-fake-rex-take server :disconnected)
         (should (equal (portal-rex-tests--messages
                          (portal-rex-tests--until
                           again (lambda () (not (portal-rex-connection-id again)))))
-                       (format "Lost the Rex server at %s: The server closed the connection (1001: going away)\n"
+                       (format "Lost the Rex server at %s: The server closed the connection (1002: protocol error)\n"
                                name)))
         ;; The server's goodbye is answered before the line goes.
-        (should (equal (plist-get (portal-fake-rex-take server :disconnected) :code) 1001))))))
+        (should (equal (plist-get (portal-fake-rex-take server :disconnected) :code) 1002))))))
 
 (ert-deftest portal-rex-waiting-call-ends-with-its-connection ()
   (portal-rex-tests--with (server)
@@ -717,7 +727,7 @@ arrives as C-g does, by `quit-flag', the first time NATIVE is called."
       ;; One going leaves the other.
       (portal-fake-rex-command left :drop t)
       (let ((inhibit-message t))
-        (portal-rex-tests--until first (lambda () (not (portal-rex-connection-id first)))))
+        (portal-rex-tests--until first (lambda () (eq (portal-rex-connection-state first) 'lost))))
       (should (equal (portal-rex-connections) (list second)))
       (should (equal (funcall label second) "right"))
       (should (equal (plist-get (portal-rex-call nil "server.version") :rex_version)
@@ -1218,12 +1228,18 @@ With no answer left, a question fails the test."
       (should (equal (portal-rex-tests--names) '("*rex: right/one*")))
       (portal-fake-rex-take left :disconnected)
       (should (equal (funcall requests left) '("session.attach_all" "session.list_blocks")))
-      ;; So does losing the connection.
+      ;; Losing the connection keeps them, marked, until it ends.
       (portal-fake-rex-command right :drop t)
       (let ((inhibit-message t)
             (kill-buffer-query-functions (list refuse)))
         (portal-rex-tests--until second
-                                 (lambda () (not (portal-rex-connection-id second)))))
+                                 (lambda () (eq (portal-rex-connection-state second) 'lost)))
+        (should (equal (portal-rex-tests--names) '("*rex: right/one*")))
+        (with-current-buffer "*rex: right/one*"
+          (should portal-rex--disconnected)
+          (should (member '(portal-rex--disconnected ":disconnected") mode-line-process))
+          (should (string-match-p "connecting again by itself" (buffer-string))))
+        (portal-rex-disconnect second))
       (should-not (portal-rex-buffers))
       (should-not (get-buffer "*rex: right/one*"))
       (portal-fake-rex-take right :disconnected)
@@ -1466,7 +1482,7 @@ With no answer left, a question fails the test."
     (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
     (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api"))
     ;; The server goes while Emacs waits for it to say whether the block is
-    ;; busy: the kill returns, and the buffer has gone with its server.
+    ;; busy: the kill returns, asking nothing, and only the buffer goes.
     (let* ((connection (portal-rex-tests--connect server))
            (api (portal-rex-block-buffer connection "block:1"))
            (portal-rex--busy-timeout 2)
@@ -1475,12 +1491,13 @@ With no answer left, a question fails the test."
       (portal-fake-rex-command server :after "com.superlogical.terminal.process"
                                :then [(:drop t)])
       (should (string-match-p
-               "\\`Lost the Rex server at .*\n\\'"
+               "\\`Lost the Rex server at .*; connecting again\nKilled only the buffer: block api still runs.*\n\\'"
                (portal-rex-tests--messages
-                 (should-not (portal-rex-tests--asking nil (should-not (kill-buffer api)))))))
+                 (should-not (portal-rex-tests--asking nil (should (kill-buffer api)))))))
       (should (< (- (float-time) start) 1.5))
       (should-not (buffer-live-p api))
-      (should-not (portal-rex-live-p connection)))
+      (should-not (portal-rex-live-p connection))
+      (portal-rex-disconnect connection))
     ;; It goes while the question waits for an answer: yes ends nothing,
     ;; as there is no buffer left and no server to tell.
     (portal-fake-rex-command server :release "com.superlogical.terminal.process")
@@ -1493,10 +1510,12 @@ With no answer left, a question fails the test."
                    (portal-fake-rex-command server :drop t)
                    (let ((inhibit-message t))
                      (portal-rex-tests--until
-                      connection (lambda () (not (portal-rex-connection-id connection)))))
+                      connection (lambda () (not (portal-rex-live-p connection)))))
                    t)))
-        (should-not (kill-buffer api)))
+        (let ((inhibit-message t))
+          (should (kill-buffer api))))
       (should-not (buffer-live-p api))
+      (portal-rex-disconnect connection)
       (portal-fake-rex-take server :disconnected)
       (should-not (cl-find-if (lambda (report)
                                 (equal (plist-get (plist-get report :request) :method) "block.close"))
@@ -1554,9 +1573,9 @@ With no answer left, a question fails the test."
          (should (equal (portal-rex-tests--names) '("*rex: work/kept*")))
          (portal-rex-disconnect connection)
          (should-not (portal-rex-buffers))
-         ;; A lost connection too.
+         ;; A connection the server ends for good too.
          (setq connection (portal-rex-tests--connect server))
-         (portal-fake-rex-command server :drop t)
+         (portal-fake-rex-command server :close 1002 :reason "protocol error")
          (let ((inhibit-message t))
            (portal-rex-tests--until connection
                                     (lambda () (not (portal-rex-connection-id connection)))))

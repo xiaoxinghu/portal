@@ -111,5 +111,8 @@ void portal_fake_socket_deliver_bytes(uint64_t socket, const void *bytes, size_t
 /* The highest socket number open, or 0: the one the core opened last. */
 uint64_t portal_fake_socket_last(void);
 void portal_fake_socket_end(uint64_t socket, const char *reason);
+/* SOCKET's server closes it with a close frame of CODE, because of REASON;
+   portal_fake_socket_end ends it without one, as a drop does. */
+void portal_fake_socket_closed(uint64_t socket, int code, const char *reason);
 
 #endif

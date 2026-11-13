@@ -201,6 +201,12 @@ enum Core {
         borrow(target) { portal_terminal_grid($0, columns, rows, cellWidth, cellHeight) }
     }
 
+    /// TARGET, a fed terminal, has more output waiting to be parsed than it
+    /// should take on, or has worked it down.
+    static func terminalBacklog(_ target: String, _ backlogged: Bool) {
+        borrow(target) { portal_terminal_backlog($0, backlogged) }
+    }
+
     /// The shared links script, started in its world with a report function
     /// that posts to that world's script message HANDLER. This glue is the
     /// only part that names WebKit's transport.

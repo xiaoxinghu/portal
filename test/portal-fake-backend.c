@@ -1317,6 +1317,7 @@ static struct message_socket {
     uint64_t socket; /* 0 for a free slot. */
     char address[512];
     bool binary, echo, ended;
+    int code;
     char reason[128];
     portal_text sent[MAX_MESSAGES], arrived[MAX_MESSAGES]; /* Oldest first. */
     size_t sent_count, arrived_count;
@@ -1398,7 +1399,7 @@ bool portal_socket_send(uint64_t socket, portal_string text, portal_text *error)
 }
 
 bool portal_socket_read(uint64_t socket, portal_text **messages, size_t *count, bool *ended,
-                        portal_text *reason, portal_text *error)
+                        int *code, portal_text *reason, portal_text *error)
 {
     struct message_socket *found = refused(error) ? NULL : find_socket(socket, error);
     if (!found)
@@ -1410,6 +1411,7 @@ bool portal_socket_read(uint64_t socket, portal_text **messages, size_t *count, 
     *count = found->arrived_count;
     found->arrived_count = 0;
     *ended = found->ended;
+    *code = found->ended ? found->code : 0;
     if (found->ended)
         *reason = copy(found->reason, strlen(found->reason));
     return true;
@@ -1502,16 +1504,22 @@ void portal_fake_socket_deliver_bytes(uint64_t socket, const void *bytes, size_t
         arrive(found, bytes, length);
 }
 
-void portal_fake_socket_end(uint64_t socket, const char *reason)
+void portal_fake_socket_closed(uint64_t socket, int code, const char *reason)
 {
     struct message_socket *found = find_socket(socket, NULL);
     if (!found || found->ended)
         return;
     bool was = readable(found);
     found->ended = true;
+    found->code = code;
     snprintf(found->reason, sizeof found->reason, "%s", reason);
     if (!was)
         portal_socket_ready(socket);
+}
+
+void portal_fake_socket_end(uint64_t socket, const char *reason)
+{
+    portal_fake_socket_closed(socket, 0, reason);
 }
 
 const char *portal_fake_fed(const char *target)

@@ -13,7 +13,19 @@
    requests and the events of the blocks it shows.  Messages wait with the
    platform, outside the pipe, so a long result never crosses it: the first
    one waiting sends Emacs the record "rex ID", and no other goes until
-   Emacs has received them all.  Lisp parses them (portal-rex.el). */
+   Emacs has received them all.  Lisp parses them (portal-rex.el).
+
+   A connection that had its welcome and then ends, by a drop or a close
+   that does not refuse this client for good, is lost, not ended: the
+   server keeps the client a while, so the core connects again by itself,
+   after 0.2 seconds, then twice as long after each try that fails, up to
+   5 seconds, with the reconnect token of the last welcome in each hello.
+   Emacs hears of the loss as a message the core puts among the server's,
+   {"type":"portal_lost","reason":REASON}, and of the return as the new
+   welcome, whose "client" says whether it "resumed" the client.  Its ID
+   stays the same throughout; requests fail while it is lost.  The closes
+   that end a connection for good are those of a broken protocol (1002,
+   1003, 1007, 1009) and 1008, unless for "event backlog exceeded". */
 #ifndef PORTAL_REX_H
 #define PORTAL_REX_H
 
@@ -62,6 +74,15 @@ bool portal_rex_wait(uint64_t id, uint64_t milliseconds, bool *ready, portal_tex
    names it afterwards, and the blocks it showed end, as below. */
 bool portal_rex_close(uint64_t id, portal_text *error);
 
+/* Connection ID is back after a loss, and Emacs has made its buffers match
+   the server: resume what it shows.  A block whose stream dropped
+   meanwhile resumes it; one that a new client, or a loss before it was
+   live, left with nothing starts again from the beginning on its terminal,
+   with a new paint; and every block asks again for what its terminal
+   reports, as the events of the meantime are lost.  Typing reaches the
+   blocks again from here.  Fails for a connection that is lost still. */
+bool portal_rex_resume(uint64_t id, portal_text *error);
+
 /* Blocks shown in terminals.  The core also makes requests of its own on
    a connection, numbered among Emacs's, and takes their responses out of
    what the server sends before Emacs receives it: Emacs never sees them.
@@ -103,7 +124,20 @@ bool portal_rex_close(uint64_t id, portal_text *error);
    A change tells Emacs with a "terminal TARGET" record, as a terminal's
    platform does (portal.h).
 
-   Fails, starting nothing, for a closed connection, a TARGET that names no
+   The stream holds up.  While TARGET has too much to parse, the core stops
+   reading the stream, and so the platform stops reading its socket and the
+   server holds the output, which keeps Emacs's memory bounded however
+   fast the program writes.  A stream the server ends with 1013 ("data
+   reconnect required"), as when it could hold no more, starts over with a
+   new ticket and a new paint, the terminal reset first; a stream that
+   drops, or ends any other way short of the block's end (1000 or 4000 and
+   up) or a failure (1008, 1011), is resumed on a new data connection from
+   the first byte not taken, which the core counts, and starts over if the
+   server refuses that.  While the connection is lost, a block shown takes
+   no typing: what is typed goes nowhere, and Emacs hears of it, as below.
+   Its stream waits for portal_rex_resume.
+
+   Fails, starting nothing, for a closed or lost connection, a TARGET that names no
    open fed terminal or shows a block already, or a block that another
    terminal shows on this connection, as a server allows one stream of a
    block per client. */
@@ -136,15 +170,20 @@ bool portal_rex_take(portal_string target, portal_text *error);
    Portal reaches is on this Mac.
 
    STATE is "starting" until the first paint, then "live", or "failed" or
-   "ended" once the stream will bring nothing more; C and R are the
+   "ended" once the stream will bring nothing more, and "disconnected"
+   while the connection is lost, until portal_rex_resume; a block that
+   starts again is "starting" again.  "typed":true follows it when
+   something was typed into the block while it was disconnected, since
+   TARGET was last described.  C and R are the
    block's grid as the stream last said, 0 until it has; O is who owns the
    block, as the server last said: "self" for Emacs, "other" for another
    client, "none" for no client, "unknown" until the server has said; and
    N what the other client calls itself, its label or else its program's
    name, "" until the server says, which it does only while that client
    is connected.  The core sends
-   Emacs the record "rex-block TARGET" when the state becomes live, failed
-   or ended, and no other until TARGET is described; a stream that ends as
+   Emacs the record "rex-block TARGET" when the state becomes live, failed,
+   ended or disconnected, at portal_rex_resume, and when something is typed
+   while disconnected, and no other until TARGET is described; a stream that ends as
    its program exits or its block closes says so only once the quarter of
    a second has passed.  Appends nothing for a TARGET that shows no
    block. */
@@ -159,6 +198,9 @@ void portal_rex_closed(portal_string target);
 void portal_rex_input(portal_string target, const char *bytes, size_t length);
 void portal_rex_grid(portal_string target);
 void portal_rex_focus(portal_string target, bool focused);
+/* For terminals.c: TARGET, a fed terminal, has too much output to parse,
+   or has worked it down (portal_terminal_backlog). */
+void portal_rex_backlog(portal_string target, bool backlogged);
 
 /* For channel.c: the timer TOKEN, which is not the channel's, fired. */
 void portal_rex_timer(uint64_t token);

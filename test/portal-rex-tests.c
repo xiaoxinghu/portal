@@ -249,16 +249,18 @@ static void test_ending(void)
     portal_text error = {0};
     bool unset = true;
     char record[32], gone[64];
-    /* A connection the server ends hands over its last messages with the
-       reason, and is gone: its socket is closed and its ID names nothing. */
+    /* A connection the server ends for good hands over its last messages
+       with the reason, and is gone: its socket is closed and its ID names
+       nothing. */
     uint64_t id = open_connection("/tmp/rex/server.sock", &error);
     snprintf(record, sizeof record, "rex %llu\n", (unsigned long long) id);
     snprintf(gone, sizeof gone, "No Rex connection %llu", (unsigned long long) id);
     portal_fake_socket_deliver(id, "{\"type\":\"welcome\"}");
-    portal_fake_socket_end(id, "The server closed the connection");
+    portal_fake_socket_closed(id, 1008, "The server closed the connection (1008: no common API revision)");
     CHECK(is_text(sent(), record));
     CHECK(portal_fake_sockets() == 1);
-    CHECK(is_text(received(id), "{\"type\":\"welcome\"}\nended: The server closed the connection"));
+    CHECK(is_text(received(id), "{\"type\":\"welcome\"}\nended: The server closed the connection "
+                                "(1008: no common API revision)"));
     CHECK(portal_fake_sockets() == 0);
     char expected[80];
     snprintf(expected, sizeof expected, "error: %s", gone);
@@ -512,7 +514,7 @@ static void test_showing(void)
                                            "hello world \x1b_rex1;7;{}\x1b\\\x1b[c<grid 81x21>!?"));
     CHECK(is_text(rex_state(target), "\"rex\":{\"state\":\"live\",\"columns\":81,\"rows\":21,\"owner\":\"unknown\",\"owner_name\":\"\",\"directory\":\"\"}"));
     /* The server ends the stream: the block has closed. */
-    portal_fake_socket_end(data, "The server closed the connection (4000: block closed)");
+    portal_fake_socket_closed(data, 4000, "The server closed the connection (4000: block closed)");
     CHECK(is_text(sent(), record));
     CHECK(is_text(rex_state(target),
                   "\"rex\":{\"state\":\"ended\",\"columns\":81,\"rows\":21,\"owner\":\"unknown\",\"owner_name\":\"\",\"directory\":\"\",\"reason\":\"The block's "
@@ -676,7 +678,7 @@ static void test_typing(void)
     answer_with(id, 15, "{}", NULL);
     CHECK(asked(id, 16, "com.superlogical.terminal.write", ON_BLOCK ",\"args\":{\"data\":\"e\"}}"));
     portal_terminal_input(text(target), "f", 1);
-    portal_fake_socket_end(data, "The server closed the connection (1001: keepalive timeout)");
+    portal_fake_socket_closed(data, 1000, "The server closed the connection (1000)");
     answer_with(id, 16, "{}", NULL);
     CHECK(is_text(portal_fake_socket_sent(id), ""));
     /* Closing the terminal stops its typing. */
@@ -1052,6 +1054,347 @@ static void test_resizing_while_painting(void)
     sent();
 }
 
+/* What was fed to TARGET since the last call for it. */
+static const char *fresh(const char *target)
+{
+    static char last[64];
+    static size_t seen;
+    const char *all = portal_fake_fed(target);
+    size_t length = strlen(all);
+    if (strcmp(last, target) || seen > length) {
+        snprintf(last, sizeof last, "%s", target);
+        seen = 0;
+    }
+    const char *rest = all + seen;
+    seen = length;
+    return rest;
+}
+
+/* A WELCOME whose token is TOKEN in every byte, with the nonce 42. */
+static void welcome_with(unsigned char bytes[static 32], unsigned char token)
+{
+    memcpy(bytes, welcome, 32);
+    memset(bytes + 1, token, 16);
+}
+
+/* The snapshot a stream starts with: no records but the last; and the
+   grid message that follows it, which the first paint waits for. */
+static const char snapshot[] = "GHOSTSNP\x01\x00\x06\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+static const char grid_message[] = "\x1b_rex1;42;{\"type\":\"resize\",\"cols\":80,\"rows\":24}\x1b\\";
+
+/* How many bytes a stream has taken once it is live, and COUNT more. */
+#define TAKEN(count) (sizeof snapshot - 1 + sizeof grid_message - 1 + (count))
+
+/* What show_on's claim is answered with: who owns the block; and what
+   its terminal was fed. */
+static const char *claim_answer = "{}";
+static char show_fed[256];
+
+/* Show the block in TARGET on connection ID, whose socket is now CONTROL
+   and whose next request is numbered NUMBER, unless the show has STARTED
+   already, and which attaches to its session if ATTACH; until it is live,
+   painted with PAINT; return its stream's socket.  *NUMBER is the next
+   request's number after it. */
+static uint64_t show_on(uint64_t id, uint64_t control, const char *target, int *number,
+                        bool started, bool attach, const char *paint)
+{
+    portal_text error = {0};
+    char content[256];
+    if (!started) {
+        portal_fake_socket_sent(control);
+        CHECK(portal_rex_show(id, text(target), text(SESSION), text(BLOCK), &error));
+    }
+    if (attach) {
+        if (!started)
+            CHECK(asked(control, *number, "session.attach", "{\"session_id\":\"" SESSION "\"}"));
+        answer_with(control, (*number)++, "{}", NULL);
+    }
+    CHECK(claimed(control, *number));
+    answer_with(control, *number, claim_answer, NULL);
+    *number += 4;
+    portal_fake_fire_timers();
+    answer_with(control, (*number)++, "{}", NULL);
+    answer_with(control, (*number)++, "{\"ticket\":\"AAECAwQFBgcICQoLDA0ODw\"}", NULL);
+    uint64_t data = portal_fake_socket_last();
+    portal_fake_socket_sent(data);
+    portal_fake_socket_deliver_bytes(data, welcome, sizeof welcome);
+    portal_fake_socket_deliver_bytes(data, snapshot, sizeof snapshot - 1);
+    portal_fake_socket_deliver(data, grid_message);
+    snprintf(content, sizeof content, "{\"content\":\"%s\"}", paint);
+    answer_with(control, (*number)++, content, NULL);
+    portal_fake_socket_sent(control);
+    CHECK(strstr(rex_state(target), "\"state\":\"live\"") != NULL);
+    /* What the terminal was fed, its grid first unless it has it. */
+    const char *fed = fresh(target);
+    snprintf(show_fed, sizeof show_fed, "%s", fed);
+    CHECK(strlen(fed) >= strlen(paint) && !strcmp(fed + strlen(fed) - strlen(paint), paint));
+    sent();
+    return data;
+}
+
+/* show_on, for a connection whose socket is its first. */
+static uint64_t show_live(uint64_t id, const char *target, int *number, bool started,
+                          bool attach, const char *paint)
+{
+    return show_on(id, id, target, number, started, attach, paint);
+}
+
+/* The RESUME a stream sends with the token TOKEN in every byte, having
+   taken COUNT bytes, in hex. */
+static const char *resume_hex(unsigned char token, uint64_t count)
+{
+    static char hex[64];
+    size_t length = (size_t) snprintf(hex, sizeof hex, "02");
+    for (int i = 0; i < 16; i++)
+        length += (size_t) snprintf(hex + length, sizeof hex - length, "%02x", token);
+    for (int i = 0; i < 8; i++)
+        length += (size_t) snprintf(hex + length, sizeof hex - length, "%02x",
+                                    (unsigned) (count >> (8 * i)) & 0xff);
+    return hex;
+}
+
+static void test_backlog(void)
+{
+    portal_text error = {0};
+    uint64_t id = open_connection("/tmp/rex/server.sock", &error);
+    int number = 1;
+    char *target = fed_terminal(&error);
+    uint64_t data = show_live(id, target, &number, false, true, "P");
+    /* While the terminal has too much to parse, the stream waits unread. */
+    portal_terminal_backlog(text(target), true);
+    portal_fake_socket_deliver(data, "one ");
+    portal_fake_socket_deliver(data, "two ");
+    CHECK(is_text(fresh(target), ""));
+    bool readable = false;
+    CHECK(portal_socket_wait(data, 0, &readable, &error) && readable);
+    /* Worked down, it is read where it stopped, in order. */
+    portal_terminal_backlog(text(target), false);
+    CHECK(is_text(fresh(target), "one two "));
+    CHECK(portal_socket_wait(data, 0, &readable, &error) && !readable);
+    portal_fake_socket_deliver(data, "three");
+    CHECK(is_text(fresh(target), "three"));
+    /* Its end waits too, and comes in its place, after the output. */
+    portal_terminal_backlog(text(target), true);
+    portal_fake_socket_deliver(data, "last");
+    portal_fake_socket_closed(data, 1000, "The server closed the connection (1000)");
+    CHECK(strstr(rex_state(target), "\"state\":\"live\"") != NULL);
+    portal_terminal_backlog(text(target), false);
+    CHECK(is_text(fresh(target), "last"));
+    CHECK(strstr(rex_state(target), "\"state\":\"ended\"") != NULL);
+    /* Another terminal's backlog, or none, changes nothing. */
+    portal_terminal_backlog(text("terminal:none"), true);
+    CHECK(portal_views_close(text(target), &error));
+    free(target);
+    CHECK(portal_rex_close(id, &error));
+    sent();
+}
+
+static void test_resuming(void)
+{
+    portal_text error = {0};
+    char record[64];
+    unsigned char renewed[32];
+    uint64_t id = open_connection("/tmp/rex/server.sock", &error);
+    int number = 1;
+    char *target = fed_terminal(&error);
+    snprintf(record, sizeof record, "rex-block %s\n", target);
+    uint64_t data = show_live(id, target, &number, false, true, "P");
+    portal_fake_socket_deliver(data, "abc");
+    fresh(target);
+    /* A stream that drops resumes on a new data connection with the
+       WELCOME's token and the bytes taken: the snapshot and "abc". */
+    portal_fake_socket_end(data, "The connection to the server was lost");
+    CHECK(!*portal_fake_socket_address(data));
+    uint64_t resumed = portal_fake_socket_last();
+    CHECK(resumed > data);
+    CHECK(is_text(portal_fake_socket_address(resumed),
+                  "/tmp/rex/server.sock /api/data rex.data.terminal.v1 binary"));
+    CHECK(is_text(portal_fake_socket_sent(resumed), resume_hex(0, TAKEN(3))));
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
+    CHECK(strstr(rex_state(target), "\"state\":\"live\"") != NULL);
+    /* Its WELCOME brings a new token, and the stream goes on where it was,
+       a Rex message split across the drop included. */
+    welcome_with(renewed, 7);
+    portal_fake_socket_deliver_bytes(resumed, renewed, sizeof renewed);
+    portal_fake_socket_deliver(resumed, "def\x1b_rex1;42;{\"type\":\"resize\",\"cols\":90,\"rows\":9}\x1b\\g");
+    CHECK(is_text(fresh(target), "def<grid 90x9>g"));
+    CHECK(strstr(rex_state(target), "\"columns\":90,\"rows\":9") != NULL);
+    CHECK(is_text(sent(), ""));
+    /* The server asks for a new stream (1013), as when it could hold no
+       more: a new ticket, a HELLO, and a new paint, the terminal reset
+       first, with no record meanwhile. */
+    portal_fake_socket_closed(resumed, 1013, "The server closed the connection (1013: data reconnect required)");
+    CHECK(asked(id, number, "data.connect",
+                ON_BLOCK ",\"data_ref_id\":\"terminal\",\"subprotocol\":\"rex.data.terminal.v1\"}"));
+    answer_with(id, number++, "{\"ticket\":\"AAECAwQFBgcICQoLDA0ODw\"}", NULL);
+    data = portal_fake_socket_last();
+    CHECK(is_text(portal_fake_socket_sent(data), "01000102030405060708090a0b0c0d0e0f"));
+    portal_fake_socket_deliver_bytes(data, welcome, sizeof welcome);
+    portal_fake_socket_deliver_bytes(data, snapshot, sizeof snapshot - 1);
+    portal_fake_socket_deliver(data, grid_message);
+    portal_fake_socket_deliver(data, "h");
+    portal_fake_socket_sent(id);
+    answer_with(id, number++, "{\"content\":\"AGAIN\"}", NULL);
+    CHECK(is_text(fresh(target), "\x1b" "c\x1b[3J<grid 80x24>AGAINh"));
+    CHECK(is_text(sent(), record));
+    CHECK(strstr(rex_state(target), "\"state\":\"live\"") != NULL);
+    /* A resume the server refuses starts over. */
+    portal_fake_socket_end(data, "The connection to the server was lost");
+    resumed = portal_fake_socket_last();
+    CHECK(is_text(portal_fake_socket_sent(resumed), resume_hex(0, TAKEN(1))));
+    portal_fake_socket_deliver_bytes(resumed, "\x82\x03", 2);
+    CHECK(!*portal_fake_socket_address(resumed));
+    CHECK(asked(id, number, "data.connect",
+                ON_BLOCK ",\"data_ref_id\":\"terminal\",\"subprotocol\":\"rex.data.terminal.v1\"}"));
+    /* A stream that keeps ending before it shows anything gives up. */
+    for (int i = 0; i < 2; i++) {
+        answer_with(id, number++, "{\"ticket\":\"AAECAwQFBgcICQoLDA0ODw\"}", NULL);
+        portal_fake_socket_end(portal_fake_socket_last(), "Nothing is listening on that socket");
+    }
+    CHECK(strstr(rex_state(target), "\"state\":\"failed\"") != NULL);
+    CHECK(strstr(rex_state(target), "keeps ending") != NULL);
+    sent();
+    CHECK(portal_views_close(text(target), &error));
+    free(target);
+
+    /* The block's end, and a failure, end the show; neither resumes. */
+    target = fed_terminal(&error);
+    data = show_live(id, target, &number, false, false, "P");
+    portal_fake_socket_closed(data, 1011, "The server closed the connection (1011: data provider failed)");
+    CHECK(strstr(rex_state(target), "\"state\":\"ended\"") != NULL);
+    CHECK(portal_fake_socket_last() == id);
+    CHECK(portal_views_close(text(target), &error));
+    free(target);
+    CHECK(portal_rex_close(id, &error));
+    sent();
+}
+
+static void test_coming_back(void)
+{
+    portal_text error = {0};
+    char lisp[32], record[64], expected[512];
+    unsigned char renewed[32];
+    uint64_t id = open_connection("/tmp/rex/server.sock", &error);
+    snprintf(lisp, sizeof lisp, "rex %llu\n", (unsigned long long) id);
+    portal_fake_socket_deliver(id, "{\"type\":\"welcome\",\"client\":{\"id\":\"client:1\","
+                                   "\"reconnect_token\":\"secret-1\"}}");
+    received(id);
+    sent();
+    int number = 1;
+    char *target = fed_terminal(&error);
+    snprintf(record, sizeof record, "rex-block %s\n", target);
+    claim_answer = OWNED_BY("client:1");
+    uint64_t data = show_live(id, target, &number, false, true, "P");
+    /* The connection drops: Emacs hears of it among the server's messages,
+       the block takes no typing and says so, and its stream goes on. */
+    portal_fake_socket_deliver(id, "{\"type\":\"event\",\"seq\":1,\"payload\":{}}");
+    portal_fake_socket_end(id, "The connection to the server was lost");
+    snprintf(expected, sizeof expected, "%s%s", lisp, record);
+    CHECK(is_text(sent(), expected));
+    CHECK(is_text(received(id), "{\"type\":\"event\",\"seq\":1,\"payload\":{}}\n"
+                                "{\"type\":\"portal_lost\",\"reason\":\"The connection to the "
+                                "server was lost\"}"));
+    CHECK(!*portal_fake_socket_address(id));
+    CHECK(strstr(rex_state(target), "\"state\":\"disconnected\"") != NULL);
+    CHECK(!request(id, "session.list", "{}", &error));
+    CHECK(says(&error, "The Rex connection is lost, and connects again by itself"));
+    bool ready = true;
+    CHECK(portal_rex_wait(id, 10, &ready, &error) && !ready);
+    portal_terminal_input(text(target), "x", 1);
+    CHECK(is_text(sent(), record));
+    CHECK(strstr(rex_state(target), "\"state\":\"disconnected\",\"typed\":true") != NULL);
+    CHECK(strstr(rex_state(target), "typed") == NULL);
+    portal_fake_socket_deliver(data, "still");
+    CHECK(is_text(fresh(target), "still"));
+    /* It comes back by itself, after a while: a try whose server is not
+       there yet fails quietly, and the next is longer coming. */
+    CHECK(portal_fake_timers() == 1);
+    portal_fake_fire_timers();
+    uint64_t again = portal_fake_socket_last();
+    CHECK(again > data);
+    CHECK(is_text(portal_fake_socket_address(again),
+                  "/tmp/rex/server.sock /api/control rex.control.v1"));
+    snprintf(expected, sizeof expected, "%.*s,\"reconnect_token\":\"secret-1\"}",
+             (int) strlen(HELLO("Portal", "0.1.0")) - 1, HELLO("Portal", "0.1.0"));
+    CHECK(is_text(portal_fake_socket_sent(again), expected));
+    portal_fake_socket_end(again, "Nothing is listening on that socket");
+    CHECK(is_text(sent(), ""));
+    CHECK(!*portal_fake_socket_address(again));
+    CHECK(portal_fake_timers() == 2); /* The late welcome's, which counts for nothing, and the next try. */
+    portal_fake_fire_timers();
+    again = portal_fake_socket_last();
+    CHECK(is_text(portal_fake_socket_sent(again), expected));
+    /* The stream drops meanwhile: it waits for the connection. */
+    portal_fake_socket_end(data, "The connection to the server was lost");
+    CHECK(portal_fake_socket_last() == again);
+    /* Back as the same client: Emacs gets the welcome, with what came
+       after it, and the core's messages from before it are dropped. */
+    portal_fake_socket_deliver(again, "{\"type\":\"event\",\"seq\":9}");
+    portal_fake_socket_deliver(again, "{\"type\":\"welcome\",\"client\":{\"id\":\"client:1\","
+                                      "\"reconnect_token\":\"secret-2\",\"resumed\":true}}");
+    CHECK(is_text(sent(), lisp));
+    CHECK(is_text(received(id), "{\"type\":\"welcome\",\"client\":{\"id\":\"client:1\","
+                                "\"reconnect_token\":\"secret-2\",\"resumed\":true}}"));
+    CHECK(request(id, "session.attach_all", "{}", &error) == (uint64_t) number);
+    CHECK(asked(again, number++, "session.attach_all", "{}"));
+    /* Still disconnected until Emacs resumes it, which it does once the
+       buffers match the server. */
+    CHECK(strstr(rex_state(target), "\"state\":\"disconnected\"") != NULL);
+    CHECK(portal_rex_resume(id, &error));
+    CHECK(is_text(sent(), record));
+    CHECK(strstr(rex_state(target), "\"state\":\"live\"") != NULL);
+    /* It asks again what the terminal reports, and resumes the stream. */
+    portal_fake_socket_sent(again);
+    data = portal_fake_socket_last();
+    CHECK(is_text(portal_fake_socket_sent(data), resume_hex(0, TAKEN(5))));
+    welcome_with(renewed, 9);
+    portal_fake_socket_deliver_bytes(data, renewed, sizeof renewed);
+    portal_fake_socket_deliver(data, "!");
+    CHECK(is_text(fresh(target), "!"));
+    number += 3;
+    portal_terminal_input(text(target), "y", 1);
+    CHECK(asked(again, number++, "com.superlogical.terminal.write", ON_BLOCK ",\"args\":{\"data\":\"y\"}}"));
+
+    /* Lost again, and back as a new client, as from a server that
+       restarted: the block starts again from the beginning, and is
+       painted afresh. */
+    portal_fake_socket_end(again, "The connection to the server was lost");
+    received(id);
+    portal_fake_fire_timers();
+    again = portal_fake_socket_last();
+    snprintf(expected, sizeof expected, "%.*s,\"reconnect_token\":\"secret-2\"}",
+             (int) strlen(HELLO("Portal", "0.1.0")) - 1, HELLO("Portal", "0.1.0"));
+    CHECK(is_text(portal_fake_socket_sent(again), expected));
+    portal_fake_socket_deliver(again, "{\"type\":\"welcome\",\"client\":{\"id\":\"client:2\","
+                                      "\"reconnect_token\":\"secret-3\",\"resumed\":false}}");
+    received(id);
+    /* Its old stream is ended, as the new client does not own it. */
+    CHECK(!*portal_fake_socket_address(data));
+    CHECK(!portal_rex_resume(12345, &error));
+    free(error.data);
+    error = (portal_text) {0};
+    CHECK(portal_rex_resume(id, &error));
+    CHECK(asked(again, number, "session.attach", "{\"session_id\":\"" SESSION "\"}"));
+    sent();
+    claim_answer = OWNED_BY("client:2");
+    data = show_on(id, again, target, &number, true, true, "FRESH");
+    claim_answer = "{}";
+    CHECK(is_text(show_fed, "\x1b" "c\x1b[3JFRESH"));
+    /* Disconnecting while lost ends it all for good. */
+    portal_fake_socket_end(again, "The connection to the server was lost");
+    CHECK(!portal_rex_resume(id, &error));
+    CHECK(says(&error, "The Rex connection is not back yet"));
+    CHECK(portal_rex_close(id, &error));
+    CHECK(strstr(rex_state(target), "\"state\":\"ended\"") != NULL);
+    /* Its stream with it, and no try comes after. */
+    CHECK(portal_fake_sockets() == 0);
+    portal_fake_fire_timers();
+    CHECK(portal_fake_sockets() == 0);
+    CHECK(portal_views_close(text(target), &error));
+    free(target);
+    sent();
+}
+
 int main(void)
 {
     int ends[2];
@@ -1071,6 +1414,9 @@ int main(void)
     test_details();
     test_owning();
     test_resizing_while_painting();
+    test_backlog();
+    test_resuming();
+    test_coming_back();
     if (failures) {
         fprintf(stderr, "%d checks failed\n", failures);
         return 1;

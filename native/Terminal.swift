@@ -359,6 +359,30 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     }
 }
 
+/// A fed terminal's backlog, told to the core on Emacs's thread. The
+/// session calls the handler on whichever thread crossed a mark, so two
+/// calls can reach the main queue out of order: each tells the core how
+/// the backlog is when it runs, the last call's word.
+private final class FedBacklog: @unchecked Sendable {
+    private let target: String
+    private let lock = NSLock()
+    private var latest = false
+
+    init(target: String) { self.target = target }
+
+    func report(_ backlogged: Bool) {
+        lock.lock()
+        latest = backlogged
+        lock.unlock()
+        DispatchQueue.main.async { [self] in
+            lock.lock()
+            let now = latest
+            lock.unlock()
+            MainActor.assumeIsolated { Core.terminalBacklog(target, now) }
+        }
+    }
+}
+
 /// The terminal view kind: one Ghostty session. Its shell starts in the parking
 /// window when the view opens, and keeps running while the view is hidden.
 /// The core owns Portal's terminal rules (native/Core/terminals.c): it checks
@@ -393,6 +417,12 @@ final class TerminalSession: PortalView {
                     }
                 },
                 suppressesTerminalResponses: true)
+            // The core stops feeding it while it has too much to parse.
+            let backlog = FedBacklog(target: target)
+            session.setOutputBacklogHandler(highWater: Int(PORTAL_TERMINAL_BACKLOG),
+                                            lowWater: Int(PORTAL_TERMINAL_BACKLOG) / 4) { backlogged in
+                backlog.report(backlogged)
+            }
             let pane = FedPane()
             terminal = HostedTerminal(directory: directory, command: nil, theme: theme, points: points,
                                       fed: session, pane: pane)

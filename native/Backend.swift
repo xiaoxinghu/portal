@@ -126,6 +126,7 @@ public func portalSocketSend(_ socket: UInt64, _ text: portal_string,
 public func portalSocketRead(_ socket: UInt64,
                              _ messages: UnsafeMutablePointer<UnsafeMutablePointer<portal_text>?>,
                              _ count: UnsafeMutablePointer<Int>, _ ended: UnsafeMutablePointer<Bool>,
+                             _ code: UnsafeMutablePointer<Int32>,
                              _ reason: UnsafeMutablePointer<portal_text>,
                              _ error: UnsafeMutablePointer<portal_text>) -> Bool {
     guard let read = perform(error, { try MessageSockets.socket(socket).read() }) else { return false }
@@ -134,6 +135,7 @@ public func portalSocketRead(_ socket: UInt64,
     messages.pointee = array
     count.pointee = read.messages.count
     ended.pointee = read.reason != nil
+    code.pointee = Int32(read.code)
     if let why = read.reason { reason.pointee = owned(why) }
     return true
 }

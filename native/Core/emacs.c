@@ -510,6 +510,14 @@ LISP_FUNCTION(Frex_close)
                                            : NULL;
 }
 
+LISP_FUNCTION(Frex_resume)
+{
+    uint64_t id;
+    portal_text error = {0};
+    return read_natural(env, args[0], &id) ? done(env, portal_rex_resume(id, &error), &error)
+                                           : NULL;
+}
+
 LISP_FUNCTION(Frex_show)
 {
     portal_text target = {0}, session = {0}, block = {0}, error = {0};
@@ -1004,6 +1012,8 @@ static const struct export {
      "terminal, until it closes."},
     {"portal--rex-take", 1, 1, Frex_take, NULL,
      "Claim the block shown in TARGET with take: Emacs owns it, and sizes it, from then on."},
+    {"portal--rex-resume", 1, 1, Frex_resume, NULL,
+     "Resume the blocks Rex connection ID shows, now that it is back after a loss."},
 };
 
 /* Run the Lisp function DATA, an export, at Emacs's request (input.h). */
