@@ -56,17 +56,28 @@ export function stepSlide(
 	index: number,
 	count: number,
 ): number | undefined {
-	const last = Math.max(0, count - 1);
 	switch (key) {
 		case "next":
-			return Math.min(last, index + 1);
+			return slideBy(index, 1, count);
 		case "previous":
-			return Math.max(0, index - 1);
+			return slideBy(index, -1, count);
 		case "first":
 			return 0;
 		case "last":
-			return last;
+			return Math.max(0, count - 1);
 		case "stop":
 			return undefined;
 	}
+}
+
+/** The slide index DELTA slides on from INDEX among COUNT, within them. */
+export function slideBy(index: number, delta: number, count: number) {
+	return Math.max(0, Math.min(Math.max(0, count - 1), index + delta));
+}
+
+/** MS milliseconds as minutes and seconds, "4:05"; past an hour the
+ * minutes go on counting, "75:00". */
+export function elapsed(ms: number) {
+	const seconds = Math.max(0, Math.floor(ms / 1000));
+	return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
