@@ -4,7 +4,7 @@
 import { expect, test } from "bun:test";
 import { assets } from "./.generated/assets";
 import { respond } from "./app";
-import { presentKey, stepSlide } from "./present";
+import { elapsed, presentKey, slideBy, stepSlide } from "./present";
 
 const authority = "127.0.0.1:4321";
 const token = "0123456789abcdef0123456789abcdef";
@@ -127,4 +127,21 @@ test("moving through slides stays within them", () => {
 	expect(stepSlide("last", 0, 3)).toBe(2);
 	expect(stepSlide("last", 0, 0)).toBe(0);
 	expect(stepSlide("stop", 1, 3)).toBeUndefined();
+});
+
+test("Emacs's next and previous move by any number, within the slides", () => {
+	expect(slideBy(1, 1, 3)).toBe(2);
+	expect(slideBy(1, -1, 3)).toBe(0);
+	expect(slideBy(1, 5, 3)).toBe(2);
+	expect(slideBy(1, -5, 3)).toBe(0);
+	expect(slideBy(0, 1, 0)).toBe(0);
+});
+
+test("the time presenting is minutes and seconds, the minutes going past an hour", () => {
+	expect(elapsed(0)).toBe("0:00");
+	expect(elapsed(999)).toBe("0:00");
+	expect(elapsed(65_000)).toBe("1:05");
+	expect(elapsed(75 * 60_000 + 3_000)).toBe("75:03");
+	// A clock set back to zero a moment ago, before the next tick.
+	expect(elapsed(-400)).toBe("0:00");
 });

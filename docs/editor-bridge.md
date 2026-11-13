@@ -116,7 +116,7 @@ the last one can outlive its buffer for a moment, and a reused name would load
 the new one there, with no new window. Without a window, Present does not
 start, and the page sends a `notice`. The page keeps the window's reference;
 the two pages talk directly, and nothing about presenting crosses the bridge
-but `mode`:
+but `mode` and `slide`:
 
 - `/excalidraw/audience` is the slide window's page, with its own bundle,
   `host/audience.ts`, built beside the editor's and sharing none of it. Its
@@ -128,6 +128,16 @@ but `mode`:
 - It sends `{type: "key", key}`, `key` one of `next`, `previous`, `first`,
   `last` and `stop`, for the presenting keys (`host/present.ts`) pressed while
   it has the keyboard; the console moves as for its own keys.
+- The drawing's page sends Emacs `{type: "slide", index, count, name}`, index
+  from 0, as the console is shown and whenever its slide, the number of slides
+  or the slide's name changes. `portal-excalidraw.el` keeps it in
+  `portal-excalidraw--slide` for the mode line, `:Present 3/12` with the name
+  as its help, and forgets it as the page leaves Present; one that comes
+  outside Present is dropped.
+- Emacs sends `{type: "slide", delta}`, from `portal-excalidraw-next-slide`
+  and `portal-excalidraw-previous-slide`, a whole number of slides to move,
+  kept within them. Emacs sends it only while the page says it presents; a
+  page that has left Present meanwhile answers with a `notice`.
 
 The core lets a hosted app open a window only on its own origin, and that
 window has no bridge ([web views](web-views.md#windows-pages-open)). The
@@ -207,10 +217,12 @@ native module, `test/portal-web-tests.el` checks ordered `bridge` delivery to th
 buffer's bridge function. `test/portal-excalidraw-tests.el` covers opening the
 Excalidraw hosted app, bridge loading, scene persistence, save failures, stale
 replies, revert, switching screens, and presenting: the slide window's bare
-frame, the keyboard given back, and each way presenting ends.
+frame, the keyboard given back, each way presenting ends, next and previous
+from Emacs and the slide in the mode line.
 `host/slides.test.ts` covers slide order and which images a change makes
 stale; `host/audience.test.ts` the slide window's page, served offline and
-apart from the editor's bundle, and the presenting keys.
+apart from the editor's bundle, the presenting keys, moving by a number of
+slides and the time presenting.
 
 `ctest --test-dir build -R web-core` runs `test/portal-web-tests.c`, the core's bridge and
 web rules against the fake platform: message order and coalescing, draining
@@ -230,8 +242,9 @@ Load `test/portal-excalidraw-gui-tests.el`; run `M-x ert` with selector
 image round trips, several drawings, revert, hidden-state retention, rapid
 `C-x C-s` delivery to Emacs, Arrange: slides in order, keys, editing a
 slide and saving from it, and presenting: the slide window shows the slide,
-next from the console and from the slide window, and stopping, which takes
-the slide window and its frame. In the full set, a covered slide window still
+the console's next slide, notes and clocks, next from the console, from the
+slide window and by `C-c C-n` and `C-c C-p` in Emacs with the mode line
+following, and stopping, which takes the slide window and its frame. In the full set, a covered slide window still
 draws, and fullscreen fills the display. The test-only JavaScript evaluator is absent from
 the production module. That the editor works offline, loading its modules and
 fonts only from the app host, is an [app host check](testing.md#app-host-checks).

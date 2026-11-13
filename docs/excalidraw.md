@@ -88,15 +88,27 @@ slide nearest the middle of its view. Two windows show them:
   a fullscreen one fills the display. It keeps drawing while another window
   covers it or it is on another Space. Customize
   `portal-excalidraw-slides-frame-parameters` to place or size it.
-- The drawing's pane becomes the **console**: the current slide, `3 / 12`, and
-  **Previous**, **Next** and **Stop**. It keeps the keyboard, and the mode line
-  says `:Present`.
+- The drawing's pane becomes the **console**, for the speaker: the current
+  slide, large; the next one, small, or **End** after the last; the current
+  slide's notes, their line breaks kept, scrolling when they are long; `3 / 12`
+  and the slide's name; the time of day and the time since presenting
+  started, in minutes and seconds, which **Reset** sets back to zero; and
+  **Previous**, **Next** and **Stop**. Neither clock is saved. The console
+  only shows notes: edit them in Arrange. It keeps the keyboard, and the mode
+  line says `:Present 3/12`.
 
 `Right`, `Down`, `Space` and `Page Down` show the next slide; `Left`, `Up` and
 `Page Up` the previous; `Home` and `End` the first and the last. They work in
 either window, so the slide window can be fullscreen with the console out of
 sight, and a presentation clicker, which types `Page Up` and `Page Down`,
 works in both.
+
+From Emacs, `C-c C-n` (`portal-excalidraw-next-slide`) and `C-c C-p`
+(`portal-excalidraw-previous-slide`) in the drawing's buffer move both windows
+too, a prefix argument that many slides, and leave the keyboard where it is.
+Being Control chords the console does not use, they reach Emacs from the
+console as well. Outside Present they say that the drawing is not being
+presented.
 
 `Escape`, **Stop** or `M-x portal-excalidraw-stop-presenting` stops: the slide
 window and its frame go, and the drawing shows Arrange at the slide that was
