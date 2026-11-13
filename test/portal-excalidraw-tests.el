@@ -447,7 +447,7 @@ Deleting a frame is recorded in `portal-excalidraw-test--frames'."
       (should (equal portal-excalidraw--mode "draw")))
     (portal-excalidraw-test--gone drawing slides frame)))
 
-(ert-deftest portal-excalidraw-a-slide-window-shown-after-presenting-stopped-closes ()
+(ert-deftest portal-excalidraw-a-slide-window-not-shown-when-presenting-stopped-closes ()
   ;; Present, then Escape at once: the page opens the window and leaves
   ;; Present before Emacs gets to show the window.
   (portal-excalidraw-test--presenting
@@ -461,21 +461,17 @@ Deleting a frame is recorded in `portal-excalidraw-test--frames'."
         (portal-fake-native-post target (json-serialize (list :type "mode" :mode mode)))
         (portal-fake-native-send (format "bridge %s\n" target)))
       (portal-excalidraw-test--run-events)
-      (let ((stale (portal-view--target-buffer late)))
-        (with-current-buffer drawing (should (eq portal-excalidraw--slides stale)))
-        ;; It closes as soon as it has been shown.
-        (accept-process-output nil 0.01)
-        (should-not (buffer-live-p stale))
-        (should-not (portal--inspect late))
-        (should (equal portal-excalidraw-test--frames (list frame)))
-        (with-current-buffer drawing
-          (should-not portal-excalidraw--slides)
-          (should (equal portal-excalidraw--mode "arrange")))))
+      ;; It is closed without being shown.
+      (should-not (portal--inspect late))
+      (should-not (portal-view--target-buffer late))
+      (should-not portal-excalidraw-test--frames)
+      (with-current-buffer drawing
+        (should-not portal-excalidraw--slides)
+        (should (equal portal-excalidraw--mode "arrange"))))
     ;; The next Present's window stays, even shown before the page says so.
     (let ((next (portal-fake-native-open-window
                  target "http://127.0.0.1:1/token/excalidraw/audience")))
       (portal-excalidraw-test--run-events)
-      (accept-process-output nil 0.01)
       (should (buffer-live-p (portal-view--target-buffer next)))
       (with-current-buffer drawing
         (should (eq portal-excalidraw--slides (portal-view--target-buffer next)))))))
@@ -503,6 +499,34 @@ Deleting a frame is recorded in `portal-excalidraw-test--frames'."
         (should-not (buffer-live-p slides))
         ;; Only the slide window's buffer went, and the drawing's if killed.
         (should (<= (length (buffer-list)) (1- buffers)))))))
+
+(ert-deftest portal-excalidraw-presenting-again-after-reopening-shows-the-slide-window ()
+  (portal-excalidraw-test--presenting
+    ;; Present, and reopen before Emacs shows the window.
+    (with-current-buffer drawing (portal-excalidraw-stop-presenting))
+    (portal-fake-native-post target "{\"type\":\"mode\",\"mode\":\"arrange\"}")
+    (portal-fake-native-send (format "bridge %s\n" target))
+    (portal-fake-native-open-window target "http://127.0.0.1:1/token/excalidraw/audience")
+    (portal-fake-native-post target "{\"type\":\"mode\",\"mode\":\"present\"}")
+    (portal-fake-native-send (format "bridge %s\n" target))
+    (with-current-buffer drawing
+      (cl-letf (((symbol-function 'portal-excalidraw--flush) #'ignore))
+        (portal-excalidraw-reopen)))
+    (portal-excalidraw-test--run-events)
+    ;; The new page presents.
+    (let ((page (buffer-local-value 'portal-view--target drawing)))
+      (portal-fake-native-post
+       page (json-serialize (list :type "loaded" :json portal-excalidraw--empty)))
+      (portal-fake-native-send (format "bridge %s\n" page))
+      (let ((window (portal-fake-native-open-window
+                     page "http://127.0.0.1:1/token/excalidraw/audience")))
+        (portal-fake-native-post page "{\"type\":\"mode\",\"mode\":\"present\"}")
+        (portal-fake-native-send (format "bridge %s\n" page))
+        (portal-excalidraw-test--run-events)
+        (should (buffer-live-p (portal-view--target-buffer window)))
+        (with-current-buffer drawing
+          (should (eq portal-excalidraw--slides (portal-view--target-buffer window)))
+          (should (equal portal-excalidraw--mode "present")))))))
 
 (ert-deftest portal-excalidraw-a-page-that-loads-again-ends-presenting ()
   (portal-excalidraw-test--presenting

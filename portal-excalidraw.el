@@ -27,10 +27,6 @@ or \"present\".")
   "The buffer of the drawing's slide window while presenting, or nil.")
 (defvar-local portal-excalidraw--slides-frame nil
   "The frame made to show the drawing's slide window, or nil.")
-(defvar-local portal-excalidraw--presents-ended 0
-  "How many times the drawing's page has left Present.")
-(defvar-local portal-excalidraw--slides-shown 0
-  "How many slide windows of the drawing have been shown.")
 
 (defcustom portal-excalidraw-slides-frame-parameters
   '((minibuffer . nil) (tool-bar-lines . 0) (tab-bar-lines . 0) (menu-bar-lines . 0)
@@ -170,7 +166,9 @@ Never prompt in this function."
 (defun portal-excalidraw--screen (mode)
   "Record MODE as the page's screen, and show it in the mode line.
 Entering Present gives the keyboard back to the console, which the slide
-window took as it opened; leaving it closes the slide window."
+window took as it opened; leaving it closes the slide window, and any the
+page opened that Emacs has not shown yet: the page opened them before it
+left Present, so they belong to a Present that is over."
   (if (not (member mode '("draw" "arrange" "present")))
       (message "Drawing: unknown screen %S" mode)
     (let ((was portal-excalidraw--mode))
@@ -180,8 +178,7 @@ window took as it opened; leaving it closes the slide window."
              ;; After the slide window's own buffer, which is queued already.
              (portal-excalidraw--queue "console"))
             ((and (equal was "present") (not (equal mode "present")))
-             (cl-incf portal-excalidraw--presents-ended)
-             (portal-excalidraw--end-slides))))))
+             (portal-excalidraw--end-all-slides))))))
 
 (defun portal-excalidraw--queue (kind)
   "Queue the command KIND, such as \"save\", to run in this drawing's buffer.
@@ -247,9 +244,7 @@ at the slide that showed."
   "Show slide window BUFFER in a new bare frame, as its drawing's.
 This is the drawing's `display-buffer' action for the window its page
 opens; ALIST's entries come first.  The drawing keeps the buffer and the
-frame, and an earlier slide window of it closes.  Emacs shows the window
-after the page opened it, and the page may have left that Present since:
-then the window closes again at once."
+frame, and an earlier slide window of it closes."
   (let* ((drawing (buffer-local-value 'portal-web-opener buffer))
          (parameters (append portal-excalidraw-slides-frame-parameters
                              `((name . ,(format "%s: Slides"
@@ -267,12 +262,7 @@ then the window closes again at once."
       (with-current-buffer drawing
         (portal-excalidraw--end-slides)
         (setq portal-excalidraw--slides buffer
-              portal-excalidraw--slides-frame (window-frame window))
-        ;; The Nth slide window is the Nth Present's, over once the page
-        ;; has left Present N times.  It closes once it has been shown.
-        (when (>= portal-excalidraw--presents-ended
-                  (cl-incf portal-excalidraw--slides-shown))
-          (run-at-time 0 nil #'portal-excalidraw--end-stale-slides drawing buffer)))
+              portal-excalidraw--slides-frame (window-frame window)))
       (with-current-buffer buffer
         (add-hook 'kill-buffer-hook #'portal-excalidraw--slides-killed nil t))
       (portal-excalidraw--resize-pixelwise))
@@ -297,8 +287,9 @@ frame that had the keyboard gives it to the console."
 
 (defun portal-excalidraw--end-all-slides ()
   "Close the drawing's slide window, and any its page opened that Emacs has
-not shown yet: the drawing's view is closing, and they would outlive it,
-owned by nothing."
+not shown yet, whose `portal-web-opened' events still wait.  Emacs would
+show them after the drawing's Present, or its view, has ended, owned by
+nothing."
   (when-let* ((target portal-view--target))
     (setq unread-command-events
           (seq-remove (lambda (event)
@@ -308,14 +299,6 @@ owned by nothing."
                            t)))
                       unread-command-events)))
   (portal-excalidraw--end-slides))
-
-(defun portal-excalidraw--end-stale-slides (drawing buffer)
-  "Close slide window BUFFER, which DRAWING's page stopped presenting before
-Emacs showed it, unless it is no longer DRAWING's."
-  (when (buffer-live-p drawing)
-    (with-current-buffer drawing
-      (when (eq portal-excalidraw--slides buffer)
-        (portal-excalidraw--end-slides)))))
 
 (defun portal-excalidraw--slides-killed ()
   "Stop presenting the drawing whose slide window's buffer this was."
