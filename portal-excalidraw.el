@@ -23,6 +23,9 @@
 (defvar-local portal-excalidraw--mode "draw"
   "The drawing page's screen, as the page last said: \"draw\", \"arrange\"
 or \"present\".")
+(defvar-local portal-excalidraw--slide nil
+  "The slide the drawing's page presents, as it last said: a plist with
+`:index', from 0, `:count' and `:name'; nil outside Present.")
 (defvar-local portal-excalidraw--slides nil
   "The buffer of the drawing's slide window while presenting, or nil.")
 (defvar-local portal-excalidraw--slides-frame nil
@@ -69,6 +72,9 @@ buffer in a pane does.  It keeps its undo history while hidden.
 \[portal-excalidraw-present] presents them: the drawing's pane becomes the
 console, and the slide window shows the slide in a frame of its own, to
 share in a call or make fullscreen on a projector.
+\[portal-excalidraw-next-slide] and
+\[portal-excalidraw-previous-slide] move through the slides from Emacs, and
+the mode line says which shows, :Present 3/12.
 \[portal-excalidraw-stop-presenting], or closing that window, stops."
   (when (and buffer-file-name (file-remote-p buffer-file-name))
     (user-error "Excalidraw currently supports local files only"))
@@ -87,7 +93,7 @@ share in a call or make fullscreen on a projector.
   (setq mode-line-process
         '(:eval (pcase portal-excalidraw--mode
                   ("arrange" ":Arrange")
-                  ("present" ":Present"))))
+                  ("present" (portal-excalidraw--presenting-tag)))))
   (portal-input-mode 1)
   (setq portal-excalidraw--saved (unless (buffer-modified-p) (buffer-string)))
   ;; Emacs deliberately catches before-save-hook errors and may still write.
@@ -104,6 +110,8 @@ share in a call or make fullscreen on a projector.
   (when auto-save-default (auto-save-mode 1)))
 
 (keymap-set portal-excalidraw-mode-map "C-c C-r" #'portal-excalidraw-reopen)
+(keymap-set portal-excalidraw-mode-map "C-c C-n" #'portal-excalidraw-next-slide)
+(keymap-set portal-excalidraw-mode-map "C-c C-p" #'portal-excalidraw-previous-slide)
 (define-key portal-excalidraw-mode-map [remap save-buffer] #'portal-excalidraw-save)
 (define-key portal-excalidraw-mode-map [remap undo] #'ignore)
 (add-to-list 'auto-mode-alist '("\\.excalidraw\\'" . portal-excalidraw-mode))
@@ -150,6 +158,7 @@ Never prompt in this function."
          (setq portal-excalidraw--ready t portal-excalidraw--error nil))
         ("dirty" (set-buffer-modified-p t))
         ("mode" (portal-excalidraw--screen (plist-get message :mode)))
+        ("slide" (portal-excalidraw--presented message))
         ("change" (portal-excalidraw--scene (plist-get message :json)))
         ("snapshot"
          (when (eql (plist-get message :request) portal-excalidraw--request)
@@ -172,9 +181,31 @@ left Present, so they belong to a Present that is over."
       (message "Drawing: unknown screen %S" mode)
     (let ((was portal-excalidraw--mode))
       (setq portal-excalidraw--mode mode)
+      (unless (equal mode "present") (setq portal-excalidraw--slide nil))
       (force-mode-line-update)
       (when (and (equal was "present") (not (equal mode "present")))
         (portal-excalidraw--end-all-slides)))))
+
+(defun portal-excalidraw--presented (message)
+  "Record the slide MESSAGE says the page presents, for the mode line.
+A slide said outside Present, which the page left meanwhile, is not."
+  (let ((index (plist-get message :index))
+        (count (plist-get message :count))
+        (name (plist-get message :name)))
+    (when (and (equal portal-excalidraw--mode "present")
+               (natnump index) (natnump count) (< index count) (stringp name))
+      (setq portal-excalidraw--slide (list :index index :count count :name name))
+      (force-mode-line-update))))
+
+(defun portal-excalidraw--presenting-tag ()
+  "The mode line's part while presenting: :Present and the slide, 3/12.
+Its help says the slide's name."
+  (if-let* ((slide portal-excalidraw--slide))
+      (concat ":Present "
+              (propertize (format "%d/%d" (1+ (plist-get slide :index))
+                                  (plist-get slide :count))
+                          'help-echo (plist-get slide :name)))
+    ":Present"))
 
 (defun portal-excalidraw--queue (kind)
   "Queue the command KIND, such as \"save\", to run in this drawing's buffer.
@@ -228,6 +259,29 @@ at the slide that showed."
   (unless (or (equal portal-excalidraw--mode "present") portal-excalidraw--slides)
     (user-error "The drawing is not being presented"))
   (portal-excalidraw--stop-presenting))
+
+(defun portal-excalidraw-next-slide (&optional n)
+  "Show the next slide while presenting the drawing, or the Nth next.
+The console and the slide window both move, as for Right in either; the
+keyboard stays where it is."
+  (interactive "p" portal-excalidraw-mode)
+  (portal-excalidraw--move-slide (or n 1)))
+
+(defun portal-excalidraw-previous-slide (&optional n)
+  "Show the previous slide while presenting the drawing, or the Nth
+previous.  The console and the slide window both move, as for Left in
+either; the keyboard stays where it is."
+  (interactive "p" portal-excalidraw-mode)
+  (portal-excalidraw--move-slide (- (or n 1))))
+
+(defun portal-excalidraw--move-slide (delta)
+  "Ask the drawing's page to move DELTA slides on, within the slides."
+  (unless (derived-mode-p 'portal-excalidraw-mode)
+    (user-error "This buffer is not a drawing"))
+  (unless (and (equal portal-excalidraw--mode "present")
+               portal-excalidraw--ready (not portal-excalidraw--error))
+    (user-error "The drawing is not being presented"))
+  (portal-web-send (list :type "slide" :delta delta)))
 
 (defun portal-excalidraw--stop-presenting ()
   "Close the drawing's slide window, and have its page leave Present."

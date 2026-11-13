@@ -259,6 +259,80 @@ Batch Emacs formats no mode line; the graphical tests read the real one."
           (portal-excalidraw--message '(:type "notice" :message "No slides")))
         (should-not portal-excalidraw--error)))))
 
+;; Next and previous from Emacs, and the slide in the mode line.
+
+(ert-deftest portal-excalidraw-next-and-previous-slide-ask-the-page-while-presenting ()
+  (portal-excalidraw-test--buffer
+    (should (eq (keymap-lookup portal-excalidraw-mode-map "C-c C-n")
+                #'portal-excalidraw-next-slide))
+    (should (eq (keymap-lookup portal-excalidraw-mode-map "C-c C-p")
+                #'portal-excalidraw-previous-slide))
+    (let (sent)
+      (cl-letf (((symbol-function 'portal-web-send) (lambda (message) (push message sent))))
+        (setq portal-excalidraw--ready t)
+        ;; Outside Present, they say so and ask the page nothing.
+        (dolist (screen '("draw" "arrange"))
+          (portal-excalidraw--message (list :type "mode" :mode screen))
+          (should (equal (cadr (should-error (portal-excalidraw-next-slide)
+                                             :type 'user-error))
+                         "The drawing is not being presented"))
+          (should-error (portal-excalidraw-previous-slide) :type 'user-error))
+        (should-not sent)
+        (let ((unread-command-events nil))
+          (portal-excalidraw--message '(:type "mode" :mode "present")))
+        (portal-excalidraw-next-slide)
+        (should (equal (pop sent) '(:type "slide" :delta 1)))
+        (portal-excalidraw-previous-slide)
+        (should (equal (pop sent) '(:type "slide" :delta -1)))
+        ;; A prefix argument moves that many.
+        (let ((current-prefix-arg 3))
+          (call-interactively #'portal-excalidraw-next-slide))
+        (should (equal (pop sent) '(:type "slide" :delta 3)))
+        (let ((current-prefix-arg 2))
+          (call-interactively #'portal-excalidraw-previous-slide))
+        (should (equal (pop sent) '(:type "slide" :delta -2)))
+        ;; Nor while the drawing has failed.
+        (setq portal-excalidraw--error "WebKit stopped")
+        (should-error (portal-excalidraw-next-slide) :type 'user-error)
+        (should-not sent)
+        (should-not (buffer-modified-p))))))
+
+(ert-deftest portal-excalidraw-mode-line-shows-the-slide-presented ()
+  (portal-excalidraw-test--buffer
+    (portal-excalidraw--message (list :type "loaded" :json portal-excalidraw--empty))
+    ;; A slide said outside Present is not shown.
+    (portal-excalidraw--message '(:type "slide" :index 0 :count 2 :name "Opening"))
+    (should-not portal-excalidraw--slide)
+    (let ((unread-command-events nil))
+      (portal-excalidraw--message '(:type "mode" :mode "present")))
+    ;; Until the page says which slide, the mode line says only :Present.
+    (should (equal (portal-excalidraw-test--screen-tag) ":Present"))
+    (portal-excalidraw--message '(:type "slide" :index 2 :count 12 :name "Intro"))
+    (should (equal (portal-excalidraw-test--screen-tag) ":Present 3/12"))
+    (should (equal (get-text-property 0 'help-echo
+                                      (portal-excalidraw--presenting-tag)) nil))
+    (should (equal (get-text-property 9 'help-echo (portal-excalidraw--presenting-tag))
+                   "Intro"))
+    (portal-excalidraw--message '(:type "slide" :index 3 :count 12 :name "Details"))
+    (should (equal (portal-excalidraw-test--screen-tag) ":Present 4/12"))
+    ;; A slide the page could not be showing is not taken.
+    (portal-excalidraw--message '(:type "slide" :index 12 :count 12 :name "Past"))
+    (portal-excalidraw--message '(:type "slide" :index -1 :count 12 :name "Before"))
+    (portal-excalidraw--message '(:type "slide" :index 1 :count 12))
+    (should (equal (portal-excalidraw-test--screen-tag) ":Present 4/12"))
+    (should-not portal-excalidraw--error)
+    ;; Leaving Present takes it away, and presenting again starts afresh.
+    (portal-excalidraw--message '(:type "mode" :mode "arrange"))
+    (should (equal (portal-excalidraw-test--screen-tag) ":Arrange"))
+    (should-not portal-excalidraw--slide)
+    (let ((unread-command-events nil))
+      (portal-excalidraw--message '(:type "mode" :mode "present")))
+    (should (equal (portal-excalidraw-test--screen-tag) ":Present"))
+    (portal-excalidraw--message '(:type "mode" :mode "draw"))
+    (should (equal (portal-excalidraw-test--screen-tag) ""))
+    ;; Presenting never modifies the buffer.
+    (should-not (buffer-modified-p))))
+
 (defvar portal-excalidraw-test--frames nil
   "The frames presenting asked to delete, newest first.")
 (defvar portal-excalidraw-test--alist nil

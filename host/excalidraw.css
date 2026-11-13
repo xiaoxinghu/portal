@@ -243,39 +243,141 @@ body {
 	margin: auto;
 	color: var(--arrange-muted);
 }
-/* The console, while presenting: the slide the slide window shows, and the
-   controls under it. */
+/* The console, while presenting: where it is and the clocks above; the
+   slide the slide window shows, large, beside the next slide and the notes;
+   the controls below. A narrow pane puts the side under the slide. */
 .portal-present {
 	outline: none;
 }
-.portal-present-stage {
+.portal-present header,
+.portal-present footer {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 10px 16px;
+	background: var(--arrange-panel);
+}
+.portal-present header {
+	border-bottom: 1px solid var(--arrange-border);
+}
+.portal-present footer {
+	justify-content: center;
+	border-top: 1px solid var(--arrange-border);
+}
+.portal-present-count {
+	font-size: 15px;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+.portal-present-name {
+	min-width: 0;
+	overflow: hidden;
+	font-size: 14px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.portal-present-clock {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin-left: auto;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+.portal-present-time {
+	font-size: 14px;
+	color: var(--arrange-muted);
+}
+.portal-present-elapsed {
+	font-size: 20px;
+	font-weight: 600;
+}
+.portal-present-clock button {
+	padding: 4px 10px;
+	font-size: 12px;
+}
+.portal-present-stop {
+	margin-left: 24px;
+}
+.portal-present-body {
 	flex: 1;
+	min-height: 0;
+	display: grid;
+	grid-template-columns: minmax(0, 2fr) minmax(200px, 1fr);
+}
+.portal-present-stage {
+	min-width: 0;
 	min-height: 0;
 	display: flex;
 	align-items: center;
 	justify-content: center;
 	padding: 16px;
 }
-.portal-present-stage img {
+.portal-present-stage img,
+.portal-present-next-image img {
 	max-width: 100%;
 	max-height: 100%;
 	object-fit: contain;
 	box-shadow: 0 1px 6px rgb(0 0 0 / 0.25);
 }
-.portal-present footer {
+.portal-present-side {
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	padding: 16px 16px 16px 0;
+}
+.portal-present h2 {
+	margin: 0 0 6px;
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--arrange-muted);
+}
+.portal-present-next-image {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	gap: 12px;
-	padding: 10px 16px;
-	border-top: 1px solid var(--arrange-border);
+	aspect-ratio: 16 / 9;
+	border: 1px solid var(--arrange-border);
+	border-radius: 4px;
+	overflow: hidden;
+}
+.portal-present-end,
+.portal-present-none {
+	color: var(--arrange-muted);
+}
+.portal-present-notes {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	padding: 10px 14px;
+	border: 1px solid var(--arrange-border);
+	border-radius: 8px;
 	background: var(--arrange-panel);
 }
-.portal-present-count {
-	min-width: 64px;
-	font-size: 14px;
-	font-variant-numeric: tabular-nums;
-	text-align: center;
+.portal-present-notes-text {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	font-size: 16px;
+	line-height: 1.45;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+@media (max-width: 640px) {
+	.portal-present-body {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: minmax(0, 3fr) minmax(0, 2fr);
+	}
+	.portal-present-side {
+		flex-direction: row;
+		padding: 0 16px 16px;
+	}
+	.portal-present-next {
+		flex: 0 0 40%;
+	}
 }
 .portal-present button:disabled,
 .portal-arrange button:disabled {

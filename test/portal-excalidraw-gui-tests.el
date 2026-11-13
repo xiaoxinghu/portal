@@ -529,11 +529,36 @@ show SLIDE of 2."
        (equal seen expected)))
     (should (equal seen expected))))
 
+(defun portal-excalidraw-gui--console ()
+  "What the console shows beside the slide: the next slide, as \"image\"
+once drawn or what it says instead; the notes, their lines kept; and
+whether it shows a time of day and the time presenting, as minutes and
+seconds."
+  (append (portal-excalidraw-gui--js
+           "const next = document.querySelector('.portal-present-next-image');
+            const image = next?.querySelector('img');
+            const notes = document.querySelector('.portal-present-notes-text');
+            return [image ? (image.complete && image.naturalWidth > 0 ? 'image' : 'pending')
+                          : next?.textContent ?? null,
+                    notes?.textContent ?? null,
+                    notes ? getComputedStyle(notes).whiteSpace : null,
+                    /\\d/.test(document.querySelector('.portal-present-time')?.textContent ?? ''),
+                    /^\\d+:\\d\\d$/.test(document.querySelector('.portal-present-elapsed')?.textContent ?? '')];")
+          nil))
+
+(defun portal-excalidraw-gui--mode-line (drawing expected)
+  "Wait until DRAWING's mode line says EXPECTED, a regexp, and check it."
+  (with-current-buffer drawing
+    (portal-excalidraw-gui--until
+     (lambda () (string-match-p expected (format-mode-line mode-line-process))))
+    (should (string-match-p expected (format-mode-line mode-line-process)))))
+
 (ert-deftest portal-excalidraw-gui-presents-in-a-slide-window-and-stops ()
   :tags '(:gui)
   (portal-excalidraw-gui--drawing
       (list (portal-excalidraw-gui--frame "closing" "Closing" 1 2000 2000 400 225)
-            (portal-excalidraw-gui--frame "opening" "Opening" 0 0 0 1600 900)
+            (portal-excalidraw-gui--frame "opening" "Opening" 0 0 0 1600 900
+                                          "Say hello.\nThen wave.")
             (append (portal-excalidraw-gui--text "hello" "Hello") '(:frameId "opening"))
             (append (portal-excalidraw-gui--text "bye" "Bye") '(:frameId "closing" :x 2050 :y 2050)))
       nil
@@ -558,14 +583,47 @@ show SLIDE of 2."
         ;; The console has the keyboard back.
         (should (eq (selected-frame) main))
         (should (eq (window-buffer) document))
-        (should (string-match-p ":Present" (format-mode-line mode-line-process)))
+        (portal-excalidraw-gui--mode-line document ":Present 1/2")
         (portal-excalidraw-gui--until
          (lambda () (portal-excalidraw-gui--js "return document.hasFocus();")))
         (should (portal-excalidraw-gui--js "return document.hasFocus();"))
         (portal-excalidraw-gui--showing frame main 1)
+        ;; Beside the slide: the next one, the notes and both clocks.
+        (let ((expected '("image" "Say hello.\nThen wave." "pre-wrap" t t)))
+          (portal-excalidraw-gui--until
+           (lambda () (equal (portal-excalidraw-gui--console) expected)))
+          (should (equal (portal-excalidraw-gui--console) expected)))
         ;; Next in the console.
         (apply #'portal-excalidraw-gui--key portal-excalidraw-gui--right)
         (portal-excalidraw-gui--showing frame main 2)
+        (portal-excalidraw-gui--mode-line document ":Present 2/2")
+        (portal-excalidraw-gui--key 115 (ash 1 23) (string #xF729)) ; Home
+        (portal-excalidraw-gui--showing frame main 1)
+        (portal-excalidraw-gui--mode-line document ":Present 1/2")
+        ;; Next and previous from Emacs, by their keys in the drawing's
+        ;; buffer: both windows move, and the mode line follows.
+        (should (eq (window-buffer) document))
+        (execute-kbd-macro (kbd "C-c C-n"))
+        (portal-excalidraw-gui--showing frame main 2)
+        (portal-excalidraw-gui--mode-line document ":Present 2/2")
+        (should (equal (portal-excalidraw-gui--console) '("End" "No notes." "pre-wrap" t t)))
+        (execute-kbd-macro (kbd "C-c C-p"))
+        (portal-excalidraw-gui--showing frame main 1)
+        (portal-excalidraw-gui--mode-line document ":Present 1/2")
+        ;; Typed in the console, they reach Emacs too: it leaves those chords.
+        (should (portal-view--with-frame-title main #'portal-test-native-target-frame))
+        (should (portal-excalidraw-gui--js "return document.hasFocus();"))
+        (portal-test-native-key 8 (ash 1 18) "\C-c")
+        (portal-test-native-key 45 (ash 1 18) "\C-n")
+        (let ((post-command-hook
+               (cons (lambda ()
+                       (when (eq this-command #'portal-input--dispatch)
+                         (exit-recursive-edit)))
+                     post-command-hook)))
+          (with-timeout (5 (ert-fail "C-c C-n from the console did not reach Emacs"))
+            (recursive-edit)))
+        (portal-excalidraw-gui--showing frame main 2)
+        (portal-excalidraw-gui--mode-line document ":Present 2/2")
         (portal-excalidraw-gui--key 115 (ash 1 23) (string #xF729)) ; Home
         (portal-excalidraw-gui--showing frame main 1)
         ;; Next in the slide window, which passes it to the console's page.
@@ -584,7 +642,8 @@ show SLIDE of 2."
         (should (portal-view--with-frame-title frame #'portal-test-native-target-frame))
         (portal-excalidraw-gui--key 53 0 "\e")
         (with-current-buffer document
-          (portal-excalidraw--wait (lambda () (equal portal-excalidraw--mode "arrange"))))
+          (portal-excalidraw--wait (lambda () (equal portal-excalidraw--mode "arrange")))
+          (should-not (string-match-p "Present\\|/2" (format-mode-line mode-line-process))))
         (should-not (buffer-live-p slides))
         (should-not (frame-live-p frame))
         (should (= (length (frame-list)) frames))
