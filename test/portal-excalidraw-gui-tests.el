@@ -459,6 +459,21 @@ The page sends it on its own; nothing here asks it to."
       (portal-excalidraw--wait (lambda () portal-excalidraw--ready))
       (portal-excalidraw--flush)
       (should (equal (portal-excalidraw-gui--deck (buffer-string)) deck))
-      (should-not (buffer-modified-p)))))
+      (should-not (buffer-modified-p))
+      ;; A name still being typed when Emacs leaves Arrange is written.
+      (portal-excalidraw-arrange)
+      (portal-excalidraw--wait (lambda () (equal portal-excalidraw--mode "arrange")))
+      (portal-terminal-test--wait
+       (lambda () (portal-excalidraw-gui--js "return document.hasFocus();")))
+      (portal-excalidraw-gui--focus "#portal-slide-closing input")
+      (portal-excalidraw-gui--type "end")
+      (portal-terminal-test--wait
+       (lambda () (equal (portal-excalidraw-gui--js
+                          "return document.activeElement.value;")
+                         "end")))
+      (portal-excalidraw-draw)
+      (portal-excalidraw--wait (lambda () (equal portal-excalidraw--mode "draw")))
+      (portal-excalidraw-gui--buffer-deck
+       '(("closing" "end" 0 nil) ("middle" "Middle" 1 nil) ("opening" "Opening" 2 "Welcome"))))))
 
 (provide 'portal-excalidraw-gui-tests)

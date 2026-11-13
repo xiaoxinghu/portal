@@ -452,18 +452,24 @@ function Arrange({
 		if (notesRef.current && notesRef.current.id !== selected?.id) writeNotes();
 	}, [selected, writeNotes]);
 
-	// A name being typed, until it is written; Escape drops it.
+	// A name being typed, until it is written; Escape drops it. Like notes,
+	// it is written before Arrange goes, which takes the field away without
+	// its losing the keyboard.
 	const name = useRef<{ id: string; text: string }>(undefined);
 	const [, renamed] = useState(0);
-	const writeName = () => {
+	const writeName = useCallback(() => {
 		const typed = name.current;
+		if (!typed) return;
 		name.current = undefined;
 		renamed((count) => count + 1);
-		const frame = typed && frames.find((each) => each.id === typed.id);
-		const text = typed?.text.trim() || null;
+		const frame = slideFrames(editor.getSceneElements()).find(
+			(each) => each.id === typed.id,
+		);
+		const text = typed.text.trim() || null;
 		if (frame && text !== frame.name)
 			write(new Map([[frame.id, { name: text }]]));
-	};
+	}, [editor, write]);
+	useEffect(() => writeName, [writeName]);
 
 	useEffect(() => {
 		list.current?.focus();
