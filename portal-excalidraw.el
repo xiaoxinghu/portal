@@ -165,8 +165,7 @@ Never prompt in this function."
 
 (defun portal-excalidraw--screen (mode)
   "Record MODE as the page's screen, and show it in the mode line.
-Entering Present gives the keyboard back to the console, which the slide
-window took as it opened; leaving it closes the slide window, and any the
+Leaving Present closes the slide window, and any the
 page opened that Emacs has not shown yet: the page opened them before it
 left Present, so they belong to a Present that is over."
   (if (not (member mode '("draw" "arrange" "present")))
@@ -174,11 +173,8 @@ left Present, so they belong to a Present that is over."
     (let ((was portal-excalidraw--mode))
       (setq portal-excalidraw--mode mode)
       (force-mode-line-update)
-      (cond ((and (equal mode "present") (not (equal was "present")))
-             ;; After the slide window's own buffer, which is queued already.
-             (portal-excalidraw--queue "console"))
-            ((and (equal was "present") (not (equal mode "present")))
-             (portal-excalidraw--end-all-slides))))))
+      (when (and (equal was "present") (not (equal mode "present")))
+        (portal-excalidraw--end-all-slides)))))
 
 (defun portal-excalidraw--queue (kind)
   "Queue the command KIND, such as \"save\", to run in this drawing's buffer.
@@ -244,7 +240,9 @@ at the slide that showed."
   "Show slide window BUFFER in a new bare frame, as its drawing's.
 This is the drawing's `display-buffer' action for the window its page
 opens; ALIST's entries come first.  The drawing keeps the buffer and the
-frame, and an earlier slide window of it closes."
+frame, and an earlier slide window of it closes.  The slide window takes
+the keyboard as it opens, and a command queued here gives it back to the
+console once the window is shown."
   (let* ((drawing (buffer-local-value 'portal-web-opener buffer))
          (parameters (append portal-excalidraw-slides-frame-parameters
                              `((name . ,(format "%s: Slides"
@@ -262,7 +260,8 @@ frame, and an earlier slide window of it closes."
       (with-current-buffer drawing
         (portal-excalidraw--end-slides)
         (setq portal-excalidraw--slides buffer
-              portal-excalidraw--slides-frame (window-frame window)))
+              portal-excalidraw--slides-frame (window-frame window))
+        (portal-excalidraw--queue "console"))
       (with-current-buffer buffer
         (add-hook 'kill-buffer-hook #'portal-excalidraw--slides-killed nil t))
       (portal-excalidraw--resize-pixelwise))

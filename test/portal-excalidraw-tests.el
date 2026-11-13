@@ -500,6 +500,28 @@ Deleting a frame is recorded in `portal-excalidraw-test--frames'."
         ;; Only the slide window's buffer went, and the drawing's if killed.
         (should (<= (length (buffer-list)) (1- buffers)))))))
 
+(ert-deftest portal-excalidraw-the-console-keeps-the-keyboard-after-present-stop-present ()
+  ;; Present, Stop and Present before Emacs drains the records: the page's
+  ;; three mode messages arrive together, before the second window's record.
+  (portal-excalidraw-test--presenting
+    (with-current-buffer drawing (portal-excalidraw-stop-presenting))
+    (portal-fake-native-post target "{\"type\":\"mode\",\"mode\":\"arrange\"}")
+    (portal-fake-native-send (format "bridge %s\n" target))
+    (let ((first (portal-fake-native-open-window
+                  target "http://127.0.0.1:1/token/excalidraw/audience")))
+      (dolist (mode '("present" "arrange" "present"))
+        (portal-fake-native-post target (json-serialize (list :type "mode" :mode mode))))
+      (portal-fake-native-send (format "bridge %s\n" target))
+      (let ((second (portal-fake-native-open-window
+                     target "http://127.0.0.1:1/token/excalidraw/audience")))
+        (portal-excalidraw-test--run-events)
+        (should-not (portal--inspect first))
+        (with-current-buffer drawing
+          (should (eq portal-excalidraw--slides (portal-view--target-buffer second))))
+        (should (eq (window-buffer) drawing))
+        (should (plist-get (portal--inspect target) :focused))
+        (should-not (plist-get (portal--inspect second) :focused))))))
+
 (ert-deftest portal-excalidraw-presenting-again-after-reopening-shows-the-slide-window ()
   (portal-excalidraw-test--presenting
     ;; Present, and reopen before Emacs shows the window.

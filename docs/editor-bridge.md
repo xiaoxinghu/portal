@@ -136,9 +136,12 @@ drawing's buffer-local `portal-web-window-action` shows it with
 `portal-excalidraw-slides-frame-parameters` and the window parameters
 `mode-line-format`, `header-line-format` and `tab-line-format` `none`. The
 drawing keeps the slide window's buffer and frame. Opening gives the slide view
-the keyboard and selects its frame; the page's `mode` `present` queues a
-command that gives it back to the console, with `select-frame-set-input-focus`
-and `portal-view-focus`. While any slide window is open,
+the keyboard and selects its frame; the display action queues a command
+that gives it back to the console, with `select-frame-set-input-focus` and
+`portal-view-focus`, once the window is shown. As the page leaves Present,
+the drawing drops the windows its page opened whose `portal-web-opened`
+events still wait, and closes their views: they belong to a Present that is
+over. Closing the drawing's view does the same. While any slide window is open,
 `frame-resize-pixelwise` is `t`, and afterwards as it was.
 
 No ending cleans up after itself: killing the slide window's buffer, or the
