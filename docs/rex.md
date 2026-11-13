@@ -496,15 +496,19 @@ A desktop read while Emacs is connected to the server gives the blocks'
 buffers themselves. Placeholders are saved as their blocks' buffers are,
 so a desktop saved while a server was down still holds its blocks.
 
-What else comes back:
+A block is to these what a file is: its record is its identity, as a
+path is a file's, and its buffer's name is only a name. So what comes back
+is what comes back for files:
 
 - A tab or a window configuration that Emacs holds while it runs, in
   `tab-bar-history` or a register, holds the buffer itself. A placeholder
   is the block's buffer once restored, so these keep showing the block.
-- A tab saved in the desktop names its buffers, and finds them by name when
-  first selected. A block's buffer comes back under the name it was saved
-  with; a block relabelled while Emacs was not running takes its new name,
-  and the saved tabs are told it.
+- Frames, tabs and splits saved in the desktop name their buffers, and a
+  block's buffer comes back under the name it was saved with, so they find
+  it, as they find a file's. A block relabelled while Emacs was not running
+  takes its new name, and a saved window or tab not shown yet loses it, as
+  it loses a file renamed meanwhile; the block's buffer is there all the
+  same.
 - The desktop saves only the buffers that `desktop-buffers-not-to-save`
   lets through. A regexp that leaves out every buffer whose name starts
   with `*` leaves out the blocks' buffers too.

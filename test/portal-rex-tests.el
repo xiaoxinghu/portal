@@ -2196,17 +2196,20 @@ The placeholders BODY leaves are killed, and the timers it arms cancelled."
 (defvar desktop-buffer-ok-count)
 (defvar desktop-buffer-fail-count)
 (defvar desktop-first-buffer)
+(defvar desktop-delay-hook)
 
 (defun portal-rex-tests--read-desktop (directory &optional tabs)
   "Restore the buffers of the desktop saved in DIRECTORY, and the frame's TABS.
 `desktop-read' does nothing in batch Emacs; this evaluates the desktop
-file, which restores each buffer, then gives the frame TABS, as the
-desktop's frameset would, and runs the hook `desktop-read' runs after."
+file, which restores each buffer, and runs the hooks `desktop-read' runs,
+in its order, giving the frame TABS where its frameset would."
   (let ((inhibit-message t)
         (desktop-buffer-ok-count 0)
         (desktop-buffer-fail-count 0)
         (desktop-first-buffer nil))
     (load (desktop-full-file-name directory) nil t t)
+    (run-hooks 'desktop-delay-hook)
+    (setq desktop-delay-hook nil)
     (when tabs (set-frame-parameter nil 'tabs tabs))
     (run-hooks 'desktop-after-read-hook)))
 
@@ -2276,7 +2279,7 @@ desktop's frameset would, and runs the hook `desktop-read' runs after."
                         (portal-rex-tests--restore)
                         (setq connection (car (portal-rex-connections)))
                         ;; Each placeholder is its block's buffer now; the
-                        ;; relabelled one takes its new name, which the tab learns.
+                        ;; relabelled one takes its new name.
                         (should (eq (portal-rex-block-buffer connection "block:1")
                                     (cdr (assoc "*rex: work/api*" placeholders))))
                         (should (eq (portal-rex-block-buffer connection "block:3")
@@ -2290,11 +2293,16 @@ desktop's frameset would, and runs the hook `desktop-read' runs after."
                           (should (eq major-mode 'portal-terminal-mode))
                           (should (equal portal-rex-session-id "session:b"))
                           (should (string-search "once a window shows this buffer" (buffer-string))))
+                        ;; The tab not yet selected finds its buffers by the
+                        ;; names they were saved with, as a file's: shell's,
+                        ;; but not the block relabelled meanwhile, as a file
+                        ;; renamed meanwhile.
                         (let ((state (alist-get 'ws (cdr (nth 1 (frame-parameter nil 'tabs))))))
                           (window-state-put state (frame-root-window))
-                          (should (equal (mapcar #'buffer-name
-                                                 (mapcar #'window-buffer (window-list nil 'nomini)))
-                                         '("*rex: work/api-2*" "*rex: play/shell*<2>")))))
+                          (let ((shown (mapcar #'window-buffer (window-list nil 'nomini))))
+                            (should (memq (portal-rex-block-buffer connection "block:4") shown))
+                            (should-not (memq (portal-rex-block-buffer connection "block:1")
+                                              shown)))))
                       ;; The closed block's placeholder has gone, and Emacs says so once.
                       (should-not (portal-rex--placeholders))
                       (should-not (get-buffer "*rex: work/logs*"))
@@ -2309,10 +2317,10 @@ desktop's frameset would, and runs the hook `desktop-read' runs after."
                                        "*rex: work/api-2*"))))
                   (set-frame-parameter nil 'tabs old-tabs))))))))))
 
-(ert-deftest portal-rex-restored-tabs-follow-blocks-that-swapped-labels ()
+(ert-deftest portal-rex-restored-blocks-that-swapped-labels-take-their-names ()
   ;; Two blocks swap labels while Emacs is not running: each placeholder
-  ;; meets the other's name as it is restored, and a tab saved in the
-  ;; desktop still finds each block where it was.
+  ;; meets the other's name as it becomes its block's buffer, and each
+  ;; ends with its own block's name.
   (portal-rex-tests--with (server)
     (portal-rex-tests--restoring
       (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
@@ -2322,27 +2330,13 @@ desktop's frameset would, and runs the hook `desktop-read' runs after."
              (first (portal-rex-desktop-restore
                      nil "*rex: work/a*" (portal-rex-tests--record socket "1" "a" "a" "work")))
              (second (portal-rex-desktop-restore
-                      nil "*rex: work/b*" (portal-rex-tests--record socket "2" "a" "b" "work")))
-             (old-tabs (frame-parameter nil 'tabs)))
-        (save-window-excursion
-          (delete-other-windows)
-          (switch-to-buffer first)
-          (set-window-buffer (split-window) second)
-          (let ((saved (window-state-get (frame-root-window) t)))
-            (unwind-protect
-                (progn
-                  (set-frame-parameter nil 'tabs `((current-tab (name . "here"))
-                                                   (tab (name . "there") (ws . ,saved))))
-                  (portal-rex-tests--restore)
-                  (should (equal (buffer-name first) "*rex: work/b*"))
-                  (should (equal (buffer-name second) "*rex: work/a*"))
-                  (switch-to-buffer "*scratch*")
-                  (delete-other-windows)
-                  (window-state-put (alist-get 'ws (cdr (nth 1 (frame-parameter nil 'tabs))))
-                                    (frame-root-window))
-                  (should (equal (mapcar #'window-buffer (window-list nil 'nomini))
-                                 (list first second))))
-              (set-frame-parameter nil 'tabs old-tabs))))))))
+                      nil "*rex: work/b*" (portal-rex-tests--record socket "2" "a" "b" "work"))))
+        (portal-rex-tests--restore)
+        (let ((connection (car (portal-rex-connections))))
+          (should (eq (portal-rex-block-buffer connection "block:1") first))
+          (should (eq (portal-rex-block-buffer connection "block:2") second)))
+        (should (equal (buffer-name first) "*rex: work/b*"))
+        (should (equal (buffer-name second) "*rex: work/a*"))))))
 
 (ert-deftest portal-rex-exiting-disconnects-after-what-saves-the-arrangement ()
   ;; desktop-save-mode saves from `kill-emacs-query-functions', before this
@@ -2388,10 +2382,10 @@ desktop's frameset would, and runs the hook `desktop-read' runs after."
           (should (equal (funcall run "t") '(t t))))
       (delete-directory directory t))))
 
-(ert-deftest portal-rex-desktop-read-while-connected-follows-swapped-labels ()
+(ert-deftest portal-rex-desktop-read-while-connected-gives-the-blocks-names ()
   ;; The same swap, with the desktop read while Emacs is connected: the
-  ;; desktop renames each block's buffer to the name it was saved with,
-  ;; which the other has now.
+  ;; desktop names each block's buffer as it was saved, which is now the
+  ;; other's name; then each takes its own block's name back.
   (require 'desktop)
   (portal-rex-tests--with (server)
     (portal-rex-tests--restoring
@@ -2406,37 +2400,20 @@ desktop's frameset would, and runs the hook `desktop-read' runs after."
              (desktop-base-lock-name "rex-desktop.lock")
              (connection (portal-rex-tests--connect server))
              (first (portal-rex-block-buffer connection "block:1"))
-             (second (portal-rex-block-buffer connection "block:2"))
-             (old-tabs (frame-parameter nil 'tabs)))
+             (second (portal-rex-block-buffer connection "block:2")))
         (cl-letf (((symbol-function 'desktop-save-buffer-p)
                    (lambda (_file name &rest _) (string-prefix-p "*rex: " name))))
-          (save-window-excursion
-            (delete-other-windows)
-            (switch-to-buffer first)
-            (set-window-buffer (split-window) second)
-            (let ((saved (window-state-get (frame-root-window) t)))
-              (desktop-save directory t)
-              (desktop-release-lock directory)
-              (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "b")
-                                        (portal-rex-tests--block "2" "a"))
-              (portal-rex-tests--session-event server "a" "session_view_changed" :revision 2)
-              (portal-rex-tests--settle connection)
-              (should (equal (list (buffer-name first) (buffer-name second))
-                             '("*rex: work/b*" "*rex: work/a*")))
-              (unwind-protect
-                  (progn
-                    (portal-rex-tests--read-desktop
-                     directory `((current-tab (name . "here")) (tab (name . "there") (ws . ,saved))))
-                    (should-not (portal-rex--placeholders))
-                    (should (equal (list (buffer-name first) (buffer-name second))
-                                   '("*rex: work/b*" "*rex: work/a*")))
-                    (switch-to-buffer "*scratch*")
-                    (delete-other-windows)
-                    (window-state-put (alist-get 'ws (cdr (nth 1 (frame-parameter nil 'tabs))))
-                                      (frame-root-window))
-                    (should (equal (mapcar #'window-buffer (window-list nil 'nomini))
-                                   (list first second))))
-                (set-frame-parameter nil 'tabs old-tabs)))))))))
+          (desktop-save directory t)
+          (desktop-release-lock directory)
+          (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "b")
+                                    (portal-rex-tests--block "2" "a"))
+          (portal-rex-tests--session-event server "a" "session_view_changed" :revision 2)
+          (portal-rex-tests--settle connection)
+          (portal-rex-tests--read-desktop directory)
+          (should-not (portal-rex--placeholders))
+          (should (eq (portal-rex-block-buffer connection "block:1") first))
+          (should (equal (list (buffer-name first) (buffer-name second))
+                         '("*rex: work/b*" "*rex: work/a*"))))))))
 
 (ert-deftest portal-rex-desktop-restoring-lazily-while-connected-keeps-names ()
   ;; A desktop that restores its buffers lazily, from an idle timer after
@@ -2460,18 +2437,19 @@ desktop's frameset would, and runs the hook `desktop-read' runs after."
                    (lambda (_file name &rest _) (equal name "*rex: work/a*"))))
           (desktop-save directory t)
           (desktop-release-lock directory)
+          ;; Relabelled since: the desktop will give it its old name.
+          (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "c")
+                                    (portal-rex-tests--block "2" "b"))
+          (portal-rex-tests--session-event server "a" "session_view_changed" :revision 2)
+          (portal-rex-tests--settle connection)
           (portal-rex-tests--read-desktop directory)
           ;; Nothing yet: the buffer waits to be restored.
           (should desktop-buffer-args-list)
           (let ((inhibit-message t))
             (desktop-lazy-complete))
-          ;; Once idle, every block's buffer has its own name back.
-          (let ((deadline (+ (float-time) 2)))
-            (while (and portal-rex--desktop-parked (< (float-time) deadline))
-              (accept-process-output nil 0.05)))
-          (should-not portal-rex--desktop-parked)
+          ;; Restored, it has its own name back.
           (should (equal (portal-rex-tests--names connection)
-                         '("*rex: work/a*" "*rex: work/b*"))))))))
+                         '("*rex: work/b*" "*rex: work/c*"))))))))
 
 (ert-deftest portal-rex-restore-says-once-what-it-could-not-restore ()
   (portal-rex-tests--with (server)

@@ -621,18 +621,10 @@ the block needs, and has no view."
   "Name BUFFER after its session's label and its block's, which is now LABEL."
   (with-current-buffer buffer
     (when label (setq portal-rex--block-label label))
-    (portal-rex--rename (portal-rex--buffer-name portal-rex-block-connection portal-rex-session-id
-                                                 portal-rex--block-label)
-                        t)
+    (rename-buffer (portal-rex--buffer-name portal-rex-block-connection portal-rex-session-id
+                                            portal-rex--block-label)
+                   t)
     (portal-rex--describe-block)))
-
-(defun portal-rex--rename (name &optional unique)
-  "Rename the current buffer NAME, as `rename-buffer' does with UNIQUE.
-The tabs that name it in their saved windows follow."
-  (let ((old (buffer-name)))
-    (rename-buffer name unique)
-    (unless (equal old (buffer-name))
-      (portal-rex--rename-in-tabs old (buffer-name)))))
 
 (defun portal-rex--untangle-names (connection session-id)
   "Give SESSION-ID's buffers on CONNECTION their plain names where they are free.
@@ -644,7 +636,7 @@ relabelled or closes.  A name given by hand stays."
       (let ((plain (portal-rex--buffer-name connection session-id portal-rex--block-label)))
         (when (and (string-match-p (concat "\\`" (regexp-quote plain) "<[0-9]+>\\'") (buffer-name))
                    (not (get-buffer plain)))
-          (portal-rex--rename plain))))))
+          (rename-buffer plain))))))
 
 (defun portal-rex--kill-buffer (connection block-id)
   "Forget CONNECTION's block BLOCK-ID, and kill its buffer if it has one.
@@ -1402,9 +1394,12 @@ on it carry on; requests still waiting fail with the code
 ;; and without the server; then Emacs connects without waiting, and each
 ;; placeholder becomes its block's buffer.  It is the same buffer, so the
 ;; windows, the tab-bar's tabs and the window configurations that held it
-;; hold the block, and those that name buffers, as a tab saved in the
-;; desktop does, find it by the name it kept.  A placeholder whose server
-;; cannot be reached waits, saying why, until Emacs connects to it.
+;; hold the block.  The record is the block's identity, as a path is a
+;; file's, and the buffer's name only a name: windows and tabs saved in
+;; the desktop find the buffer by the name it was saved with, as they find
+;; a file's, and lose a block relabelled meanwhile, as a file renamed.  A
+;; placeholder whose server cannot be reached waits, saying why, until
+;; Emacs connects to it.
 
 (declare-function bookmark-prop-get "bookmark" (bookmark prop))
 (defvar desktop-buffer-mode-handlers)
@@ -1522,35 +1517,16 @@ WHY says what it waits for."
 
 (defun portal-rex--keep-name ()
   "Keep the current block's buffer's restored name, unless its labels moved.
-The buffer has the name it was saved with, as a placeholder's or as
-the desktop gave it.  A tab saved in the desktop names its buffers, and
-finds the block by that name when it is first selected; one whose block
-was relabelled meanwhile is told the new name."
+The buffer has the name it was saved with, as a placeholder's or as the
+desktop gave it, which is how saved windows and tabs find it, as they
+find a file's buffer.  A block relabelled meanwhile takes its own name,
+as a block's buffer always does; like a file renamed while Emacs was
+not running, a saved window that has not shown it yet does not find it."
   (let ((plain (portal-rex--buffer-name portal-rex-block-connection portal-rex-session-id
-                                        portal-rex--block-label))
-        (old (buffer-name)))
-    (unless (string-match-p (concat "\\`" (regexp-quote plain) "\\(?:<[0-9]+>\\)?\\'") old)
-      (portal-rex--rename plain t))))
-
-(defun portal-rex--rename-in-tabs (old new)
-  "Make the tabs that name the buffer OLD in their saved windows name NEW.
-A tab restored from a desktop and not yet selected finds its buffers by
-these names; the others hold the buffers too.  Every rename of a block's
-buffer comes here, in order, so the names follow the buffers through
-the clashes of a restore."
-  (dolist (frame (frame-list))
-    (dolist (tab (frame-parameter frame 'tabs))
-      (when-let* ((state (alist-get 'ws (cdr-safe tab))))
-        (portal-rex--rename-in-state state old new)))))
-
-(defun portal-rex--rename-in-state (state old new)
-  "Make the window state STATE, as `window-state-get' writes it, name NEW for OLD."
-  (when (consp state)
-    (if (and (eq (car state) 'buffer) (equal (cadr state) old))
-        (setcar (cdr state) new)
-      (while (consp state)
-        (portal-rex--rename-in-state (car state) old new)
-        (setq state (cdr state))))))
+                                        portal-rex--block-label)))
+    (unless (string-match-p (concat "\\`" (regexp-quote plain) "\\(?:<[0-9]+>\\)?\\'")
+                            (buffer-name))
+      (rename-buffer plain t))))
 
 (defun portal-rex--give-up (connection predicate)
   "Kill the placeholders of CONNECTION's server whose records satisfy PREDICATE.
@@ -1680,39 +1656,19 @@ Signal a `user-error' saying why there is none."
 
 ;;;; The desktop
 
-(defvar portal-rex--desktop-parked nil
-  "Non-nil while a desktop read has the blocks' buffers under passing names.")
+(defvar desktop-delay-hook)
 
-(defun portal-rex--desktop-park ()
-  "Move every block's buffer off its name, once in each desktop read.
-The desktop gives each buffer it restores the name it was saved with,
-and windows and tabs find it by that name.  A name another block's
-buffer has now, as when two blocks swapped labels, would make it
-another; under passing names, each restored buffer gets its own.
-The names come back once the desktop has been read, or, for a buffer
-the desktop restores lazily, once Emacs is next idle."
-  (unless portal-rex--desktop-parked
-    (setq portal-rex--desktop-parked t)
-    ;; A lazy restore runs after `desktop-after-read-hook'; the read itself
-    ;; lets no timer run before that hook.
-    (run-at-time 0 nil #'portal-rex--desktop-read)
-    (dolist (buffer (portal-rex-buffers))
-      (with-current-buffer buffer
-        (portal-rex--rename (generate-new-buffer-name " *rex: restoring*"))))))
-
-(defun portal-rex--desktop-read ()
-  "Give the blocks' buffers their own names back once a desktop has been read.
-A buffer restored under its saved name keeps it unless its labels moved;
-a renamed one tells the saved tabs, each in turn, so they follow their
-blocks.  On `desktop-after-read-hook', and once Emacs is idle after
-the blocks' buffers were moved off their names."
-  (when portal-rex--desktop-parked
-    (setq portal-rex--desktop-parked nil)
-    (dolist (buffer (portal-rex-buffers))
-      (with-current-buffer buffer (portal-rex--keep-name)))
-    (dolist (connection portal-rex--connections)
-      (seq-doseq (session (portal-rex-connection-sessions connection))
-        (portal-rex--untangle-names connection (plist-get session :session_id))))))
+(defun portal-rex--desktop-named ()
+  "Give the blocks' buffers the desktop renamed their own names back.
+The desktop names each buffer it restores as it was saved; a block
+relabelled since takes its labels' name again.  On `desktop-delay-hook',
+which runs once the desktop has restored its buffers, or one buffer
+lazily."
+  (dolist (buffer (portal-rex-buffers))
+    (with-current-buffer buffer (portal-rex--keep-name)))
+  (dolist (connection portal-rex--connections)
+    (seq-doseq (session (portal-rex-connection-sessions connection))
+      (portal-rex--untangle-names connection (plist-get session :session_id)))))
 
 (defun portal-rex--desktop-record (_directory)
   "Return what the desktop saves of the current buffer: its block's record.
@@ -1734,9 +1690,9 @@ which it starts doing once idle.  Restoring never waits for a server."
         (portal-rex--restore-soon)
         (portal-rex--make-placeholder name record "Emacs has not connected to its server yet."))
        ((when-let* ((buffer (portal-rex-block-buffer connection (alist-get 'block record))))
-          ;; The desktop renames it to NAME, as it was saved; once read,
-          ;; it takes its own back if its labels moved.
-          (portal-rex--desktop-park)
+          ;; The desktop renames it to NAME, as it was saved; then it takes
+          ;; its own back if its labels moved.
+          (add-hook 'desktop-delay-hook #'portal-rex--desktop-named)
           buffer))
        ;; Its session's blocks are still being listed.
        ((portal-rex-connection-lists connection)
@@ -1748,10 +1704,6 @@ which it starts doing once idle.  Restoring never waits for a server."
 (with-eval-after-load 'desktop
   (dolist (mode '(portal-terminal-mode portal-rex-placeholder-mode))
     (add-to-list 'desktop-buffer-mode-handlers (cons mode #'portal-rex-desktop-restore))))
-
-;; Not autoloaded: the handler loads this file before any buffer needs it.
-(with-eval-after-load 'desktop
-  (add-hook 'desktop-after-read-hook #'portal-rex--desktop-read))
 
 ;; Portal's major modes turn it on: a placeholder needs no keyboard light.
 (with-eval-after-load 'desktop
