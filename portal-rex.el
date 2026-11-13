@@ -863,9 +863,13 @@ A block that has not answered in time may be busy, so the kill asks.")
 (defun portal-rex--program (process)
   "Return the program in the foreground of PROCESS, a `process' reply, or nil.
 That is Rex's own label for it: its script, else its argv0 without a
-login shell's \"-\", else its name, as a file name without directory."
+login shell's \"-\", else its name, as a file name without directory.
+Root's login names no program: it stands in the foreground for a block
+that is starting, or for a program the shell `exec'ed."
   (when-let* ((foreground (plist-get process :foreground))
               ((consp foreground))
+              ((not (and (equal (plist-get foreground :name) "login")
+                         (eql (plist-get foreground :user_id) 0))))
               (label (seq-find (lambda (value) (and (stringp value) (not (string-empty-p value))))
                                (list (plist-get foreground :script)
                                      (string-remove-prefix "-" (or (plist-get foreground :argv0) ""))

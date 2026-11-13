@@ -1320,7 +1320,10 @@ With no answer left, a question fails the test."
   (should (equal (portal-rex--program (portal-rex-tests--shell
                                        40 '(("node" "node" :script "/work/agent.js"))))
                  "agent.js"))
-  (should (equal (portal-rex--program '(:foreground (:pid 1 :name "login"))) "login"))
+  ;; Root's login, in the foreground while a block starts or for a program
+  ;; the shell exec'd, names nothing.
+  (should-not (portal-rex--program '(:foreground (:pid 1 :user_id 0 :name "login"))))
+  (should (equal (portal-rex--program '(:foreground (:pid 1 :user_id 501 :name "login"))) "login"))
   (should-not (portal-rex--program '(:foreground :null))))
 
 (ert-deftest portal-rex-killing-an-idle-blocks-buffer-ends-it ()
