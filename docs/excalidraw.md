@@ -74,6 +74,36 @@ like any change in the editor, and is saved with it.
   in Arrange or in the editor, takes back the last, and Shift-Command-Z
   puts it back. In the notes box or a name, they are the field's own.
 
+## Presenting
+
+**Present** in Arrange or in the drawing's menu, or `M-x portal-excalidraw-present`,
+presents the slides from the one Arrange selects, or from the editor from the
+slide nearest the middle of its view. Two windows show them:
+
+- The **slide window** is a new Emacs frame with nothing of Emacs in it: no
+  mode line, minibuffer, tab bar, tool bar or fringes. It shows the current
+  slide, letterboxed on black. Share that window in a video call, or move it
+  to a projector and make it fullscreen (`M-x toggle-frame-fullscreen` or the
+  green button): while a slide window is open, frames resize to the pixel, so
+  a fullscreen one fills the display. It keeps drawing while another window
+  covers it or it is on another Space. Customize
+  `portal-excalidraw-slides-frame-parameters` to place or size it.
+- The drawing's pane becomes the **console**: the current slide, `3 / 12`, and
+  **Previous**, **Next** and **Stop**. It keeps the keyboard, and the mode line
+  says `:Present`.
+
+`Right`, `Down`, `Space` and `Page Down` show the next slide; `Left`, `Up` and
+`Page Up` the previous; `Home` and `End` the first and the last. They work in
+either window, so the slide window can be fullscreen with the console out of
+sight, and a presentation clicker, which types `Page Up` and `Page Down`,
+works in both.
+
+`Escape`, **Stop** or `M-x portal-excalidraw-stop-presenting` stops: the slide
+window and its frame go, and the drawing shows Arrange at the slide that was
+showing. Killing the slide window's buffer, deleting its frame or closing it
+stops the same way. Killing the drawing, changing its major mode, `C-c C-r` and
+`revert-buffer` close the slide window. Presenting never modifies the buffer.
+
 `portal-host` bundles Excalidraw 0.18.1, React, CSS, lazy modules and fonts. Bun
 installs pinned npm dependencies at build time; runtime needs neither npm
 packages nor internet. The page blocks external assets, CDN font fallbacks and
