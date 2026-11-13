@@ -425,9 +425,15 @@ The page sends it on its own; nothing here asks it to."
     (portal-excalidraw-gui--type "hi")
     (portal-excalidraw-gui--buffer-deck
      '(("closing" "Closing" 0 nil) ("middle" "Middle" 1 "hi") ("opening" "Opening" 2 "Welcome")))
+    ;; Command-Z in Arrange takes the notes back, and a move at once after it
+    ;; does not bring them back.
+    (portal-excalidraw-gui--key 53 0 "\e")
+    (apply #'portal-excalidraw-gui--key portal-excalidraw-gui--command-z)
+    (apply #'portal-excalidraw-gui--key portal-excalidraw-gui--option-down)
+    (portal-excalidraw-gui--buffer-deck
+     '(("closing" "Closing" 0 nil) ("opening" "Opening" 1 "Welcome") ("middle" "Middle" 2 nil)))
     ;; A slide's name is typed in the filmstrip; Escape drops it, and Return
     ;; writes it.
-    (portal-excalidraw-gui--key 53 0 "\e")
     (portal-excalidraw-gui--focus "#portal-slide-closing input")
     (portal-excalidraw-gui--type "hi")
     (portal-excalidraw-gui--key 53 0 "\e")
@@ -439,13 +445,13 @@ The page sends it on its own; nothing here asks it to."
     (portal-excalidraw-gui--type "end")
     (portal-excalidraw-gui--key 36 0 "\r")
     (portal-excalidraw-gui--buffer-deck
-     '(("closing" "end" 0 nil) ("middle" "Middle" 1 "hi") ("opening" "Opening" 2 "Welcome")))
+     '(("closing" "end" 0 nil) ("opening" "Opening" 1 "Welcome") ("middle" "Middle" 2 nil)))
     (should (equal (portal-excalidraw-gui--js "return document.activeElement.getAttribute('role');") "listbox"))
     ;; Command-Z in Arrange takes back the last edit, the name, and in Draw
-    ;; the one before, the notes.
+    ;; the one before, the move.
     (apply #'portal-excalidraw-gui--key portal-excalidraw-gui--command-z)
     (portal-excalidraw-gui--buffer-deck
-     '(("closing" "Closing" 0 nil) ("middle" "Middle" 1 "hi") ("opening" "Opening" 2 "Welcome")))
+     '(("closing" "Closing" 0 nil) ("opening" "Opening" 1 "Welcome") ("middle" "Middle" 2 nil)))
     (should (equal portal-excalidraw--mode "arrange"))
     (portal-excalidraw-gui--key 53 0 "\e")
     (portal-excalidraw--wait (lambda () (equal portal-excalidraw--mode "draw")))

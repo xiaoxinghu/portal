@@ -413,17 +413,24 @@ function Arrange({
 		},
 		[editor],
 	);
+	/** Move the slide ID to the place TO gives for where it is now. Both
+	 * come from the editor's scene as it is, not from what Arrange shows,
+	 * which can be a moment behind it, as after an undo. */
 	const move = useCallback(
-		(from: number, to: number) =>
+		(id: string, to: (from: number) => number) => {
+			const current = slideFrames(editor.getSceneElements());
+			const from = current.findIndex((frame) => frame.id === id);
+			if (from < 0) return;
 			write(
 				new Map(
-					moveSlide(frames, from, to).map(({ frame, order }) => [
+					moveSlide(current, from, to(from)).map(({ frame, order }) => [
 						frame.id,
 						{ customData: { ...frame.customData, slidesOrder: order } },
 					]),
 				),
-			),
-		[frames, write],
+			);
+		},
+		[editor, write],
 	);
 
 	// The notes being typed, until they are written.
@@ -521,17 +528,20 @@ function Arrange({
 			};
 			if (plain && event.key === "ArrowUp") step(-1);
 			else if (plain && event.key === "ArrowDown") step(1);
-			else if (option && event.key === "ArrowUp") move(index, index - 1);
-			else if (option && event.key === "ArrowDown") move(index, index + 1);
+			else if (option && event.key === "ArrowUp" && selected)
+				move(selected.id, (at) => at - 1);
+			else if (option && event.key === "ArrowDown" && selected)
+				move(selected.id, (at) => at + 1);
 			else if (plain && event.key === "Enter" && selected) onEdit(selected);
 			else if (plain && event.key === "Escape") onDraw();
-			else if (!(undo && forwardToEditor(event))) return;
+			else if (undo && forwardToEditor(event)) setScene(currentScene(editor));
+			else return;
 			event.preventDefault();
 		};
 		return () => {
 			arrangeKeys = undefined;
 		};
-	}, [frames, index, selected, move, onDraw, onEdit]);
+	}, [editor, frames, index, selected, move, onDraw, onEdit]);
 
 	// Dragging a slide: the pointer goes down on it and moves; where it lets
 	// go, between which two slides, is where the slide goes.
@@ -589,7 +599,7 @@ function Arrange({
 			dragged.current = false;
 		});
 		setSelectedId(drag.id);
-		move(drag.from, drag.to);
+		move(drag.id, () => drag.to);
 	};
 	const dropMark = (at: number) => {
 		if (!drag?.moving || drag.to === drag.from) return undefined;
