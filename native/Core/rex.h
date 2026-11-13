@@ -81,7 +81,8 @@ bool portal_rex_close(uint64_t id, portal_text *error);
    live, left with nothing starts again from the beginning on its terminal,
    with a new paint; and every block asks again for what its terminal
    reports, as the events of the meantime are lost, and is sized again to
-   its terminal's grid, which may have changed meanwhile.  Typing reaches the
+   its terminal's grid and told whether it has the keyboard, either of
+   which may have changed meanwhile.  Typing reaches the
    blocks again from here.  Fails for a connection that is lost still. */
 bool portal_rex_resume(uint64_t id, portal_text *error);
 

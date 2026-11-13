@@ -1329,6 +1329,8 @@ static void test_coming_back(void)
     portal_fake_socket_end(data, "The connection to the server was lost");
     CHECK(portal_fake_socket_last() == again);
     CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 400, 160}, text("frame"), &error));
+    portal_input_focus(text(target), true);
+    sent(); /* The focus record. */
     CHECK(is_text(portal_fake_socket_sent(again), ""));
     /* Back as the same client: Emacs gets the welcome, with what came
        after it, and the core's messages from before it are dropped. */
@@ -1358,6 +1360,10 @@ static void test_coming_back(void)
     portal_fake_socket_deliver(data, "!");
     CHECK(is_text(fresh(target), "!"));
     number += 3;
+    answer_with(again, number++, "{}", NULL);
+    /* Then that it has the keyboard, which it gained meanwhile. */
+    CHECK(asked(again, number, "block.event",
+                ON_BLOCK ",\"event\":{\"type\":\"focus\",\"payload\":{\"action\":\"in\"}}}"));
     answer_with(again, number++, "{}", NULL);
     portal_terminal_input(text(target), "y", 1);
     CHECK(asked(again, number++, "com.superlogical.terminal.write", ON_BLOCK ",\"args\":{\"data\":\"y\"}}"));

@@ -25,6 +25,7 @@
 
 #include "channel.h"
 #include "core.h"
+#include "input.h"
 #include "json.h"
 #include "rex.h"
 #include "views.h"
@@ -2325,6 +2326,10 @@ bool portal_rex_resume(uint64_t id, portal_text *error)
             memset(shown->sized, 0, sizeof shown->sized);
             if (shown->stage > RESIZING && shown->stage < FAILED)
                 queue(shown, (struct operation) {.kind = RESIZE});
+            /* So may who has the keyboard: the block hears how it is now. */
+            struct portal_input *input = portal_views_input(view(shown->target));
+            if (input)
+                queue(shown, (struct operation) {.kind = FOCUS, .in = input->focused});
         }
         announce(shown);
     }
