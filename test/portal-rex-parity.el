@@ -12,6 +12,9 @@
 (require 'seq)
 (require 'portal-rex)
 (require 'portal-terminal)
+(require 'bookmark)
+
+(defvar desktop-save-buffer)
 
 (declare-function portal--rex-open "portal-rex" (path name version))
 (declare-function portal--rex-request "portal-rex" (id method payload))
@@ -269,6 +272,47 @@ nothing else claims the block meanwhile."
                          (list (list me "disconnect"))))
           (should (equal (funcall grid) '(100 32))))
       (when other (portal--rex-close (car other))))))
+
+(defun portal-rex-parity-check-reattach (connection block-id)
+  "Check that the block BLOCK-ID's buffer finds it again by ID after Emacs reconnects.
+CONNECTION is to the block's server, which disconnects.  The desktop's
+record makes a placeholder without the server; restoring connects
+without waiting, and the placeholder becomes the block's buffer, under
+its name; a bookmark jumps to it.  Return the new connection."
+  (let* ((socket (portal-rex-connection-socket connection))
+         (old (portal-rex-block-buffer connection block-id))
+         (name (buffer-name old))
+         (record (with-current-buffer old (funcall desktop-save-buffer nil)))
+         (bookmark (with-current-buffer old (portal-rex-bookmark-make-record)))
+         placeholder again)
+    (should (equal (alist-get 'block record) block-id))
+    (should (equal (alist-get 'server record) (abbreviate-file-name socket)))
+    (portal-rex-disconnect connection)
+    (should-not (buffer-live-p old))
+    (setq placeholder (portal-rex-desktop-restore nil name record))
+    (unwind-protect
+        (progn
+          (should (equal (buffer-name placeholder) name))
+          (should (eq (buffer-local-value 'major-mode placeholder) 'portal-rex-placeholder-mode))
+          (should (string-search block-id (with-current-buffer placeholder (buffer-string))))
+          (portal-rex--restore)
+          (setq again (cl-find socket portal-rex--connections
+                               :key #'portal-rex-connection-socket :test #'equal))
+          (should again)
+          (should (portal-rex--await again (lambda () (not (portal-rex-connection-opening again)))
+                                     10))
+          (should (portal-rex-live-p again))
+          (should (eq (portal-rex-block-buffer again block-id) placeholder))
+          (with-current-buffer placeholder
+            (should (eq major-mode 'portal-terminal-mode))
+            (should (equal portal-rex-block-id block-id))
+            (should (equal (buffer-name) name)))
+          (should (eq (save-current-buffer (portal-rex-bookmark-jump bookmark) (current-buffer))
+                      placeholder))
+          again)
+      (when (buffer-live-p placeholder)
+        (with-current-buffer placeholder
+          (unless portal-rex-block-id (kill-buffer placeholder)))))))
 
 (defun portal-rex-parity-check-sessions (connection directory)
   "Check the commands that change CONNECTION's server, and what it then says.

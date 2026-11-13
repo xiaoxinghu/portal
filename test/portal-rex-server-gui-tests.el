@@ -531,5 +531,44 @@ Its one block runs cat, without a login shell."
             (should-not (portal-rex-buffers connection session)))
         (mapc #'portal-rex-disconnect (portal-rex-connections))))))
 
+(ert-deftest portal-rex-server-gui-reattaches-a-block-by-its-id ()
+  :tags '(:gui)
+  ;; A buffer finds its block again by ID once Emacs has disconnected and
+  ;; connected again, as when it restarts with the desktop, and the
+  ;; program in it ran on meanwhile, with no command given.
+  (portal-real-rex-with (server)
+    (let* ((session (plist-get (portal-real-rex-cli server "new" "kept" "--shell" "none" "--json"
+                                                    "--" "/bin/sh")
+                               :session_id))
+           (connection (portal-rex-connect (portal-real-rex-socket server)))
+           (block (buffer-local-value 'portal-rex-block-id
+                                      (car (portal-rex-buffers connection session))))
+           (screen (lambda () (portal-rex-server-gui-tests--screen server session block)))
+           (write (lambda (data)
+                    (portal-rex-server-gui-tests--api server "com.superlogical.terminal.write"
+                                                      :session_id session :block_id block
+                                                      :args (list :data data)))))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (funcall write "echo before-$((6*7))\r")
+            (portal-rex-server-gui-tests--wait (lambda () (string-search "before-42" (funcall screen))))
+            (let* ((again (portal-rex-parity-check-reattach connection block))
+                   (buffer (portal-rex-block-buffer again block)))
+              ;; While Emacs was away, the shell ran on.
+              (funcall write "echo away-$((6*7))\r")
+              (portal-rex-server-gui-tests--wait (lambda () (string-search "away-42" (funcall screen))))
+              (switch-to-buffer buffer)
+              (redisplay t)
+              (let ((target portal-view--target))
+                (should target)
+                (portal-rex-server-gui-tests--wait
+                 (lambda () (equal (plist-get (plist-get (portal--inspect target) :rex) :state)
+                                   "live")))
+                (portal-rex-server-gui-tests--wait
+                 (lambda () (string-search "away-42" (portal--terminal-text target))))
+                (should (string-search "before-42" (portal--terminal-text target))))))
+        (mapc #'portal-rex-disconnect (portal-rex-connections))))))
+
 (provide 'portal-rex-server-gui-tests)
 ;;; portal-rex-server-gui-tests.el ends here

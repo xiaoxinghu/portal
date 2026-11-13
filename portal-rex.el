@@ -103,6 +103,9 @@ comes, and the IDs of the blocks closed since asking.")
   (held nil :documentation "Events that arrived before the sessions did, newest first.")
   (handling nil :documentation "Whether an event's functions are running.")
   (resume nil :documentation "The timer that will finish what a non-local exit left, or nil.")
+  (opening nil
+           :documentation "While it opens without anyone waiting, (FUNCTION . TIMER): who to
+tell once it is ready, or has failed, and the timer that gives up.")
   (reason nil :documentation "Why it ended, once it has, when anything said."))
 
 (defvar portal-rex--connections nil
@@ -235,7 +238,12 @@ connection again: its messages, the end among them, are in Emacs already."
 (defun portal-rex--handle (connection message)
   "Handle MESSAGE, which arrived on CONNECTION."
   (pcase (plist-get message :type)
-    ("welcome" (setf (portal-rex-connection-welcome connection) message))
+    ("welcome"
+     (setf (portal-rex-connection-welcome connection) message)
+     ;; Opening without anyone waiting, it attaches as soon as it is welcomed.
+     (when (and (portal-rex-connection-opening connection)
+                (eq (portal-rex-connection-state connection) 'connecting))
+       (portal-rex--attach connection)))
     ("response"
      (let* ((id (plist-get message :id))
             (call (and (stringp id)
@@ -309,7 +317,8 @@ server.  Every request still waiting fails, oldest first."
       (when (and ready (not quiet))
         (message "Lost the Rex server at %s: %s" (portal-rex--named connection) reason))
       (portal-rex--run #'portal-rex--forget-blocks connection)
-      (portal-rex--fail-calls connection reason))))
+      (portal-rex--fail-calls connection reason)
+      (portal-rex--opened connection (portal-rex--cannot connection reason)))))
 
 (defun portal-rex--record (id &rest _)
   "Handle the record that messages wait on the native connection ID."
@@ -460,6 +469,10 @@ Emacs sizes the block, or nobody does.")
 (defvar-local portal-rex--in-use nil
   "Whether this block's view was in the pane in use at the last look.")
 
+(defvar-local portal-rex--awaited nil
+  "In a placeholder, the record of the block it stands for; nil elsewhere.
+A placeholder stands for a block until Emacs connects to its server.")
+
 ;; A buffer is its block's whatever mode it is put in.
 (dolist (variable '(portal-rex-block-connection portal-rex-block-id portal-rex-session-id
                     portal-rex-block-directory portal-rex--block-label portal-rex--show-failure))
@@ -561,10 +574,15 @@ instead, which this leaves alone."
 The block is in the session SESSION-ID on CONNECTION's server.  The
 buffer is in `portal-terminal-mode', as the terminal view that will show
 the block needs, and has no view."
-  (let ((buffer (generate-new-buffer (portal-rex--buffer-name connection session-id label)))
-        ready)
+  (let* ((placeholder (portal-rex--placeholder connection block-id))
+         (buffer (or placeholder
+                     (generate-new-buffer (portal-rex--buffer-name connection session-id label))))
+         ready)
     (unwind-protect
         (with-current-buffer buffer
+          ;; A placeholder becomes the block's buffer, so the windows, tabs
+          ;; and window configurations that hold it hold the block.
+          (when placeholder (setq portal-rex--awaited nil))
           (portal-terminal-mode)
           ;; Who sizes the block, after the terminal's own state.
           (setq mode-line-process (list "" mode-line-process
@@ -587,11 +605,16 @@ the block needs, and has no view."
           ;; and closing the terminal ends the block.
           (setq portal-terminal--renamer #'portal-rex--renamer
                 portal-terminal--closer #'portal-rex--close)
+          (portal-rex--restorable)
+          (when placeholder (portal-rex--keep-name))
           (portal-rex--describe-block)
           (puthash block-id buffer (portal-rex-connection-blocks connection))
           (setq ready t))
       (unless ready
         (let ((portal-rex--killing t)) (kill-buffer buffer))))
+    ;; A window that showed the placeholder shows the block's screen now.
+    (when (and placeholder (display-graphic-p) (get-buffer-window buffer t))
+      (run-at-time 0 nil #'portal-rex--show-shown))
     buffer))
 
 (defun portal-rex--rename-buffer (buffer &optional label)
@@ -686,9 +709,13 @@ was killed by hand."
              ((not (buffer-live-p buffer)))
              ((not (equal label (buffer-local-value 'portal-rex--block-label buffer)))
               (portal-rex--rename-buffer buffer label)))))
-        (portal-rex--untangle-names connection session-id)))
+        (portal-rex--untangle-names connection session-id)
+        ;; A placeholder whose block was not listed waits for nothing.
+        (portal-rex--give-up connection (lambda (record)
+                                          (equal (alist-get 'session record) session-id)))))
       (when (cadr asked)
-        (portal-rex--list-blocks connection session-id)))))
+        (portal-rex--list-blocks connection session-id))
+      (portal-rex--check-opened connection))))
 
 (defun portal-rex--follow (connection event)
   "Bring CONNECTION's sessions and its blocks' buffers up to date with EVENT.
@@ -1142,7 +1169,19 @@ Each session is asked for its blocks, which makes their buffers."
                                      held)
                    (portal-rex-connection-inbox connection)))
       (seq-doseq (session (portal-rex-connection-sessions connection))
-        (portal-rex--list-blocks connection (plist-get session :session_id))))))
+        (portal-rex--list-blocks connection (plist-get session :session_id)))
+      ;; A placeholder of a session the server no longer has waits for nothing.
+      (portal-rex--give-up connection (lambda (record)
+                                        (not (portal-rex--session connection
+                                                                  (alist-get 'session record)))))
+      (portal-rex--check-opened connection))))
+
+(defun portal-rex--attach (connection)
+  "Ask CONNECTION's server, which has welcomed it, for every session's events.
+The answer, to `portal-rex--attached', makes the connection ready."
+  (setf (portal-rex-connection-state connection) 'attaching)
+  (portal-rex--request connection "session.attach_all" '(:event_scope "session")
+                       (lambda (response) (portal-rex--attached connection response))))
 
 (defun portal-rex--disconnect-all ()
   "Disconnect from every Rex server, as Emacs exits."
@@ -1176,9 +1215,16 @@ of the server and of its sessions.  The connection's
                               (file-name-directory (expand-file-name portal-rex-socket))
                               nil t))))
   (let* ((socket (expand-file-name (or socket portal-rex-socket)))
-         (existing (cl-find socket (portal-rex-connections)
+         (existing (cl-find socket portal-rex--connections
                             :key #'portal-rex-connection-socket :test #'equal)))
     (cond
+     ((and existing (portal-rex-connection-opening existing))
+      ;; It is opening without anyone waiting, as when restoring: wait now.
+      (portal-rex--await existing (lambda () (not (portal-rex-connection-opening existing)))
+                         portal-rex-timeout)
+      (if (portal-rex-live-p existing)
+          existing
+        (user-error "%s" (portal-rex--cannot existing (portal-rex-connection-reason existing)))))
      (existing
       (when (called-interactively-p 'any)
         (message "Already connected to the Rex server at %s" (portal-rex--named existing)))
@@ -1195,30 +1241,43 @@ of the server and of its sessions.  The connection's
                      (portal-rex--named connection) count (if (= count 1) "" "s"))))
         connection)))))
 
+(defun portal-rex--new-connection (socket)
+  "Start a connection to the Rex server on SOCKET, say hello, and return it.
+Call this with quitting inhibited, so that Emacs knows every connection."
+  (let ((connection (portal-rex--make-connection
+                     :id (portal--rex-open socket "Portal" (or (portal-build-version) "0"))
+                     :socket socket)))
+    (setq portal-rex--connections (append portal-rex--connections (list connection)))
+    ;; Late, so that whatever saves Emacs's arrangement as it exits, such
+    ;; as a desktop saved from this hook, still finds the blocks' buffers.
+    (add-hook 'kill-emacs-hook #'portal-rex--disconnect-all 90)
+    (add-hook 'window-buffer-change-functions #'portal-rex--show-shown)
+    (portal-rex--follow-use t)
+    connection))
+
+(defun portal-rex--cannot (connection reason)
+  "Return the sentence that says CONNECTION could not be made because of REASON.
+Without REASON, the server did not answer in time."
+  (if reason
+      (format "Cannot connect to the Rex server at %s: %s" (portal-rex--named connection) reason)
+    (format "The Rex server at %s did not answer within %s seconds" (portal-rex--named connection)
+            portal-rex-timeout)))
+
 (defun portal-rex--open (socket)
   "Return a new, ready connection to the Rex server on SOCKET, or signal why not."
-  (let ((name (abbreviate-file-name socket))
-        (version (or (portal-build-version) "0"))
-        connection finished)
+  (let (connection finished)
     ;; Whatever stops this, a quit included, leaves no half-made connection:
     ;; the connection is made inside that promise, with quitting inhibited
     ;; until Emacs knows it.
     (unwind-protect
         (progn
           (let ((inhibit-quit t))
-            (setq connection (portal-rex--make-connection
-                              :id (portal--rex-open socket "Portal" version) :socket socket)
-                  portal-rex--connections (append portal-rex--connections (list connection)))
-            (add-hook 'kill-emacs-hook #'portal-rex--disconnect-all)
-            (add-hook 'window-buffer-change-functions #'portal-rex--show-shown)
-            (portal-rex--follow-use t))
+            (setq connection (portal-rex--new-connection socket)))
           (when (and (portal-rex--await connection
                                         (lambda () (portal-rex-connection-welcome connection))
                                         portal-rex-timeout)
                      (portal-rex-connection-id connection))
-            (setf (portal-rex-connection-state connection) 'attaching)
-            (portal-rex--request connection "session.attach_all" '(:event_scope "session")
-                                 (lambda (response) (portal-rex--attached connection response)))
+            (portal-rex--attach connection)
             (when (portal-rex--await connection (lambda () (portal-rex-live-p connection))
                                      portal-rex-timeout)
               ;; The buffers, so that they are there when this returns.  A
@@ -1230,13 +1289,70 @@ of the server and of its sessions.  The connection's
           (setq finished t))
       (when (and connection (not (and finished (portal-rex-live-p connection))))
         (portal-rex--end connection nil t)))
+    (if (portal-rex-live-p connection)
+        connection
+      (user-error "%s" (portal-rex--cannot connection (portal-rex-connection-reason connection))))))
+
+(defun portal-rex--open-soon (socket then)
+  "Start connecting to the Rex server on SOCKET, and return without waiting.
+THEN is called once: with the connection and nil once it is ready and
+its blocks have their buffers, or once `portal-rex-timeout' seconds have
+passed with it ready; otherwise with nil and a sentence saying why it
+could not connect.  A connection Emacs has already is ready at once.
+Meanwhile the server's messages arrive as they do between commands, so
+Emacs waits for nothing."
+  (let* ((socket (expand-file-name socket))
+         (existing (cl-find socket portal-rex--connections
+                            :key #'portal-rex-connection-socket :test #'equal)))
     (cond
-     ((portal-rex-live-p connection) connection)
-     ((portal-rex-connection-reason connection)
-      (user-error "Cannot connect to the Rex server at %s: %s" name
-                  (portal-rex-connection-reason connection)))
-     (t (user-error "The Rex server at %s did not answer within %s seconds" name
-                    portal-rex-timeout)))))
+     ((and existing (portal-rex-connection-opening existing))
+      (let ((first (car (portal-rex-connection-opening existing))))
+        (setcar (portal-rex-connection-opening existing)
+                (lambda (connection failure)
+                  (funcall first connection failure)
+                  (funcall then connection failure)))))
+     (existing (funcall then existing nil))
+     ((not (file-exists-p socket))
+      (funcall then nil (format "No Rex server is running: there is no socket at %s"
+                                (abbreviate-file-name socket))))
+     (t
+      (let (connection)
+        (condition-case failure
+            (progn
+              (portal-view--load)
+              (let ((inhibit-quit t))
+                (setq connection (portal-rex--new-connection socket))
+                (setf (portal-rex-connection-opening connection)
+                      (cons then (run-at-time portal-rex-timeout nil
+                                              #'portal-rex--open-late connection)))))
+          (error
+           (if connection
+               (portal-rex--end connection (error-message-string failure) t)
+             (funcall then nil (format "Cannot connect to the Rex server at %s: %s"
+                                       (abbreviate-file-name socket)
+                                       (error-message-string failure)))))))))))
+
+(defun portal-rex--open-late (connection)
+  "Give up waiting for CONNECTION to open: `portal-rex-timeout' has passed.
+A connection that is ready is opened, though some of its blocks may not
+have their buffers yet; they come when the server's answers do."
+  (if (portal-rex-live-p connection)
+      (portal-rex--opened connection)
+    (portal-rex--end connection nil t)))
+
+(defun portal-rex--opened (connection &optional failure)
+  "Tell whoever waits for CONNECTION to open that it has, or why not: FAILURE."
+  (when-let* ((opening (portal-rex-connection-opening connection)))
+    (setf (portal-rex-connection-opening connection) nil)
+    (cancel-timer (cdr opening))
+    (portal-rex--run (car opening) (and (not failure) connection) failure)))
+
+(defun portal-rex--check-opened (connection)
+  "Note that CONNECTION has opened, if it is ready and its blocks have buffers."
+  (when (and (portal-rex-connection-opening connection)
+             (portal-rex-live-p connection)
+             (null (portal-rex-connection-lists connection)))
+    (portal-rex--opened connection)))
 
 (defun portal-rex--read-connection (&optional prompt)
   "Return the live connection the user means, reading it if there are several.
@@ -1262,6 +1378,364 @@ on it carry on; requests still waiting fail with the code
     (portal-rex--end connection "Disconnected" t)
     (when (called-interactively-p 'any)
       (message "Disconnected from the Rex server at %s" (portal-rex--named connection)))))
+
+;;; Restoring the arrangement
+
+;; Rex keeps the programs; Emacs keeps the arrangement.  A block's buffer
+;; has a record that names its block by the one identity that lasts, its
+;; server and its ID, with the labels for people to read:
+;;
+;;   ((server . "~/Library/Application Support/rex/server.sock")
+;;    (block . "block:01a1…") (session . "session:01a1…")
+;;    (block-label . "api") (session-label . "work"))
+;;
+;; A bookmark holds it, and so does the desktop.  Restoring the desktop
+;; makes a placeholder for each block, with the buffer's old name, at once
+;; and without the server; then Emacs connects without waiting, and each
+;; placeholder becomes its block's buffer.  It is the same buffer, so the
+;; windows, the tab-bar's tabs and the window configurations that held it
+;; hold the block.  The record is the block's identity, as a path is a
+;; file's, and the buffer's name only a name: windows and tabs saved in
+;; the desktop find the buffer by the name it was saved with, as they find
+;; a file's, and lose a block relabelled meanwhile, as a file renamed.  A
+;; placeholder whose server cannot be reached waits, saying why, until
+;; Emacs connects to it.
+
+(declare-function bookmark-prop-get "bookmark" (bookmark prop))
+(defvar desktop-buffer-mode-handlers)
+(defvar desktop-minor-mode-table)
+(defvar desktop-save-buffer)
+
+;;;###autoload
+(defcustom portal-rex-connect-at-startup nil
+  "Whether to connect to this Mac's Rex server once Emacs has started.
+The server is `portal-rex-socket'.  Emacs does not wait for it: a server
+that is slow or stopped delays nothing, and Emacs says once why it could
+not connect.  Restoring a desktop that holds Rex buffers connects to
+their servers whatever this says."
+  :type 'boolean)
+
+(defvar portal-rex--unrestored nil
+  "What could not be restored and is still to be said, newest first.
+Each is (WHY . NAMES): the blocks NAMES, or without them WHY alone.")
+
+(defvar portal-rex--report-timer nil
+  "The timer that will say what could not be restored, or nil.")
+
+(defvar portal-rex--restore-timer nil
+  "The timer that will connect to the servers placeholders wait for, or nil.")
+
+(defun portal-rex--block-record ()
+  "Return the record of the current buffer's block, or nil if it has none.
+A placeholder has the record of the block it stands for."
+  (cond
+   (portal-rex--awaited portal-rex--awaited)
+   (portal-rex-block-connection
+    `((server . ,(portal-rex--named portal-rex-block-connection))
+      (block . ,portal-rex-block-id)
+      (session . ,portal-rex-session-id)
+      (block-label . ,portal-rex--block-label)
+      (session-label . ,(portal-rex-session-label))))))
+
+(defun portal-rex--record-p (record)
+  "Return non-nil if RECORD is a Rex block's record."
+  (and (consp record)
+       (stringp (alist-get 'server record))
+       (stringp (alist-get 'block record))))
+
+(defun portal-rex--record-name (record)
+  "Return RECORD's block as people read it, SESSION/BLOCK from the labels."
+  (format "%s/%s" (or (alist-get 'session-label record) (alist-get 'session record))
+          (or (alist-get 'block-label record) (alist-get 'block record))))
+
+(defun portal-rex--record-socket (record)
+  "Return the socket of RECORD's server, or nil when the server is a host's label."
+  (let ((server (alist-get 'server record)))
+    (and (file-name-absolute-p server) (expand-file-name server))))
+
+(defun portal-rex--server-socket (server)
+  "Return the socket of the Rex server called SERVER, or signal why there is none.
+SERVER is as a record names it: a socket's file name, or the label of a
+host in Rex's host list, which Portal cannot reach yet."
+  (if (file-name-absolute-p server)
+      (expand-file-name server)
+    (user-error "Cannot reach the Rex host %s: Portal connects only to the Rex server on this Mac" server)))
+
+(defun portal-rex--restorable ()
+  "Make bookmarks and the desktop keep the current buffer's block.
+The buffer is a block's, or a placeholder."
+  (setq-local bookmark-make-record-function #'portal-rex-bookmark-make-record)
+  (setq-local desktop-save-buffer #'portal-rex--desktop-record))
+
+;;;; Placeholders
+
+(define-derived-mode portal-rex-placeholder-mode special-mode "Rex"
+  "Major mode of a buffer that stands for a Rex block until Emacs connects.
+Restoring a desktop makes one for each Rex block it held.  Once Emacs
+connects to the block's server, the buffer becomes the block's, in the
+windows that show it; a block that has closed takes its placeholder with
+it.  \\[portal-rex-connect] connects to this Mac's server.")
+
+(defun portal-rex--make-placeholder (name record why)
+  "Make and return a placeholder called NAME for RECORD's block.
+WHY says what it waits for."
+  (with-current-buffer (generate-new-buffer name)
+    (portal-rex-placeholder-mode)
+    (setq portal-rex--awaited record)
+    (portal-rex--restorable)
+    (portal-rex--placeholder-says why)
+    (current-buffer)))
+
+(defun portal-rex--placeholder-says (why)
+  "Make the current placeholder say which block it stands for, and WHY it waits."
+  (let ((inhibit-read-only t))
+    (erase-buffer)
+    (insert (format "Rex block %s, in session %s.\n%s on the server at %s\n\n%s\n%s\n"
+                    (or (alist-get 'block-label portal-rex--awaited) "")
+                    (or (alist-get 'session-label portal-rex--awaited)
+                        (alist-get 'session portal-rex--awaited))
+                    (alist-get 'block portal-rex--awaited)
+                    (alist-get 'server portal-rex--awaited)
+                    why
+                    "Once Emacs connects to the server, this buffer becomes the block's.")))
+  (set-buffer-modified-p nil)
+  (goto-char (point-min)))
+
+(defun portal-rex--placeholders (&optional socket)
+  "Return the placeholders, or those of the Rex server on SOCKET."
+  (cl-remove-if-not
+   (lambda (buffer)
+     (when-let* ((record (buffer-local-value 'portal-rex--awaited buffer)))
+       (or (null socket) (equal (portal-rex--record-socket record) socket))))
+   (buffer-list)))
+
+(defun portal-rex--placeholder (connection block-id)
+  "Return the placeholder of the block BLOCK-ID on CONNECTION's server, or nil."
+  (seq-find (lambda (buffer)
+              (equal (alist-get 'block (buffer-local-value 'portal-rex--awaited buffer)) block-id))
+            (portal-rex--placeholders (portal-rex-connection-socket connection))))
+
+(defun portal-rex--keep-name ()
+  "Keep the current block's buffer's restored name, unless its labels moved.
+The buffer has the name it was saved with, as a placeholder's or as the
+desktop gave it, which is how saved windows and tabs find it, as they
+find a file's buffer.  A block relabelled meanwhile takes its own name,
+as a block's buffer always does; like a file renamed while Emacs was
+not running, a saved window that has not shown it yet does not find it."
+  (let ((plain (portal-rex--buffer-name portal-rex-block-connection portal-rex-session-id
+                                        portal-rex--block-label)))
+    (unless (string-match-p (concat "\\`" (regexp-quote plain) "\\(?:<[0-9]+>\\)?\\'")
+                            (buffer-name))
+      (rename-buffer plain t))))
+
+(defun portal-rex--give-up (connection predicate)
+  "Kill the placeholders of CONNECTION's server whose records satisfy PREDICATE.
+They wait for blocks the server does not have, which have closed: once
+closed, a block's ID is never used again.  What they stood for is said."
+  (dolist (buffer (portal-rex--placeholders (portal-rex-connection-socket connection)))
+    (let ((record (buffer-local-value 'portal-rex--awaited buffer)))
+      (when (funcall predicate record)
+        (portal-rex--note-unrestored
+         (if (gethash (alist-get 'block record) (portal-rex-connection-blocks connection))
+             "its buffer was killed; it gets one when Emacs next connects"
+           "it has closed")
+         (portal-rex--record-name record))
+        (kill-buffer buffer)))))
+
+(defun portal-rex--still-waiting (server why)
+  "Make the placeholders of SERVER say WHY Emacs could not connect to it.
+They wait on, and what could not be restored is said."
+  (let ((waiting (seq-filter (lambda (buffer)
+                               (equal (alist-get 'server (buffer-local-value 'portal-rex--awaited
+                                                                             buffer))
+                                      server))
+                             (portal-rex--placeholders))))
+    (dolist (buffer waiting)
+      (with-current-buffer buffer (portal-rex--placeholder-says why)))
+    (apply #'portal-rex--note-unrestored why
+           (mapcar (lambda (buffer)
+                     (portal-rex--record-name (buffer-local-value 'portal-rex--awaited buffer)))
+                   waiting))))
+
+(defun portal-rex--note-unrestored (why &rest names)
+  "Note that the blocks NAMES could not be restored, because of WHY.
+Without NAMES, WHY says what failed.  Everything noted before Emacs is
+next idle is said at once, in one message."
+  (if-let* ((noted (assoc why portal-rex--unrestored)))
+      (setcdr noted (append (cdr noted) names))
+    (push (cons why names) portal-rex--unrestored))
+  (unless portal-rex--report-timer
+    (setq portal-rex--report-timer (run-at-time 0 nil #'portal-rex--report-unrestored))))
+
+(defun portal-rex--report-unrestored ()
+  "Say, in one message, what could not be restored since it was last said."
+  (when (timerp portal-rex--report-timer) (cancel-timer portal-rex--report-timer))
+  (setq portal-rex--report-timer nil)
+  (when portal-rex--unrestored
+    (message "%s"
+             (mapconcat (lambda (noted)
+                          (if (cdr noted)
+                              (format "Could not restore Rex %s %s: %s"
+                                      (if (cddr noted) "blocks" "block")
+                                      (string-join (cdr noted) ", ") (car noted))
+                            (car noted)))
+                        (reverse portal-rex--unrestored) "; "))
+    (setq portal-rex--unrestored nil)))
+
+;;;; Connecting to restore
+
+(defun portal-rex--restore-soon ()
+  "Connect, once Emacs is idle, to the servers placeholders wait for."
+  (unless portal-rex--restore-timer
+    (setq portal-rex--restore-timer (run-at-time 0 nil #'portal-rex--restore))))
+
+(defun portal-rex--restore ()
+  "Start connecting to each server that placeholders wait for, without waiting.
+This Mac's server too, when `portal-rex-connect-at-startup' says so."
+  (when (timerp portal-rex--restore-timer) (cancel-timer portal-rex--restore-timer))
+  (setq portal-rex--restore-timer nil)
+  (let (servers)
+    (dolist (buffer (portal-rex--placeholders))
+      (cl-pushnew (alist-get 'server (buffer-local-value 'portal-rex--awaited buffer)) servers
+                  :test #'equal))
+    (when portal-rex-connect-at-startup
+      (cl-pushnew (abbreviate-file-name (expand-file-name portal-rex-socket)) servers
+                  :test #'equal))
+    (dolist (server (nreverse servers))
+      (condition-case failure
+          (portal-rex--open-soon
+           (portal-rex--server-socket server)
+           (lambda (connection why)
+             (cond
+              ((null connection) (portal-rex--still-waiting server why))
+              ;; Connected, with blocks not listed in time: they come when
+              ;; the server answers.
+              ((seq-some (lambda (buffer)
+                           (equal (alist-get 'server (buffer-local-value 'portal-rex--awaited
+                                                                         buffer))
+                                  server))
+                         (portal-rex--placeholders))
+               (portal-rex--still-waiting
+                server (format "The Rex server at %s has not listed its blocks within %s seconds; each comes when it does"
+                               server portal-rex-timeout))))))
+        (user-error (portal-rex--still-waiting server (cadr failure)))))))
+
+;; In the autoloads, so that the option alone is enough: Portal is not
+;; loaded unless it is set.  A desktop's placeholders connect by themselves.
+;;;###autoload
+(progn
+  (defun portal-rex-at-startup ()
+    "Connect to this Mac's Rex server, if `portal-rex-connect-at-startup' says so.
+On `emacs-startup-hook'.  Emacs does not wait for the server."
+    (when (bound-and-true-p portal-rex-connect-at-startup)
+      (require 'portal-rex)
+      (portal-rex--restore-soon)))
+  (add-hook 'emacs-startup-hook #'portal-rex-at-startup))
+
+;;;; Bookmarks
+
+(defun portal-rex-bookmark-make-record ()
+  "Return a bookmark record for the current buffer's Rex block.
+It names the block's server and ID, which last, and the labels, which
+only show what it is.  `portal-rex-bookmark-jump' jumps to it."
+  (let ((record (or (portal-rex--block-record) (user-error "Not the buffer of a Rex block"))))
+    `(,(concat "rex: " (portal-rex--record-name record))
+      ,@record
+      (handler . portal-rex-bookmark-jump))))
+
+;;;###autoload
+(defun portal-rex-bookmark-jump (bookmark)
+  "Make the buffer of BOOKMARK's Rex block current, connecting if need be.
+The caller shows it, as `bookmark-jump' does.  A block that has closed,
+a server that is not running and one on another machine each say so."
+  (set-buffer (portal-rex--find-block
+               (mapcar (lambda (key) (cons key (bookmark-prop-get bookmark key)))
+                       '(server block session block-label session-label)))))
+(put 'portal-rex-bookmark-jump 'bookmark-handler-type "Rex")
+
+(defun portal-rex--find-block (record)
+  "Return the buffer of RECORD's block, connecting to its server if need be.
+Signal a `user-error' saying why there is none."
+  (unless (portal-rex--record-p record)
+    (user-error "Not a Rex block's record"))
+  (let* ((connection (portal-rex-connect (portal-rex--server-socket (alist-get 'server record))))
+         (block-id (alist-get 'block record)))
+    (or (portal-rex-block-buffer connection block-id)
+        (user-error (if (gethash block-id (portal-rex-connection-blocks connection))
+                        "Rex block %s still runs, but its buffer was killed; it gets one when Emacs next connects"
+                      "Rex block %s has closed: it is gone from the server at %s")
+                    (portal-rex--record-name record) (portal-rex--named connection)))))
+
+;;;; The desktop
+
+(defvar desktop-delay-hook)
+(defvar desktop-clear-preserve-buffers)
+
+(defun portal-rex--desktop-named ()
+  "Give the blocks' buffers the desktop renamed their own names back.
+The desktop names each buffer it restores as it was saved; a block
+relabelled since takes its labels' name again.  On `desktop-delay-hook',
+which runs once the desktop has restored its buffers, or one buffer
+lazily."
+  (dolist (buffer (portal-rex-buffers))
+    (with-current-buffer buffer (portal-rex--keep-name)))
+  (dolist (connection portal-rex--connections)
+    (seq-doseq (session (portal-rex-connection-sessions connection))
+      (portal-rex--untangle-names connection (plist-get session :session_id)))))
+
+(defun portal-rex--desktop-record (_directory)
+  "Return what the desktop saves of the current buffer: its block's record.
+The value of `desktop-save-buffer' in a block's buffer and a placeholder."
+  (portal-rex--block-record))
+
+;;;###autoload
+(defun portal-rex-desktop-restore (_file name record)
+  "Restore the buffer called NAME of RECORD's Rex block, from a desktop.
+The block's buffer, when Emacs is connected to its server; otherwise a
+placeholder that becomes the block's buffer once Emacs has connected,
+which it starts doing once idle.  Restoring never waits for a server."
+  (when (portal-rex--record-p record)
+    (let* ((socket (portal-rex--record-socket record))
+           (connection (and socket (cl-find socket (portal-rex-connections)
+                                            :key #'portal-rex-connection-socket :test #'equal))))
+      (cond
+       ;; One kept through `desktop-clear', as by `desktop-revert', which
+       ;; tries its server again.
+       ((when-let* ((kept (seq-find (lambda (buffer)
+                                      (equal (alist-get 'block (buffer-local-value
+                                                                'portal-rex--awaited buffer))
+                                             (alist-get 'block record)))
+                                    (portal-rex--placeholders socket))))
+          (portal-rex--restore-soon)
+          kept))
+       ((null connection)
+        (portal-rex--restore-soon)
+        (portal-rex--make-placeholder name record "Emacs has not connected to its server yet."))
+       ((when-let* ((buffer (portal-rex-block-buffer connection (alist-get 'block record))))
+          ;; The desktop renames it to NAME, as it was saved; then it takes
+          ;; its own back if its labels moved.
+          (add-hook 'desktop-delay-hook #'portal-rex--desktop-named)
+          buffer))
+       ;; Its session's blocks are still being listed.
+       ((assoc (alist-get 'session record) (portal-rex-connection-lists connection))
+        (portal-rex--make-placeholder name record "Emacs is asking its server for it."))
+       (t (portal-rex--note-unrestored "it has closed" (portal-rex--record-name record))
+          nil)))))
+
+;;;###autoload
+(with-eval-after-load 'desktop
+  (dolist (mode '(portal-terminal-mode portal-rex-placeholder-mode))
+    (add-to-list 'desktop-buffer-mode-handlers (cons mode #'portal-rex-desktop-restore))))
+
+;; `desktop-revert' and `desktop-change-dir' kill every buffer first, which
+;; would end blocks: their buffers, and placeholders, are kept, and the
+;; desktop then finds them.
+(with-eval-after-load 'desktop
+  (add-to-list 'desktop-clear-preserve-buffers "\\*rex: .*"))
+
+;; Portal's major modes turn it on: a placeholder needs no keyboard light.
+(with-eval-after-load 'desktop
+  (add-to-list 'desktop-minor-mode-table '(portal-input-mode nil)))
 
 ;;; Sessions and terminals from Emacs
 
