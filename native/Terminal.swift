@@ -42,11 +42,61 @@ private func terminalQuote(_ value: String) -> String {
     }.joined() + "'"
 }
 
+/// A fed terminal's pane: the view Portal places, which clips the terminal
+/// inside it. The terminal holds the grid its output is laid out for, at
+/// the pane's bottom-left, so a shell's prompt and cursor stay in view; the
+/// rest of the pane is the theme's background (`portal_terminal_hold_grid`).
+@MainActor
+private final class FedPane: NSView {
+    weak var terminal: HostedTerminal?
+    /// The theme's background, for the light and the dark appearance.
+    var background: NSColor = .textBackgroundColor { didSet { needsDisplay = true } }
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.masksToBounds = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = background.cgColor
+        }
+    }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+    override func setFrameSize(_ size: NSSize) {
+        super.setFrameSize(size)
+        terminal?.fitInPane()
+    }
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        terminal?.fitInPane()
+    }
+    /// A click beside the terminal gives it the keyboard, as one on it does.
+    override func mouseDown(with event: NSEvent) {
+        if let terminal { window?.makeFirstResponder(terminal) }
+    }
+}
+
+/// Where a fed terminal's in-memory session reports the grid its terminal
+/// has taken, from Ghostty's thread.
+@MainActor
+private final class GridWatch {
+    weak var terminal: HostedTerminal?
+}
+
 @MainActor
 private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     TerminalSurfacePwdDelegate, TerminalSurfaceGridResizeDelegate, TerminalSurfaceLifecycleDelegate,
     TerminalSurfaceCloseDelegate, TerminalSurfaceOpenURLDelegate, TerminalSurfaceProgressReportDelegate, NativeSurface {
-    var nativeView: NSView { self }
+    var nativeView: NSView { pane ?? self }
     var input: NativeInput? { session?.input }
     weak var session: TerminalSession?
     func handleKeyEvent(_ event: NSEvent) -> Bool { session?.handleKeyEvent(event) ?? false }
@@ -68,14 +118,34 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     /// A fed terminal's session: its output comes from the core and what it
     /// writes goes to the core. Nil for a terminal with its own pty.
     let fed: InMemoryTerminalSession?
+    /// A fed terminal's pane, which Portal places; nil for any other.
+    private let pane: FedPane?
+    /// The padding Ghostty leaves inside a terminal on each side, in points,
+    /// set rather than left to Ghostty's default, as the grids below count on it.
+    private static let padding = 2.0
+    /// The grid the core gave a fed terminal, which it holds whatever its
+    /// pane's size; nil until the core gives one, while it fills its pane.
+    private var heldGrid: (columns: UInt32, rows: UInt32)?
+    /// The grid the in-memory session last said its terminal has.
+    private var takenGrid: (columns: UInt32, rows: UInt32)?
+    /// What the core gave a fed terminal, in order, that waits while it
+    /// takes a grid: output, and grids.
+    private enum Fed { case output(Data), grid(UInt32, UInt32) }
+    private var waiting: [Fed] = []
+    private var takingGrid: Timer?
+    /// The pane's grid and cell size, as last reported to the core.
+    private var reportedPane: [UInt32] = []
 
     init(directory: String?, command: String?, theme: TerminalTheme, points: Double,
          fed: InMemoryTerminalSession? = nil) {
         self.fed = fed
+        pane = fed != nil ? FedPane() : nil
         super.init(frame: .zero)
         delegate = self
-        if let fed {
+        if let fed, let pane {
             configuration = TerminalSurfaceOptions(backend: .inMemory(fed))
+            pane.terminal = self
+            pane.addSubview(self)
         } else {
             configuration = TerminalSurfaceOptions(
                 workingDirectory: directory,
@@ -89,8 +159,93 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
             builder.withFontThicken(false)
             // Every exit takes that path: none counts as a failed launch.
             builder.withCustom("abnormal-command-exit-runtime", "0")
+            builder.withCustom("window-padding-x", "\(Int(Self.padding))")
+            builder.withCustom("window-padding-y", "\(Int(Self.padding))")
+            builder.withCustom("window-padding-balance", "false")
             builder.withFontSize(Float(points))
         }
+    }
+
+    /// The theme's background beside a fed terminal's grid.
+    func setBackground(_ color: NSColor) { pane?.background = color }
+
+    // A fed terminal's grid and its pane's.
+
+    /// The size of a cell in pixels, and pixels per point, once known.
+    private var cell: (width: Double, height: Double, scale: Double)? {
+        guard let grid, grid.cellWidthPixels > 0, grid.cellHeightPixels > 0 else { return nil }
+        let scale = Double(convertToBacking(NSSize(width: 1, height: 1)).width)
+        guard scale > 0 else { return nil }
+        return (Double(grid.cellWidthPixels), Double(grid.cellHeightPixels), scale)
+    }
+
+    /// Size the terminal to the grid it holds, at its pane's bottom-left, or
+    /// to its pane until it holds one; then report the pane's grid.
+    func fitInPane() {
+        guard let pane else { return }
+        var frame = pane.bounds
+        if let held = heldGrid, let cell {
+            // The grid, Ghostty's padding, and half a cell to spare, so that
+            // rounding never loses a row or a column.
+            let padding = 2 * Self.padding * cell.scale
+            frame = CGRect(x: 0, y: 0,
+                           width: (Double(held.columns) * cell.width + padding + cell.width / 2) / cell.scale,
+                           height: (Double(held.rows) * cell.height + padding + cell.height / 2) / cell.scale)
+        }
+        if self.frame != frame { self.frame = frame }
+        reportPane()
+    }
+
+    /// Tell the core the grid the pane would hold, whatever grid the
+    /// terminal holds: the size Emacs gives the block when it owns it.
+    private func reportPane() {
+        guard let pane, let cell, let target = session?.target else { return }
+        let padding = 2 * Self.padding * cell.scale
+        let columns = max(0, (Double(pane.bounds.width) * cell.scale - padding) / cell.width)
+        let rows = max(0, (Double(pane.bounds.height) * cell.scale - padding) / cell.height)
+        let values = [UInt32(columns), UInt32(rows), UInt32(cell.width), UInt32(cell.height)]
+        guard values[0] > 0, values[1] > 0, values != reportedPane else { return }
+        reportedPane = values
+        Core.terminalGrid(target, columns: values[0], rows: values[1],
+                          cellWidth: values[2], cellHeight: values[3])
+    }
+
+    /// The core's output and grids, in order: a grid waits for the output
+    /// before it to be parsed, and holds the output after it until the
+    /// terminal has taken it, for at most a quarter of a second.
+    private func flush() {
+        while takingGrid == nil, !waiting.isEmpty {
+            switch waiting.removeFirst() {
+            case let .output(data):
+                fed?.receive(data)
+            case let .grid(columns, rows):
+                fed?.waitForPendingOutput()
+                heldGrid = (columns, rows)
+                fitInPane()
+                if takenGrid.map({ $0 != (columns, rows) }) ?? true {
+                    takingGrid = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: false) { [weak self] _ in
+                        MainActor.assumeIsolated { self?.tookGrid() }
+                    }
+                }
+            }
+        }
+    }
+
+    private func tookGrid() {
+        takingGrid?.invalidate()
+        takingGrid = nil
+        flush()
+    }
+
+    /// The in-memory session says its terminal has this grid now.
+    func viewportResized(columns: UInt32, rows: UInt32) {
+        takenGrid = (columns, rows)
+        if takingGrid != nil, let held = heldGrid, held == (columns, rows) { tookGrid() }
+    }
+
+    func holdGrid(columns: UInt32, rows: UInt32) {
+        waiting.append(.grid(columns, rows))
+        flush()
     }
 
     @available(*, unavailable)
@@ -118,10 +273,9 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     func terminalDidResize(_ size: TerminalGridMetrics) {
         guard size != grid else { return }
         grid = size
-        if fed != nil, let target = session?.target, size.columns > 0, size.rows > 0 {
-            Core.terminalGrid(target, columns: UInt32(size.columns), rows: UInt32(size.rows),
-                              cellWidth: size.cellWidthPixels, cellHeight: size.cellHeightPixels)
-        }
+        // A new cell size changes the frame that holds the grid, and the
+        // pane's grid.
+        fitInPane()
     }
     func terminalDidAttachSurface(_ surface: TerminalSurface) {
         terminalSurface = surface
@@ -166,12 +320,18 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     func stopSamplingProgram() {
         programTimer?.invalidate()
         programTimer = nil
+        takingGrid?.invalidate()
+        takingGrid = nil
     }
 
     /// A fed terminal's output: parsed in order off the main thread, with
     /// the replies to its queries dropped (the session's
-    /// suppressesTerminalResponses), and held until the surface exists.
-    func feed(_ output: Data) { fed?.receive(output) }
+    /// suppressesTerminalResponses), and held until the surface exists, or
+    /// while the terminal takes a grid.
+    func feed(_ output: Data) {
+        waiting.append(.output(output))
+        flush()
+    }
 
     /// Ghostty asks to close the surface when its process ends, at each key
     /// press after that, and when a close is requested while the process
@@ -214,13 +374,21 @@ final class TerminalSession: PortalView {
         if options.flag("fed") {
             // Its program runs elsewhere: what it writes goes to the core,
             // in order, on Emacs's thread, as the core requires.
+            let watch = GridWatch()
             let session = InMemoryTerminalSession(
                 write: { bytes in
                     DispatchQueue.main.async { MainActor.assumeIsolated { Core.terminalInput(target, bytes) } }
                 },
-                resize: { _ in },
+                resize: { viewport in
+                    let columns = UInt32(viewport.columns), rows = UInt32(viewport.rows)
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated { watch.terminal?.viewportResized(columns: columns, rows: rows) }
+                    }
+                },
                 suppressesTerminalResponses: true)
             terminal = HostedTerminal(directory: directory, command: nil, theme: theme, points: points, fed: session)
+            watch.terminal = terminal
+            terminal.setBackground(try Terminals.background(named: options.string("theme")))
         } else {
             guard let directory else {
                 throw NativeError.message("The core passed a terminal without a :directory")
@@ -231,7 +399,7 @@ final class TerminalSession: PortalView {
         if let issue = terminal.controller?.lastConfigurationIssue { throw NativeError.message(issue) }
         self.terminal = terminal
         input = NativeInput(target: target, view: terminal, host: NativeView.parking) { [weak terminal] in
-            guard let terminal, !terminal.isHidden else { return false }
+            guard let terminal, !terminal.isHiddenOrHasHiddenAncestor else { return false }
             return terminal.acquireProgrammaticFocus()
         }
         terminal.session = self
@@ -279,8 +447,17 @@ final class TerminalSession: PortalView {
         terminal.feed(output)
     }
 
+    func holdGrid(columns: UInt32, rows: UInt32) throws {
+        guard terminal.fed != nil else { throw NativeError.message("Only a fed terminal holds a grid") }
+        guard columns > 0, rows > 0, columns <= UInt32(UInt16.max), rows <= UInt32(UInt16.max) else {
+            throw NativeError.message("A terminal's grid has at least one cell each way")
+        }
+        terminal.holdGrid(columns: columns, rows: rows)
+    }
+
     func applyTheme(_ name: String?) throws {
         let theme = try Terminals.theme(named: name)
+        if terminal.fed != nil { terminal.setBackground(try Terminals.background(named: name)) }
         guard let controller = terminal.controller, controller.theme != theme else { return }
         guard controller.setTheme(theme) else {
             throw NativeError.message(controller.lastConfigurationIssue ?? "Could not apply terminal theme")
@@ -357,5 +534,30 @@ enum Terminals {
             throw NativeError.message("Unknown terminal theme: \(name)")
         }
         return theme.toTerminalTheme()
+    }
+
+    /// The background of the theme NAME, or of the default theme for nil,
+    /// which is Alabaster's in the light appearance and Afterglow's in the
+    /// dark one.
+    static func background(named name: String?) throws -> NSColor {
+        func color(_ theme: String) -> NSColor {
+            let hex = GhosttyThemeCatalog.theme(named: theme)?.background ?? ""
+            let digits = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
+            guard digits.count >= 6, let value = UInt32(digits.prefix(6), radix: 16) else {
+                return .textBackgroundColor
+            }
+            return NSColor(srgbRed: CGFloat(value >> 16 & 0xff) / 255, green: CGFloat(value >> 8 & 0xff) / 255,
+                           blue: CGFloat(value & 0xff) / 255, alpha: 1)
+        }
+        guard let name else {
+            let light = color("Alabaster"), dark = color("Afterglow")
+            return NSColor(name: nil) { appearance in
+                appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
+            }
+        }
+        guard GhosttyThemeCatalog.theme(named: name) != nil else {
+            throw NativeError.message("Unknown terminal theme: \(name)")
+        }
+        return color(name)
     }
 }

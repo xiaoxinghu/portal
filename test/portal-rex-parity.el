@@ -13,6 +13,12 @@
 (require 'portal-rex)
 (require 'portal-terminal)
 
+(declare-function portal--rex-open "portal-rex" (path name version))
+(declare-function portal--rex-request "portal-rex" (id method payload))
+(declare-function portal--rex-receive "portal-rex" (id))
+(declare-function portal--rex-wait "portal-rex" (id milliseconds))
+(declare-function portal--rex-close "portal-rex" (id))
+
 (defun portal-rex-parity-check (connection)
   "Check what the server of CONNECTION says, as Portal relies on it.
 The handshake, `server.version', `session.list' and `session.list_blocks',
@@ -130,6 +136,139 @@ palette, is longer than 16 bytes."
                    '(:bytes_written 0)))
     (portal-rex-call connection "block.event"
                      (append block '(:event (:type "focus" :payload (:action "in")))))))
+
+(defun portal-rex-parity--open (socket)
+  "Connect to the Rex server on SOCKET as another client, and return its ID.
+It is a client of its own, as Rex's app is, reached through the native
+module's connection primitives alone, outside `portal-rex-connections'."
+  (let ((id (portal--rex-open socket "Parity" "1"))
+        welcome)
+    (while (not welcome)
+      (unless (portal--rex-wait id 5000) (error "No welcome from the Rex server"))
+      (dolist (text (cdr (portal--rex-receive id)))
+        (let ((message (json-parse-string text :object-type 'plist :null-object nil)))
+          (when (equal (plist-get message :type) "welcome") (setq welcome message)))))
+    (cons id (plist-get (plist-get welcome :client) :id))))
+
+(defun portal-rex-parity--call (other method payload)
+  "Call METHOD with PAYLOAD as the client OTHER, and return its result.
+Signal an error with the server's message if it fails."
+  (let ((number (number-to-string
+                 (portal--rex-request (car other) method (json-serialize payload))))
+        response)
+    (while (not response)
+      (unless (portal--rex-wait (car other) 5000) (error "No answer to %s" method))
+      (dolist (text (cdr (portal--rex-receive (car other))))
+        (let ((message (json-parse-string text :object-type 'plist :null-object nil)))
+          (when (equal (plist-get message :id) number) (setq response message)))))
+    (when (plist-get response :error)
+      (error "%s: %s" method (plist-get (plist-get response :error) :message)))
+    (plist-get response :payload)))
+
+(defun portal-rex-parity-check-owners (connection socket session-id block-id)
+  "Check how the block BLOCK-ID of SESSION-ID follows its owner's size.
+Emacs's CONNECTION and another client, on the server at SOCKET, claim
+and size the block in turn, as the native module claims a shown block
+and sends its pane's size: the block has its owner's size, a client's
+size waits until it owns the block, and the server tells CONNECTION of
+each change of owner.  CONNECTION has attached to the session, and
+nothing else claims the block meanwhile."
+  (let* ((me (plist-get (plist-get (portal-rex-connection-welcome connection) :client) :id))
+         (block (list :session_id session-id :block_id block-id))
+         (owner (lambda (result)
+                  (should (equal (plist-get (aref (plist-get result :blocks) 0) :block_id) block-id))
+                  (plist-get (aref (plist-get result :blocks) 0) :owner)))
+         (grid (lambda ()
+                 (let ((size (portal-rex-call connection "com.superlogical.terminal.size"
+                                              (append block '(:args nil)))))
+                   (list (plist-get size :columns) (plist-get size :rows)))))
+         (resize (lambda (call columns rows)
+                   (funcall call "com.superlogical.terminal.resize"
+                            (append block (list :args (list :columns columns :rows rows
+                                                            :cell_width_px 8 :cell_height_px 16))))))
+         (events nil)
+         (portal-rex-event-functions
+          (list (lambda (_connection event)
+                  (let ((inner (plist-get (plist-get (plist-get event :payload) :payload) :event)))
+                    (when (and (equal (plist-get inner :type) "block_owner_changed")
+                               (equal (plist-get (plist-get inner :payload) :block_id) block-id))
+                      (push (plist-get inner :payload) events))))))
+         (other (portal-rex-parity--open socket)))
+    (unwind-protect
+        (let ((call (lambda (method payload) (portal-rex-call connection method payload)))
+              (as-other (lambda (method payload) (portal-rex-parity--call other method payload))))
+          ;; Emacs takes the block at its size.
+          (should (equal (funcall owner (portal-rex-call connection "session.own_block"
+                                                         (list :session_id session-id
+                                                               :block_ids (vector block-id)
+                                                               :mode "take")))
+                         me))
+          (funcall resize call 90 30)
+          (should (equal (funcall grid) '(90 30)))
+          ;; The other client asks for a size and requests the block: it
+          ;; stays Emacs's, at Emacs's size.
+          (funcall as-other "session.attach" (list :session_id session-id))
+          (funcall resize as-other 70 20)
+          (should (equal (funcall owner (funcall as-other "session.own_block"
+                                                 (list :session_id session-id
+                                                       :block_ids (vector block-id)
+                                                       :mode "request")))
+                         me))
+          (should (equal (funcall grid) '(90 30)))
+          ;; It takes the block: the block has its size, with no other call,
+          ;; and Emacs hears of the new owner.
+          (setq events nil)
+          (should (equal (funcall owner (funcall as-other "session.own_block"
+                                                 (list :session_id session-id
+                                                       :block_ids (vector block-id)
+                                                       :mode "take")))
+                         (cdr other)))
+          (should (equal (funcall grid) '(70 20)))
+          (portal-rex-call connection "server.version")
+          (should (equal (mapcar (lambda (event) (list (plist-get event :owner) (plist-get event :reason)))
+                                 events)
+                         (list (list (cdr other) "take"))))
+          ;; Emacs's size while it does not own the block waits; a request
+          ;; does not win it back.
+          (funcall resize call 100 32)
+          (should (equal (funcall grid) '(70 20)))
+          (should (equal (funcall owner (portal-rex-call connection "session.own_block"
+                                                         (list :session_id session-id
+                                                               :block_ids (vector block-id)
+                                                               :mode "request")))
+                         (cdr other)))
+          ;; Another client's name, as client.inspect gives it.
+          (should (equal (plist-get (plist-get (plist-get (portal-rex-call connection "client.inspect"
+                                                                           (list :client_id (cdr other)))
+                                                          :client)
+                                               :info)
+                                    :name)
+                         "Parity"))
+          ;; A take alone gives Emacs its size back.
+          (setq events nil)
+          (should (equal (funcall owner (portal-rex-call connection "session.own_block"
+                                                         (list :session_id session-id
+                                                               :block_ids (vector block-id)
+                                                               :mode "take")))
+                         me))
+          (should (equal (funcall grid) '(100 32)))
+          (should (equal (mapcar (lambda (event) (plist-get event :owner)) events) (list me)))
+          ;; The other client takes the block and leaves: the block comes
+          ;; back to Emacs, in line for it, at Emacs's size.
+          (funcall as-other "session.own_block"
+                   (list :session_id session-id :block_ids (vector block-id) :mode "take"))
+          (should (equal (funcall grid) '(70 20)))
+          (setq events nil)
+          (portal--rex-close (car other))
+          (setq other nil)
+          (let ((deadline (+ (float-time) 5)))
+            (while (and (not events) (< (float-time) deadline))
+              (portal-rex-call connection "server.version")))
+          (should (equal (mapcar (lambda (event) (list (plist-get event :owner) (plist-get event :reason)))
+                                 events)
+                         (list (list me "disconnect"))))
+          (should (equal (funcall grid) '(100 32))))
+      (when other (portal--rex-close (car other))))))
 
 (defun portal-rex-parity-check-sessions (connection directory)
   "Check the commands that change CONNECTION's server, and what it then says.

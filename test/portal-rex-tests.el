@@ -146,6 +146,8 @@ Connections that BODY leaves are closed, and none may remain."
     (let ((connection (portal-rex-tests--connect server)))
       (portal-rex-parity-check connection)
       (portal-rex-parity-check-block connection "session:fake-1" "block:fake-1")
+      (portal-rex-parity-check-owners connection (portal-fake-rex-socket server)
+                                      "session:fake-1" "block:fake-1")
       (portal-rex-tests--idle server "block:fake-1")
       (portal-rex-parity-check-kill connection "session:fake-1" "block:fake-1"))))
 

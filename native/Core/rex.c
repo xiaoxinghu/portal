@@ -119,6 +119,7 @@ struct connection {
     size_t asked;
     char **attached; /* Sessions attached with session.attach. */
     size_t sessions;
+    char *client; /* Its client's ID, from the welcome, or NULL until then. */
 };
 
 static struct {
@@ -144,7 +145,7 @@ enum stage {
 
 /* Something to send for the terminal, one at a time, in order. */
 struct operation {
-    enum { WRITE, FOCUS, RESIZE } kind;
+    enum { WRITE, FOCUS, RESIZE, TAKE } kind;
     struct bytes bytes; /* WRITE's. */
     bool in;            /* FOCUS's. */
 };
@@ -179,17 +180,24 @@ struct shown {
     portal_text reported; /* The last directory reported from this Mac. */
     portal_text cwd;      /* The foreground process's working directory. */
     portal_text program;  /* The foreground process, as Rex labels one. */
-    uint64_t seqs[3];     /* Of the title, the reported directory, the process. */
+    uint64_t seqs[4];     /* Of the title, the reported directory, the process, the owner. */
     bool exited;          /* Its program has exited, and the block stays. */
     bool child_exited;    /* The server said its program exited. */
     bool closed;          /* The server said the block closed. */
     bool exiting;         /* Either: EXIT_TIMER runs, and the stream's end waits. */
     bool end_waits;       /* The stream ended while exiting: told after it. */
     uint64_t exit_timer;
+    /* Who owns the block, as the server last said: a client's ID, "" for
+       no client, unknown until the server has said. */
+    portal_text owner;
+    bool owner_known;
+    portal_text owner_name; /* What the owner calls itself, "" until known. */
+    bool taking;            /* A take is queued or unanswered. */
+    uint32_t drawn[2];      /* The grid last given the terminal, 0 by 0 before any. */
 };
 
 /* Which of a shown block's details a seq is for. */
-enum detail { TITLE, DIRECTORY, PROCESS };
+enum detail { TITLE, DIRECTORY, PROCESS, OWNER };
 
 static struct {
     struct shown **items;
@@ -272,6 +280,7 @@ static void free_connection(struct connection *connection)
     for (size_t i = 0; i < connection->sessions; i++)
         free(connection->attached[i]);
     free(connection->attached);
+    free(connection->client);
 }
 
 static void forget(struct connection *connection)
@@ -820,6 +829,89 @@ static void ask_details(struct shown *shown)
     }
 }
 
+/* Who owns the block. */
+
+/* Whether this connection's client owns SHOWN's block, as far as the
+   server has said. */
+static bool mine(struct shown *shown)
+{
+    struct connection *connection = find(shown->connection, NULL);
+    return shown->owner_known && connection && connection->client
+        && same(shown->owner, literal(connection->client));
+}
+
+static answer named;
+
+/* OWNER, a block's "owner" member, a client's ID, or NULL for a block
+   without one, as the server said at SEQ: whether that changed who owns
+   SHOWN's block.  Another client's name is asked of the server, which
+   knows it while that client is connected. */
+static bool take_owner(struct shown *shown, const portal_string *owner, uint64_t seq)
+{
+    portal_text id = {0};
+    if (seq < shown->seqs[OWNER] || (owner && !portal_json_string(*owner, &id)))
+        return false;
+    shown->seqs[OWNER] = seq;
+    bool moved = !shown->owner_known || !same(shown->owner, id.data ? view(id) : literal(""));
+    if (moved) {
+        free(shown->owner.data);
+        shown->owner = id;
+        id = (portal_text) {0};
+        if (!shown->owner.data)
+            copy(literal(""), &shown->owner);
+        shown->owner_known = shown->owner.data != NULL;
+        set_text(&shown->owner_name, literal(""));
+        if (shown->owner.length && !mine(shown)) {
+            struct json json = {0};
+            put_text(&json, "{\"client_id\":");
+            put_string(&json, view(shown->owner));
+            put_text(&json, "}");
+            ask(shown, "client.inspect", &json, named);
+        }
+    }
+    free(id.data);
+    return moved;
+}
+
+/* PAYLOAD, the result of a claim, lists each block's owner: SHOWN's, at
+   SEQ, the result's. */
+static void take_owners(struct shown *shown, portal_string payload, uint64_t seq)
+{
+    portal_string blocks, entry, block, owner;
+    if (!portal_json_member(payload, "blocks", &blocks))
+        return;
+    for (size_t i = 0; portal_json_element(blocks, i, &entry); i++) {
+        if (!portal_json_member(entry, "block_id", &block) || !portal_json_is(block, shown->block.data))
+            continue;
+        bool owned = portal_json_member(entry, "owner", &owner) && !is(owner, "null");
+        if (take_owner(shown, owned ? &owner : NULL, seq))
+            changed(shown);
+        return;
+    }
+}
+
+/* The owner's own description: what it calls itself, its label or else
+   its program's name, while it still owns the block. */
+static void named(struct shown *shown, const char *response, size_t length)
+{
+    portal_string payload, client, info, id, value;
+    portal_text name = {0};
+    if (!told(response, length, &payload) || !portal_json_member(payload, "client", &client)
+        || !portal_json_member(client, "client_id", &id) || !portal_json_is(id, shown->owner.data)
+        || !portal_json_member(client, "info", &info))
+        return;
+    if (portal_json_member(info, "label", &value))
+        portal_json_string(value, &name);
+    if (!name.length && portal_json_member(info, "name", &value)) {
+        free(name.data);
+        name = (portal_text) {0};
+        portal_json_string(value, &name);
+    }
+    if (name.length && set_text(&shown->owner_name, view(name)))
+        changed(shown);
+    free(name.data);
+}
+
 /* EVENT, a block event's payload with its "name" and "payload", from the
    block SHOWN shows, at SEQ. */
 static void terminal_event(struct shown *shown, portal_string event, uint64_t seq)
@@ -848,16 +940,27 @@ static void terminal_event(struct shown *shown, portal_string event, uint64_t se
         changed(shown);
 }
 
-static answer attached, owned, resized, connected, painted, read_part, operated;
+static answer attached, owned, resized, connected, painted, read_part, operated, taken;
 
+/* The arguments of a claim of SHOWN's block in MODE, "request" or "take". */
+static void put_claim(struct json *json, struct shown *shown, const char *mode)
+{
+    put_text(json, "{\"session_id\":");
+    put_string(json, view(shown->session));
+    put_text(json, ",\"block_ids\":[");
+    put_string(json, view(shown->block));
+    put_text(json, "],\"mode\":");
+    put_string(json, literal(mode));
+    put_text(json, "}");
+}
+
+/* Claim the block with "request": Emacs owns it only if no other client
+   does, and is in line for it otherwise.  A take, when Emacs is used,
+   follows as an operation. */
 static void own(struct shown *shown)
 {
     struct json json = {0};
-    put_text(&json, "{\"session_id\":");
-    put_string(&json, view(shown->session));
-    put_text(&json, ",\"block_ids\":[");
-    put_string(&json, view(shown->block));
-    put_text(&json, "],\"mode\":\"take\"}");
+    put_claim(&json, shown, "request");
     shown->stage = OWNING;
     ask(shown, "session.own_block", &json, owned);
     ask_details(shown);
@@ -889,8 +992,11 @@ static void owned(struct shown *shown, const char *response, size_t length)
     portal_string payload;
     if (!succeeded(shown, "session.own_block", response, length, &payload))
         return;
+    take_owners(shown, payload, seq_of((portal_string) {response, length}));
     shown->stage = SIZING;
     settle(shown);
+    /* What waited for the claim, such as a take. */
+    next_operation(shown);
 }
 
 /* The terminal's grid has settled: size the block to it. */
@@ -1001,11 +1107,29 @@ static void output(struct shown *shown, const char *bytes, size_t length)
         feed(shown, bytes, length);
 }
 
+/* Give SHOWN's terminal the block's grid, as the stream last gave it,
+   unless it has that grid: the output fed from now on is laid out for it,
+   whichever client sized the block. */
+static void hold(struct shown *shown)
+{
+    portal_view *terminal = portal_views_find(view(shown->target), PORTAL_TERMINAL, NULL);
+    portal_text error = {0};
+    if (!shown->columns || !shown->rows
+        || (shown->drawn[0] == shown->columns && shown->drawn[1] == shown->rows) || !terminal)
+        return;
+    if (portal_terminal_hold_grid(terminal, shown->columns, shown->rows, &error)) {
+        shown->drawn[0] = shown->columns;
+        shown->drawn[1] = shown->rows;
+    }
+    free(error.data);
+}
+
 /* One of Rex's own messages, a JSON object, from SHOWN's stream.  A resize
-   gives the block's grid, which the terminal has already: while Emacs owns
-   the block, the server takes the size of the terminal's pane.  A
-   child_exited says the block's program has ended.  Its theme is left
-   out: the terminal keeps Portal's theme. */
+   gives the block's grid, which the terminal takes at its place in the
+   stream: the output after it is laid out for it.  Before the first paint,
+   the paint takes the grid the stream gave last.  A child_exited says the
+   block's program has ended.  Its theme is left out: the terminal keeps
+   Portal's theme. */
 static void message(struct shown *shown, portal_string json)
 {
     portal_string type, value;
@@ -1024,6 +1148,8 @@ static void message(struct shown *shown, portal_string json)
         && columns >= 0 && rows >= 0 && columns <= UINT32_MAX && rows <= UINT32_MAX) {
         shown->columns = (uint32_t) columns;
         shown->rows = (uint32_t) rows;
+        if (shown->stage == LIVE)
+            hold(shown);
     }
 }
 
@@ -1114,7 +1240,7 @@ done:;
                     "\"extra_kitty_keyboard\":true,\"extra_modes\":true,"
                     "\"extra_protection\":true,\"extra_pwd\":true,"
                     "\"extra_scrolling_region\":true,\"extra_style\":true,"
-                    "\"extra_tabstops\":true,\"max_bytes\":");
+                    "\"extra_tabstops\":true,\"unwrap\":true,\"max_bytes\":");
     put_number(&json, PAINT_BYTES);
     put_text(&json, "}}");
     if (ask(shown, "com.superlogical.terminal.format", &json, painted))
@@ -1198,6 +1324,7 @@ static void paint(struct shown *shown)
         clear(&held);
         return end_show(shown, FAILED, "Portal is out of memory", literal(""));
     }
+    hold(shown);
     feed(shown, shown->paint.data, shown->paint.length);
     clear(&shown->paint);
     shown->stage = LIVE;
@@ -1264,7 +1391,7 @@ static void read_part(struct shown *shown, const char *response, size_t length)
     read_next(shown);
 }
 
-/* Operations: typing, focus and size, one request at a time. */
+/* Operations: typing, focus, size and takes, one request at a time. */
 
 static void free_operation(struct operation *operation)
 {
@@ -1272,7 +1399,8 @@ static void free_operation(struct operation *operation)
 }
 
 /* Queue OPERATION for SHOWN, joining it to the last one where they are
-   alike: typing to typing, and a size to the size it replaces. */
+   alike: typing to typing, a size to the size it replaces, and a take to a
+   take. */
 static void queue(struct shown *shown, struct operation operation)
 {
     if (shown->stage >= FAILED)
@@ -1281,7 +1409,8 @@ static void queue(struct shown *shown, struct operation operation)
     if (last && last->kind == WRITE && operation.kind == WRITE) {
         append(&last->bytes, operation.bytes.data, operation.bytes.length);
         free_operation(&operation);
-    } else if (last && last->kind == RESIZE && operation.kind == RESIZE) {
+    } else if (last && last->kind == operation.kind
+               && (operation.kind == RESIZE || operation.kind == TAKE)) {
         free_operation(&operation);
     } else {
         struct operation *grown =
@@ -1331,13 +1460,16 @@ static void put_bytes(struct json *json, const char *bytes, size_t length)
 
 static void next_operation(struct shown *shown)
 {
-    if (shown->sending || !shown->queued)
+    /* Nothing goes before the block is claimed: a take or a key could
+       reach the server before the session is attached. */
+    if (shown->sending || !shown->queued || shown->stage < SIZING)
         return;
     struct operation operation = shown->operations[0];
     memmove(shown->operations, shown->operations + 1, --shown->queued * sizeof *shown->operations);
     struct json json = {0};
     const char *method;
     uint32_t values[4];
+    int kind = operation.kind;
     switch (operation.kind) {
     case WRITE:
         method = "com.superlogical.terminal.write";
@@ -1352,6 +1484,10 @@ static void next_operation(struct shown *shown)
         put_text(&json, operation.in
                      ? ",\"event\":{\"type\":\"focus\",\"payload\":{\"action\":\"in\"}}}"
                      : ",\"event\":{\"type\":\"focus\",\"payload\":{\"action\":\"out\"}}}");
+        break;
+    case TAKE:
+        method = "session.own_block";
+        put_claim(&json, shown, "take");
         break;
     case RESIZE:
     default:
@@ -1376,8 +1512,11 @@ static void next_operation(struct shown *shown)
     if (grown && send_request(connection, literal(method), (portal_string) {json.data, json.length},
                               &request, &error)) {
         connection->pending[connection->asked++] =
-            (struct pending) {.number = request, .answer = operated, .shown = shown->id};
+            (struct pending) {.number = request, .answer = kind == TAKE ? taken : operated,
+                              .shown = shown->id};
         shown->sending = true;
+    } else if (kind == TAKE) {
+        shown->taking = false;
     }
     free(error.data);
     free(json.data);
@@ -1393,6 +1532,17 @@ static void operated(struct shown *shown, const char *response, size_t length)
     (void) length;
     shown->sending = false;
     next_operation(shown);
+}
+
+/* A take's answer, which says who owns the block now: Emacs, unless a
+   take of another client's overtook it. */
+static void taken(struct shown *shown, const char *response, size_t length)
+{
+    portal_string payload;
+    shown->taking = false;
+    if (told(response, length, &payload))
+        take_owners(shown, payload, seq_of((portal_string) {response, length}));
+    operated(shown, response, length);
 }
 
 /* Whether BYTES are a report the terminal makes of its own state, which the
@@ -1421,11 +1571,24 @@ static bool own_report(const char *bytes, size_t length)
     return digit && fields == 4;
 }
 
+/* Claim SHOWN's block with "take", once for as long as a take waits. */
+static void take(struct shown *shown)
+{
+    if (shown->taking || shown->stage >= FAILED)
+        return;
+    shown->taking = true;
+    queue(shown, (struct operation) {.kind = TAKE});
+}
+
 void portal_rex_input(portal_string target, const char *bytes, size_t length)
 {
     struct shown *shown = shown_in(target);
     if (!shown || !length || own_report(bytes, length))
         return;
+    /* Typing is using the block, as in Rex's app: a block another client
+       took meanwhile, such as a phone, comes back first. */
+    if (!mine(shown))
+        take(shown);
     struct operation operation = {.kind = WRITE};
     append(&operation.bytes, bytes, length);
     if (!operation.bytes.failed)
@@ -1437,6 +1600,15 @@ void portal_rex_focus(portal_string target, bool focused)
     struct shown *shown = shown_in(target);
     if (shown)
         queue(shown, (struct operation) {.kind = FOCUS, .in = focused});
+}
+
+bool portal_rex_take(portal_string target, portal_text *error)
+{
+    struct shown *shown = shown_in(target);
+    if (!shown)
+        return fail(error, "No block is shown in ", target);
+    take(shown);
+    return true;
 }
 
 void portal_rex_grid(portal_string target)
@@ -1545,6 +1717,13 @@ void portal_rex_describe(portal_string target, struct json *json)
     put_number(json, shown->columns);
     put_text(json, ",\"rows\":");
     put_number(json, shown->rows);
+    put_text(json, ",\"owner\":");
+    put_string(json, literal(!shown->owner_known ? "unknown"
+                             : mine(shown)       ? "self"
+                             : shown->owner.length ? "other"
+                                                   : "none"));
+    put_text(json, ",\"owner_name\":");
+    put_string(json, shown->owner_name.data ? view(shown->owner_name) : literal(""));
     put_text(json, ",\"directory\":");
     put_string(json, directory(shown));
     if (shown->stage >= FAILED) {
@@ -1577,6 +1756,8 @@ void portal_rex_closed(portal_string target)
         free(shown->reported.data);
         free(shown->cwd.data);
         free(shown->program.data);
+        free(shown->owner.data);
+        free(shown->owner_name.data);
         free(shown);
         return;
     }
@@ -1605,7 +1786,7 @@ static bool own_response(struct connection *connection, portal_text message)
                 (--connection->asked - i) * sizeof *connection->pending);
         struct shown *shown = shown_by_id(pending.shown);
         /* A show that has failed takes no more answers, but its typing's. */
-        if (shown && (shown->stage < FAILED || pending.answer == operated))
+        if (shown && (shown->stage < FAILED || pending.answer == operated || pending.answer == taken))
             pending.answer(shown, message.data, message.length);
         return true;
     }
@@ -1613,8 +1794,9 @@ static bool own_response(struct connection *connection, portal_text message)
 }
 
 /* MESSAGE, if it is an event of a block shown on CONNECTION, tells the
-   show what the block reported: what its terminal says of itself, or that
-   the block closed.  It goes on to Emacs all the same. */
+   show what the block reported: what its terminal says of itself, that
+   another client owns it now, or that the block closed.  It goes on to
+   Emacs all the same. */
 static void block_event(struct connection *connection, portal_text message)
 {
     bool showing = false;
@@ -1637,6 +1819,11 @@ static void block_event(struct connection *connection, portal_text message)
             continue;
         if (portal_json_is(kind, "block_event")) {
             terminal_event(shown, fields, seq_of(whole));
+        } else if (portal_json_is(kind, "block_owner_changed")) {
+            portal_string owner;
+            bool owned = portal_json_member(fields, "owner", &owner) && !is(owner, "null");
+            if (take_owner(shown, owned ? &owner : NULL, seq_of(whole)))
+                changed(shown);
         } else if (portal_json_is(kind, "block_closed")) {
             shown->closed = true;
             exit_later(shown);
@@ -1645,13 +1832,27 @@ static void block_event(struct connection *connection, portal_text message)
     free(id.data);
 }
 
+/* MESSAGE, if it is the server's welcome, says which client CONNECTION is,
+   for telling the blocks Emacs owns from those other clients do.  It goes
+   on to Emacs all the same. */
+static void welcomed(struct connection *connection, portal_text message)
+{
+    portal_string type, client, id;
+    portal_text text = {0};
+    if (connection->client || !portal_json_member(view(message), "type", &type)
+        || !portal_json_is(type, "welcome") || !portal_json_member(view(message), "client", &client)
+        || !portal_json_member(client, "id", &id) || !portal_json_string(id, &text))
+        return;
+    connection->client = text.data;
+}
+
 /* CONNECTION's end, for the core's own requests and shows. */
 static void ended(struct connection *connection)
 {
     while (connection->asked) {
         struct pending pending = connection->pending[--connection->asked];
         struct shown *shown = shown_by_id(pending.shown);
-        if (shown && pending.answer == operated)
+        if (shown && (pending.answer == operated || pending.answer == taken))
             shown->sending = false;
     }
     for (size_t i = 0; i < shows.count; i++) {
@@ -1683,6 +1884,7 @@ static void pump(struct connection *connection)
     for (size_t i = 0; i < count; i++) {
         /* An answer can make requests, but never opens or closes a
            connection, so CONNECTION stays where it is. */
+        welcomed(connection, messages[i]);
         if (own_response(connection, messages[i])) {
             free(messages[i].data);
             continue;

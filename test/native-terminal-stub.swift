@@ -15,6 +15,7 @@ final class TerminalSession: PortalView {
     func pressEnter() throws {}
     func text() throws -> String { "" }
     func feed(_ output: Data) throws {}
+    func holdGrid(columns: UInt32, rows: UInt32) throws {}
     func setTextSize(_ points: Double) throws {}
     func copy() throws {}
     func paste() throws {}

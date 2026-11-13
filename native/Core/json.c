@@ -114,6 +114,31 @@ bool portal_json_member(portal_string object, const char *name, portal_string *v
     return false;
 }
 
+bool portal_json_element(portal_string array, size_t index, portal_string *value)
+{
+    const char *end = array.data + array.length;
+    const char *at = blank(array.data, end);
+    if (at == end || *at != '[')
+        return false;
+    at = blank(at + 1, end);
+    if (at < end && *at == ']')
+        return false;
+    for (size_t i = 0; at < end; i++) {
+        const char *stop = skip(at, end, 1);
+        if (!stop)
+            return false;
+        if (i == index) {
+            *value = (portal_string) {at, (size_t) (stop - at)};
+            return true;
+        }
+        at = blank(stop, end);
+        if (at == end || *at != ',')
+            return false;
+        at = blank(at + 1, end);
+    }
+    return false;
+}
+
 bool portal_json_is(portal_string value, const char *literal)
 {
     size_t length = strlen(literal);

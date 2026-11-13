@@ -31,6 +31,7 @@
 (declare-function portal--rex-wait "portal-rex" (id milliseconds))
 (declare-function portal--rex-close "portal-rex" (id))
 (declare-function portal--rex-show "portal-rex" (id target session-id block-id))
+(declare-function portal--rex-take "portal-rex" (target))
 (declare-function portal--inspect "portal-view" (target))
 (declare-function ibuffer-current-buffer "ibuffer" (&optional must-be-live))
 (declare-function ibuffer-update "ibuffer" (arg &optional silent))
@@ -450,6 +451,15 @@ path here alone, leaving `default-directory' as it is.")
 (defvar-local portal-rex--show-failure nil
   "Why this block's screen could not be shown the last time, or nil.")
 
+(defvar-local portal-rex--sized-by nil
+  "Who sizes this block while another Rex client owns it, or nil.
+It is (NAME COLUMNS ROWS): what that client calls itself, or nil while
+the server has not said, and the grid it gives the block.  Nil while
+Emacs sizes the block, or nobody does.")
+
+(defvar-local portal-rex--in-use nil
+  "Whether this block's view was in the pane in use at the last look.")
+
 ;; A buffer is its block's whatever mode it is put in.
 (dolist (variable '(portal-rex-block-connection portal-rex-block-id portal-rex-session-id
                     portal-rex-block-directory portal-rex--block-label portal-rex--show-failure))
@@ -556,6 +566,9 @@ the block needs, and has no view."
     (unwind-protect
         (with-current-buffer buffer
           (portal-terminal-mode)
+          ;; Who sizes the block, after the terminal's own state.
+          (setq mode-line-process (list "" mode-line-process
+                                        '(portal-rex--sized-by (:eval (portal-rex--size-mark)))))
           (setq portal-rex-block-connection connection
                 portal-rex-block-id block-id
                 portal-rex-session-id session-id
@@ -789,6 +802,8 @@ window change hook."
             (portal--rex-show (portal-rex-connection-id connection) target
                               portal-rex-session-id portal-rex-block-id)
             (setq portal-rex--show-failure nil)
+            ;; Shown in the pane in use, Emacs takes the block at once.
+            (portal-rex--claim-used)
             (add-hook 'window-state-change-functions #'portal-terminal--resize-shown 90))
         (error
          (when portal-view--target (portal-view-close))
@@ -824,24 +839,35 @@ says why; one whose stream ended keeps its last screen."
 ;; becomes `default-directory'.
 
 (defun portal-rex--terminal-changed (state)
-  "Note the block's directory in STATE, what its terminal described.
-On `portal-terminal--changed-functions'."
+  "Note the block's directory and who sizes it, from STATE.
+STATE is what its terminal described.  On
+`portal-terminal--changed-functions'."
   (when portal-rex-block-connection
-    (let ((directory (plist-get (plist-get state :rex) :directory)))
+    (let* ((rex (plist-get state :rex))
+           (directory (plist-get rex :directory))
+           (name (plist-get rex :owner_name))
+           (sized-by (and (equal (plist-get rex :owner) "other")
+                          (list (and (stringp name) (not (string-empty-p name)) name)
+                                (plist-get rex :columns) (plist-get rex :rows)))))
       (when (and (stringp directory) (not (string-empty-p directory)))
-        (setq portal-rex-block-directory directory)))))
+        (setq portal-rex-block-directory directory))
+      (unless (equal sized-by portal-rex--sized-by)
+        (setq portal-rex--sized-by sized-by)
+        (force-mode-line-update)))))
 (add-hook 'portal-terminal--changed-functions #'portal-rex--terminal-changed)
 
 (defun portal-rex--view-closed ()
   "Forget what a block reported once its buffer's view has closed.
 Nothing follows the block until the view opens again, so its title,
-program and exit would only go stale; its directory stays.  On
+program, exit and owner would only go stale; its directory stays.  On
 `portal-view-close-hook'."
   (when portal-rex-block-connection
     (setq portal-terminal--title nil
           portal-terminal--program nil
           portal-terminal--progress nil
-          portal-terminal--exited nil)))
+          portal-terminal--exited nil
+          portal-rex--sized-by nil
+          portal-rex--in-use nil)))
 (add-hook 'portal-view-close-hook #'portal-rex--view-closed)
 
 ;;; Ending a block
@@ -1028,6 +1054,67 @@ answered; one that has closed already is not."
   "End this buffer's block by killing the buffer, for `portal-terminal-close'."
   (kill-buffer (current-buffer)))
 
+;;; Who sizes a block
+
+;; A block has one size, its owner's: the Rex client in use sizes it, as
+;; tmux's attached client does, and the others draw it at that size.  The
+;; native module claims a shown block with "request", so Emacs sizes it
+;; only while no other client does, sends the size of its pane at every
+;; change for when Emacs owns it, and takes it when a key is typed into
+;; it.  Lisp takes it when Emacs starts to use it: when its view's pane
+;; becomes the selected pane of the frame with the keyboard.  Leaving the
+;; pane, hiding the view and Emacs losing the keyboard give nothing up:
+;; the block stays Emacs's until another client is used.  Nor does a
+;; buried block disown it: the server would pass it to the client that
+;; claimed it last, used or not, and resize the block for nothing.
+
+(defun portal-rex--in-use-p ()
+  "Whether the current buffer's view is in the pane in use.
+That is the selected pane, while its frame has the keyboard."
+  (and portal-view--target
+       (window-live-p portal-view--window)
+       (eq portal-view--window (portal-view--selected-pane))
+       (frame-focus-state (window-frame portal-view--window))))
+
+(defun portal-rex--claim-used (&rest _)
+  "Take each shown block whose view has come into the pane in use.
+On the window selection and state hooks, `portal-view-moved-hook' and
+`after-focus-change-function' while Emacs is connected to a server: a
+block is taken when its view's pane becomes the one in use, the view
+is taken there, or Emacs gets the keyboard back with it there, and
+not again until it has left."
+  (dolist (buffer (portal-view-buffers 'terminal))
+    (with-current-buffer buffer
+      (when portal-rex-block-connection
+        (let ((used (portal-rex--in-use-p)))
+          (when (and used (not portal-rex--in-use))
+            (with-demoted-errors "Cannot take Rex block: %S"
+              (portal--rex-take portal-view--target)))
+          (setq portal-rex--in-use (and used t)))))))
+
+(defun portal-rex--size-mark ()
+  "The mode line's mark for a block another Rex client sizes."
+  (pcase-let ((`(,name ,columns ,rows) portal-rex--sized-by))
+    (propertize (if name (format ":sized by %s" name) ":sized elsewhere")
+                'help-echo
+                (format "%s owns this block and sizes it%s.\nSelecting this pane takes it back."
+                        (or name "Another Rex client")
+                        (if (and (natnump columns) (natnump rows) (> columns 0) (> rows 0))
+                            (format ", at %d×%d" columns rows)
+                          "")))))
+
+(defun portal-rex--follow-use (install)
+  "INSTALL the hooks that take blocks as Emacs uses them, or remove them."
+  (dolist (hook '(window-selection-change-functions window-state-change-functions))
+    (if install
+        (add-hook hook #'portal-rex--claim-used 90)
+      (remove-hook hook #'portal-rex--claim-used)))
+  (if install
+      (progn (add-hook 'portal-view-moved-hook #'portal-rex--claim-used)
+             (add-function :after after-focus-change-function #'portal-rex--claim-used))
+    (remove-hook 'portal-view-moved-hook #'portal-rex--claim-used)
+    (remove-function after-focus-change-function #'portal-rex--claim-used)))
+
 ;;; Connecting
 
 (defun portal-rex--attached (connection response)
@@ -1119,7 +1206,8 @@ of the server and of its sessions.  The connection's
                               :id (portal--rex-open socket "Portal" version) :socket socket)
                   portal-rex--connections (append portal-rex--connections (list connection)))
             (add-hook 'kill-emacs-hook #'portal-rex--disconnect-all)
-            (add-hook 'window-buffer-change-functions #'portal-rex--show-shown))
+            (add-hook 'window-buffer-change-functions #'portal-rex--show-shown)
+            (portal-rex--follow-use t))
           (when (and (portal-rex--await connection
                                         (lambda () (portal-rex-connection-welcome connection))
                                         portal-rex-timeout)

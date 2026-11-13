@@ -35,10 +35,11 @@ Its one block runs cat, without a login shell."
       (unwind-protect
           (progn
             (portal-rex-parity-check connection)
-            (portal-rex-parity-check-block
-             connection session
-             (with-current-buffer (car (portal-rex-buffers connection session))
-               portal-rex-block-id))
+            (let ((block (with-current-buffer (car (portal-rex-buffers connection session))
+                           portal-rex-block-id)))
+              (portal-rex-parity-check-block connection session block)
+              (portal-rex-parity-check-owners connection (portal-real-rex-socket server)
+                                              session block))
             (portal-rex-parity-check-sessions connection (portal-real-rex-directory server)))
         (portal-rex-disconnect connection)))))
 

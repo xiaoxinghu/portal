@@ -69,23 +69,35 @@ bool portal_rex_close(uint64_t id, portal_text *error);
    Show the block BLOCK, of the session SESSION on connection ID's server,
    in TARGET, an open fed terminal (portal.h), from now until TARGET
    closes.  This returns at once; the core then, in turn, attaches the
-   connection to SESSION unless it has, claims the block with "take", waits
-   for TARGET's grid to settle and sizes the block to it, opens the block's
-   data stream, skips its snapshot, paints TARGET from the server's
-   "format" of the screen in VT form, and then feeds it the stream's bytes
-   from the snapshot on, without Rex's own messages.  From then on what
-   TARGET writes is typed into the block, one request at a time so that it
-   arrives in order, except the terminal's own reports of focus, size and
-   colour scheme, which the server makes for itself; a change of who has
-   the keyboard is sent as a "focus" block event, and a change of TARGET's
-   grid resizes the block.  The paint leaves the server's palette out, so
-   TARGET keeps its own theme's colours.
+   connection to SESSION unless it has, claims the block with "request",
+   which makes Emacs its owner only if no other client is, waits for the
+   grid of TARGET's pane to settle and sends it as Emacs's size for the
+   block, opens the block's data stream, skips its snapshot, paints TARGET
+   from the server's "format" of the screen in VT form, unwrapped, and then
+   feeds it the stream's bytes from the snapshot on, without Rex's own
+   messages.  From then on what TARGET writes is typed into the block, one
+   request at a time so that it arrives in order, except the terminal's own
+   reports of focus, size and colour scheme, which the server makes for
+   itself; a change of who has the keyboard is sent as a "focus" block
+   event, and a change of the grid of TARGET's pane is sent as Emacs's size
+   for the block, whoever owns it.  The paint leaves the server's palette
+   out, so TARGET keeps its own theme's colours.
+
+   A block has the size its owner gives it.  The server keeps the size
+   every other client sends and applies a client's the moment it becomes
+   the owner, so claiming the block with "take" (portal_rex_take) is all
+   it takes to size it to Emacs's pane.  TARGET always holds the block's
+   grid, from the paint on and from each "resize" message at its place in
+   the stream (portal_terminal_hold_grid), as the stream's bytes are laid
+   out for it, whoever sized it.  A key typed into a block that another
+   client owns, or whose owner is not known yet, takes it first.
 
    As it claims the block, the core also asks for the terminal's title,
    reported directory and processes, once, and from then on follows the
    block's events of each: title_changed, pwd_changed, process_changed and
-   child_exited.  An event that overtakes an answer wins, by its seq.  A
-   change tells Emacs with a "terminal TARGET" record, as a terminal's
+   child_exited, and of its owner, block_owner_changed, which the claims'
+   answers say too.  An event that overtakes an answer wins, by its seq.
+   A change tells Emacs with a "terminal TARGET" record, as a terminal's
    platform does (portal.h).
 
    Fails, starting nothing, for a closed connection, a TARGET that names no
@@ -95,9 +107,16 @@ bool portal_rex_close(uint64_t id, portal_text *error);
 bool portal_rex_show(uint64_t id, portal_string target, portal_string session,
                      portal_string block, portal_text *error);
 
+/* Claim TARGET's block with "take", once the claim the show makes has been
+   answered: Emacs owns it from then on, and it takes Emacs's size, until
+   another client takes it.  A take already waiting stands for this one.
+   Fails, sending nothing, for a TARGET that shows no block. */
+bool portal_rex_take(portal_string target, portal_text *error);
+
 /* For views.c: what TARGET shows, if it shows a block, as the members
    ,"title":T,"pwd":P,"program":G,"exited":E,
-   "rex":{"state":STATE,"columns":C,"rows":R,"directory":P} appended to
+   "rex":{"state":STATE,"columns":C,"rows":R,"owner":O,"owner_name":N,
+   "directory":P} appended to
    JSON, with "reason" after them once it has failed or ended.
 
    T, P, G and E are what a terminal's platform describes of a terminal
@@ -115,7 +134,12 @@ bool portal_rex_show(uint64_t id, portal_string target, portal_string session,
 
    STATE is "starting" until the first paint, then "live", or "failed" or
    "ended" once the stream will bring nothing more; C and R are the
-   block's grid as the stream last said, 0 until it has.  The core sends
+   block's grid as the stream last said, 0 until it has; O is who owns the
+   block, as the server last said: "self" for Emacs, "other" for another
+   client, "none" for no client, "unknown" until the server has said; and
+   N what the other client calls itself, its label or else its program's
+   name, "" until the server says, which it does only while that client
+   is connected.  The core sends
    Emacs the record "rex-block TARGET" when the state becomes live, failed
    or ended, and no other until TARGET is described; a stream that ends as
    its program exits or its block closes says so only once the quarter of

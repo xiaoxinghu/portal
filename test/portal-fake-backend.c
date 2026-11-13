@@ -9,8 +9,9 @@
    A view created with the option :description describes itself with exactly
    that text instead, for tests of how the core reads descriptions.
 
-   A fed terminal's "fed" is all it has been fed, as a string, and it
-   reports a grid of 8 by 16 cells in the size it is attached at.  It
+   A fed terminal's "fed" is all it has been fed, as a string, with each
+   grid it was given marked in its place, and it reports its pane's grid,
+   in cells of 8 by 16, in the size it is attached at.  It
    describes no "title", "pwd", "program" or "exited", which the core
    describes for it.
 
@@ -359,13 +360,11 @@ bool portal_view_attach(portal_view *view, portal_string frame, portal_rect rect
     set_string(view, "frame", frame.data, frame.length);
     set_integers(view, "size", (int64_t[]) {rect.width, rect.height}, 2);
     set_flag(view, "attached", true);
-    /* A fed terminal's grid follows its size, in cells of 8 by 16, as a
-       real one reports it once it is laid out. */
+    /* A fed terminal's pane holds a grid of cells of 8 by 16, which it
+       reports as a real one does once it is laid out. */
     const struct property *fed = get(view, "fed");
     if (view->kind == PORTAL_TERMINAL && fed && (fed->kind == STRING || fed->flag)) {
         uint32_t columns = (uint32_t) (rect.width / 8), rows = (uint32_t) (rect.height / 16);
-        set_integer(view, "columns", columns);
-        set_integer(view, "rows", rows);
         portal_terminal_grid((portal_string) {view->target, strlen(view->target)}, columns, rows,
                              8, 16);
     }
@@ -652,6 +651,27 @@ bool portal_terminal_feed(portal_view *terminal, const char *bytes, size_t lengt
     if (fed->kind == FLAG)
         set_string(terminal, "fed", "", 0);
     append(terminal, "fed", "", bytes, length);
+    return true;
+}
+
+/* A fed terminal takes a grid in its place in what it is fed: its "fed"
+   string marks it there as "<grid COLUMNSxROWS>", and its "columns" and
+   "rows" are the grid's. */
+bool portal_terminal_hold_grid(portal_view *terminal, uint32_t columns, uint32_t rows,
+                               portal_text *error)
+{
+    char mark[64];
+    if (!working(terminal, error))
+        return false;
+    const struct property *fed = get(terminal, "fed");
+    if (!fed || (fed->kind == FLAG && !fed->flag))
+        return fail(error, "The fake gave a grid to a terminal that is not fed");
+    if (fed->kind == FLAG)
+        set_string(terminal, "fed", "", 0);
+    int length = snprintf(mark, sizeof mark, "<grid %ux%u>", columns, rows);
+    append(terminal, "fed", "", mark, (size_t) length);
+    set_integer(terminal, "columns", columns);
+    set_integer(terminal, "rows", rows);
     return true;
 }
 
