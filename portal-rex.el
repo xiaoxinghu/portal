@@ -1680,16 +1680,33 @@ Signal a `user-error' saying why there is none."
 
 ;;;; The desktop
 
-(defvar portal-rex--desktop-named nil
-  "The blocks' buffers the desktop being read gave their saved names.")
+(defvar portal-rex--desktop-parked nil
+  "Non-nil while a desktop read has the blocks' buffers under passing names.")
+
+(defun portal-rex--desktop-park ()
+  "Move every block's buffer off its name, once in each desktop read.
+The desktop gives each buffer it restores the name it was saved with,
+and windows and tabs find it by that name.  A name another block's
+buffer has now, as when two blocks swapped labels, would make it
+another; under passing names, each restored buffer gets its own."
+  (unless portal-rex--desktop-parked
+    (setq portal-rex--desktop-parked t)
+    (dolist (buffer (portal-rex-buffers))
+      (with-current-buffer buffer
+        (portal-rex--rename (generate-new-buffer-name " *rex: restoring*"))))))
 
 (defun portal-rex--desktop-read ()
-  "Give the blocks' buffers the desktop renamed their own names, if theirs moved.
-On `desktop-after-read-hook'."
-  (dolist (buffer (prog1 portal-rex--desktop-named (setq portal-rex--desktop-named nil)))
-    (when (buffer-live-p buffer)
-      (with-current-buffer buffer
-        (when portal-rex-block-connection (portal-rex--keep-name))))))
+  "Give the blocks' buffers their own names back once a desktop has been read.
+A buffer restored under its saved name keeps it unless its labels moved;
+a renamed one tells the saved tabs, each in turn, so they follow their
+blocks.  On `desktop-after-read-hook'."
+  (when portal-rex--desktop-parked
+    (setq portal-rex--desktop-parked nil)
+    (dolist (buffer (portal-rex-buffers))
+      (with-current-buffer buffer (portal-rex--keep-name)))
+    (dolist (connection portal-rex--connections)
+      (seq-doseq (session (portal-rex-connection-sessions connection))
+        (portal-rex--untangle-names connection (plist-get session :session_id))))))
 
 (defun portal-rex--desktop-record (_directory)
   "Return what the desktop saves of the current buffer: its block's record.
@@ -1713,7 +1730,7 @@ which it starts doing once idle.  Restoring never waits for a server."
        ((when-let* ((buffer (portal-rex-block-buffer connection (alist-get 'block record))))
           ;; The desktop renames it to NAME, as it was saved; once read,
           ;; it takes its own back if its labels moved.
-          (push buffer portal-rex--desktop-named)
+          (portal-rex--desktop-park)
           buffer))
        ;; Its session's blocks are still being listed.
        ((portal-rex-connection-lists connection)
