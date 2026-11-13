@@ -11,6 +11,9 @@
 (require 'portal-input)
 (require 'portal-web)
 
+(declare-function portal--close "portal-view" (target))
+(declare-function portal--inspect "portal-view" (target))
+
 (defvar-local portal-excalidraw--ready nil)
 (defvar-local portal-excalidraw--error nil)
 (defvar-local portal-excalidraw--saved nil)
@@ -97,7 +100,7 @@ share in a call or make fullscreen on a projector.
   (add-hook 'after-save-hook #'portal-excalidraw--did-save nil t)
   (add-hook 'kill-buffer-query-functions #'portal-excalidraw--query-kill nil t)
   (add-hook 'change-major-mode-hook #'portal-excalidraw--leave-mode nil t)
-  (add-hook 'kill-buffer-hook #'portal-excalidraw--end-slides nil t)
+  (add-hook 'kill-buffer-hook #'portal-excalidraw--end-all-slides nil t)
   ;; The slide window, the one window this page opens.
   (setq-local portal-web-window-action '(portal-excalidraw--display-slides))
   (setq-local revert-buffer-function #'portal-excalidraw--revert)
@@ -292,6 +295,20 @@ frame that had the keyboard gives it to the console."
     (when (buffer-live-p buffer) (kill-buffer buffer))
     (portal-excalidraw--resize-pixelwise)))
 
+(defun portal-excalidraw--end-all-slides ()
+  "Close the drawing's slide window, and any its page opened that Emacs has
+not shown yet: the drawing's view is closing, and they would outlive it,
+owned by nothing."
+  (when-let* ((target portal-view--target))
+    (setq unread-command-events
+          (seq-remove (lambda (event)
+                        (pcase event
+                          (`(portal-web-opened (,window ,(pred (equal target))))
+                           (when (portal--inspect window) (portal--close window))
+                           t)))
+                      unread-command-events)))
+  (portal-excalidraw--end-slides))
+
 (defun portal-excalidraw--end-stale-slides (drawing buffer)
   "Close slide window BUFFER, which DRAWING's page stopped presenting before
 Emacs showed it, unless it is no longer DRAWING's."
@@ -411,14 +428,14 @@ of the display.  Afterwards, `frame-resize-pixelwise' is as it was."
 (defun portal-excalidraw--leave-mode ()
   "Bring the buffer up to date before a new major mode closes the view.
 The slide window closes with it."
-  (portal-excalidraw--end-slides)
+  (portal-excalidraw--end-all-slides)
   (when (and portal-excalidraw--ready (not portal-excalidraw--error))
     (portal-excalidraw--flush)))
 
 (defun portal-excalidraw--close ()
   "Close the drawing's web view, and its slide window.
 The buffer keeps the drawing."
-  (portal-excalidraw--end-slides)
+  (portal-excalidraw--end-all-slides)
   (portal-view-close)
   (setq portal-excalidraw--ready nil)
   (portal-excalidraw--screen "draw"))

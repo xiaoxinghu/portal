@@ -480,6 +480,30 @@ Deleting a frame is recorded in `portal-excalidraw-test--frames'."
       (with-current-buffer drawing
         (should (eq portal-excalidraw--slides (portal-view--target-buffer next)))))))
 
+(ert-deftest portal-excalidraw-ending-a-drawing-closes-slide-windows-not-yet-shown ()
+  ;; The page opened a window, and Emacs has not shown it when the drawing's
+  ;; view closes: it must not outlive the drawing as a buffer of its own.
+  (dolist (end (list (lambda (drawing) (kill-buffer drawing))
+                     (lambda (drawing) (with-current-buffer drawing (fundamental-mode)))
+                     (lambda (drawing)
+                       (with-current-buffer drawing
+                         (cl-letf (((symbol-function 'portal-excalidraw--flush) #'ignore))
+                           (portal-excalidraw-reopen))))))
+    (portal-excalidraw-test--presenting
+      (let ((late (portal-fake-native-open-window
+                   target "http://127.0.0.1:1/token/excalidraw/audience"))
+            (buffers (length (buffer-list))))
+        (with-current-buffer drawing
+          (setq portal-excalidraw--ready nil)
+          (set-buffer-modified-p nil))
+        (funcall end drawing)
+        (portal-excalidraw-test--run-events)
+        (should-not (portal--inspect late))
+        (should-not (portal-view--target-buffer late))
+        (should-not (buffer-live-p slides))
+        ;; Only the slide window's buffer went, and the drawing's if killed.
+        (should (<= (length (buffer-list)) (1- buffers)))))))
+
 (ert-deftest portal-excalidraw-a-page-that-loads-again-ends-presenting ()
   (portal-excalidraw-test--presenting
     (portal-fake-native-post target "{\"type\":\"ready\"}")
