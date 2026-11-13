@@ -958,7 +958,9 @@ def command(value):
                     known[key] = value[key]
         elif "claim" in value:
             block, who = value["claim"], value.get("client", "client:other")
-            state["others"][who] = {"kind": "app", "name": value["name"]} if "name" in value else {}
+            if "name" in value:
+                state["others"][who] = {"kind": "app", "name": value["name"]}
+            state["others"].setdefault(who, {})
             if "columns" in value:
                 state["desired"].setdefault(block, {})[who] = (
                     value["columns"], value.get("rows", 24), 0, 0)

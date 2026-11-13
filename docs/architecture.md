@@ -421,9 +421,13 @@ the core three things: it parses the bytes the core feeds it
 query in them, since the server has answered each already and a second
 answer would reach the program as typing; it hands the core what it would
 write to its program, keys, mouse reports, pastes and its own reports, in
-order on the main thread (`portal_terminal_input`); and it reports its grid
-with the cells' size in pixels (`portal_terminal_grid`). Everything else,
-its theme, text size, placement, input and lifetime, is any terminal view's.
+order on the main thread (`portal_terminal_input`); it holds the grid the
+core gives it (`portal_terminal_hold_grid`), whatever its pane's size; and
+it reports the grid its pane would hold, with the cells' size in pixels
+(`portal_terminal_grid`). On macOS the view Portal places is a clipping
+pane, filled with the theme's background, with the terminal inside it at
+its bottom-left, sized to its grid. Everything else, its theme, text size,
+placement, input and lifetime, is any terminal view's.
 
 Lisp opens one in a block's buffer the first time a window shows the
 buffer, and calls `portal--rex-show` with the view's target, the
@@ -432,16 +436,22 @@ works the block on its own requests, numbered among Lisp's on the same
 connection, so that Emacs is one client of the server:
 
 1. `session.attach`, once per session per connection, which `data.connect`
-   and `session.own_block` need; then `session.own_block` with `take`.
-2. It waits for the terminal's grid to stay the same for 100 ms, as a view
-   placed in a pane reports a grid or two on the way, and sizes the block
-   to it with `com.superlogical.terminal.resize`, cells in pixels included.
+   and `session.own_block` need; then `session.own_block` with `request`,
+   which makes Emacs the owner only of a block no other client owns.
+2. It waits for the grid of the terminal's pane to stay the same for
+   100 ms, as a view placed in a pane reports a grid or two on the way,
+   and sends it with `com.superlogical.terminal.resize`, cells in pixels
+   included, whoever owns the block: the server keeps the size a client
+   that is not the owner asks for, and applies it the moment that client
+   becomes the owner.
 3. `data.connect` gives a ticket for the block's stream, which the core
    opens on a second message socket, a binary one, at `/api/data`, and
    greets with the ticket. The stream starts with a snapshot of the
    terminal, which the core skips record by record without decoding.
 4. It asks for the screen with `com.superlogical.terminal.format` in `vt`
-   form with every `extra_*` flag, in parts through `blob_read` when large,
+   form with every `extra_*` flag and `unwrap`, so that history the
+   terminal wrapped reflows as the server's does, in parts through
+   `blob_read` when large,
    holding the stream's bytes meanwhile, then feeds the paint and the held
    bytes. From then on the stream's bytes are fed as they come, with Rex's
    own messages (`ESC _ rex1;NONCE;JSON ESC \`, the nonce from the
@@ -454,12 +464,31 @@ written meanwhile joins the next. A change of who has the keyboard goes as
 a `block.event` `focus`, in its place among the writes, and the terminal's
 own focus, size and colour-scheme reports are dropped by their shapes: the
 server makes those for itself, and a program would otherwise get two. A
-new grid resizes the block, the latest of several. While Emacs is the
-block's only client, the block follows the pane; a block another client
-owns may draw at the wrong size, which a later task settles. Once a
+new grid of the pane goes to the server, the latest of several. Once a
 stream has failed or ended, what was queued is dropped and nothing more is
 typed: the terminal's last screen no longer changes, and must not run
 commands unseen.
+
+**The client last used sizes a block.** A block has one owner, whose size
+it has. Lisp takes a shown block, `session.own_block` with `take` through
+`portal--rex-take`, when its view's pane becomes the pane in use: selected,
+in the frame with the keyboard, after a selection, a window change, the
+view's move to another pane (`portal-view-moved-hook`) or Emacs getting the
+keyboard back (`after-focus-change-function`). The core takes it before a
+key typed into a block Emacs does not own. A take is an operation like a
+write, in its place among them, and one waiting stands for the next. Who
+owns the block comes from each claim's answer and from
+`block_owner_changed` on the control connection, by `seq`, and the core
+knows which client is Emacs from the server's welcome; another owner's
+name comes from `client.inspect`, while that client is connected. The
+core describes them as the block's `owner` and `owner_name`, and Lisp
+shows a mark in the mode line while another client owns the block.
+Whoever owns it, the stream's bytes are laid out for the block's grid, so
+the terminal always holds that grid: from the paint, and from each `resize`
+message at its place in the stream. The platform parses the output before
+it, sets the terminal's frame, and holds the output after it until the
+in-memory session reports the new grid, which Ghostty takes 25 to 35 ms
+to apply, or a quarter of a second has passed.
 
 **A block's details are the terminal's.** A terminal's title, directory,
 program and exit reach Lisp the same way whatever runs it: the terminal

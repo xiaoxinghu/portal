@@ -267,14 +267,8 @@ Its one block runs cat, without a login shell."
               (should target)
               (portal-rex-server-gui-tests--wait
                (lambda () (equal (plist-get (plist-get (portal--inspect target) :rex) :state) "live")))
-              ;; The first paint has what the block showed, and the block has
-              ;; the pane's size.
+              ;; The first paint has what the block showed.
               (funcall shows "before-42")
-              (let ((state (portal--inspect target))
-                    (size (portal-rex-server-gui-tests--api
-                           server "com.superlogical.terminal.size" :session_id session :block_id block)))
-                (should (equal (list (plist-get size :columns) (plist-get size :rows))
-                               (list (plist-get state :columns) (plist-get state :rows)))))
               ;; Typed in Emacs, it reaches the shell, and its output Emacs.
               (select-frame-set-input-focus (selected-frame))
               ;; Keys go to this frame by name: the VM's desktop may take
@@ -289,6 +283,15 @@ Its one block runs cat, without a login shell."
               (portal-rex-server-gui-tests--wait
                (lambda () (string-match-p "^typed$" (funcall screen))))
               (funcall shows "\ntyped\n")
+              ;; Used in Emacs, the block has the terminal's grid, the pane's.
+              (portal-rex-server-gui-tests--wait
+               (lambda ()
+                 (let ((state (portal--inspect target))
+                       (size (portal-rex-server-gui-tests--api
+                              server "com.superlogical.terminal.size"
+                              :session_id session :block_id block)))
+                   (equal (list (plist-get size :columns) (plist-get size :rows))
+                          (list (plist-get state :columns) (plist-get state :rows))))))
               ;; A query: the server answers it, and the terminal does not.
               (portal--terminal-paste target "printf '\\033[c'; read -r a; printf 'got:%s:\\n' \"$a\" | cat -v" t)
               (funcall shows "^[[?")
@@ -314,6 +317,78 @@ Its one block runs cat, without a login shell."
                   (should (string-match-p (format "^%s$" line) ours))))))
         (portal-test-native-target-frame nil)
         (mapc #'portal-rex-disconnect (portal-rex-connections))))))
+
+(ert-deftest portal-rex-server-gui-the-client-last-used-sizes-a-block ()
+  :tags '(:gui)
+  ;; What only a real server shows: the grid it keeps as Emacs requests,
+  ;; takes and resizes a block that rex itself also claims.  A block made
+  ;; by `rex new' stays its maker's, a client that has gone, until another
+  ;; takes it.
+  (portal-real-rex-with (server)
+    (let* ((session (portal-rex-server-gui-tests--new-session server "sized"))
+           (connection (portal-rex-connect (portal-real-rex-socket server)))
+           (buffer (car (portal-rex-buffers connection session)))
+           (block (buffer-local-value 'portal-rex-block-id buffer))
+           (me (plist-get (plist-get (portal-rex-connection-welcome connection) :client) :id))
+           (size (lambda ()
+                   (portal-rex-server-gui-tests--api server "com.superlogical.terminal.size"
+                                                     :session_id session :block_id block)))
+           (grid (lambda ()
+                   (let ((answer (funcall size)))
+                     (list (plist-get answer :columns) (plist-get answer :rows)))))
+           (rex (lambda () (plist-get (portal--inspect (buffer-local-value 'portal-view--target buffer))
+                                      :rex)))
+           (drawn (lambda ()
+                    (let ((state (portal--inspect (buffer-local-value 'portal-view--target buffer))))
+                      (list (list (plist-get (plist-get state :rex) :columns)
+                                  (plist-get (plist-get state :rex) :rows))
+                            (list (plist-get state :columns) (plist-get state :rows))))))
+           (mark (lambda () (with-current-buffer buffer (format-mode-line mode-line-process))))
+           (made (funcall grid)))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (switch-to-buffer (get-buffer-create "*rex-server-gui-elsewhere*"))
+            (select-frame-set-input-focus (selected-frame))
+            (let ((right (split-window-right)))
+              ;; Shown in a pane not in use, the block stays its maker's, at
+              ;; its maker's size, and Emacs draws it so, saying so.
+              (set-window-buffer right buffer)
+              (redisplay t)
+              (portal-rex-server-gui-tests--wait
+               (lambda () (equal (plist-get (funcall rex) :state) "live")))
+              (should (equal (plist-get (funcall rex) :owner) "other"))
+              (should-not (equal (plist-get (funcall size) :owner) me))
+              (portal-rex-server-gui-tests--wait (lambda () (equal (funcall drawn) (list made made))))
+              (should (string-search ":sized elsewhere" (funcall mark)))
+              ;; The server keeps the pane's size for Emacs meanwhile.
+              (portal-rex-server-gui-tests--wait
+               (lambda () (> (length (plist-get (funcall size) :desired)) 0)))
+              (should (equal (funcall grid) made))
+              ;; Selected, the pane takes the block, which takes its size.
+              (select-window right)
+              (redisplay t)
+              (portal-rex-server-gui-tests--wait
+               (lambda () (equal (plist-get (funcall size) :owner) me)))
+              (portal-rex-server-gui-tests--wait
+               (lambda () (let ((now (funcall drawn)))
+                            (and (equal (car now) (cadr now)) (equal (car now) (funcall grid))))))
+              (should (equal (plist-get (funcall rex) :owner) "self"))
+              (should-not (string-search "sized" (funcall mark)))
+              ;; rex takes the block and leaves: the server gives it back to
+              ;; Emacs, in line for it, at Emacs's size.
+              (let ((ours (funcall grid)))
+                (portal-rex-server-gui-tests--api server "session.own_block"
+                                                  :session_id session :block_ids (vector block)
+                                                  :mode "take")
+                (portal-rex-server-gui-tests--wait
+                 (lambda () (equal (plist-get (funcall size) :owner) me)))
+                (portal-rex-server-gui-tests--wait
+                 (lambda () (equal (plist-get (funcall rex) :owner) "self")))
+                (should (equal (funcall grid) ours))
+                (should (equal (funcall drawn) (list ours ours))))))
+        (mapc #'portal-rex-disconnect (portal-rex-connections))
+        (kill-buffer "*rex-server-gui-elsewhere*")))))
 
 (ert-deftest portal-rex-server-gui-a-blocks-details-reach-its-buffer ()
   :tags '(:gui)
