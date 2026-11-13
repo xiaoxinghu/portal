@@ -22,6 +22,14 @@ was seen to, and as its documentation of data connections says:
   session_not_found for a session it does not have; and any other method
   with method_not_found, but those of showing a block, below.
 - Gives each response the seq of the last event it sent that client.
+- Changes its sessions and blocks as a real server does, sending the
+  events of each change before its answer: session.create (with the label
+  given, or one it chooses), session.set_label, session.destroy (closing
+  the session's blocks), session.new_window (one window of one block of
+  the flavor com.superlogical.terminal.shell, called shell or the label
+  given) and session.set_block_label (an event only for a block in a
+  window).  A label is trimmed, and refused with bad_request when longer
+  than 128 characters or with a control character.
 - Shows a block as a real server does: session.attach joins a session;
   session.own_block, which needs that, makes the client the block's
   owner; com.superlogical.terminal.resize sets the block's grid;
@@ -154,6 +162,9 @@ state = {
     "grids": {},
     "tickets": {},
     "streams": {},
+    "made": 0,
+    "chosen": {},
+    "revision": 1,
 }
 
 
@@ -316,8 +327,8 @@ class Client:
                         "message": "session %s not found" % session,
                         "status": 404,
                     }
-            elif method in SHOWING:
-                result = SHOWING[method](self, payload)
+            elif method in SHOWING or method in CHANGING:
+                result = (SHOWING.get(method) or CHANGING[method])(self, payload)
                 if "code" in result:
                     response["error"] = result
                 else:
@@ -530,6 +541,134 @@ def answer_block(client, payload):
     return {"bytes_written": len(data.encode())} if data is not None else {}
 
 
+def broadcast(event):
+    """Send every client that called session.attach_all this event."""
+    for client in list(clients.values()):
+        if client.attached:
+            client.seq += 1
+            client.send({"type": "event", "seq": client.seq, "payload": event})
+
+
+def session_event(session, kind, **fields):
+    broadcast({"type": "session_event",
+               "payload": {"session_id": session, "event": {"type": kind, "payload": fields}}})
+
+
+def find_session(session):
+    return next((known for known in state["sessions"] if known["session_id"] == session), None)
+
+
+def check_label(method, label):
+    """The label trimmed, or an error, as the server checks one."""
+    label = (label or "").strip()
+    if len(label) > 128 or any(ord(c) < 32 or ord(c) == 127 for c in label):
+        return None, error("bad_request", "%s: label must be at most 128 characters "
+                           "without control characters" % method, 400)
+    return label, None
+
+
+def made(kind):
+    state["made"] += 1
+    return "%s:made-%d" % (kind, state["made"])
+
+
+def create_session(client, payload):
+    label, problem = check_label("session.create", payload.get("label"))
+    if problem:
+        return problem
+    session = made("session")
+    chosen = "fake-meadow-%d" % state["made"]
+    state["chosen"][session] = chosen
+    state["sessions"].append({"session_id": session, "label": label or chosen})
+    state["blocks"][session] = []
+    broadcast({"type": "session_created",
+               "payload": {"session": {"session_id": session, "label": label or chosen}}})
+    return {"session_id": session}
+
+
+def set_label(client, payload):
+    session = find_session(payload.get("session_id"))
+    if not session:
+        return error("session_not_found", "session %s not found" % payload.get("session_id"), 404)
+    label, problem = check_label("session.set_label", payload.get("label"))
+    if problem:
+        return problem
+    label = label or state["chosen"].get(session["session_id"], session["label"])
+    if label != session["label"]:
+        session["label"] = label
+        state["revision"] += 1
+        session_event(session["session_id"], "session_label_changed", label=label)
+        session_event(session["session_id"], "session_view_changed", revision=state["revision"])
+    return {"revision": state["revision"]}
+
+
+def destroy(client, payload):
+    session = find_session(payload.get("session_id"))
+    if not session:
+        return error("session_not_found", "session %s not found" % payload.get("session_id"), 404)
+    if not client.attached and session["session_id"] not in client.joined:
+        return error("conflict", "session.destroy: attach to the session first", 409)
+    for block in state["blocks"].pop(session["session_id"], []):
+        session_event(session["session_id"], "block_closed", block_id=block["block_id"])
+    state["sessions"].remove(session)
+    broadcast({"type": "session_destroyed", "payload": {"session_id": session["session_id"]}})
+    return {}
+
+
+def new_window(client, payload):
+    session = find_session(payload.get("session_id"))
+    if not session:
+        return error("session_not_found", "session %s not found" % payload.get("session_id"), 404)
+    node = (payload.get("layout") or {}).get("block")
+    if not isinstance(node, dict) or not node.get("flavor"):
+        return error("bad_request", "session.new_window: layout must hold a block with a flavor", 400)
+    if node["flavor"] != "com.superlogical.terminal.shell":
+        return error("not_found", "no creator provides flavor %s" % node["flavor"], 404)
+    label, problem = check_label("session.new_window", node.get("label"))
+    if problem:
+        return problem
+    window, block = made("window"), made("block")
+    state["blocks"].setdefault(session["session_id"], []).append(
+        {"block_id": block, "label": label or "shell", "placement": "placed", "window_id": window})
+    state["revision"] += 1
+    session_event(session["session_id"], "block_created", block_id=block)
+    session_event(session["session_id"], "window_created", window_id=window)
+    session_event(session["session_id"], "session_view_changed", revision=state["revision"])
+    return {"window_id": window, "block_ids": [block], "revision": state["revision"]}
+
+
+def set_block_label(client, payload):
+    session = find_session(payload.get("session_id"))
+    if not session:
+        return error("session_not_found", "session %s not found" % payload.get("session_id"), 404)
+    found = next((block for block in state["blocks"].get(session["session_id"], [])
+                  if block.get("block_id") == payload.get("block_id")), None)
+    if not found:
+        return error("not_found", "block %s is not in the session" % payload.get("block_id"), 404)
+    label, problem = check_label("session.set_block_label", payload.get("label"))
+    if problem:
+        return problem
+    label = label or "Block %s" % found["block_id"].split(":")[-1][:8]
+    if label != found["label"]:
+        found["label"] = label
+        if found.get("placement") != "detached":
+            state["revision"] += 1
+            session_event(session["session_id"], "session_view_changed",
+                          revision=state["revision"])
+    return {"revision": state["revision"]}
+
+
+# The methods that change what the server has, and send their events
+# before their answer, as a real server does.
+CHANGING = {
+    "session.create": create_session,
+    "session.set_label": set_label,
+    "session.destroy": destroy,
+    "session.new_window": new_window,
+    "session.set_block_label": set_block_label,
+}
+
+
 SHOWING = {
     "session.attach": attach,
     "session.own_block": own_block,
@@ -572,10 +711,7 @@ def command(value):
         elif "after" in value:
             state["after"][value["after"]] = value.get("then", [])
         elif "event" in value:
-            for client in everyone:
-                if client.attached:
-                    client.seq += 1
-                    client.send({"type": "event", "seq": client.seq, "payload": value["event"]})
+            broadcast(value["event"])
         elif "send" in value:
             for client in everyone:
                 client.message(value["send"].encode())

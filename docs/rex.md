@@ -6,8 +6,9 @@
 server runs your terminals' programs, so they outlive the applications that
 show them. Portal is becoming a client of that server. Today it can connect to
 one, give each of its blocks a buffer that follows the server and shows the
-block's screen, a terminal you type in, and call its methods and receive its
-events from Lisp; see [what is not built](#what-is-not-built).
+block's screen, a terminal you type in, make, rename and destroy sessions,
+start new terminals in them, and call its methods and receive its events from
+Lisp; see [what is not built](#what-is-not-built).
 
 Rex is optional. Portal's own [terminals](terminals.md) run their shells
 themselves and need no Rex installed.
@@ -15,6 +16,7 @@ themselves and need no Rex installed.
 - [Connect and disconnect](#connect-and-disconnect)
 - [A buffer for every block](#a-buffer-for-every-block)
 - [A block's screen](#a-blocks-screen)
+- [Sessions and new terminals](#sessions-and-new-terminals)
 - [Call the server](#call-the-server)
 - [Receive events](#receive-events)
 - [When a connection is lost](#when-a-connection-is-lost)
@@ -91,8 +93,9 @@ Two things to know about names:
 - The server does not say when a detached block is relabelled. Its buffer
   takes the new name at the next change to its session that the server
   does report, such as a block made or a window changed.
-- A name you give one of these buffers lasts until its block or session is
-  next relabelled.
+- A name you give one of these buffers with `rename-buffer` lasts until its
+  block or session is next relabelled; `portal-terminal-rename` relabels the
+  block instead, as [below](#sessions-and-new-terminals).
 
 ### What a buffer knows
 
@@ -212,6 +215,88 @@ again. A block whose output stops, such as when its server drops the
 stream, keeps its last screen, and Emacs says so in the echo area; from
 then on nothing typed there reaches the block, so a screen that no longer
 changes never runs a command unseen.
+
+## Sessions and new terminals
+
+Portal gives the commands, and decides nothing about what a session is for:
+one user option says which session a new terminal joins, and your
+configuration can map sessions to projects, or to anything else.
+
+| Command | Does |
+| --- | --- |
+| `portal-rex-new-terminal` | Starts a shell in a new terminal, in the directory of the current buffer, and shows its buffer in the selected window. The session is the one `portal-rex-session-function` returns. |
+| `portal-rex-session-create` | Makes an empty session, reading its label; an empty label lets the server choose one, such as `quiet-meadow`. |
+| `portal-rex-session-rename` | Gives a session a new label; its buffers are renamed. |
+| `portal-rex-session-destroy` | Destroys a session, after asking, with how many blocks will end. Every program in it ends, as when a terminal window closes, and its buffers are killed. |
+| `portal-rex-block-rename` | Gives the current buffer's block a new label. `portal-terminal-rename` does the same in a block's buffer. |
+
+A command works on the server of the current buffer's block, or on the only
+server Emacs is connected to, and asks which when there are several. The
+session commands read the session, the current buffer's being the default.
+Each command returns once the server has made the change and Emacs has
+followed it: a new session is among the connection's sessions, a new
+terminal has its buffer, a renamed block's buffer has its new name.
+
+A new terminal gets a window of its own in its session, a tab in Rex's app,
+without becoming the session's active one, so starting terminals from Emacs
+does not change the tab another client is looking at. Its buffer comes as
+any new block's does, and its `default-directory` is the directory it
+started in. When the server refuses, such as when the session has as many
+windows as it allows, the command says so in the server's words, and nothing
+is made.
+
+A block's label is its buffer's name: renaming a block's buffer with
+`portal-terminal-rename` relabels the block, on the server, and the buffer
+takes the name `*rex: SESSION/LABEL*`. A name given with `rename-buffer`
+instead lasts only until a label next changes. An empty label gives a block
+a default made from its ID, and a session back the label the server chose
+when it made it.
+
+From Lisp, the commands take the connection, nil for the only one, and the
+session's ID, and return what they made:
+
+```elisp
+(let ((session (portal-rex-session-create nil "work")))
+  (portal-rex-new-terminal nil session "~/src/api/")    ; ⇒ its buffer
+  (portal-rex-session-rename nil session "api")
+  (portal-rex-session-destroy nil session))              ; asks nothing
+```
+
+`(portal-rex-find-session CONNECTION LABEL)` returns the ID of the first
+session with that label, or nil. Two sessions may share a label.
+
+### Which session a new terminal joins
+
+`portal-rex-session-function` holds a function that is called with the
+connection, in the buffer the command started from, and returns the ID of
+the session for the new terminal. It may make the session, and may ask.
+
+The default, `portal-rex-session-default`, takes the current buffer's
+session when that buffer is a block's, so a terminal started from a terminal
+joins its session. Elsewhere it asks, completing over the server's sessions;
+a name that no session has makes a session with it. A label that several
+sessions share is offered once for each, with its ID.
+
+To give each project a session named after it, made the first time a
+terminal starts there, set the option to a function of your own:
+
+<!-- example: rex-project-session -->
+```elisp
+(defun my-rex-project-session (connection)
+  "Return the session named after the current project, making it if missing."
+  (if-let* ((project (project-current)))
+      (let ((name (project-name project)))
+        (or (portal-rex-find-session connection name)
+            (portal-rex-session-create connection name)))
+    (portal-rex-session-default connection)))
+
+(setq portal-rex-session-function #'my-rex-project-session)
+```
+
+A terminal started in a project then joins that project's session, and one
+started outside any project asks as the default does. A Rex terminal's
+buffer is in the directory it started in, so one started from it joins the
+same project's session. Portal's tests run this example as written here.
 
 ## Call the server
 
@@ -341,7 +426,6 @@ pin when it would.
 
 Portal's Rex client is being built in steps. Not built yet:
 
-- Commands for sessions and for new terminals.
 - Titles, directories and programs of Rex terminals, from the server.
 - Ending a block by killing its buffer.
 - Sharing a block's size with Rex's other clients: see [Size](#size).

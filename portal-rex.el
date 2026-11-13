@@ -566,6 +566,8 @@ the block needs, and has no view."
           (add-hook 'kill-buffer-hook #'portal-rex--buffer-killed nil t)
           ;; Killing the buffer ends no program: the block runs on.
           (setq-local portal-terminal-confirm-kill nil)
+          ;; Its name is its block's, which renaming the terminal changes.
+          (setq portal-terminal--renamer #'portal-rex--renamer)
           (portal-rex--describe-block)
           (puthash block-id buffer (portal-rex-connection-blocks connection))
           (setq ready t))
@@ -581,6 +583,18 @@ the block needs, and has no view."
                                             portal-rex--block-label)
                    t)
     (portal-rex--describe-block)))
+
+(defun portal-rex--untangle-names (connection session-id)
+  "Give SESSION-ID's buffers on CONNECTION their plain names where they are free.
+A buffer that Emacs named *rex: S/B*<2>, as another had the name then,
+takes *rex: S/B* once no buffer has it, as when the other's block is
+relabelled or closes.  A name given by hand stays."
+  (dolist (buffer (portal-rex-buffers connection session-id))
+    (with-current-buffer buffer
+      (let ((plain (portal-rex--buffer-name connection session-id portal-rex--block-label)))
+        (when (and (string-match-p (concat "\\`" (regexp-quote plain) "<[0-9]+>\\'") (buffer-name))
+                   (not (get-buffer plain)))
+          (rename-buffer plain))))))
 
 (defun portal-rex--kill-buffer (connection block-id)
   "Forget CONNECTION's block BLOCK-ID, and kill its buffer if it has one.
@@ -652,7 +666,8 @@ was killed by hand."
              ((null buffer) (portal-rex--make-buffer connection session-id block-id label))
              ((not (buffer-live-p buffer)))
              ((not (equal label (buffer-local-value 'portal-rex--block-label buffer)))
-              (portal-rex--rename-buffer buffer label)))))))
+              (portal-rex--rename-buffer buffer label)))))
+        (portal-rex--untangle-names connection session-id)))
       (when (cadr asked)
         (portal-rex--list-blocks connection session-id)))))
 
@@ -912,13 +927,15 @@ of the server and of its sessions.  The connection's
      (t (user-error "The Rex server at %s did not answer within %s seconds" name
                     portal-rex-timeout)))))
 
-(defun portal-rex--read-connection ()
-  "Return the live connection the user means, reading it if there are several."
+(defun portal-rex--read-connection (&optional prompt)
+  "Return the live connection the user means, reading it if there are several.
+PROMPT reads it, by default for disconnecting."
   (let ((connections (portal-rex-connections)))
     (cond
-     ((null connections) (user-error "Not connected to a Rex server"))
+     ((null connections)
+      (user-error "Not connected to a Rex server; use M-x portal-rex-connect"))
      ((null (cdr connections)) (car connections))
-     (t (let ((name (completing-read "Disconnect from Rex server: "
+     (t (let ((name (completing-read (or prompt "Disconnect from Rex server: ")
                                      (mapcar #'portal-rex--named connections) nil t)))
           (cl-find name connections :key #'portal-rex--named :test #'equal))))))
 
@@ -934,6 +951,272 @@ on it carry on; requests still waiting fail with the code
     (portal-rex--end connection "Disconnected" t)
     (when (called-interactively-p 'any)
       (message "Disconnected from the Rex server at %s" (portal-rex--named connection)))))
+
+;;; Sessions and terminals from Emacs
+
+;; The primitives of changing what a server has: sessions made, renamed and
+;; destroyed, a terminal started in a session, a block renamed.  Portal
+;; decides nothing about what a session is for: which session a new
+;; terminal joins is `portal-rex-session-function''s, the user's to set.
+;; Each command changes the server and lets the buffers follow it as they
+;; follow any client's change, waiting for the server's events so that the
+;; change is there in Emacs when the command returns.
+
+(defcustom portal-rex-session-function #'portal-rex-session-default
+  "Function that returns the session a new Rex terminal starts in.
+`portal-rex-new-terminal' calls it with the connection to the server,
+in the buffer it was started from, and starts the terminal in the
+session whose ID it returns.  It may create the session, with
+`portal-rex-session-create', and may prompt.
+
+The default, `portal-rex-session-default', takes the current buffer's
+session when that buffer is a block's, and otherwise reads one.  The
+Rex guide, docs/rex.md, has a function that gives each project a
+session named after it."
+  :type 'function)
+
+(defun portal-rex--command-connection ()
+  "Return the connection a command means.
+That of the current buffer's block, else the only connection, else one
+read from the minibuffer."
+  (if (and portal-rex-block-connection (portal-rex-live-p portal-rex-block-connection))
+      portal-rex-block-connection
+    (portal-rex--read-connection "Rex server: ")))
+
+(defun portal-rex--ask (connection what method &optional payload)
+  "Return what METHOD with PAYLOAD gives on CONNECTION's server, for a command.
+A call the server refuses is a `user-error' saying WHAT could not be
+done, with the server's own words, such as at a limit of its."
+  (condition-case failure
+      (portal-rex-call connection method payload)
+    (portal-rex-error
+     (user-error "%s: %s" what (or (plist-get (nth 2 failure) :message) (cadr failure))))))
+
+(defun portal-rex--session-name (connection session-id)
+  "Return the session SESSION-ID of CONNECTION as a message names it."
+  (or (portal-rex--session-label connection session-id) session-id))
+
+(defun portal-rex-find-session (connection label)
+  "Return the ID of the first of CONNECTION's sessions labelled LABEL, or nil.
+The server lets sessions share a label, and keeps them in its own order."
+  (plist-get (seq-find (lambda (session) (equal (plist-get session :label) label))
+                       (portal-rex-connection-sessions (portal-rex--connection connection)))
+             :session_id))
+
+(defun portal-rex--session-choices (connection)
+  "Return CONNECTION's sessions as completion choices, (NAME . SESSION-ID).
+A session's name is its label.  Where names would be the same, as when
+sessions share a label, each of them is followed by its session's ID,
+until every name is one session's alone."
+  (let* ((sessions (append (portal-rex-connection-sessions connection) nil))
+         (choices (mapcar (lambda (session)
+                            (list (plist-get session :label) (plist-get session :session_id)))
+                          sessions))
+         same)
+    ;; A name followed by its ID ends unlike any other so followed, so one
+    ;; round more settles a label that reads like another's name.
+    (while (setq same (cl-remove-if-not
+                       (lambda (choice)
+                         (and (not (nth 2 choice))
+                              (> (cl-count (car choice) choices :key #'car :test #'equal) 1)))
+                       choices))
+      (dolist (choice same)
+        (setcar choice (format "%s (%s)" (car choice) (cadr choice)))
+        (setcdr (cdr choice) (list t))))
+    (mapcar (lambda (choice) (cons (car choice) (cadr choice))) choices)))
+
+(defun portal-rex--read-session (connection prompt)
+  "Read one of CONNECTION's sessions with PROMPT, and return its ID.
+The current buffer's session is the default."
+  (let* ((choices (or (portal-rex--session-choices connection)
+                      (user-error "The Rex server at %s has no sessions"
+                                  (portal-rex--named connection))))
+         (default (and (eq portal-rex-block-connection connection)
+                       (car (rassoc portal-rex-session-id choices))))
+         (name (completing-read (format-prompt prompt default) choices nil t nil nil default)))
+    (or (cdr (assoc name choices))
+        (user-error "No Rex session is called %s" name))))
+
+(defun portal-rex-session-default (connection)
+  "Return the session a new terminal on CONNECTION's server starts in.
+The current buffer's session when that buffer is a block's on that
+server.  Otherwise one read from the minibuffer, completing over the
+server's sessions: a name that none has creates a session with it."
+  (if (and (eq portal-rex-block-connection connection) portal-rex-session-id)
+      portal-rex-session-id
+    (let* ((choices (portal-rex--session-choices connection))
+           (name (string-trim (completing-read "Rex session for the terminal (a new name creates one): "
+                                               choices))))
+      (cond
+       ((string-empty-p name) (user-error "Name a Rex session for the terminal"))
+       ((cdr (assoc name choices)))
+       ((portal-rex-find-session connection name))
+       (t (portal-rex-session-create connection name))))))
+
+;;;###autoload
+(defun portal-rex-session-create (connection label)
+  "Create a session called LABEL on CONNECTION's Rex server, and return its ID.
+CONNECTION is nil for the only one.  An empty or nil LABEL lets the
+server choose one, such as quiet-meadow.  The session starts empty; it
+is among the connection's sessions when this returns.  The server lets
+two sessions share a label."
+  (interactive
+   (list (portal-rex--command-connection)
+         (read-string "New Rex session's label (empty for one the server chooses): ")))
+  (let* ((connection (portal-rex--connection connection))
+         (label (and label (string-trim label)))
+         (id (plist-get (portal-rex--ask connection "Cannot create a Rex session" "session.create"
+                                         (and label (not (string-empty-p label))
+                                              (list :label label)))
+                        :session_id)))
+    (unless (stringp id)
+      (user-error "Cannot create a Rex session: the server gave no session ID"))
+    ;; Its event usually comes before the answer; if it has not, wait.
+    (unless (portal-rex--await connection (lambda () (portal-rex--session connection id))
+                               portal-rex-timeout)
+      (portal-rex--label-session connection id (or label "")))
+    (when (called-interactively-p 'any)
+      (message "Created Rex session %s" (portal-rex--session-name connection id)))
+    id))
+
+;;;###autoload
+(defun portal-rex-session-rename (connection session-id label)
+  "Call the session SESSION-ID on CONNECTION's Rex server LABEL.
+Interactively, read the session, by default the current buffer's, and
+its new label.  The session's buffers are renamed as the server says it
+has changed.  An empty LABEL gives back the label the server chose when
+it made the session."
+  (interactive
+   (let* ((connection (portal-rex--command-connection))
+          (session-id (portal-rex--read-session connection "Rename Rex session")))
+     (list connection session-id
+           (read-string (format "Rename Rex session %s to: "
+                                (portal-rex--session-name connection session-id))
+                        (portal-rex--session-label connection session-id)))))
+  (let ((connection (portal-rex--connection connection)))
+    (portal-rex--ask connection
+                     (format "Cannot rename Rex session %s"
+                             (portal-rex--session-name connection session-id))
+                     "session.set_label" (list :session_id session-id :label (or label "")))
+    nil))
+
+;;;###autoload
+(defun portal-rex-session-destroy (connection session-id &optional confirm)
+  "Destroy the session SESSION-ID on CONNECTION's Rex server, ending its blocks.
+Every program in the session ends, as when a terminal window closes, and
+its blocks' buffers are killed.  With CONFIRM, as interactively, ask
+first, naming how many blocks will end.  Interactively, read the
+session, by default the current buffer's.  Return non-nil if the session
+was destroyed."
+  (interactive
+   (let ((connection (portal-rex--command-connection)))
+     (list connection (portal-rex--read-session connection "Destroy Rex session") t)))
+  (let* ((connection (portal-rex--connection connection))
+         (name (portal-rex--session-name connection session-id)))
+    (when (or (not confirm)
+              (let ((count (length (plist-get (portal-rex--ask connection
+                                                               (format "Cannot destroy Rex session %s" name)
+                                                               "session.list_blocks"
+                                                               (list :session_id session-id))
+                                              :blocks))))
+                (yes-or-no-p (format "Destroy Rex session %s%s? " name
+                                     (pcase count
+                                       (0 ", which has no blocks")
+                                       (1 " and end its one block")
+                                       (_ (format " and end its %d blocks" count)))))))
+      (portal-rex--ask connection (format "Cannot destroy Rex session %s" name)
+                       "session.destroy" (list :session_id session-id))
+      ;; The server answers once the session has gone, and its events say so.
+      (portal-rex--await connection (lambda () (not (portal-rex--session connection session-id)))
+                         portal-rex-timeout)
+      (when confirm (message "Destroyed Rex session %s" name))
+      t)))
+
+(defun portal-rex--blocks-listed (connection session-id)
+  "Ask CONNECTION's server for SESSION-ID's blocks, and wait for the answer.
+Its buffers then match what the server says, names included."
+  (portal-rex--list-blocks connection session-id)
+  (portal-rex--await connection
+                     (lambda () (not (assoc session-id (portal-rex-connection-lists connection))))
+                     portal-rex-timeout))
+
+;;;###autoload
+(defun portal-rex-new-terminal (connection session-id &optional directory)
+  "Start a shell in a new terminal in session SESSION-ID of CONNECTION's server.
+The shell starts in DIRECTORY, by default `default-directory'.  Show the
+terminal's buffer in the selected window, and return it.
+
+Interactively, the server is the current buffer's block's, or the only
+one, or one read, and the session is the one `portal-rex-session-function'
+returns.  The block has a window of its own in the session, a tab in
+Rex's app, which does not become the session's active one."
+  (interactive
+   (let ((connection (portal-rex--command-connection)))
+     (list connection (funcall portal-rex-session-function connection))))
+  (let* ((connection (portal-rex--connection connection))
+         (directory (file-name-as-directory (expand-file-name (or directory default-directory))))
+         (name (portal-rex--session-name connection session-id))
+         result block-id buffer)
+    (when (file-remote-p directory)
+      (user-error "Start a Rex terminal in a local directory, not %s" directory))
+    (setq result (portal-rex--ask
+                  connection (format "Cannot start a terminal in Rex session %s" name)
+                  "session.new_window"
+                  (list :session_id session-id
+                        :layout (list :block (list :flavor "com.superlogical.terminal.shell"
+                                                   :options (list :cwd (directory-file-name directory))))
+                        :focus :false))
+          block-id (let ((ids (plist-get result :block_ids)))
+                     (and (vectorp ids) (> (length ids) 0) (aref ids 0))))
+    (unless (stringp block-id)
+      (user-error "Started a terminal in Rex session %s, but the server gave no block ID" name))
+    ;; Its buffer comes as any block's does, once the server has listed it.
+    (unless (portal-rex-block-buffer connection block-id)
+      (portal-rex--blocks-listed connection session-id))
+    (setq buffer (or (portal-rex-block-buffer connection block-id)
+                     (user-error "Started block %s in Rex session %s, but its buffer has not come"
+                                 block-id name)))
+    (with-current-buffer buffer
+      (setq default-directory directory))
+    (pop-to-buffer-same-window buffer)
+    ;; A graphical Emacs opens the block's view as it shows the buffer.
+    (when (display-graphic-p)
+      (redisplay t)
+      (when (buffer-local-value 'portal-view--target buffer)
+        (with-current-buffer buffer (portal-terminal-focus))))
+    buffer))
+
+;;;###autoload
+(defun portal-rex-block-rename (label)
+  "Call the current buffer's Rex block LABEL, on its server.
+The buffer's name follows, as it follows any change of the label.  An
+empty LABEL gives the block a default label made from its ID.
+`portal-terminal-rename' does this in a block's buffer."
+  (interactive
+   (progn (portal-rex--this-block)
+          (list (read-string "Rename Rex block: " portal-rex--block-label))))
+  (let ((connection (portal-rex--this-block))
+        (session-id portal-rex-session-id))
+    (portal-rex--ask connection (format "Cannot rename Rex block %s" portal-rex--block-label)
+                     "session.set_block_label"
+                     (list :session_id session-id :block_id portal-rex-block-id :label (or label "")))
+    ;; A block in a window is relabelled with an event, a detached one
+    ;; without: either way, asking for the session's blocks renames it.
+    (portal-rex--blocks-listed connection session-id)
+    nil))
+
+(defun portal-rex--this-block ()
+  "Return the connection of the current buffer's Rex block, or signal why not."
+  (cond
+   ((not portal-rex-block-connection) (user-error "Not the buffer of a Rex block"))
+   ((not (portal-rex-live-p portal-rex-block-connection))
+    (user-error "The Rex server of this block is not connected"))
+   (t portal-rex-block-connection)))
+
+(defun portal-rex--renamer (&optional label)
+  "Rename this buffer's block LABEL, for `portal-terminal-rename'.
+Without LABEL, return the block's label, to start from."
+  (if label (portal-rex-block-rename label) portal-rex--block-label))
 
 (provide 'portal-rex)
 ;;; portal-rex.el ends here

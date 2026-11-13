@@ -38,7 +38,8 @@ Its one block runs cat, without a login shell."
             (portal-rex-parity-check-block
              connection session
              (with-current-buffer (car (portal-rex-buffers connection session))
-               portal-rex-block-id)))
+               portal-rex-block-id))
+            (portal-rex-parity-check-sessions connection (portal-real-rex-directory server)))
         (portal-rex-disconnect connection)))))
 
 (ert-deftest portal-rex-server-gui-sees-a-session-made-elsewhere ()
@@ -169,9 +170,58 @@ Its one block runs cat, without a login shell."
               (should (equal (funcall listed second) '(("shell" "placed"))))))
         (mapc #'portal-rex-disconnect (portal-rex-connections))))))
 
+(ert-deftest portal-rex-server-gui-makes-sessions-and-terminals ()
+  :tags '(:gui)
+  ;; What only a real server shows: a session and terminals made from
+  ;; Emacs, as rex, another client, then lists them, each terminal a
+  ;; window of its own, its shell in the directory it was started in.
+  (portal-real-rex-with (server)
+    (let* ((connection (portal-rex-connect (portal-real-rex-socket server)))
+           (directory (file-name-as-directory
+                       (make-temp-file (expand-file-name "cwd-check-" (portal-real-rex-directory server))
+                                       t)))
+           (blocks (lambda (session)
+                     (mapcar (lambda (block)
+                               (list (plist-get block :label) (plist-get block :placement)
+                                     (stringp (plist-get block :window_id))))
+                             (plist-get (portal-real-rex-cli server "block" "ls" "-s" session "--json")
+                                        :blocks)))))
+      (unwind-protect
+          (save-window-excursion
+            (let* ((session (portal-rex-session-create connection "made"))
+                   (first (portal-rex-new-terminal connection session directory))
+                   (second (portal-rex-new-terminal connection session directory)))
+              (should (equal (plist-get (portal-real-rex-cli server "ls" "--json") :sessions)
+                             `[(:session_id ,session :label "made")]))
+              (with-current-buffer first (portal-terminal-rename "api"))
+              (should (equal (funcall blocks session) '(("api" "placed" t) ("shell" "placed" t))))
+              (should (equal (sort (mapcar #'buffer-name (list first second)) #'string<)
+                             '("*rex: made/api*" "*rex: made/shell*")))
+              ;; Two windows: a tab each in Rex's app.
+              (let ((listed (plist-get (portal-real-rex-cli server "block" "ls" "-s" session "--json")
+                                       :blocks)))
+                (should-not (equal (plist-get (aref listed 0) :window_id)
+                                   (plist-get (aref listed 1) :window_id))))
+              ;; The shell started in the directory.
+              (let ((block (buffer-local-value 'portal-rex-block-id second)))
+                (portal-rex-server-gui-tests--api server "com.superlogical.terminal.write"
+                                                  :session_id session :block_id block
+                                                  :args '(:data "pwd\r"))
+                (portal-rex-server-gui-tests--wait
+                 (lambda () (string-search (file-name-nondirectory (directory-file-name directory))
+                                           (portal-rex-server-gui-tests--screen server session block)))))
+              ;; Destroyed from Emacs: gone from the server, and its buffers.
+              (should (portal-rex-session-destroy connection session))
+              (should-not (buffer-live-p first))
+              (should-not (buffer-live-p second))
+              (should (equal (plist-get (portal-real-rex-cli server "ls" "--json") :sessions) []))))
+        (mapc #'portal-rex-disconnect (portal-rex-connections))))))
+
 (declare-function portal--terminal-text "portal-terminal" (target))
 (declare-function portal--terminal-paste "portal-terminal" (target text &optional enter))
 (declare-function portal-test-native-key "test-terminal-input" (code flags text &optional windowless))
+(declare-function portal-test-native-target-frame "test-terminal-input" (title))
+(declare-function portal-test-native-focus-target "test-terminal-input" ())
 
 (defun portal-rex-server-gui-tests--screen (server session block)
   "Return the screen and history of BLOCK in SESSION as SERVER has them, as text."
@@ -226,6 +276,11 @@ Its one block runs cat, without a login shell."
                                (list (plist-get state :columns) (plist-get state :rows)))))
               ;; Typed in Emacs, it reaches the shell, and its output Emacs.
               (select-frame-set-input-focus (selected-frame))
+              ;; Keys go to this frame by name: the VM's desktop may take
+              ;; activation back from a test's Emacs at any moment.
+              (should (portal-view--with-frame-title (selected-frame)
+                                                     #'portal-test-native-target-frame))
+              (portal-test-native-focus-target)
               (portal-terminal-focus)
               (portal-rex-server-gui-tests--keys '(14 0 "e") '(8 0 "c") '(4 0 "h") '(31 0 "o")
                                                  '(49 0 " ") '(17 0 "t") '(16 0 "y")
@@ -256,6 +311,7 @@ Its one block runs cat, without a login shell."
               (let ((ours (portal--terminal-text target)))
                 (dolist (line '("before-42" "typed" "after-vim"))
                   (should (string-match-p (format "^%s$" line) ours))))))
+        (portal-test-native-target-frame nil)
         (mapc #'portal-rex-disconnect (portal-rex-connections))))))
 
 (provide 'portal-rex-server-gui-tests)

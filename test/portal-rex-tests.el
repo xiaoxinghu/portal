@@ -1209,5 +1209,404 @@ Each is returned once: a later call returns those asked for since."
       (should (commandp 'ibuffer-filter-by-portal-rex-session))
       (should (equal (portal-rex--session-labels) '("work"))))))
 
+;;; Sessions and terminals from Emacs
+
+(defmacro portal-rex-tests--answering (answers &rest body)
+  "Run BODY with the minibuffer giving ANSWERS, in turn, and return what it asked.
+Each answer goes to the next `read-string', `completing-read' or
+`yes-or-no-p'.  The value is a list of (PROMPT CHOICES START) for each
+question, in order, CHOICES being the names a completion offered and
+START the text a `read-string' starts with.  As in the minibuffer, an
+empty answer to `read-string' gives its default."
+  (declare (indent 1))
+  `(let ((answers ,answers) asked)
+     (cl-letf (((symbol-function 'read-string)
+                (lambda (prompt &optional initial _history default &rest _)
+                  (push (list prompt nil initial) asked)
+                  (let ((answer (pop answers)))
+                    (if (and (equal answer "") default) default answer))))
+               ((symbol-function 'completing-read)
+                (lambda (prompt collection &optional _predicate _require _initial _history default
+                                &rest _)
+                  (push (list prompt (all-completions "" collection) default) asked)
+                  (pop answers)))
+               ((symbol-function 'yes-or-no-p)
+                (lambda (prompt) (push (list prompt nil nil) asked) (pop answers))))
+       ,@body)
+     (nreverse asked)))
+
+(defun portal-rex-tests--session-ids (connection)
+  "Return the IDs of CONNECTION's sessions, in order."
+  (mapcar (lambda (session) (plist-get session :session_id))
+          (portal-rex-connection-sessions connection)))
+
+(defun portal-rex-tests--request (server method)
+  "Return the payload of the last request for METHOD that SERVER had.
+It and those before it are taken: a later call finds only newer ones."
+  ;; The server reports in order, so once it has finished a command, every
+  ;; request made before has been reported.
+  (portal-fake-rex-command server :fragment 0)
+  (let* ((asked (lambda (report) (equal (plist-get (plist-get report :request) :method) method)))
+         (last (plist-get (portal-fake-rex-request server method) :payload)))
+    (while (cl-find-if asked (portal-fake-rex-reports server))
+      (setq last (plist-get (portal-fake-rex-request server method) :payload)))
+    last))
+
+(ert-deftest portal-rex-fake-changes-sessions-as-a-real-server ()
+  ;; The same checks run against a real server in the real-server tier.
+  (portal-rex-tests--with (server)
+    (portal-rex-parity-check-sessions (portal-rex-tests--connect server)
+                                      temporary-file-directory)))
+
+(ert-deftest portal-rex-session-create-makes-a-session ()
+  (portal-rex-tests--with (server)
+    (let* ((connection (portal-rex-tests--connect server))
+           (made (portal-rex-session-create nil "work")))
+      ;; Asked with the label, and known when it returns.
+      (should (equal (portal-rex-tests--request server "session.create") '(:label "work")))
+      (should (equal (portal-rex--session-label connection made) "work"))
+      (should (equal (portal-rex-find-session connection "work") made))
+      (should-not (portal-rex-buffers connection made))
+      ;; Without a label, the server chooses one.
+      (let ((chosen (portal-rex-session-create connection "  ")))
+        (should (equal (portal-rex-tests--request server "session.create") nil))
+        (should (string-prefix-p "fake-meadow-" (portal-rex--session-label connection chosen))))
+      ;; Interactively, it reads the label and says what it made.
+      (let (id)
+        (should (equal (mapcar #'car (portal-rex-tests--answering '("play")
+                                       (should (equal (portal-rex-tests--messages
+                                                        (setq id (call-interactively
+                                                                  #'portal-rex-session-create)))
+                                                      "Created Rex session play\n"))))
+                       '("New Rex session's label (empty for one the server chooses): ")))
+        (should (equal (portal-rex--session-label connection id) "play")))
+      ;; A refusal is the server's, in its own words.
+      (portal-fake-rex-command server :error "session.create" :code "conflict"
+                               :message "too many sessions" :status 409)
+      (should (equal (cadr (should-error (portal-rex-session-create connection "more")
+                                         :type 'user-error))
+                     "Cannot create a Rex session: too many sessions"))
+      (should (= (length (portal-rex-connection-sessions connection)) 4))
+      ;; A session whose event is late is known all the same.
+      (portal-fake-rex-command server :result "session.create"
+                               :payload '(:session_id "session:quiet"))
+      (let ((portal-rex-timeout 0.2))
+        (should (equal (portal-rex-session-create connection "quiet") "session:quiet")))
+      (should (equal (portal-rex--session-label connection "session:quiet") "quiet")))))
+
+(ert-deftest portal-rex-session-rename-renames-its-buffers ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")
+                                               (:session_id "session:b" :label "play")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api"))
+    (portal-rex-tests--blocks server "b" (portal-rex-tests--block "2" "shell"))
+    (let ((connection (portal-rex-tests--connect server)))
+      (portal-rex-session-rename connection "session:a" "server")
+      (should (equal (portal-rex-tests--request server "session.set_label")
+                     '(:session_id "session:a" :label "server")))
+      ;; The event came before the answer: renamed when it returns.
+      (should (equal (portal-rex-tests--names) '("*rex: play/shell*" "*rex: server/api*")))
+      ;; Interactively, from a block's buffer: its session is the default,
+      ;; and its label the text to edit.
+      (with-current-buffer "*rex: play/shell*"
+        (should (equal (portal-rex-tests--answering '("play" "games")
+                         (call-interactively #'portal-rex-session-rename))
+                       '(("Rename Rex session (default play): " ("server" "play") "play")
+                         ("Rename Rex session play to: " nil "play")))))
+      (should (equal (portal-rex-tests--names) '("*rex: games/shell*" "*rex: server/api*")))
+      ;; Elsewhere, there is no default.
+      (with-temp-buffer
+        (should (equal (portal-rex-tests--answering '("server" "work")
+                         (call-interactively #'portal-rex-session-rename))
+                       '(("Rename Rex session: " ("server" "games") nil)
+                         ("Rename Rex session server to: " nil "server")))))
+      (should (equal (portal-rex-tests--names) '("*rex: games/shell*" "*rex: work/api*")))
+      ;; An emptied label is sent empty, which the server takes as asking
+      ;; for the label it chose.
+      (with-current-buffer "*rex: games/shell*"
+        (portal-rex-tests--answering '("games" "")
+          (call-interactively #'portal-rex-session-rename)))
+      (should (equal (portal-rex-tests--request server "session.set_label")
+                     '(:session_id "session:b" :label "")))
+      ;; A label the server refuses.
+      (should (equal (cadr (should-error (portal-rex-session-rename connection "session:a"
+                                                                    (make-string 129 ?x))
+                                         :type 'user-error))
+                     "Cannot rename Rex session work: session.set_label: label must be at most 128 characters without control characters")))))
+
+(ert-deftest portal-rex-session-destroy-asks-naming-the-blocks ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")
+                                               (:session_id "session:b" :label "play")
+                                               (:session_id "session:c" :label "empty")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api")
+                              (portal-rex-tests--block "2" "logs"))
+    (portal-rex-tests--blocks server "b" (portal-rex-tests--block "3" "shell"))
+    (let ((connection (portal-rex-tests--connect server)))
+      (portal-rex-tests--asked server connection)
+      (with-current-buffer "*rex: work/api*"
+        ;; Answered no, nothing ends: the server was only asked how many
+        ;; blocks the session has.
+        (should (equal (portal-rex-tests--answering '("work" nil)
+                         (should-not (call-interactively #'portal-rex-session-destroy)))
+                       '(("Destroy Rex session (default work): " ("work" "play" "empty") "work")
+                         ("Destroy Rex session work and end its 2 blocks? " nil nil))))
+        (should (equal (portal-rex-tests--asked server connection) '("session.list_blocks")))
+        (should (equal (portal-rex-tests--names connection "a")
+                       '("*rex: work/api*" "*rex: work/logs*")))
+        ;; Answered yes, it ends, and its buffers with it, when it returns.
+        (let ((buffer (current-buffer)))
+          (should (equal (portal-rex-tests--messages
+                           (should (equal (portal-rex-tests--answering '("work" t)
+                                            (should (call-interactively
+                                                     #'portal-rex-session-destroy)))
+                                          '(("Destroy Rex session (default work): "
+                                             ("work" "play" "empty") "work")
+                                            ("Destroy Rex session work and end its 2 blocks? "
+                                             nil nil)))))
+                         "Destroyed Rex session work\n"))
+          (should-not (buffer-live-p buffer))))
+      (should (equal (portal-rex-tests--request server "session.destroy") '(:session_id "session:a")))
+      (should (equal (portal-rex-tests--names) '("*rex: play/shell*")))
+      (should (equal (portal-rex-tests--session-ids connection) '("session:b" "session:c")))
+      ;; One block, and none, are said as such.
+      (should (equal (car (cadr (portal-rex-tests--answering '("play" nil)
+                                  (call-interactively #'portal-rex-session-destroy))))
+                     "Destroy Rex session play and end its one block? "))
+      (should (equal (car (cadr (portal-rex-tests--answering '("empty" nil)
+                                  (call-interactively #'portal-rex-session-destroy))))
+                     "Destroy Rex session empty, which has no blocks? "))
+      ;; From Lisp, without CONFIRM, nothing asks.
+      (should (equal (portal-rex-tests--answering nil
+                       (should (portal-rex-session-destroy connection "session:c")))
+                     nil))
+      (should (equal (portal-rex-tests--session-ids connection) '("session:b"))))))
+
+(ert-deftest portal-rex-new-terminal-starts-a-shell-in-a-session ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+    (portal-rex-tests--blocks server "a")
+    (let* ((connection (portal-rex-tests--connect server))
+           (directory (file-name-as-directory (make-temp-file "rex-cwd" t))))
+      (unwind-protect
+          (save-window-excursion
+            (let ((buffer (let ((default-directory directory))
+                            (portal-rex-new-terminal connection "session:a"))))
+              ;; One window of one shell, in the directory, not made active.
+              (should (equal (portal-rex-tests--request server "session.new_window")
+                             `(:session_id "session:a"
+                               :layout (:block (:flavor "com.superlogical.terminal.shell"
+                                                :options (:cwd ,(directory-file-name directory))))
+                               :focus :false)))
+              ;; Its buffer, as the server listed it, shown and returned.
+              (should (eq (window-buffer (selected-window)) buffer))
+              (should (equal (buffer-name buffer) "*rex: work/shell*"))
+              (with-current-buffer buffer
+                (should (eq portal-rex-block-connection connection))
+                (should (equal portal-rex-session-id "session:a"))
+                (should (string-prefix-p "block:made-" portal-rex-block-id))
+                (should (equal default-directory directory))
+                ;; A second from there joins its session, by default.
+                (let ((second (call-interactively #'portal-rex-new-terminal)))
+                  (should (equal (buffer-local-value 'portal-rex-session-id second) "session:a"))
+                  (should (equal (buffer-local-value 'default-directory second) directory))
+                  (should (eq (window-buffer (selected-window)) second)))))
+            (should (equal (portal-rex-tests--names) '("*rex: work/shell*" "*rex: work/shell*<2>")))
+            ;; At a limit, the server's own message, and no buffer.
+            (portal-fake-rex-command server :error "session.new_window" :code "conflict"
+                                     :message "session has too many windows" :status 409)
+            (should (equal (cadr (should-error (portal-rex-new-terminal connection "session:a")
+                                               :type 'user-error))
+                           "Cannot start a terminal in Rex session work: session has too many windows"))
+            (should (= (length (portal-rex-buffers)) 2))
+            ;; A remote directory is refused before the server is asked.
+            (should-error (portal-rex-new-terminal connection "session:a" "/ssh:elsewhere:/tmp/")
+                          :type 'user-error)
+            ;; A session the server does not have.
+            (portal-fake-rex-command server :result "session.new_window" :payload nil)
+            (should (string-prefix-p "Started a terminal in Rex session session:none, but"
+                                     (cadr (should-error
+                                            (portal-rex-new-terminal connection "session:none")
+                                            :type 'user-error)))))
+        (delete-directory directory t)))))
+
+(ert-deftest portal-rex-session-default-in-each-case ()
+  (portal-rex-tests--with (server other)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")
+                                               (:session_id "session:b" :label "play")
+                                               (:session_id "session:c" :label "play")])
+    (portal-rex-tests--blocks server "b" (portal-rex-tests--block "1" "shell"))
+    (let ((connection (portal-rex-tests--connect server))
+          (prompt "Rex session for the terminal (a new name creates one): "))
+      ;; In a block's buffer, its session, without a question.
+      (with-current-buffer "*rex: play/shell*"
+        (should-not (portal-rex-tests--answering nil
+                      (should (equal (portal-rex-session-default connection) "session:b")))))
+      (with-temp-buffer
+        ;; Elsewhere, a question, completing over the sessions, a label
+        ;; that two share told apart by their IDs.
+        (should (equal (portal-rex-tests--answering '("work")
+                         (should (equal (portal-rex-session-default connection) "session:a")))
+                       `((,prompt ("work" "play (session:b)" "play (session:c)") nil))))
+        (should (equal (portal-rex-tests--answering '("play (session:c)")
+                         (should (equal (portal-rex-session-default connection) "session:c")))
+                       `((,prompt ("work" "play (session:b)" "play (session:c)") nil))))
+        ;; A label that reads like another's name is told apart too.
+        (portal-fake-rex-command server :event '(:type "session_created"
+                                                 :payload (:session (:session_id "session:d"
+                                                                     :label "play (session:b)"))))
+        (portal-rex-tests--settle connection)
+        (let ((choices (portal-rex--session-choices connection)))
+          (should (equal (mapcar #'car choices)
+                         '("work" "play (session:b)" "play (session:c)" "play (session:b) (session:d)")))
+          (should (equal (mapcar #'cdr choices)
+                         '("session:a" "session:b" "session:c" "session:d"))))
+        (portal-fake-rex-command server :event '(:type "session_destroyed"
+                                                 :payload (:session_id "session:d")))
+        (portal-rex-tests--settle connection)
+        ;; A shared label typed as it is takes the first.
+        (portal-rex-tests--answering '("play")
+          (should (equal (portal-rex-session-default connection) "session:b")))
+        ;; A new name makes a session of it.
+        (let ((made (portal-rex-tests--answering '(" docs ")
+                      (portal-rex-session-default connection))))
+          (should (equal (length made) 1)))
+        (should (equal (portal-rex--session-label connection (car (last (portal-rex-tests--session-ids connection))))
+                       "docs"))
+        (should (equal (portal-rex-tests--request server "session.create") '(:label "docs")))
+        ;; No name is refused.
+        (portal-rex-tests--answering '("")
+          (should-error (portal-rex-session-default connection) :type 'user-error)))
+      ;; With two servers, a command takes the current buffer's, and asks
+      ;; elsewhere.
+      (let ((second (portal-rex-tests--connect other)))
+        (with-current-buffer "*rex: play/shell*"
+          (should-not (portal-rex-tests--answering nil
+                        (should (eq (portal-rex--command-connection) connection)))))
+        (with-temp-buffer
+          (should (equal (portal-rex-tests--answering (list (portal-rex--named second))
+                           (should (eq (portal-rex--command-connection) second)))
+                         `(("Rex server: " ,(mapcar #'portal-rex--named (list connection second))
+                            nil)))))
+        (portal-rex-disconnect second))
+      ;; With none, a command says to connect.
+      (portal-rex-disconnect connection)
+      (with-temp-buffer
+        (should (string-match-p "portal-rex-connect"
+                                (cadr (should-error (portal-rex--command-connection)
+                                                    :type 'user-error))))))))
+
+(ert-deftest portal-rex-renaming-a-block-sets-its-label ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "shell")
+                              (portal-rex-tests--block "2" "logs" "detached")
+                              (portal-rex-tests--block "3" "shell"))
+    (let ((connection (portal-rex-tests--connect server)))
+      (should (equal (portal-rex-tests--names)
+                     '("*rex: work/logs*" "*rex: work/shell*" "*rex: work/shell*<2>")))
+      (with-current-buffer "*rex: work/shell*"
+        ;; Portal's rename command starts from the block's label, and sets it.
+        (should (equal (portal-rex-tests--answering '("api")
+                         (call-interactively #'portal-terminal-rename))
+                       '(("Terminal name: " nil "shell"))))
+        (should (equal (portal-rex-tests--request server "session.set_block_label")
+                       '(:session_id "session:a" :block_id "block:1" :label "api")))
+        ;; The buffer's name follows the block's.
+        (should (equal (buffer-name) "*rex: work/api*"))
+        (should (equal portal-rex--block-label "api")))
+      ;; The other shell's buffer, named apart from this one's, takes the
+      ;; plain name once it is free.
+      (should (equal (buffer-name (portal-rex-block-buffer connection "block:3"))
+                     "*rex: work/shell*"))
+      ;; A detached block sends no event, and is renamed all the same.
+      (with-current-buffer "*rex: work/logs*"
+        (portal-terminal-rename "errors")
+        (should (equal (buffer-name) "*rex: work/errors*")))
+      ;; The server's refusal, in its words, and the name stays.
+      (with-current-buffer "*rex: work/api*"
+        (should (equal (cadr (should-error (portal-rex-block-rename "a\tb") :type 'user-error))
+                       "Cannot rename Rex block api: session.set_block_label: label must be at most 128 characters without control characters"))
+        (should (equal (buffer-name) "*rex: work/api*")))
+      ;; Only a block's buffer has a block to rename.
+      (with-temp-buffer
+        (should-error (portal-rex-block-rename "x") :type 'user-error))
+      ;; Other terminals' buffers are renamed as ever.
+      (with-temp-buffer
+        (portal-terminal-mode)
+        (portal-terminal-rename "portal-rex-tests-plain")
+        (should (equal (buffer-name) "portal-rex-tests-plain")))
+      ;; A name given by hand stays while the labels do.
+      (with-current-buffer (portal-rex-block-buffer connection "block:3")
+        (rename-buffer "my shell"))
+      (portal-rex-tests--session-event server "a" "session_view_changed" :revision 9)
+      (portal-rex-tests--settle connection)
+      (should (equal (portal-rex-tests--names connection)
+                     '("*rex: work/api*" "*rex: work/errors*" "my shell"))))))
+
+(defconst portal-rex-tests--guide
+  (expand-file-name "../docs/rex.md" (file-name-directory (or load-file-name buffer-file-name)))
+  "The Rex guide, whose examples tests run.")
+
+(defun portal-rex-tests--example (name)
+  "Return the Rex guide's example NAME, the Emacs Lisp block after its marker."
+  (with-temp-buffer
+    (insert-file-contents portal-rex-tests--guide)
+    (unless (re-search-forward (format "^<!-- example: %s -->\n```elisp\n" (regexp-quote name)) nil t)
+      (error "docs/rex.md has no example %s" name))
+    (let ((start (point)))
+      (re-search-forward "^```$")
+      (car (read-from-string (concat "(progn\n" (buffer-substring-no-properties
+                                                  start (match-beginning 0))
+                                     ")"))))))
+
+(ert-deftest portal-rex-project-recipe-gives-each-project-a-session ()
+  ;; The recipe in docs/rex.md, as the guide has it.
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+    (let* ((connection (portal-rex-tests--connect server))
+           (root (file-name-as-directory (make-temp-file "rex-projects" t)))
+           (alpha (expand-file-name "alpha/" root))
+           (beta (expand-file-name "beta/" root))
+           (project-find-functions
+            (list (lambda (directory)
+                    (seq-some (lambda (project)
+                                (and (string-prefix-p project (expand-file-name directory))
+                                     (cons 'transient project)))
+                              (list alpha beta)))))
+           (portal-rex-session-function portal-rex-session-function))
+      (make-directory (expand-file-name "src" alpha) t)
+      (make-directory beta t)
+      (unwind-protect
+          (save-window-excursion
+            (eval (portal-rex-tests--example "rex-project-session") t)
+            (with-temp-buffer
+              ;; A terminal in each of two projects: two sessions, named
+              ;; after them, made without a question.
+              (should-not (portal-rex-tests--answering nil
+                            (let ((default-directory alpha))
+                              (call-interactively #'portal-rex-new-terminal))
+                            (let ((default-directory beta))
+                              (call-interactively #'portal-rex-new-terminal)))))
+            (should (equal (mapcar (lambda (session) (plist-get session :label))
+                                   (portal-rex-connection-sessions connection))
+                           '("work" "alpha" "beta")))
+            ;; A third, from deeper in a project, joins its session.
+            (with-temp-buffer
+              (let ((default-directory (expand-file-name "src/" alpha)))
+                (call-interactively #'portal-rex-new-terminal)))
+            (should (equal (mapcar (lambda (session) (plist-get session :label))
+                                   (portal-rex-connection-sessions connection))
+                           '("work" "alpha" "beta")))
+            (should (equal (portal-rex-tests--names)
+                           '("*rex: alpha/shell*" "*rex: alpha/shell*<2>" "*rex: beta/shell*")))
+            ;; Outside any project, the default's question.
+            (with-temp-buffer
+              (let ((default-directory root))
+                (should (equal (caar (portal-rex-tests--answering '("work")
+                                       (call-interactively #'portal-rex-new-terminal)))
+                               "Rex session for the terminal (a new name creates one): ")))))
+        (delete-directory root t)))))
+
 (provide 'portal-rex-tests)
 ;;; portal-rex-tests.el ends here

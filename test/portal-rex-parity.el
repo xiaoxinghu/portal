@@ -11,6 +11,7 @@
 (require 'ert)
 (require 'seq)
 (require 'portal-rex)
+(require 'portal-terminal)
 
 (defun portal-rex-parity-check (connection)
   "Check what the server of CONNECTION says, as Portal relies on it.
@@ -112,6 +113,60 @@ The block's screen in VT form, with its palette, is longer than 16 bytes."
                    '(:bytes_written 0)))
     (portal-rex-call connection "block.event"
                      (append block '(:event (:type "focus" :payload (:action "in")))))))
+
+(defun portal-rex-parity-check-sessions (connection directory)
+  "Check the commands that change CONNECTION's server, and what it then says.
+A session made, two terminals started in it in DIRECTORY, one of them
+renamed, the session renamed and destroyed, each by Portal's own command
+and each followed by the buffers.  The server has no session labelled
+parity-made beforehand, and nothing else changes it meanwhile."
+  (let* ((session (portal-rex-session-create connection "  parity-made "))
+         (listed (lambda ()
+                   (mapcar (lambda (block) (list (plist-get block :label) (plist-get block :placement)))
+                           (plist-get (portal-rex-call connection "session.list_blocks"
+                                                       (list :session_id session))
+                                      :blocks))))
+         (names (lambda ()
+                  (sort (mapcar #'buffer-name (portal-rex-buffers connection session)) #'string<)))
+         first second)
+    ;; Made, trimmed, empty, and known at once.
+    (should (string-prefix-p "session:" session))
+    (should (equal (portal-rex-find-session connection "parity-made") session))
+    (should (member (list :session_id session :label "parity-made")
+                    (append (plist-get (portal-rex-call connection "session.list") :sessions) nil)))
+    (should (equal (funcall listed) nil))
+    ;; A label the server refuses, in its own words.
+    (should (string-match-p "\\`Cannot rename Rex session parity-made: .+"
+                            (cadr (should-error (portal-rex-session-rename connection session "a\nb")
+                                                :type 'user-error))))
+    ;; Two terminals, each in a window of its own, with their buffers.
+    (save-window-excursion
+      (setq first (portal-rex-new-terminal connection session directory)
+            second (portal-rex-new-terminal connection session directory))
+      (should (eq (window-buffer (selected-window)) second)))
+    (should-not (eq first second))
+    (dolist (buffer (list first second))
+      (with-current-buffer buffer
+        (should (eq portal-rex-block-connection connection))
+        (should (equal portal-rex-session-id session))
+        (should (equal default-directory (file-name-as-directory directory)))))
+    (should (equal (funcall listed) '(("shell" "placed") ("shell" "placed"))))
+    (should (equal (funcall names) '("*rex: parity-made/shell*" "*rex: parity-made/shell*<2>")))
+    ;; One renamed as any terminal is, which relabels its block.
+    (with-current-buffer second (portal-terminal-rename " api "))
+    (should (equal (buffer-name second) "*rex: parity-made/api*"))
+    (should (member '("api" "placed") (funcall listed)))
+    ;; The session renamed, and its buffers with it.
+    (portal-rex-session-rename connection session "parity-renamed")
+    (should (equal (portal-rex--session-label connection session) "parity-renamed"))
+    (should (equal (funcall names) '("*rex: parity-renamed/api*" "*rex: parity-renamed/shell*")))
+    ;; Destroyed: its blocks end, and their buffers go.
+    (should (portal-rex-session-destroy connection session))
+    (should-not (buffer-live-p first))
+    (should-not (buffer-live-p second))
+    (should-not (portal-rex--session connection session))
+    (should-not (seq-find (lambda (known) (equal (plist-get known :session_id) session))
+                          (plist-get (portal-rex-call connection "session.list") :sessions)))))
 
 (provide 'portal-rex-parity)
 ;;; portal-rex-parity.el ends here
