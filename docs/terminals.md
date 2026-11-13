@@ -176,6 +176,13 @@ These are only facts: titles are program-set, not process names; `:program` is
 an executable path, the shell's at a prompt, or nil until one is known; live
 shells may be busy or idle.
 
+The buffer of a [Rex block](rex.md#a-buffer-for-every-block) is a terminal
+too, from the moment Emacs connects, whether or not a window has shown it
+yet: it is listed, chosen and cycled to like the others, and showing it
+opens its view. Its details come from its server, as
+[the Rex guide](rex.md#a-blocks-details) says; until a window first shows
+it, Portal knows only its name and project.
+
 `(portal-terminal-start DIRECTORY PROGRAM ARGUMENTS NAME)` runs PROGRAM with
 literal ARGUMENTS in a new terminal, optionally named NAME, and shows it with
 `pop-to-buffer` under Emacs display rules. The native adapter starts the
@@ -197,8 +204,10 @@ movement. `M-a` switches lists, preserving input. Candidates show name, project,
 directory and title; completion matches every field. Category `portal-terminal`
 tries `basic` and `substring` before your styles, like Emacs buffers; customize
 with `completion-category-overrides`. With Orderless, `portal api npm` finds a
-terminal titled `npm run dev` in project `portal`'s `api/` directory. Exited/quick terminals
-are annotated.
+terminal titled `npm run dev` in project `portal`'s `api/` directory. Each
+candidate is annotated with the program in its foreground, by file name, and
+with whether it is quick or has exited. [Rex blocks'](rex.md#portals-terminal-commands)
+buffers are listed with the rest.
 
 Recently selected terminals come first; the current one comes last. `RET` on
 empty input takes the first. Order is fixed at opening; previews do not count

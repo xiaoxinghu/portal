@@ -314,5 +314,74 @@ Its one block runs cat, without a login shell."
         (portal-test-native-target-frame nil)
         (mapc #'portal-rex-disconnect (portal-rex-connections))))))
 
+(ert-deftest portal-rex-server-gui-a-blocks-details-reach-its-buffer ()
+  :tags '(:gui)
+  ;; What only a real server shows: the events its terminal sends as a
+  ;; shell sets a title, changes directory and runs a program, reaching the
+  ;; block's buffer as a terminal's details, and the block closing, and its
+  ;; buffer going, when the shell exits.
+  (portal-real-rex-with (server)
+    (let* ((session (plist-get (portal-real-rex-cli server "new" "details" "--shell" "none" "--json"
+                                                    "--" "/bin/sh")
+                               :session_id))
+           (connection (portal-rex-connect (portal-real-rex-socket server)))
+           (buffer (car (portal-rex-buffers connection session)))
+           (here (file-name-as-directory (file-truename (portal-real-rex-directory server))))
+           (fact (lambda (key) (plist-get (portal-terminal-metadata buffer) key)))
+           (until (lambda (key wanted)
+                    (portal-rex-server-gui-tests--wait
+                     (lambda () (equal (funcall fact key) wanted)))))
+           exits
+           (watcher (lambda (_symbol value operation where)
+                      (when (and (eq operation 'set) (eq where buffer) value)
+                        (push value exits)))))
+      (add-variable-watcher 'portal-terminal--exited watcher)
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (switch-to-buffer buffer)
+            (redisplay t)
+            (let ((target portal-view--target)
+                  (type (lambda (line) (portal--terminal-paste portal-view--target line t))))
+              (should target)
+              (portal-rex-server-gui-tests--wait
+               (lambda () (equal (plist-get (plist-get (portal--inspect target) :rex) :state) "live")))
+              ;; The shell, by Rex's label for it, from the first answer.
+              (portal-rex-server-gui-tests--wait
+               (lambda () (equal (file-name-nondirectory (or (funcall fact :program) "")) "sh")))
+              ;; A title a program sets.
+              (funcall type "printf '\\033]2;%s\\007' rex-title")
+              (funcall until :title "rex-title")
+              ;; A change of directory with no report of it: the shell's
+              ;; own directory stands in.
+              (funcall type (format "cd %s" (shell-quote-argument (directory-file-name here))))
+              (funcall until :directory here)
+              (should (equal (buffer-local-value 'default-directory buffer) here))
+              (should (equal (buffer-local-value 'portal-rex-block-directory buffer)
+                             (directory-file-name here)))
+              ;; A directory the shell reports, as shell integration does,
+              ;; wins from then on.
+              (funcall type "mkdir -p 'a b' && printf '\\033]7;file://%s%s/a%%20b\\007' \"$(hostname)\" \"$PWD\"")
+              (funcall until :directory (file-name-as-directory (expand-file-name "a b" here)))
+              ;; A program in the foreground, and the shell after it.
+              (funcall type "vim -u NONE -N")
+              (portal-rex-server-gui-tests--wait
+               (lambda () (equal (file-name-nondirectory (or (funcall fact :program) "")) "vim")))
+              (should (string-search "vim" (portal-terminal--annotation buffer)))
+              (select-frame-set-input-focus (selected-frame))
+              (portal-terminal-focus)
+              (portal-rex-server-gui-tests--keys '(53 0 "\e") (list 41 (ash 1 17) ":") '(12 0 "q")
+                                                 (list 18 (ash 1 17) "!") '(36 0 "\r"))
+              (portal-rex-server-gui-tests--wait
+               (lambda () (equal (file-name-nondirectory (or (funcall fact :program) "")) "sh")))
+              ;; The shell exits: the block closes and takes its buffer, which
+              ;; never said the program exited.
+              (funcall type "exit")
+              (portal-rex-server-gui-tests--wait (lambda () (not (buffer-live-p buffer))))
+              (should-not exits)
+              (should-not (portal-rex-buffers connection session))))
+        (remove-variable-watcher 'portal-terminal--exited watcher)
+        (mapc #'portal-rex-disconnect (portal-rex-connections))))))
+
 (provide 'portal-rex-server-gui-tests)
 ;;; portal-rex-server-gui-tests.el ends here

@@ -1216,8 +1216,13 @@ Rex's app, which does not become the session's active one."
     (setq buffer (or (portal-rex-block-buffer connection block-id)
                      (user-error "Started block %s in Rex session %s, but its buffer has not come"
                                  block-id name)))
+    ;; It starts as a terminal started there does: in that directory, and
+    ;; in its project, which the shell changing directory never changes.
     (with-current-buffer buffer
-      (setq default-directory directory))
+      (setq default-directory directory
+            list-buffers-directory directory
+            portal-terminal--directory directory
+            portal-terminal--project (portal-project-root directory)))
     (pop-to-buffer-same-window buffer)
     ;; A graphical Emacs opens the block's view as it shows the buffer.
     (when (display-graphic-p)
