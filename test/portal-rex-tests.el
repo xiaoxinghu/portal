@@ -812,9 +812,11 @@ Each is returned once: a later call returns those asked for since."
         (should (equal default-directory (expand-file-name "~/"))))
       (should-not (portal-rex-session-label (get-buffer-create "*scratch*"))))))
 
-(ert-deftest portal-rex-buffer-is-a-terminal-buffer-without-a-view ()
+(ert-deftest portal-rex-buffer-is-a-terminal-before-its-view-opens ()
   ;; The mode is the one a terminal view lives in, and Portal's terminal
-  ;; commands take a buffer that has no view yet for what it is.
+  ;; commands take the buffer for a terminal whose details are not known
+  ;; yet: its view, and with it the block's details, come once a window
+  ;; shows it.
   (portal-rex-tests--with (server)
     (let* ((connection (portal-rex-tests--connect server))
            (buffer (portal-rex-block-buffer connection "block:fake-1")))
@@ -822,23 +824,82 @@ Each is returned once: a later call returns those asked for since."
       (with-current-buffer buffer
         (should (eq major-mode 'portal-terminal-mode))
         (should-not portal-view--target)
-        (should-not (portal-terminal-metadata))
-        (should-not (memq buffer (portal-terminal-buffers)))
+        (should (equal (portal-terminal-metadata)
+                       '(:name "*rex: fake/shell*" :project nil :directory nil :title nil
+                         :program nil :progress nil :exited nil :quick nil)))
+        (should (memq buffer (portal-terminal-buffers)))
+        (should-not (memq buffer (portal-terminal-buffers default-directory)))
         (should-not (memq buffer (portal-view-buffers)))
+        (should-not portal-rex-block-directory)
+        ;; No window shows it, so it has no view to focus.
         (should-error (portal-terminal-focus) :type 'user-error)
         (should-error (portal-input-focus) :type 'user-error)
-        (should-error (portal-terminal-set-project nil) :type 'user-error)
-        (should-error (portal-terminal-next) :type 'user-error)
+        ;; Its name comes from the server's labels.
+        (should-error (portal-terminal-rename "mine") :type 'user-error)
+        (should (equal (buffer-name) "*rex: fake/shell*"))
+        ;; It can belong to a project, and to none.
+        (let ((root (file-name-as-directory (make-temp-file "rex-project" t))))
+          (unwind-protect
+              (progn
+                (make-directory (expand-file-name ".git" root))
+                (let ((inhibit-message t)) (portal-terminal-set-project root))
+                (should (equal (plist-get (portal-terminal-metadata) :project)
+                               (file-truename root)))
+                (should (memq buffer (portal-terminal-buffers root)))
+                (let ((inhibit-message t)) (portal-terminal-set-project nil))
+                (should-not (plist-get (portal-terminal-metadata) :project)))
+            (delete-directory root t)))
+        ;; Its candidate has no directory yet, and no program to annotate.
+        (should (string-prefix-p "*rex: fake/shell*  -"
+                                 (substring-no-properties
+                                  (caar (portal-terminal--candidates (list buffer))))))
+        (should-not (portal-terminal--annotation buffer))
         (should (portal-terminal--kill-query))
         ;; Closing the terminal there is none of ends nothing.
         (portal-terminal-close)
         (should (buffer-live-p buffer))
-        ;; Another mode leaves it the block's buffer.
+        ;; Another mode leaves it the block's buffer, but not a terminal.
         (fundamental-mode)
         (should (equal portal-rex-block-id "block:fake-1"))
-        (should (eq portal-rex-block-connection connection)))
+        (should (eq portal-rex-block-connection connection))
+        (should-not (portal-terminal-metadata))
+        (should-not (memq buffer (portal-terminal-buffers))))
       (portal-rex-disconnect connection)
       (should-not (buffer-live-p buffer)))))
+
+(ert-deftest portal-rex-buffer-takes-its-blocks-details-as-a-terminals ()
+  ;; The native module describes the block's details as a terminal's; the
+  ;; graphical suite drives them from the fake server's events.  Here the
+  ;; description is given.
+  (portal-rex-tests--with (server)
+    (let* ((connection (portal-rex-tests--connect server))
+           (buffer (portal-rex-block-buffer connection "block:fake-1"))
+           (directory (file-name-as-directory (file-truename (make-temp-file "rex-block" t))))
+           (state (list :title "vim notes" :pwd (directory-file-name directory)
+                        :program "vim" :exited nil
+                        :rex (list :state "live" :directory (directory-file-name directory)))))
+      (unwind-protect
+          (with-current-buffer buffer
+            (setq portal-view--target "terminal:99")
+            (cl-letf (((symbol-function 'portal--inspect) (lambda (_target) state)))
+              (portal-terminal--changed "terminal:99"))
+            (should (equal (portal-terminal-metadata)
+                           (list :name "*rex: fake/shell*" :project nil :directory directory
+                                 :title "vim notes" :program "vim" :progress nil
+                                 :exited nil :quick nil)))
+            ;; A directory of this Mac becomes the buffer's, and the block's.
+            (should (equal default-directory directory))
+            (should (equal portal-rex-block-directory (directory-file-name directory)))
+            (should (equal (portal-terminal--annotation buffer)
+                           (propertize "  vim" 'face 'completions-annotations)))
+            ;; Once its view closes, what it reported goes stale, but for
+            ;; its directory.
+            (setq portal-view--target nil)
+            (run-hooks 'portal-view-close-hook)
+            (should (equal (portal-terminal-metadata)
+                           (list :name "*rex: fake/shell*" :project nil :directory directory
+                                 :title nil :program nil :progress nil :exited nil :quick nil))))
+        (delete-directory directory t)))))
 
 (ert-deftest portal-rex-buffers-follow-blocks ()
   (portal-rex-tests--with (server)

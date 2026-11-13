@@ -35,6 +35,18 @@ never by the shell changing directory.")
 That is the shell at a prompt and the program while one runs.")
 (defvar-local portal-terminal--progress nil "The last OSC 9;4 progress state, or nil.")
 (defvar-local portal-terminal--exited nil "Whether its program has exited.")
+
+(defvar-local portal-terminal--elsewhere nil
+  "Non-nil in the buffer of a terminal whose program runs elsewhere.
+Such a buffer, a Rex block's, is a terminal from the moment it is made,
+before its view first opens, which happens once a window shows it.  The
+value is a number that orders such buffers by when they were made.")
+(put 'portal-terminal--elsewhere 'permanent-local t)
+
+(defvar portal-terminal--changed-functions nil
+  "Functions called with what a terminal described, in its buffer.
+They run each time Portal caches a terminal's facts, after it has, with
+the plist `portal--inspect' returned.")
 (defvar portal-terminal--native-maps)
 (declare-function portal-terminal-refresh-bindings "portal-terminal-bindings" ())
 (declare-function portal-terminal-quick--display "portal-terminal-quick" (buffer))
@@ -157,8 +169,31 @@ brings it too.  \\[portal-terminal-close] ends the shell and keeps the buffer."
 (keymap-set portal-terminal-mode-map "RET" #'portal-terminal-focus)
 (keymap-set portal-terminal-mode-map "C-c C-k" #'portal-terminal-close)
 
+(defun portal-terminal--waiting ()
+  "Return the buffers of terminals whose programs run elsewhere, without views.
+Each opens its view once a window shows it.  They come in the order they
+were made."
+  (sort (cl-remove-if-not (lambda (buffer)
+                            (and (not (buffer-local-value 'portal-view--target buffer))
+                                 (portal-terminal--p buffer)))
+                          (buffer-list))
+        :key (lambda (buffer) (buffer-local-value 'portal-terminal--elsewhere buffer))))
+
+(defun portal-terminal--p (buffer)
+  "Return non-nil if BUFFER is a live terminal's.
+That is a buffer with a terminal view, or one whose program runs
+elsewhere, which is a terminal before its view opens."
+  (and (buffer-live-p buffer)
+       (or (string-prefix-p "terminal:" (or (buffer-local-value 'portal-view--target buffer) ""))
+           (and (buffer-local-value 'portal-terminal--elsewhere buffer)
+                (provided-mode-derived-p (buffer-local-value 'major-mode buffer)
+                                         'portal-terminal-mode)))
+       t))
+
 (defun portal-terminal-buffers (&optional project quick)
   "Return the live terminal buffers, in creation order.
+That is the order their views opened in, then the terminals whose
+programs run elsewhere, such as Rex blocks, that have no view yet.
 With PROJECT, a project root, return only the terminals assigned to it,
 wherever their shells are now.  Quick terminals, which belong to their
 project too, are included only when QUICK is non-nil."
@@ -169,23 +204,26 @@ project too, are included only when QUICK is non-nil."
          (with-current-buffer buffer
            (and (or quick (not portal-terminal--quick-root))
                 (or (null project) (equal portal-terminal--project root)))))
-       (portal-view-buffers 'terminal)))))
+       (append (portal-view-buffers 'terminal) (portal-terminal--waiting))))))
 
 (defun portal-terminal-metadata (&optional buffer)
   "Return what Portal knows about terminal BUFFER, or nil if it has no shell.
 BUFFER defaults to the current buffer.  The plist holds its label, the
-buffer's `:name'; its `:project' root, or nil; its working `:directory';
-its `:title', as its program last set it, or nil; its `:program', the
-executable in the foreground of its terminal, the shell at a prompt, or
-nil; whether its program `:exited'; its `:progress' state, or nil; and
-whether it is a `:quick' terminal.  Only facts are reported: a live shell
-may be idle or busy, a title may name anything, and a program is noted
-within about a second of starting."
+buffer's `:name'; its `:project' root, or nil; its working `:directory',
+or nil until known; its `:title', as its program last set it, or nil; its
+`:program', the executable in the foreground of its terminal, the shell
+at a prompt, or nil; whether its program `:exited'; its `:progress'
+state, or nil; and whether it is a `:quick' terminal.  Only facts are
+reported: a live shell may be idle or busy, a title may name anything,
+and a program is noted within about a second of starting.
+
+A terminal whose program runs elsewhere, a Rex block, has a buffer
+before its view first opens: until then, Portal knows only its name and
+project.  Its `:program' is the foreground process as Rex labels it."
   (let ((buffer (or buffer (current-buffer))))
     ;; A buffer has a target exactly while it has a view, so this costs the
     ;; same however many views there are, unlike `portal-view-buffers'.
-    (when (and (buffer-live-p buffer)
-               (string-prefix-p "terminal:" (or (buffer-local-value 'portal-view--target buffer) "")))
+    (when (portal-terminal--p buffer)
       (with-current-buffer buffer
         (list :name (buffer-name) :project portal-terminal--project
               :directory portal-terminal--directory :title portal-terminal--title
@@ -222,7 +260,8 @@ ordinary file commands, and `list-buffers-directory', for buffer lists."
               list-buffers-directory directory))
       (unless (eq portal-terminal--exited (plist-get state :exited))
         (setq portal-terminal--exited (plist-get state :exited))
-        (force-mode-line-update)))))
+        (force-mode-line-update))
+      (run-hook-with-args 'portal-terminal--changed-functions state))))
 
 (setf (alist-get "terminal" portal-view-record-handlers nil nil #'equal)
       #'portal-terminal--changed)
@@ -374,6 +413,11 @@ A missing program is reported by the shell inside the terminal."
 (defun portal-terminal-focus ()
   "Give this buffer's native terminal keyboard focus."
   (interactive)
+  ;; A terminal whose program runs elsewhere opens its view once a window
+  ;; shows it, which Emacs runs at redisplay.
+  (when (and portal-terminal--elsewhere (not portal-view--target)
+             (get-buffer-window (current-buffer) t))
+    (redisplay t))
   (unless (memq (current-buffer) (portal-view-buffers 'terminal))
     (user-error "No terminal in this buffer"))
   (portal-view-focus))
@@ -467,7 +511,7 @@ argument, the terminal belongs to no project.  Its name stays as it is."
   (interactive
    (list (unless current-prefix-arg
            (read-directory-name "Project containing: " portal-terminal--directory nil t))))
-  (unless (memq (current-buffer) (portal-view-buffers 'terminal))
+  (unless (portal-terminal--p (current-buffer))
     (user-error "No terminal in this buffer"))
   (when portal-terminal--quick-root
     (user-error "Quick terminals belong to the project they were opened for"))
