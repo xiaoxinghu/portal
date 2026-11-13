@@ -1451,6 +1451,19 @@ It and those before it are taken: a later call finds only newer ones."
         (should (equal (portal-rex-tests--answering '("play (session:c)")
                          (should (equal (portal-rex-session-default connection) "session:c")))
                        `((,prompt ("work" "play (session:b)" "play (session:c)") nil))))
+        ;; A label that reads like another's name is told apart too.
+        (portal-fake-rex-command server :event '(:type "session_created"
+                                                 :payload (:session (:session_id "session:d"
+                                                                     :label "play (session:b)"))))
+        (portal-rex-tests--settle connection)
+        (let ((choices (portal-rex--session-choices connection)))
+          (should (equal (mapcar #'car choices)
+                         '("work" "play (session:b)" "play (session:c)" "play (session:b) (session:d)")))
+          (should (equal (mapcar #'cdr choices)
+                         '("session:a" "session:b" "session:c" "session:d"))))
+        (portal-fake-rex-command server :event '(:type "session_destroyed"
+                                                 :payload (:session_id "session:d")))
+        (portal-rex-tests--settle connection)
         ;; A shared label typed as it is takes the first.
         (portal-rex-tests--answering '("play")
           (should (equal (portal-rex-session-default connection) "session:b")))

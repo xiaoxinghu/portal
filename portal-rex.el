@@ -1005,18 +1005,25 @@ The server lets sessions share a label, and keeps them in its own order."
 
 (defun portal-rex--session-choices (connection)
   "Return CONNECTION's sessions as completion choices, (NAME . SESSION-ID).
-A session's name is its label; a label that several share is followed
-by each one's ID."
-  (let ((sessions (append (portal-rex-connection-sessions connection) nil)))
-    (mapcar (lambda (session)
-              (let ((label (plist-get session :label)))
-                (cons (if (> (cl-count label sessions :test #'equal
-                                       :key (lambda (other) (plist-get other :label)))
-                             1)
-                          (format "%s (%s)" label (plist-get session :session_id))
-                        label)
-                      (plist-get session :session_id))))
-            sessions)))
+A session's name is its label.  Where names would be the same, as when
+sessions share a label, each of them is followed by its session's ID,
+until every name is one session's alone."
+  (let* ((sessions (append (portal-rex-connection-sessions connection) nil))
+         (choices (mapcar (lambda (session)
+                            (list (plist-get session :label) (plist-get session :session_id)))
+                          sessions))
+         same)
+    ;; A name followed by its ID ends unlike any other so followed, so one
+    ;; round more settles a label that reads like another's name.
+    (while (setq same (cl-remove-if-not
+                       (lambda (choice)
+                         (and (not (nth 2 choice))
+                              (> (cl-count (car choice) choices :key #'car :test #'equal) 1)))
+                       choices))
+      (dolist (choice same)
+        (setcar choice (format "%s (%s)" (car choice) (cadr choice)))
+        (setcdr (cdr choice) (list t))))
+    (mapcar (lambda (choice) (cons (car choice) (cadr choice))) choices)))
 
 (defun portal-rex--read-session (connection prompt)
   "Read one of CONNECTION's sessions with PROMPT, and return its ID.
