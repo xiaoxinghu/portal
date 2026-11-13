@@ -710,10 +710,11 @@ Emacs comes back as the same client when the server still keeps it, which
 it does for a while after a drop, so its blocks stay sized as they were.
 After that, or from a server that restarted, it comes back as a new one.
 
-A connection ends for good, as before this, only when the server refuses
-the client in a way that trying again would not change, such as a broken
-protocol or an API revision it does not speak: then its buffers are
-killed, and `portal-rex-connect` connects afresh.
+A connection ends for good only when the server refuses the client in a
+way that trying again would not change, such as a broken protocol or an
+API revision it does not speak, whether while connected or as a try is
+answered: then its buffers are killed, Emacs says it has stopped
+connecting, and `portal-rex-connect` connects afresh.
 
 ## Ghostty versions
 

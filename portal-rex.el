@@ -320,11 +320,13 @@ One whose function exits non-locally leaves the rest to be failed soon."
 
 (defun portal-rex--ended (connection reason &optional quiet)
   "Note that CONNECTION has ended because of REASON, the first time only.
-A connection that was ready is reported lost in the echo area, unless
-QUIET.  Its blocks' buffers are killed, which ends nothing on the
-server.  Every request still waiting fails, oldest first."
+A connection that was ready is reported lost in the echo area, and one
+that was lost is reported given up, unless QUIET.  Its blocks' buffers
+are killed, which ends nothing on the server.  Every request still
+waiting fails, oldest first."
   (unless (eq (portal-rex-connection-state connection) 'closed)
     (let ((ready (portal-rex--ready-p connection))
+          (lost (eq (portal-rex-connection-state connection) 'lost))
           (inhibit-quit t))
       (setf (portal-rex-connection-id connection) nil
             (portal-rex-connection-state connection) 'closed
@@ -336,8 +338,11 @@ server.  Every request still waiting fails, oldest first."
       (unless portal-rex--connections
         (remove-hook 'kill-emacs-hook #'portal-rex--disconnect-all)
         (remove-hook 'window-buffer-change-functions #'portal-rex--show-shown))
-      (when (and ready (not quiet))
-        (message "Lost the Rex server at %s: %s" (portal-rex--named connection) reason))
+      (unless quiet
+        (cond (ready (message "Lost the Rex server at %s: %s" (portal-rex--named connection) reason))
+              ;; Said lost already: say that Emacs has stopped trying.
+              (lost (message "Stopped connecting to the Rex server at %s: %s"
+                             (portal-rex--named connection) reason))))
       (portal-rex--run #'portal-rex--forget-blocks connection)
       (portal-rex--fail-calls connection reason)
       (portal-rex--opened connection (portal-rex--cannot connection reason)))))
@@ -964,8 +969,10 @@ says why; one whose stream ended keeps its last screen."
        (portal-rex--describe-block)
        (message "Cannot show Rex block %s: %s" portal-rex--block-label portal-rex--show-failure))
       ("ended"
-       ;; A block that closed takes its buffer with it, as its event says.
-       (message "Rex block %s: %s" portal-rex--block-label (plist-get state :reason)))
+       ;; A block that closed takes its buffer with it, as its event says;
+       ;; the end of its connection is said once, for the connection.
+       (unless (equal (plist-get state :reason) "The connection to the server ended")
+         (message "Rex block %s: %s" portal-rex--block-label (plist-get state :reason))))
       ("disconnected"
        (when (eq (plist-get state :typed) t)
          (message "Rex block %s is not connected: what you type goes nowhere until its server is back"
@@ -1275,8 +1282,10 @@ Those that follow go to the front of the inbox, which is being drained,
 so a handler that waits for the server finds them ahead of anything newer.
 Each session is asked for its blocks, which makes their buffers."
   (if-let* ((failure (plist-get response :error)))
-      (portal-rex--end connection (format "The server sends no events: %s"
-                                          (plist-get failure :message)))
+      ;; Lost again while attaching: the next welcome attaches again.
+      (unless (eq (portal-rex-connection-state connection) 'lost)
+        (portal-rex--end connection (format "The server sends no events: %s"
+                                            (plist-get failure :message))))
     (let ((seq (or (plist-get response :seq) 0))
           (held (nreverse (portal-rex-connection-held connection)))
           (sessions (plist-get (plist-get response :payload) :sessions)))

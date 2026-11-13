@@ -139,6 +139,9 @@ Commands, on standard input:
         and have these sessions and blocks from now on.
     {"welcome": false}
         Do not answer later hellos; true answers them again.
+    {"refuse_hello": CODE, "reason": TEXT}
+        Close the connection of each later hello with this close frame, as
+        a server that will not take the client; null takes them again.
     {"upgrade": "refuse" | "no-protocol" | "bad-accept" | "silent" | "ok"}
         How to answer later upgrades: 400, no subprotocol, a wrong accept
         key, nothing at all, or properly.
@@ -235,6 +238,7 @@ state = {
     "others": {},
     "line": {},
     "kept": {},
+    "refuse_hello": None,
 }
 
 
@@ -482,7 +486,11 @@ class Client:
                 if isinstance(value, dict) and value.get("type") == "hello":
                     report(hello=value, client=self.number)
                     self.info = value.get("client") or {}
-                    if state["welcome"]:
+                    refusal = state["refuse_hello"]
+                    if refusal:
+                        self.closing = True
+                        self.frame(0x8, struct.pack(">H", refusal[0]) + refusal[1].encode())
+                    elif state["welcome"]:
                         with lock:
                             kept = state["kept"].pop(value.get("reconnect_token"), None)
                             if kept:
@@ -1025,6 +1033,9 @@ def command(value):
                 drop(client)
         elif "welcome" in value:
             state["welcome"] = bool(value["welcome"])
+        elif "refuse_hello" in value:
+            code = value["refuse_hello"]
+            state["refuse_hello"] = (int(code), value.get("reason", "")) if code else None
         elif "upgrade" in value:
             state["upgrade"] = value["upgrade"]
         elif "screen" in value:

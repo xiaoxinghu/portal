@@ -832,6 +832,56 @@ and the buffer current."
         (portal-fake-rex-command server :output "block:fake-1" :data " and on")
         (portal-rex-gui-tests--shows target "still here and on")))))
 
+(ert-deftest portal-rex-gui-a-loss-while-coming-back-keeps-the-buffers ()
+  :tags '(:gui)
+  ;; The connection drops again while it attaches after a loss: the
+  ;; buffers stay, and the next try brings it back.
+  (portal-fake-rex-with (server)
+    (portal-rex-gui-tests--showing server
+      (let ((buffer (current-buffer))
+            (connection (car (portal-rex-connections)))
+            (inhibit-message t))
+        (portal-fake-rex-command server :hold "session.attach_all")
+        (setf (portal-fake-rex-reports server) nil)
+        (portal-fake-rex-command server :drop_control t)
+        (portal-fake-rex-request server "session.attach_all")
+        (should (eq (portal-rex-connection-state connection) 'attaching))
+        (portal-fake-rex-command server :drop_control t)
+        (portal-fake-rex-request server "session.attach_all")
+        (should (buffer-live-p buffer))
+        (should-not (eq (portal-rex-connection-state connection) 'closed))
+        (portal-fake-rex-command server :release "session.attach_all")
+        (portal-rex-gui-tests--wait (lambda () (portal-rex-live-p connection)) 10)
+        (portal-rex-gui-tests--wait
+         (lambda () (equal (portal-rex-gui-tests--state target) "live")))
+        (should (eq (portal-rex-block-buffer connection "block:fake-1") buffer))
+        (should-not (buffer-local-value 'portal-rex--disconnected buffer))))))
+
+(ert-deftest portal-rex-gui-a-server-that-refuses-emacs-ends-the-tries ()
+  :tags '(:gui)
+  ;; Lost, then refused for good as it tries again, as by a server
+  ;; restarted with no API revision in common: Emacs stops, says so, and
+  ;; the buffers go.
+  (portal-fake-rex-with (server)
+    (portal-rex-gui-tests--showing server
+      (let* ((buffer (current-buffer))
+             (connection (car (portal-rex-connections)))
+             (name (abbreviate-file-name portal-rex-socket))
+             (said (portal-rex-gui-tests--messages
+                    (lambda ()
+                      (portal-fake-rex-command server :refuse_hello 1008
+                                               :reason "no common API revision")
+                      (portal-fake-rex-command server :drop_control t)
+                      (portal-rex-gui-tests--wait
+                       (lambda () (eq (portal-rex-connection-state connection) 'closed))
+                       10)))))
+        (should-not (buffer-live-p buffer))
+        (should-not (portal-rex-connections))
+        (should (equal said
+                       (format (concat "Lost the Rex server at %s: The connection to the server was lost; connecting again\n"
+                                       "Stopped connecting to the Rex server at %s: The server closed the connection (1008: no common API revision)\n")
+                               name name)))))))
+
 (ert-deftest portal-rex-gui-a-restarted-server-has-other-blocks ()
   :tags '(:gui)
   (portal-fake-rex-with (server)

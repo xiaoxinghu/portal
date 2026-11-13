@@ -2352,8 +2352,9 @@ static void pump(struct connection *connection)
     free(messages);
     if (!over) {
         free(reason.data);
-    } else if (connection->lost && !connection->welcomed) {
-        /* A try that failed: the next comes later. */
+    } else if (connection->lost && !connection->welcomed && !final(code, view(reason))) {
+        /* A try that failed: the next comes later.  One the server refuses
+           for good ends the connection, below. */
         free(reason.data);
         hang_up(connection);
         try_later(connection);

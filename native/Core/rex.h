@@ -24,8 +24,9 @@
    {"type":"portal_lost","reason":REASON}, and of the return as the new
    welcome, whose "client" says whether it "resumed" the client.  Its ID
    stays the same throughout; requests fail while it is lost.  The closes
-   that end a connection for good are those of a broken protocol (1002,
-   1003, 1007, 1009) and 1008, unless for "event backlog exceeded". */
+   that end a connection for good, a try's as well, are those of a broken
+   protocol (1002, 1003, 1007, 1009) and 1008, unless for "event backlog
+   exceeded". */
 #ifndef PORTAL_REX_H
 #define PORTAL_REX_H
 

@@ -1395,6 +1395,32 @@ static void test_coming_back(void)
     sent();
 }
 
+static void test_giving_up(void)
+{
+    portal_text error = {0};
+    uint64_t id = open_connection("/tmp/rex/server.sock", &error);
+    portal_fake_socket_deliver(id, "{\"type\":\"welcome\",\"client\":{\"reconnect_token\":\"t\"}}");
+    received(id);
+    char *target = fed_terminal(&error);
+    int number = 1;
+    show_live(id, target, &number, false, true, "P");
+    /* Lost; then a try the server refuses for good, as one restarted with
+       no revision in common: the connection ends, and no try follows. */
+    portal_fake_socket_end(id, "The connection to the server was lost");
+    received(id);
+    portal_fake_fire_timers();
+    uint64_t again = portal_fake_socket_last();
+    portal_fake_socket_closed(again, 1008, "The server closed the connection (1008: no common API revision)");
+    CHECK(is_text(received(id), "ended: The server closed the connection (1008: no common API revision)"));
+    CHECK(strstr(rex_state(target), "\"state\":\"ended\"") != NULL);
+    CHECK(portal_fake_sockets() == 0);
+    portal_fake_fire_timers();
+    CHECK(portal_fake_sockets() == 0);
+    CHECK(portal_views_close(text(target), &error));
+    free(target);
+    sent();
+}
+
 int main(void)
 {
     int ends[2];
@@ -1417,6 +1443,7 @@ int main(void)
     test_backlog();
     test_resuming();
     test_coming_back();
+    test_giving_up();
     if (failures) {
         fprintf(stderr, "%d checks failed\n", failures);
         return 1;
