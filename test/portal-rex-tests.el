@@ -2174,10 +2174,12 @@ The placeholders BODY leaves are killed, and the timers it arms cancelled."
         (should (equal (cadr (should-error (funcall jump "logs") :type 'user-error))
                        (format "Rex block work/logs has closed: it is gone from the server at %s"
                                (abbreviate-file-name socket))))
-        ;; So does one whose buffer was killed by hand, while Emacs stays
-        ;; connected.
-        (let ((inhibit-message t))
-          (kill-buffer "*rex: work/api*"))
+        ;; So does one whose buffer alone was killed, by a kill that asked
+        ;; nothing, while Emacs stays connected.
+        (with-current-buffer "*rex: work/api*"
+          (let ((inhibit-message t)
+                (kill-buffer-query-functions nil))
+            (kill-buffer)))
         (should (string-prefix-p "Rex block work/api still runs, but its buffer was killed"
                                  (cadr (should-error (funcall jump "api") :type 'user-error))))
         (portal-rex-disconnect (car (portal-rex-connections)))
@@ -2450,6 +2452,36 @@ in its order, giving the frame TABS where its frameset would."
           ;; Restored, it has its own name back.
           (should (equal (portal-rex-tests--names connection)
                          '("*rex: work/b*" "*rex: work/c*"))))))))
+
+(ert-deftest portal-rex-desktop-clear-ends-no-block ()
+  ;; `desktop-revert' and `desktop-change-dir' clear the desktop first,
+  ;; killing every buffer; killing a block's buffer would end the block.
+  (require 'desktop)
+  (portal-rex-tests--with (server)
+    (portal-rex-tests--restoring
+      (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+      (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api"))
+      (let* ((connection (portal-rex-tests--connect server))
+             (buffer (portal-rex-block-buffer connection "block:1"))
+             (record (portal-rex-tests--record "studio" "9" "z" "far" "home"))
+             (placeholder (portal-rex-desktop-restore nil "*rex: home/far*" record))
+             (other (get-buffer-create "*rex-tests-other*"))
+             (desktop-clear-preserve-buffers
+              (append desktop-clear-preserve-buffers
+                      (list (regexp-quote (buffer-name (messages-buffer)))
+                            "\\*fake-rex-server.*"))))
+        (portal-rex-tests--asked server connection)
+        (save-window-excursion
+          (cl-letf (((symbol-function 'buffer-list)
+                     (lambda (&rest _) (list buffer placeholder other))))
+            (desktop-clear)))
+        (should-not (buffer-live-p other))
+        (should (eq (portal-rex-block-buffer connection "block:1") buffer))
+        (should (buffer-live-p placeholder))
+        (should-not (member "block.close" (portal-rex-tests--asked server connection)))
+        ;; The desktop read after finds the placeholder, and makes no other.
+        (should (eq (portal-rex-desktop-restore nil "*rex: home/far*" record) placeholder))
+        (should (equal (mapcar #'buffer-name (portal-rex--placeholders)) '("*rex: home/far*")))))))
 
 (ert-deftest portal-rex-restore-says-once-what-it-could-not-restore ()
   (portal-rex-tests--with (server)

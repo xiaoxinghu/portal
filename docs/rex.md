@@ -512,9 +512,10 @@ is what comes back for files:
 - The desktop saves only the buffers that `desktop-buffers-not-to-save`
   lets through. A regexp that leaves out every buffer whose name starts
   with `*` leaves out the blocks' buffers too.
-- `desktop-revert` and `desktop-change-dir` kill every buffer first, the
-  blocks' among them: those blocks run on, without buffers, until Emacs
-  next connects.
+- `desktop-revert` and `desktop-change-dir` kill every buffer first, which
+  would [end the blocks](#end-a-block). The blocks' buffers and the
+  placeholders are kept instead, by their names, `*rex: …*`, and the desktop
+  read after finds them. A block's buffer you renamed by hand is not.
 
 ### Connect at startup
 

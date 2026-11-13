@@ -1657,6 +1657,7 @@ Signal a `user-error' saying why there is none."
 ;;;; The desktop
 
 (defvar desktop-delay-hook)
+(defvar desktop-clear-preserve-buffers)
 
 (defun portal-rex--desktop-named ()
   "Give the blocks' buffers the desktop renamed their own names back.
@@ -1686,6 +1687,11 @@ which it starts doing once idle.  Restoring never waits for a server."
            (connection (and socket (cl-find socket (portal-rex-connections)
                                             :key #'portal-rex-connection-socket :test #'equal))))
       (cond
+       ;; One kept through `desktop-clear', as by `desktop-revert'.
+       ((seq-find (lambda (buffer)
+                    (equal (alist-get 'block (buffer-local-value 'portal-rex--awaited buffer))
+                           (alist-get 'block record)))
+                  (portal-rex--placeholders socket)))
        ((null connection)
         (portal-rex--restore-soon)
         (portal-rex--make-placeholder name record "Emacs has not connected to its server yet."))
@@ -1704,6 +1710,12 @@ which it starts doing once idle.  Restoring never waits for a server."
 (with-eval-after-load 'desktop
   (dolist (mode '(portal-terminal-mode portal-rex-placeholder-mode))
     (add-to-list 'desktop-buffer-mode-handlers (cons mode #'portal-rex-desktop-restore))))
+
+;; `desktop-revert' and `desktop-change-dir' kill every buffer first, which
+;; would end blocks: their buffers, and placeholders, are kept, and the
+;; desktop then finds them.
+(with-eval-after-load 'desktop
+  (add-to-list 'desktop-clear-preserve-buffers "\\*rex: .*"))
 
 ;; Portal's major modes turn it on: a placeholder needs no keyboard light.
 (with-eval-after-load 'desktop
