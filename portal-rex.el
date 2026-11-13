@@ -1085,7 +1085,7 @@ it made the session."
      (list connection session-id
            (read-string (format "Rename Rex session %s to: "
                                 (portal-rex--session-name connection session-id))
-                        nil nil (portal-rex--session-label connection session-id)))))
+                        (portal-rex--session-label connection session-id)))))
   (let ((connection (portal-rex--connection connection)))
     (portal-rex--ask connection
                      (format "Cannot rename Rex session %s"

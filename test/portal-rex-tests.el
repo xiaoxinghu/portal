@@ -1214,14 +1214,17 @@ Each is returned once: a later call returns those asked for since."
 (defmacro portal-rex-tests--answering (answers &rest body)
   "Run BODY with the minibuffer giving ANSWERS, in turn, and return what it asked.
 Each answer goes to the next `read-string', `completing-read' or
-`yes-or-no-p'.  The value is a list of (PROMPT CHOICES DEFAULT) for each
-question, in order, CHOICES being the names a completion offered."
+`yes-or-no-p'.  The value is a list of (PROMPT CHOICES START) for each
+question, in order, CHOICES being the names a completion offered and
+START the text a `read-string' starts with.  As in the minibuffer, an
+empty answer to `read-string' gives its default."
   (declare (indent 1))
   `(let ((answers ,answers) asked)
      (cl-letf (((symbol-function 'read-string)
                 (lambda (prompt &optional initial _history default &rest _)
-                  (push (list prompt nil (or initial default)) asked)
-                  (pop answers)))
+                  (push (list prompt nil initial) asked)
+                  (let ((answer (pop answers)))
+                    (if (and (equal answer "") default) default answer))))
                ((symbol-function 'completing-read)
                 (lambda (prompt collection &optional _predicate _require _initial _history default
                                 &rest _)
@@ -1238,8 +1241,16 @@ question, in order, CHOICES being the names a completion offered."
           (portal-rex-connection-sessions connection)))
 
 (defun portal-rex-tests--request (server method)
-  "Return the payload of the last request for METHOD that SERVER had."
-  (plist-get (portal-fake-rex-request server method) :payload))
+  "Return the payload of the last request for METHOD that SERVER had.
+It and those before it are taken: a later call finds only newer ones."
+  ;; The server reports in order, so once it has finished a command, every
+  ;; request made before has been reported.
+  (portal-fake-rex-command server :fragment 0)
+  (let* ((asked (lambda (report) (equal (plist-get (plist-get report :request) :method) method)))
+         (last (plist-get (portal-fake-rex-request server method) :payload)))
+    (while (cl-find-if asked (portal-fake-rex-reports server))
+      (setq last (plist-get (portal-fake-rex-request server method) :payload)))
+    last))
 
 (ert-deftest portal-rex-fake-changes-sessions-as-a-real-server ()
   ;; The same checks run against a real server in the real-server tier.
@@ -1310,6 +1321,13 @@ question, in order, CHOICES being the names a completion offered."
                        '(("Rename Rex session: " ("server" "games") nil)
                          ("Rename Rex session server to: " nil "server")))))
       (should (equal (portal-rex-tests--names) '("*rex: games/shell*" "*rex: work/api*")))
+      ;; An emptied label is sent empty, which the server takes as asking
+      ;; for the label it chose.
+      (with-current-buffer "*rex: games/shell*"
+        (portal-rex-tests--answering '("games" "")
+          (call-interactively #'portal-rex-session-rename)))
+      (should (equal (portal-rex-tests--request server "session.set_label")
+                     '(:session_id "session:b" :label "")))
       ;; A label the server refuses.
       (should (equal (cadr (should-error (portal-rex-session-rename connection "session:a"
                                                                     (make-string 129 ?x))
