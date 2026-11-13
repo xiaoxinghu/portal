@@ -277,11 +277,12 @@ bool portal_web_print(portal_view *web, const portal_string *file, portal_text *
    hold, at its text's cell size, with portal_terminal_grid, once it can
    and at each change.  It parses off the module thread, and reports with
    portal_terminal_backlog when the output fed and not yet parsed passes
-   PORTAL_TERMINAL_BACKLOG bytes, and again when it falls back to a quarter
-   of that, so that the core stops feeding it meanwhile.  It answers no
-   query in its output, as whoever
-   produced that output has answered it: a second answer would reach the
-   program as typing.  It takes neither :command nor :argv, its :directory is
+   PORTAL_TERMINAL_BACKLOG bytes, and again when it is down to a quarter of
+   that, so that the core stops feeding it meanwhile: the last report says
+   how it is, whatever order the crossings were seen in.  It answers no
+   query in its output, as whoever produced that output has answered it: a
+   second answer would reach the program as typing.  It takes neither
+   :command nor :argv, its :directory is
    optional, and it never exits by itself.  It describes no "title",
    "pwd", "program" or "exited" and reports no change of them: the core
    describes those of the program it is fed from (rex.h).

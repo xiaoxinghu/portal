@@ -857,6 +857,47 @@ and the buffer current."
         (should (eq (portal-rex-block-buffer connection "block:fake-1") buffer))
         (should-not (buffer-local-value 'portal-rex--disconnected buffer))))))
 
+(ert-deftest portal-rex-gui-a-session-destroyed-while-coming-back ()
+  :tags '(:gui)
+  ;; Coming back, Emacs waits for every session's blocks; the last of
+  ;; them is destroyed before its answer comes.  The return finishes all
+  ;; the same, and the other session's block is live.
+  (portal-fake-rex-with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:fake-1" :label "fake")
+                                               (:session_id "session:two" :label "two")])
+    (portal-fake-rex-command server :blocks '(:session:two [(:block_id "block:two" :label "b"
+                                                             :placement "placed")]))
+    (portal-rex-gui-tests--showing server
+      (let ((connection (car (portal-rex-connections)))
+            (name (abbreviate-file-name portal-rex-socket))
+            said)
+        (setq said
+              (portal-rex-gui-tests--messages
+               (lambda ()
+                 ;; The first session's blocks are answered, the second's held.
+                 (portal-fake-rex-command server :after "session.list_blocks"
+                                          :then [(:hold "session.list_blocks")])
+                 (setf (portal-fake-rex-reports server) nil)
+                 (portal-fake-rex-command server :drop_control t)
+                 (portal-fake-rex-take
+                  server (lambda (report)
+                           (equal (plist-get (plist-get (plist-get report :request) :payload)
+                                             :session_id)
+                                  "session:two"))
+                  10)
+                 (portal-fake-rex-command server :sessions [(:session_id "session:fake-1"
+                                                             :label "fake")])
+                 (portal-fake-rex-command server :event '(:type "session_destroyed"
+                                                          :payload (:session_id "session:two")))
+                 (portal-rex-gui-tests--wait
+                  (lambda () (equal (portal-rex-gui-tests--state target) "live")))
+                 (portal-fake-rex-command server :release "session.list_blocks"))))
+        (should (portal-rex-live-p connection))
+        (should-not (get-buffer "*rex: two/b*"))
+        (should (string-suffix-p
+                 (format "Back on the Rex server at %s; its block *rex: two/b* went meanwhile\n" name)
+                 said))))))
+
 (ert-deftest portal-rex-gui-a-server-that-refuses-emacs-ends-the-tries ()
   :tags '(:gui)
   ;; Lost, then refused for good as it tries again, as by a server

@@ -360,25 +360,42 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
 }
 
 /// A fed terminal's backlog, told to the core on Emacs's thread. The
-/// session calls the handler on whichever thread crossed a mark, so two
-/// calls can reach the main queue out of order: each tells the core how
-/// the backlog is when it runs, the last call's word.
-private final class FedBacklog: @unchecked Sendable {
+/// session's handler only says when to look: it runs on whichever thread
+/// crossed a mark, after the session's lock is released, so two calls can
+/// arrive in the other order than their crossings. So the main thread reads
+/// how much is unparsed itself, and while the core is told to wait, reads
+/// again every 10 ms until it is down to the low mark: a crossing whose
+/// call came first can leave nothing waiting.
+@MainActor
+private final class FedBacklog {
     private let target: String
-    private let lock = NSLock()
-    private var latest = false
+    private weak var session: InMemoryTerminalSession?
+    /// What the core was last told.
+    private var waiting = false
+    private var timer: Timer?
 
-    init(target: String) { self.target = target }
+    init(target: String, session: InMemoryTerminalSession) {
+        self.target = target
+        self.session = session
+    }
 
-    func report(_ backlogged: Bool) {
-        lock.lock()
-        latest = backlogged
-        lock.unlock()
-        DispatchQueue.main.async { [self] in
-            lock.lock()
-            let now = latest
-            lock.unlock()
-            MainActor.assumeIsolated { Core.terminalBacklog(target, now) }
+    nonisolated func crossed() {
+        DispatchQueue.main.async { [self] in MainActor.assumeIsolated { look() } }
+    }
+
+    private func look() {
+        let pending = session?.pendingOutputByteCount ?? 0
+        let backlogged = pending > Int(PORTAL_TERMINAL_BACKLOG) / 4
+        if backlogged != waiting {
+            waiting = backlogged
+            Core.terminalBacklog(target, backlogged)
+        }
+        timer?.invalidate()
+        timer = nil
+        if backlogged {
+            timer = Timer.scheduledTimer(withTimeInterval: 0.01, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.look() }
+            }
         }
     }
 }
@@ -418,10 +435,10 @@ final class TerminalSession: PortalView {
                 },
                 suppressesTerminalResponses: true)
             // The core stops feeding it while it has too much to parse.
-            let backlog = FedBacklog(target: target)
+            let backlog = FedBacklog(target: target, session: session)
             session.setOutputBacklogHandler(highWater: Int(PORTAL_TERMINAL_BACKLOG),
-                                            lowWater: Int(PORTAL_TERMINAL_BACKLOG) / 4) { backlogged in
-                backlog.report(backlogged)
+                                            lowWater: Int(PORTAL_TERMINAL_BACKLOG) / 4) { _ in
+                backlog.crossed()
             }
             let pane = FedPane()
             terminal = HostedTerminal(directory: directory, command: nil, theme: theme, points: points,

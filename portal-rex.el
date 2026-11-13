@@ -851,7 +851,9 @@ An event of a session that the connection does not know is left alone:
          (setf (portal-rex-connection-lists connection)
                (cl-delete session-id (portal-rex-connection-lists connection)
                           :key #'car :test #'equal))
-         (portal-rex--drop-session connection session-id)))
+         (portal-rex--drop-session connection session-id)
+         ;; Its list may have been the last a return waited for.
+         (portal-rex--settled connection)))
       ("session_moved"
        (portal-rex--move-session connection (plist-get fields :session_id)
                                  (plist-get fields :before_session_id)))
