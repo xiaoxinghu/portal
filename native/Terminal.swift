@@ -118,8 +118,10 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     /// A fed terminal's session: its output comes from the core and what it
     /// writes goes to the core. Nil for a terminal with its own pty.
     let fed: InMemoryTerminalSession?
-    /// A fed terminal's pane, which Portal places; nil for any other.
-    private let pane: FedPane?
+    /// A fed terminal's pane, which Portal places; nil for any other. The
+    /// pane holds the terminal as its subview, and its session holds the
+    /// pane, so the terminal's reference is weak: neither keeps the other.
+    private weak var pane: FedPane?
     /// The padding Ghostty leaves inside a terminal on each side, in points,
     /// set rather than left to Ghostty's default, as the grids below count on it.
     private static let padding = 2.0
@@ -137,9 +139,9 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     private var reportedPane: [UInt32] = []
 
     init(directory: String?, command: String?, theme: TerminalTheme, points: Double,
-         fed: InMemoryTerminalSession? = nil) {
+         fed: InMemoryTerminalSession? = nil, pane: FedPane? = nil) {
         self.fed = fed
-        pane = fed != nil ? FedPane() : nil
+        self.pane = pane
         super.init(frame: .zero)
         delegate = self
         if let fed, let pane {
@@ -362,6 +364,8 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
 final class TerminalSession: PortalView {
     let target: String
     private let terminal: HostedTerminal
+    /// A fed terminal's pane, the view Portal places, which holds the terminal.
+    private let pane: NSView?
     var surface: any NativeSurface { terminal }
     let input: NativeInput
 
@@ -386,7 +390,10 @@ final class TerminalSession: PortalView {
                     }
                 },
                 suppressesTerminalResponses: true)
-            terminal = HostedTerminal(directory: directory, command: nil, theme: theme, points: points, fed: session)
+            let pane = FedPane()
+            terminal = HostedTerminal(directory: directory, command: nil, theme: theme, points: points,
+                                      fed: session, pane: pane)
+            self.pane = pane
             watch.terminal = terminal
             terminal.setBackground(try Terminals.background(named: options.string("theme")))
         } else {
@@ -395,6 +402,7 @@ final class TerminalSession: PortalView {
             }
             terminal = HostedTerminal(directory: directory, command: try terminalCommand(options, directory: directory),
                                       theme: theme, points: points)
+            pane = nil
         }
         if let issue = terminal.controller?.lastConfigurationIssue { throw NativeError.message(issue) }
         self.terminal = terminal
