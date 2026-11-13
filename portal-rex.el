@@ -1086,11 +1086,15 @@ not again until it has left."
   (dolist (buffer (portal-view-buffers 'terminal))
     (with-current-buffer buffer
       (when portal-rex-block-connection
-        (let ((used (portal-rex--in-use-p)))
-          (when (and used (not portal-rex--in-use))
-            (with-demoted-errors "Cannot take Rex block: %S"
-              (portal--rex-take portal-view--target)))
-          (setq portal-rex--in-use (and used t)))))))
+        ;; A view that has opened but shows no block yet takes nothing:
+        ;; it is taken once it shows one, as `portal-rex--show' looks again.
+        (setq portal-rex--in-use
+              (and (portal-rex--in-use-p)
+                   (or portal-rex--in-use
+                       (condition-case nil
+                           (portal--rex-take portal-view--target)
+                         (error nil)))
+                   t))))))
 
 (defun portal-rex--size-mark ()
   "The mode line's mark for a block another Rex client sizes."

@@ -343,13 +343,17 @@ Its one block runs cat, without a login shell."
                       (list (list (plist-get (plist-get state :rex) :columns)
                                   (plist-get (plist-get state :rex) :rows))
                             (list (plist-get state :columns) (plist-get state :rows))))))
-           (mark (lambda () (with-current-buffer buffer (format-mode-line mode-line-process))))
+           (mark (lambda () (format-mode-line (buffer-local-value 'mode-line-process buffer)
+                                              nil nil buffer)))
            (made (funcall grid)))
       (unwind-protect
           (save-window-excursion
             (delete-other-windows)
             (switch-to-buffer (get-buffer-create "*rex-server-gui-elsewhere*"))
-            (select-frame-set-input-focus (selected-frame))
+            ;; Emacs has the keyboard: the frames say so, whatever the VM's
+            ;; desktop does meanwhile.
+            (advice-add 'frame-focus-state :override (lambda (&rest _) t)
+                        '((name . portal-rex-server-gui-tests)))
             (let ((right (split-window-right)))
               ;; Shown in a pane not in use, the block stays its maker's, at
               ;; its maker's size, and Emacs draws it so, saying so.
@@ -374,7 +378,8 @@ Its one block runs cat, without a login shell."
                (lambda () (let ((now (funcall drawn)))
                             (and (equal (car now) (cadr now)) (equal (car now) (funcall grid))))))
               (should (equal (plist-get (funcall rex) :owner) "self"))
-              (should-not (string-search "sized" (funcall mark)))
+              (portal-rex-server-gui-tests--wait
+               (lambda () (not (string-search "sized" (funcall mark)))))
               ;; rex takes the block and leaves: the server gives it back to
               ;; Emacs, in line for it, at Emacs's size.
               (let ((ours (funcall grid)))
@@ -387,6 +392,7 @@ Its one block runs cat, without a login shell."
                  (lambda () (equal (plist-get (funcall rex) :owner) "self")))
                 (should (equal (funcall grid) ours))
                 (should (equal (funcall drawn) (list ours ours))))))
+        (advice-remove 'frame-focus-state 'portal-rex-server-gui-tests)
         (mapc #'portal-rex-disconnect (portal-rex-connections))
         (kill-buffer "*rex-server-gui-elsewhere*")))))
 
@@ -445,6 +451,11 @@ Its one block runs cat, without a login shell."
                (lambda () (equal (file-name-nondirectory (or (funcall fact :program) "")) "vim")))
               (should (string-search "vim" (portal-terminal--annotation buffer)))
               (select-frame-set-input-focus (selected-frame))
+              ;; Keys go to this frame by name: the VM's desktop may take
+              ;; activation back from a test's Emacs at any moment.
+              (should (portal-view--with-frame-title (selected-frame)
+                                                     #'portal-test-native-target-frame))
+              (portal-test-native-focus-target)
               (portal-terminal-focus)
               (portal-rex-server-gui-tests--keys '(53 0 "\e") (list 41 (ash 1 17) ":") '(12 0 "q")
                                                  (list 18 (ash 1 17) "!") '(36 0 "\r"))
@@ -457,6 +468,7 @@ Its one block runs cat, without a login shell."
               (should-not exits)
               (should-not (portal-rex-buffers connection session))))
         (remove-variable-watcher 'portal-terminal--exited watcher)
+        (portal-test-native-target-frame nil)
         (mapc #'portal-rex-disconnect (portal-rex-connections))))))
 
 (ert-deftest portal-rex-server-gui-killing-a-blocks-buffer-ends-it ()

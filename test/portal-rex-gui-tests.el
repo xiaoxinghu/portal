@@ -175,6 +175,8 @@ record can bring them."
 
 (declare-function portal--terminal-text "portal-terminal" (target))
 (declare-function portal-test-native-key "test-terminal-input" (code flags text &optional windowless))
+(declare-function portal-test-native-target-frame "test-terminal-input" (title))
+(declare-function portal-test-native-focus-target "test-terminal-input" ())
 
 (defun portal-rex-gui-tests--state (target)
   "The state of the block shown in TARGET, as the native module reports it."
@@ -197,6 +199,21 @@ record can bring them."
                         :payload)
              :args))
 
+(defun portal-rex-gui-tests--focus (focused)
+  "Have Emacs gain the keyboard, when FOCUSED, or lose it to another app.
+A test can neither take the keyboard from Emacs nor keep it there, as the
+VM's desktop may take it back at any moment, so the frames say what they
+would, and `after-focus-change-function' runs as it would.
+`portal-rex-gui-tests--unfocus' ends this."
+  (advice-add 'frame-focus-state :override (if focused (lambda (&rest _) t) #'ignore)
+              '((name . portal-rex-gui-tests)))
+  (funcall after-focus-change-function)
+  (redisplay t))
+
+(defun portal-rex-gui-tests--unfocus ()
+  "Let the frames say again whether they have the keyboard."
+  (advice-remove 'frame-focus-state 'portal-rex-gui-tests))
+
 (defmacro portal-rex-gui-tests--showing (server &rest body)
   "Connect to SERVER, show its block in the selected window, and run BODY.
 BODY runs with `target' bound to the block's terminal once it is live,
@@ -206,7 +223,7 @@ and the buffer current."
      (unwind-protect
          (save-window-excursion
            (delete-other-windows)
-           (select-frame-set-input-focus (selected-frame))
+           (portal-rex-gui-tests--focus t)
            (portal-rex-connect)
            (switch-to-buffer "*rex: fake/shell*")
            (redisplay t)
@@ -215,6 +232,7 @@ and the buffer current."
              (portal-rex-gui-tests--wait
               (lambda () (equal (portal-rex-gui-tests--state target) "live")))
              ,@body))
+       (portal-rex-gui-tests--unfocus)
        (mapc #'portal-rex-disconnect (portal-rex-connections)))))
 
 (ert-deftest portal-rex-gui-shows-a-block-in-its-buffer ()
@@ -477,18 +495,7 @@ and the buffer current."
 
 (defun portal-rex-gui-tests--mark (buffer)
   "What BUFFER's mode line says after its mode's name."
-  (with-current-buffer buffer (format-mode-line mode-line-process)))
-
-(defun portal-rex-gui-tests--focus (focused)
-  "Have Emacs gain the keyboard, when FOCUSED, or lose it to another app.
-Nothing in a test can take the keyboard from Emacs, so the frames say
-what they would, and `after-focus-change-function' runs as it would."
-  (if focused
-      (progn (advice-remove 'frame-focus-state #'ignore)
-             (select-frame-set-input-focus (selected-frame)))
-    (advice-add 'frame-focus-state :override #'ignore))
-  (funcall after-focus-change-function)
-  (redisplay t))
+  (format-mode-line (buffer-local-value 'mode-line-process buffer) nil nil buffer))
 
 (ert-deftest portal-rex-gui-the-client-last-used-sizes-a-block ()
   :tags '(:gui)
@@ -503,7 +510,7 @@ what they would, and `after-focus-change-function' runs as it would."
             (delete-other-windows)
             (setq left (selected-window))
             (switch-to-buffer (get-buffer-create "*rex-gui-elsewhere*"))
-            (select-frame-set-input-focus (selected-frame))
+            (portal-rex-gui-tests--focus t)
             (portal-rex-connect)
             ;; Placed in a pane that is not in use: Emacs requests the
             ;; block, sends its pane's size for later, and draws the block
@@ -552,20 +559,17 @@ what they would, and `after-focus-change-function' runs as it would."
               (should (equal (portal-rex-gui-tests--claims server) '("take")))
               ;; Emacs loses the keyboard with the pane selected, and the app
               ;; takes the block: Emacs follows, and claims nothing.
-              (unwind-protect
-                  (progn
-                    (portal-rex-gui-tests--focus nil)
-                    (portal-fake-rex-command server :claim "block:fake-1" :client "client:app"
-                                             :name "Rex.app")
-                    (portal-rex-gui-tests--wait
-                     (lambda () (equal (portal-rex-gui-tests--grid target) '((60 15) (60 15)))))
-                    (portal-rex-gui-tests--wait
-                     (lambda () (string-search ":sized by Rex.app"
-                                               (portal-rex-gui-tests--mark buffer))))
-                    (should-not (portal-rex-gui-tests--claims server)))
-                ;; Emacs gets the keyboard back with the pane selected: it
-                ;; takes the block.
-                (portal-rex-gui-tests--focus t))
+              (portal-rex-gui-tests--focus nil)
+              (portal-fake-rex-command server :claim "block:fake-1" :client "client:app"
+                                       :name "Rex.app")
+              (portal-rex-gui-tests--wait
+               (lambda () (equal (portal-rex-gui-tests--grid target) '((60 15) (60 15)))))
+              (portal-rex-gui-tests--wait
+               (lambda () (string-search ":sized by Rex.app" (portal-rex-gui-tests--mark buffer))))
+              (should-not (portal-rex-gui-tests--claims server))
+              ;; Emacs gets the keyboard back with the pane selected: it
+              ;; takes the block.
+              (portal-rex-gui-tests--focus t)
               (should (equal (portal-rex-gui-tests--claims server) '("take")))
               (portal-rex-gui-tests--wait
                (lambda () (not (equal (car (portal-rex-gui-tests--grid target)) '(60 15)))))
@@ -587,12 +591,19 @@ what they would, and `after-focus-change-function' runs as it would."
               (portal-fake-rex-command server :claim "block:fake-1" :client "client:app")
               (portal-rex-gui-tests--wait
                (lambda () (string-search ":sized" (portal-rex-gui-tests--mark buffer))))
+              ;; Keys go to this frame by name: the VM's desktop may take
+              ;; activation back from a test's Emacs at any moment.
+              (select-frame-set-input-focus (selected-frame))
+              (should (portal-view--with-frame-title (selected-frame)
+                                                     #'portal-test-native-target-frame))
+              (portal-test-native-focus-target)
               (portal-terminal-focus)
               (should (portal-test-native-key 0 0 "a"))
               (should (equal (portal-rex-gui-tests--claims server) '("take")))
               (should (equal (portal-rex-gui-tests--written server) '(:data "a")))
               (portal-input-unfocus)))
-        (advice-remove 'frame-focus-state #'ignore)
+        (portal-rex-gui-tests--unfocus)
+        (portal-test-native-target-frame nil)
         (mapc #'portal-rex-disconnect (portal-rex-connections))
         (kill-buffer "*rex-gui-elsewhere*")))))
 
