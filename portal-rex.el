@@ -584,6 +584,18 @@ the block needs, and has no view."
                    t)
     (portal-rex--describe-block)))
 
+(defun portal-rex--untangle-names (connection session-id)
+  "Give SESSION-ID's buffers on CONNECTION their plain names where they are free.
+A buffer that Emacs named *rex: S/B*<2>, as another had the name then,
+takes *rex: S/B* once no buffer has it, as when the other's block is
+relabelled or closes.  A name given by hand stays."
+  (dolist (buffer (portal-rex-buffers connection session-id))
+    (with-current-buffer buffer
+      (let ((plain (portal-rex--buffer-name connection session-id portal-rex--block-label)))
+        (when (and (string-match-p (concat "\\`" (regexp-quote plain) "<[0-9]+>\\'") (buffer-name))
+                   (not (get-buffer plain)))
+          (rename-buffer plain))))))
+
 (defun portal-rex--kill-buffer (connection block-id)
   "Forget CONNECTION's block BLOCK-ID, and kill its buffer if it has one.
 The block has gone, or the connection has: nothing asks, whatever is on
@@ -654,7 +666,8 @@ was killed by hand."
              ((null buffer) (portal-rex--make-buffer connection session-id block-id label))
              ((not (buffer-live-p buffer)))
              ((not (equal label (buffer-local-value 'portal-rex--block-label buffer)))
-              (portal-rex--rename-buffer buffer label)))))))
+              (portal-rex--rename-buffer buffer label)))))
+        (portal-rex--untangle-names connection session-id)))
       (when (cadr asked)
         (portal-rex--list-blocks connection session-id)))))
 

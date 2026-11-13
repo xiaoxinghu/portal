@@ -1469,8 +1469,11 @@ question, in order, CHOICES being the names a completion offered."
   (portal-rex-tests--with (server)
     (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
     (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "shell")
-                              (portal-rex-tests--block "2" "logs" "detached"))
+                              (portal-rex-tests--block "2" "logs" "detached")
+                              (portal-rex-tests--block "3" "shell"))
     (let ((connection (portal-rex-tests--connect server)))
+      (should (equal (portal-rex-tests--names)
+                     '("*rex: work/logs*" "*rex: work/shell*" "*rex: work/shell*<2>")))
       (with-current-buffer "*rex: work/shell*"
         ;; Portal's rename command starts from the block's label, and sets it.
         (should (equal (portal-rex-tests--answering '("api")
@@ -1481,6 +1484,10 @@ question, in order, CHOICES being the names a completion offered."
         ;; The buffer's name follows the block's.
         (should (equal (buffer-name) "*rex: work/api*"))
         (should (equal portal-rex--block-label "api")))
+      ;; The other shell's buffer, named apart from this one's, takes the
+      ;; plain name once it is free.
+      (should (equal (buffer-name (portal-rex-block-buffer connection "block:3"))
+                     "*rex: work/shell*"))
       ;; A detached block sends no event, and is renamed all the same.
       (with-current-buffer "*rex: work/logs*"
         (portal-terminal-rename "errors")
@@ -1498,8 +1505,13 @@ question, in order, CHOICES being the names a completion offered."
         (portal-terminal-mode)
         (portal-terminal-rename "portal-rex-tests-plain")
         (should (equal (buffer-name) "portal-rex-tests-plain")))
+      ;; A name given by hand stays while the labels do.
+      (with-current-buffer (portal-rex-block-buffer connection "block:3")
+        (rename-buffer "my shell"))
+      (portal-rex-tests--session-event server "a" "session_view_changed" :revision 9)
+      (portal-rex-tests--settle connection)
       (should (equal (portal-rex-tests--names connection)
-                     '("*rex: work/api*" "*rex: work/errors*"))))))
+                     '("*rex: work/api*" "*rex: work/errors*" "my shell"))))))
 
 (defconst portal-rex-tests--guide
   (expand-file-name "../docs/rex.md" (file-name-directory (or load-file-name buffer-file-name)))
