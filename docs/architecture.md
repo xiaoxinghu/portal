@@ -330,7 +330,7 @@ subprotocol), answers pings and a server's close, joins fragments, and ends
 a connection whose server breaks the framing, with a reason for people.
 
 **The core owns the connection** (`native/Core/rex.c`): its ID, never
-reused, which is also the socket's name; the endpoint it asks for,
+reused, which is also its first socket's name; the endpoint it asks for,
 `/api/control` with `rex.control.v1`; the hello that opens the protocol,
 with one API revision as both the oldest and the newest Portal speaks, so
 the server translates and Portal never sees another; each request's
@@ -343,7 +343,7 @@ rest, and the events of the blocks it shows, which it passes on; for those
 it reads the few values it needs with `native/Core/json.c`,
 which finds a member by skipping what comes before it. `portal--rex-open`,
 `portal--rex-request`, `portal--rex-receive`, `portal--rex-wait`,
-`portal--rex-close` and `portal--rex-show` are its Lisp functions.
+`portal--rex-close`, `portal--rex-show` and `portal--rex-resume` are its Lisp functions.
 
 **Lisp reads the messages** (`portal-rex.el`): the server's welcome,
 responses matched to their callers by number, and events for
@@ -355,7 +355,20 @@ one before any sees the next: while an event's functions run, one that
 waits for the server is given the responses that arrive, and the events
 keep their places in the queue until it returns. A connection's end joins
 the queue behind its last messages, so what arrived before it still runs;
-it is reported lost, and fails the requests still waiting. Taking messages
+it is reported lost, and fails the requests still waiting.
+
+A connection that had its welcome and then drops is lost, not ended: the
+server keeps the client a while, so the core connects again by itself, on
+a new socket each time, with the reconnect token of the last welcome in
+its hello, and backs off from 0.2 to 5 seconds between tries. It tells
+Lisp with a message of its own among the server's, `portal_lost`, which
+keeps its place in the queue as an end does, and Lisp hears of the return
+as the new welcome, whose `client` says whether the server `resumed` the
+client. Lisp keeps the buffers, attaches again, makes the buffers match
+the server, and only then calls `portal--rex-resume`, so that a block that
+went meanwhile is never shown failing. A close that refuses this client
+for good, a broken protocol or no common revision, still ends the
+connection. Taking messages
 from the module and handling them is one step that a quit cannot cut into:
 it runs with quitting inhibited from a waiting call as Emacs runs it from
 the pipe's filter, and the quit takes effect between the wait's turns. A
@@ -406,9 +419,13 @@ receives. A caller that needs an answer before going on, as
 `portal-rex-call` does, instead blocks in `portal--rex-wait`, the one
 primitive that waits, in turns of at most 50 ms so that a quit gets through,
 and receives directly; the record that follows finds nothing. The second
-way needs no run loop, so batch Emacs can test the real module's sockets.
+way needs no run loop, so batch Emacs can test the real module's sockets;
+the core's own timers need one, so batch Emacs never sees a lost
+connection come back.
 Messages that arrive while Emacs is busy wait in memory, without a limit:
 the control protocol's are small, and one above 16 MiB ends its connection.
+A block's stream is bounded instead: past a megabyte unread, the platform
+stops reading its socket until the core reads.
 
 **A block's screen is a fed terminal.** A terminal view usually runs a
 shell in a pty of its own. A fed terminal, a terminal view opened with
@@ -424,7 +441,9 @@ write to its program, keys, mouse reports, pastes and its own reports, in
 order on the main thread (`portal_terminal_input`); it holds the grid the
 core gives it (`portal_terminal_hold_grid`), whatever its pane's size; and
 it reports the grid its pane would hold, with the cells' size in pixels
-(`portal_terminal_grid`). On macOS the view Portal places is a clipping
+(`portal_terminal_grid`); and it reports when it has more than half a
+megabyte fed and not yet parsed, and when it is down to a quarter of that
+again (`portal_terminal_backlog`), from the package's backlog handler. On macOS the view Portal places is a clipping
 pane, filled with the theme's background, with the terminal inside it at
 its bottom-left, sized to its grid. Everything else, its theme, text size,
 placement, input and lifetime, is any terminal view's.
@@ -489,6 +508,25 @@ message at its place in the stream. The platform parses the output before
 it, sets the terminal's frame, and holds the output after it until the
 in-memory session reports the new grid, which Ghostty takes 25 to 35 ms
 to apply, or a quarter of a second has passed.
+
+**The stream holds up.** While the terminal reports a backlog, the core
+leaves the stream unread, so the platform stops reading the socket and the
+server holds the output: flow control, not a buffer that grows. So does a
+first paint that holds more than 4 MiB of the stream. The core counts
+every byte of the stream after its welcome, and keeps the latest
+welcome's reconnect token. A stream that drops, or that the server closes
+in any way short of the block's end (1000, or 4000 and up) or its failure
+(1008, 1011), is resumed on a new data connection with a RESUME of the
+token and the count, and the server continues from the next byte. One the
+server closes with 1013, `data reconnect required`, as when it held more
+than it could for a slow client, or whose RESUME it refuses, starts over:
+a new ticket, a HELLO, and a new paint on the terminal, reset first with
+`ESC c` and `ESC [ 3 J`. Three ends in a row before the stream shows
+anything fail the show. While the connection is lost, the block takes no
+typing, says so when something is typed, and waits: `portal--rex-resume`
+resumes a stream that dropped meanwhile, and starts again from the
+beginning a block the server no longer knows Emacs showed, a new client's
+or one that was not live yet.
 
 **A block's details are the terminal's.** A terminal's title, directory,
 program and exit reach Lisp the same way whatever runs it: the terminal

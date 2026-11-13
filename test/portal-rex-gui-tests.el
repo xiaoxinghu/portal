@@ -12,11 +12,11 @@
 (require 'portal-rex)
 (require 'portal-fake-rex)
 
-(defun portal-rex-gui-tests--wait (done)
+(defun portal-rex-gui-tests--wait (done &optional seconds)
   "Let Emacs idle, as between commands, until DONE returns non-nil.
-Nothing here asks a connection for its messages: only the module's
-record can bring them."
-  (let ((deadline (+ (float-time) 5)))
+Fail after SECONDS, by default 5.  Nothing here asks a connection for
+its messages: only the module's record can bring them."
+  (let ((deadline (+ (float-time) (or seconds 5))))
     (while (and (not (funcall done)) (< (float-time) deadline))
       (accept-process-output nil 0.05))
     (should (funcall done))))
@@ -86,16 +86,16 @@ record can bring them."
             (portal-rex-gui-tests--wait (lambda () t))
             (portal-fake-rex-command right :event '(:type "four"))
             (portal-rex-gui-tests--wait (lambda () (equal (cdar seen) "four")))
-            ;; A server that goes is reported once, with Emacs idle, and the
-            ;; other connection carries on.
+            ;; A server that ends the connection for good is reported once,
+            ;; with Emacs idle, and the other connection carries on.
             (let ((said (portal-rex-gui-tests--messages
                          (lambda ()
-                           (portal-fake-rex-command left :drop t)
+                           (portal-fake-rex-command left :close 1002 :reason "protocol error")
                            (portal-rex-gui-tests--wait
                             (lambda () (not (portal-rex-live-p first))))
                            (portal-rex-gui-tests--wait (lambda () t))))))
               (should (equal said
-                             (format "Lost the Rex server at %s: The connection to the server was lost\n"
+                             (format "Lost the Rex server at %s: The server closed the connection (1002: protocol error)\n"
                                      (abbreviate-file-name (portal-fake-rex-socket left))))))
             (should (equal (portal-rex-connections) (list second)))
             (should (portal-rex-call second "session.list")))
@@ -166,7 +166,7 @@ record can bring them."
                                '("*rex: fake/build*" "*rex: fake/shell*"))))
             (switch-to-buffer "*rex: fake/build*")
             (let ((inhibit-message t))
-              (portal-fake-rex-command server :drop t)
+              (portal-fake-rex-command server :close 1002 :reason "protocol error")
               (portal-rex-gui-tests--wait (lambda () (null (portal-rex-connections)))))
             (should-not (funcall completions)))
         (mapc #'portal-rex-disconnect (portal-rex-connections))))))
@@ -174,6 +174,7 @@ record can bring them."
 ;;; A block's screen
 
 (declare-function portal--terminal-text "portal-terminal" (target))
+(declare-function portal--terminal-paste "portal-terminal" (target text &optional enter))
 (declare-function portal-test-native-key "test-terminal-input" (code flags text &optional windowless))
 (declare-function portal-test-native-target-frame "test-terminal-input" (title))
 (declare-function portal-test-native-focus-target "test-terminal-input" ())
@@ -719,6 +720,209 @@ and the buffer current."
         (tab-bar-mode (if tabs 1 -1))
         (set-window-configuration configuration)
         (delete-directory directory t)))))
+
+;;; Holding up
+
+(defun portal-rex-gui-tests--paints (server)
+  "How many times SERVER is asked for a screen, from its reports so far."
+  (cl-count-if (lambda (report)
+                 (equal (plist-get (plist-get report :request) :method)
+                        "com.superlogical.terminal.format"))
+               (portal-fake-rex-reports server)))
+
+(ert-deftest portal-rex-gui-a-stream-that-drops-resumes ()
+  :tags '(:gui)
+  (portal-fake-rex-with (server)
+    (portal-fake-rex-command server :screen '(:block:fake-1 "\e[H\e[2Jfirst paint\r\n"))
+    (portal-rex-gui-tests--showing server
+      (portal-fake-rex-take server :stream)
+      (portal-fake-rex-command server :output "block:fake-1" :data "before the drop ")
+      (portal-rex-gui-tests--shows target "before the drop")
+      (setf (portal-fake-rex-reports server) nil)
+      ;; The stream drops; what the program writes meanwhile follows it,
+      ;; once resumed from the byte after those Emacs took, painting nothing.
+      (portal-fake-rex-command server :drop_stream "block:fake-1")
+      (portal-fake-rex-command server :output "block:fake-1" :data "while away ")
+      (let ((resumed (portal-fake-rex-take server :resumed)))
+        (should (equal (plist-get resumed :resumed) "block:fake-1"))
+        (should (> (plist-get resumed :from) 0)))
+      (portal-fake-rex-command server :output "block:fake-1" :data "after")
+      (portal-rex-gui-tests--shows target "before the drop while away after")
+      (should (equal (portal-rex-gui-tests--state target) "live"))
+      (should (= (portal-rex-gui-tests--paints server) 0))
+      ;; The server asks for a new stream, as when it could hold no more:
+      ;; a new ticket, and a new paint, on a reset terminal.
+      (portal-fake-rex-command server :screen '(:block:fake-1 "\e[H\e[2Jsecond paint\r\n"))
+      (portal-fake-rex-command server :end_stream "block:fake-1" :code 1013
+                               :reason "data reconnect required")
+      (portal-fake-rex-request server "data.connect")
+      (portal-fake-rex-request server "com.superlogical.terminal.format")
+      (portal-rex-gui-tests--shows target "second paint")
+      (should-not (string-search "first paint" (portal--terminal-text target)))
+      ;; A resume the server refuses, as one that could not keep the
+      ;; stream, starts over too.
+      (portal-fake-rex-command server :screen '(:block:fake-1 "\e[H\e[2Jthird paint\r\n"))
+      (portal-fake-rex-command server :lose_stream "block:fake-1")
+      (portal-fake-rex-request server "data.connect")
+      (portal-rex-gui-tests--shows target "third paint")
+      (should (equal (portal-rex-gui-tests--state target) "live"))
+      ;; Typing reaches the block all along.
+      (portal--terminal-paste target "x")
+      (should (equal (portal-rex-gui-tests--written server) '(:data "x"))))))
+
+(ert-deftest portal-rex-gui-a-lost-connection-comes-back ()
+  :tags '(:gui)
+  (portal-fake-rex-with (server)
+    (portal-rex-gui-tests--showing server
+      (let ((buffer (current-buffer))
+            (name (abbreviate-file-name portal-rex-socket))
+            (token (plist-get (plist-get (portal-rex-connection-welcome
+                                          (car (portal-rex-connections)))
+                                         :client)
+                              :reconnect_token))
+            said)
+        (portal-fake-rex-take server :stream)
+        (setf (portal-fake-rex-reports server) nil)
+        (setq
+         said
+         (portal-rex-gui-tests--messages
+          (lambda ()
+            ;; The control connection drops, and the server is not there to
+            ;; take it back yet: the buffer stays, marked, its stream
+            ;; still live, and typing in it goes nowhere, and says so.
+            (portal-fake-rex-command server :upgrade "refuse")
+            (portal-fake-rex-command server :drop_control t)
+            (portal-rex-gui-tests--wait
+             (lambda () (and (equal (portal-rex-gui-tests--state target) "disconnected")
+                             (buffer-local-value 'portal-rex--disconnected buffer))))
+            (should (buffer-live-p buffer))
+            (should (buffer-local-value 'portal-rex--disconnected buffer))
+            (should (string-search ":disconnected" (format-mode-line mode-line-process)))
+            (should-not (portal-rex-connections))
+            (portal-fake-rex-command server :output "block:fake-1" :data "still here")
+            (portal-rex-gui-tests--shows target "still here")
+            (portal--terminal-paste target "lost")
+            (portal-rex-gui-tests--wait
+             (lambda () (with-current-buffer (messages-buffer)
+                          (string-search "is not connected" (buffer-string)))))
+            ;; The server takes it back, as the same client: no command
+            ;; brings it, nothing is painted again, and typing goes.
+            (portal-fake-rex-command server :upgrade "ok")
+            (portal-rex-gui-tests--wait
+             (lambda () (equal (portal-rex-gui-tests--state target) "live"))
+             10)
+            (portal-rex-gui-tests--wait (lambda () (portal-rex-connections))))))
+        (should (equal (plist-get (plist-get (portal-fake-rex-take server :hello) :hello)
+                                  :reconnect_token)
+                       token))
+        (should (eq (plist-get (plist-get (portal-rex-connection-welcome
+                                           (car (portal-rex-connections)))
+                                          :client)
+                               :resumed)
+                    t))
+        (should (equal said
+                       (concat (format "Lost the Rex server at %s: The connection to the server was lost; connecting again\n"
+                                       name)
+                               "Rex block shell is not connected: what you type goes nowhere until its server is back\n"
+                               (format "Back on the Rex server at %s\n" name))))
+        (should-not (buffer-local-value 'portal-rex--disconnected buffer))
+        (should (= (portal-rex-gui-tests--paints server) 0))
+        (portal--terminal-paste target "back")
+        (should (equal (portal-rex-gui-tests--written server) '(:data "back")))
+        (portal-fake-rex-command server :output "block:fake-1" :data " and on")
+        (portal-rex-gui-tests--shows target "still here and on")))))
+
+(ert-deftest portal-rex-gui-a-restarted-server-has-other-blocks ()
+  :tags '(:gui)
+  (portal-fake-rex-with (server)
+    (portal-fake-rex-command
+     server :blocks '(:session:fake-1
+                      [(:block_id "block:fake-1" :label "shell" :placement "placed")
+                       (:block_id "block:fake-2" :label "logs" :placement "placed")]))
+    (portal-fake-rex-command server :screen '(:block:fake-1 "\e[H\e[2Jbefore the restart\r\n"))
+    (portal-rex-gui-tests--showing server
+      (let ((name (abbreviate-file-name portal-rex-socket))
+            (names (lambda () (sort (mapcar #'buffer-name (portal-rex-buffers)) #'string<)))
+            said)
+        (portal-rex-gui-tests--shows target "before the restart")
+        (should (equal (funcall names) '("*rex: fake/logs*" "*rex: fake/shell*")))
+        (setf (portal-fake-rex-reports server) nil)
+        ;; The server restarts with its shell, a new block, and not the
+        ;; other: Emacs comes back to it as a new client, with the buffers
+        ;; it has and one message about what went.  The shell starts
+        ;; again from the beginning, painted afresh.
+        (portal-fake-rex-command server :screen '(:block:fake-1 "\e[H\e[2Jafter the restart\r\n"))
+        (setq said
+              (portal-rex-gui-tests--messages
+               (lambda ()
+                 (portal-fake-rex-command
+                  server :restart
+                  '(:sessions [(:session_id "session:fake-1" :label "fake")]
+                    :blocks (:session:fake-1
+                             [(:block_id "block:fake-1" :label "shell" :placement "placed")
+                              (:block_id "block:fake-3" :label "build" :placement "placed")])))
+                 (portal-rex-gui-tests--wait
+                  (lambda () (equal (funcall names) '("*rex: fake/build*" "*rex: fake/shell*")))
+                  10)
+                 (portal-rex-gui-tests--shows target "after the restart"))))
+        (should (equal said
+                       (format (concat "Lost the Rex server at %s: The connection to the server was lost; connecting again\n"
+                                       "Back on the Rex server at %s; its block *rex: fake/logs* went meanwhile\n")
+                               name name)))
+        (should (equal (plist-get (portal-fake-rex-request server "session.attach") :payload)
+                       '(:session_id "session:fake-1")))
+        (should-not (string-search "before the restart" (portal--terminal-text target)))
+        (should (equal (portal-rex-gui-tests--state target) "live"))
+        ;; Again, with none of its sessions: every buffer goes, said once.
+        (setq said
+              (portal-rex-gui-tests--messages
+               (lambda ()
+                 (portal-fake-rex-command server :restart '(:sessions [] :blocks ()))
+                 (portal-rex-gui-tests--wait (lambda () (null (funcall names))) 10)
+                 (portal-rex-gui-tests--wait (lambda () (portal-rex-connections))))))
+        (should (equal said
+                       (format (concat "Lost the Rex server at %s: The connection to the server was lost; connecting again\n"
+                                       "Back on the Rex server at %s; 2 of its blocks went meanwhile: *rex: fake/build*, *rex: fake/shell*\n")
+                               name name)))))))
+
+(ert-deftest portal-rex-gui-a-flood-leaves-emacs-responsive ()
+  :tags '(:gui)
+  ;; A program floods its block, shown and then buried: the stream is read
+  ;; as fast as the terminal parses, Emacs's timers keep their time, and
+  ;; every line arrives.
+  (portal-fake-rex-with (server)
+    (portal-rex-gui-tests--showing server
+      (portal-fake-rex-take server :stream)
+      (dolist (shown '(t nil))
+        (let* ((prefix (if shown "shown " "buried "))
+               (tail (mapconcat (lambda (number) (format "%s%d" prefix number))
+                                (number-sequence 199990 200000) "\n"))
+               (last (float-time)) (gap 0)
+               (timer (run-at-time 0 0.01 (lambda ()
+                                            (let ((now (float-time)))
+                                              (setq gap (max gap (- now last)) last now))))))
+          (unless shown
+            (switch-to-buffer (get-buffer-create "*rex-gui-elsewhere*"))
+            (redisplay t))
+          (unwind-protect
+              (progn
+                (portal-fake-rex-command server :flood "block:fake-1" :lines 200000
+                                         :prefix prefix)
+                (portal-fake-rex-take server :flooded 60)
+                ;; Its last lines, on the screen once the history is cleared:
+                ;; a terminal read whole with megabytes of history behind it
+                ;; comes back short.
+                (portal-fake-rex-command server :output "block:fake-1" :data "\e[3J")
+                (portal-rex-gui-tests--wait
+                 (lambda () (string-search tail (portal--terminal-text target)))
+                 30))
+            (cancel-timer timer))
+          (message "Rex flood, %s: longest gap between timer runs %.0f ms"
+                   (if shown "shown" "buried") (* 1000 gap))
+          (should (< gap 0.5))
+          (switch-to-buffer "*rex: fake/shell*")
+          (redisplay t)))
+      (kill-buffer "*rex-gui-elsewhere*"))))
 
 (provide 'portal-rex-gui-tests)
 ;;; portal-rex-gui-tests.el ends here

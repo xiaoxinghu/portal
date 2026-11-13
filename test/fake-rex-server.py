@@ -60,6 +60,16 @@ was seen to, and as its documentation of data connections says:
   the block's grid; or with a REJECT, reason 0x01, and a close, for a
   ticket it did not give or gave already.  Each later resize of the block
   sends its streams a resize message too.
+- Keeps a stream whose data connection drops, and what is written to it
+  meanwhile, until the client closes it with 1000 or the server ends it:
+  a RESUME with the latest WELCOME's token and the count of bytes taken
+  gets a WELCOME with a new token and the same nonce, then the stream from
+  that byte on; one with a token it does not know, or a count past what
+  it sent, gets a REJECT (0x01, 0x05) and a close.
+- Gives each control client a reconnect token, a new one in each welcome.
+  A client whose connection drops is kept: a hello with its token
+  continues it, "resumed" true, with its ID, its sessions attached and its
+  blocks; any other token starts a new client.
 
 Reports, on standard output:
 
@@ -71,6 +81,8 @@ Reports, on standard output:
     {"pong": N}                           client N answered a ping
     {"stream": BLOCK, "client": N}        client N's data connection to
                                           BLOCK has had its WELCOME
+    {"resumed": BLOCK, "client": N,       client N resumed BLOCK's stream
+     "from": COUNT}                       from byte COUNT
     {"disconnected": N, "code": CODE}     client N left; CODE is its close
                                           frame's, its own or its answer to
                                           the server's, or null without one
@@ -118,6 +130,13 @@ Commands, on standard input:
         Close every client's connection with a close frame.
     {"drop": true}
         Drop every client's connection without one, as a crash would.
+    {"drop_control": true}
+        Drop every control connection without a close frame, as a lost
+        line would, and leave the data connections as they are.
+    {"restart": {"sessions": [...], "blocks": {...}}}
+        Come back as a server that restarted: drop every connection,
+        forget every client and stream, so no token or RESUME is known,
+        and have these sessions and blocks from now on.
     {"welcome": false}
         Do not answer later hellos; true answers them again.
     {"upgrade": "refuse" | "no-protocol" | "bad-accept" | "silent" | "ok"}
@@ -132,10 +151,22 @@ Commands, on standard input:
     {"output": BLOCK, "data": TEXT, "split": BYTES}
         Send TEXT, as UTF-8, on every data connection of BLOCK, as the
         program's output, in messages of at most BYTES when split is given.
+    {"flood": BLOCK, "lines": N, "prefix": TEXT}
+        Send "TEXT1" to "TEXTN", TEXT "line " unless given, each ending
+        in CR LF, on BLOCK's
+        streams, in messages of 64 KiB, from a thread of its own, at the
+        pace the client reads; report {"flooded": BLOCK} when all are out.
     {"rex": BLOCK, "message": {...}}
         Send every data connection of BLOCK this Rex message, with its nonce.
     {"end_stream": BLOCK, "code": CODE, "reason": TEXT}
-        Close every data connection of BLOCK with this close frame.
+        Close every data connection of BLOCK with this close frame, and
+        end its streams.
+    {"drop_stream": BLOCK}
+        Drop every data connection of BLOCK without a close frame, keeping
+        its streams for a RESUME.
+    {"lose_stream": BLOCK}
+        Drop BLOCK's data connections and forget their streams, as a
+        server that could hold no more: a RESUME of one is refused.
     {"terminal": BLOCK, "title": TEXT, "pwd": TEXT, "process": {...},
      "input_mode": {...}}
         What BLOCK's terminal methods answer from now on, each given
@@ -203,6 +234,7 @@ state = {
     "desired": {},
     "others": {},
     "line": {},
+    "kept": {},
 }
 
 
@@ -232,9 +264,13 @@ class Client:
         self.buffer = b""
         self.data = False  # A data connection, not a control one.
         self.joined = set()  # Sessions it attached to.
-        self.nonce = 0
-        self.block = None
         self.info = {}  # What its hello said of it.
+        self.name = "client:fake-%d" % number  # Its ID, kept across a resume.
+        self.token = None  # Its latest reconnect token.
+        self.stream = None  # A data connection's stream.
+        # Sends on this connection, one at a time: not the global lock, as a
+        # client that reads slowly holds a send up.
+        self.sending = threading.Lock()
 
     def read(self, count):
         while len(self.buffer) < count:
@@ -253,7 +289,7 @@ class Client:
             head += bytes([126]) + struct.pack(">H", len(payload))
         else:
             head += bytes([127]) + struct.pack(">Q", len(payload))
-        with lock:
+        with self.sending:
             try:
                 self.connection.sendall(head + payload)
             except OSError:
@@ -385,38 +421,47 @@ class Client:
             for value in state["after"].pop(method, []):
                 command(value)
 
-    def stream(self):
-        """A data connection: the HELLO, then the block's stream until it ends."""
+    def reject(self, reason):
+        self.frame(2, b"\x82" + bytes([reason]))
+        self.closing = True
+        self.frame(0x8, struct.pack(">H", 1008) + b"data handshake rejected")
+
+    def stream_connection(self):
+        """A data connection: a HELLO or a RESUME, then the block's stream
+        until the connection ends."""
         kind, hello = self.receive()
-        ticket = bytes(hello[1:17])
         with lock:
-            found = state["tickets"].pop(ticket, None) if kind == 2 and hello[:1] == b"\x01" else None
-            if not found:
-                self.frame(2, b"\x82\x01")
-                self.closing = True
-                self.frame(0x8, struct.pack(">H", 1008) + b"data handshake rejected")
-                return
-            self.block = found["block"]
-            self.nonce = int.from_bytes(os.urandom(8), "little") or 1
-            self.frame(
-                2,
-                b"\x81" + os.urandom(16) + b"\0\0\0" + struct.pack("<I", 10000)
-                + struct.pack("<Q", self.nonce),
-            )
-            snapshot = b"GHOSTSNP\x01\x00"
-            for tag, body in ((1, b"fake screen"), (6, b"")):
-                snapshot += struct.pack("<HIxxxx", tag, len(body)) + body
-            self.frame(2, snapshot)
-            self.rex(resize_message(self.block))
-            state["streams"].setdefault(self.block, []).append(self)
-        report(stream=self.block, client=self.number)
+            if kind == 2 and hello[:1] == b"\x02" and len(hello) >= 25:
+                found = next((stream for streams in state["streams"].values()
+                              for stream in streams if stream.token == bytes(hello[1:17])), None)
+                (count,) = struct.unpack("<Q", hello[17:25])
+                if not found:
+                    return self.reject(0x01)
+                if count > len(found.sent):
+                    return self.reject(0x05)
+                if found.connection:
+                    found.connection.stream = None
+                found.connection, self.stream = self, found
+                self.frame(2, found.welcome())
+                if count < len(found.sent):
+                    self.frame(2, bytes(found.sent[count:]))
+                report(resumed=found.block, client=self.number, **{"from": count})
+            else:
+                ticket = bytes(hello[1:17])
+                found = state["tickets"].pop(ticket, None) if kind == 2 and hello[:1] == b"\x01" else None
+                if not found:
+                    return self.reject(0x01)
+                self.stream = Stream(found["block"], self)
+                self.frame(2, self.stream.welcome())
+                snapshot = b"GHOSTSNP\x01\x00"
+                for tag, body in ((1, b"fake screen"), (6, b"")):
+                    snapshot += struct.pack("<HIxxxx", tag, len(body)) + body
+                self.stream.write(snapshot)
+                self.stream.rex(resize_message(self.stream.block))
+                state["streams"].setdefault(self.stream.block, []).append(self.stream)
+                report(stream=self.stream.block, client=self.number)
         while True:
             self.receive()
-
-    def rex(self, message):
-        """Send one of Rex's own messages on this data connection."""
-        body = json.dumps(message, separators=(",", ":"))
-        self.frame(2, b"\x1b_rex1;%d;%s\x1b\\" % (self.nonce, body.encode()))
 
     def serve(self):
         try:
@@ -426,7 +471,7 @@ class Client:
                 return
             report(connected=self.number)
             if self.data:
-                return self.stream()
+                return self.stream_connection()
             while True:
                 kind, payload = self.receive()
                 text = payload.decode("utf-8", "replace")
@@ -438,14 +483,20 @@ class Client:
                     report(hello=value, client=self.number)
                     self.info = value.get("client") or {}
                     if state["welcome"]:
+                        with lock:
+                            kept = state["kept"].pop(value.get("reconnect_token"), None)
+                            if kept:
+                                self.name, self.joined, self.attached = kept
+                            self.token = "fake-token-%s" % os.urandom(8).hex()
                         self.send(
                             {
                                 "type": "welcome",
                                 "protocol": PROTOCOL,
                                 "limits": {"max_message_bytes": 1048576},
                                 "client": {
-                                    "id": "client:fake-%d" % self.number,
-                                    "reconnect_token": "fake",
+                                    "id": self.name,
+                                    "reconnect_token": self.token,
+                                    "resumed": bool(kept),
                                 },
                                 "api_revision": value.get("api_revision", 0),
                                 "api_server_revision": API_REVISION,
@@ -461,15 +512,56 @@ class Client:
         finally:
             with lock:
                 clients.pop(self.number, None)
-                if self.block and self in state["streams"].get(self.block, []):
-                    state["streams"][self.block].remove(self)
-                if not self.data:
+                stream = self.stream
+                if stream and stream.connection is self:
+                    stream.connection = None
+                    # The client's 1000 ends the stream; a drop keeps it.
+                    if self.code == 1000 or self.closing:
+                        stream.end()
+                # A control client that dropped is kept for its token.
+                if not self.data and self.code is None and self.token:
+                    state["kept"][self.token] = (self.name, self.joined, self.attached)
+                # One that left for good gives up its blocks.
+                elif not self.data:
                     leave(identity(self))
             try:
                 self.connection.close()
             except OSError:
                 pass
             report(disconnected=self.number, code=self.code)
+
+
+class Stream:
+    """A block's stream, which may outlive its data connection."""
+
+    def __init__(self, block, connection):
+        self.block = block
+        self.connection = connection
+        self.nonce = int.from_bytes(os.urandom(8), "little") or 1
+        self.token = None
+        self.sent = bytearray()  # Every byte after the WELCOME.
+
+    def welcome(self):
+        """A WELCOME, with a new token."""
+        self.token = os.urandom(16)
+        return (b"\x81" + self.token + b"\0\0\0" + struct.pack("<I", 10000)
+                + struct.pack("<Q", self.nonce))
+
+    def write(self, data):
+        """Send DATA as the stream's next bytes, or keep it for a RESUME."""
+        self.sent += data
+        if self.connection:
+            self.connection.frame(2, data)
+
+    def rex(self, message):
+        """Send one of Rex's own messages on this stream."""
+        body = json.dumps(message, separators=(",", ":"))
+        self.write(b"\x1b_rex1;%d;%s\x1b\\" % (self.nonce, body.encode()))
+
+    def end(self):
+        streams = state["streams"].get(self.block, [])
+        if self in streams:
+            streams.remove(self)
 
 
 def error(code, message, status):
@@ -497,11 +589,11 @@ def attach(client, payload):
     if not any(known["session_id"] == session for known in state["sessions"]):
         return error("session_not_found", "session %s not found" % session, 404)
     client.joined.add(session)
-    return {"client_id": "client:fake-%d" % client.number, "view": {"revision": 1}}
+    return {"client_id": client.name, "view": {"revision": 1}}
 
 
 def identity(client):
-    return "client:fake-%d" % client.number
+    return client.name
 
 
 def owner_of(block):
@@ -930,10 +1022,7 @@ def command(value):
                 client.frame(0x8, struct.pack(">H", int(value["close"])) + reason)
         elif "drop" in value:
             for client in everyone:
-                try:
-                    client.connection.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
+                drop(client)
         elif "welcome" in value:
             state["welcome"] = bool(value["welcome"])
         elif "upgrade" in value:
@@ -945,12 +1034,16 @@ def command(value):
         elif "output" in value:
             data = value.get("data", "").encode()
             size = int(value.get("split") or 0) or len(data) or 1
-            for client in list(state["streams"].get(value["output"], [])):
+            for stream in list(state["streams"].get(value["output"], [])):
                 for start in range(0, len(data), size):
-                    client.frame(2, data[start : start + size])
+                    stream.write(data[start : start + size])
+        elif "flood" in value:
+            threading.Thread(target=flood, args=(value["flood"], int(value.get("lines", 0)),
+                                                 value.get("prefix", "line ").encode()),
+                             daemon=True).start()
         elif "rex" in value:
-            for client in list(state["streams"].get(value["rex"], [])):
-                client.rex(value["message"])
+            for stream in list(state["streams"].get(value["rex"], [])):
+                stream.rex(value["message"])
         elif "terminal" in value:
             known = terminal(value["terminal"])
             for key in ("title", "pwd", "process", "input_mode"):
@@ -990,12 +1083,61 @@ def command(value):
                     client.seq += 1
                     client.send({"type": "event", "seq": client.seq, "payload": event})
         elif "end_stream" in value:
-            for client in list(state["streams"].get(value["end_stream"], [])):
-                client.closing = True
-                reason = value.get("reason", "").encode()
-                client.frame(0x8, struct.pack(">H", int(value.get("code", 1000))) + reason)
+            for stream in list(state["streams"].get(value["end_stream"], [])):
+                stream.end()
+                if stream.connection:
+                    stream.connection.closing = True
+                    reason = value.get("reason", "").encode()
+                    stream.connection.frame(
+                        0x8, struct.pack(">H", int(value.get("code", 1000))) + reason)
+        elif "drop_stream" in value:
+            for stream in list(state["streams"].get(value["drop_stream"], [])):
+                if stream.connection:
+                    drop(stream.connection)
+        elif "lose_stream" in value:
+            for stream in list(state["streams"].get(value["lose_stream"], [])):
+                stream.end()
+                stream.token = None
+                if stream.connection:
+                    drop(stream.connection)
+        elif "drop_control" in value:
+            for client in everyone:
+                if not client.data:
+                    drop(client)
+        elif "restart" in value:
+            for client in everyone:
+                client.token = None
+                drop(client)
+            state["kept"].clear()
+            state["streams"].clear()
+            state["tickets"].clear()
+            state["grids"].clear()
+            state["line"].clear()
+            state["desired"].clear()
+            state["sessions"] = value["restart"].get("sessions", [])
+            state["blocks"] = value["restart"].get("blocks", {})
         else:
             report(problem="unknown command: %s" % json.dumps(value))
+
+
+def flood(block, lines, prefix):
+    """Send BLOCK's streams LINES numbered lines, as fast as they are read."""
+    chunk = bytearray()
+    for number in range(1, lines + 1):
+        chunk += b"%s%d\r\n" % (prefix, number)
+        if len(chunk) >= 65536 or number == lines:
+            for stream in list(state["streams"].get(block, [])):
+                stream.write(bytes(chunk))
+            chunk = bytearray()
+    report(flooded=block)
+
+
+def drop(client):
+    """End CLIENT's connection without a close frame, as a crash would."""
+    try:
+        client.connection.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
 
 
 def accept(listener):

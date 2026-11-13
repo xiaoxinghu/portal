@@ -44,9 +44,14 @@ another server or to the user's files."
   (let* ((directory (let ((temporary-file-directory
                             (file-name-as-directory
                              (or (getenv "PORTAL_TEST_REX_DIRECTORY") temporary-file-directory))))
-                       (make-temp-file "rex" t)))
-         (server (portal-real-rex--make :directory directory
-                                        :socket (expand-file-name "s" directory)))
+                       (make-temp-file "rex" t))))
+    (make-directory (expand-file-name "home" directory))
+    (portal-real-rex--run (portal-real-rex--make :directory directory
+                                                 :socket (expand-file-name "s" directory)))))
+
+(defun portal-real-rex--run (server)
+  "Run SERVER's rex in its directory, and return SERVER once it is ready."
+  (let* ((directory (portal-real-rex-directory server))
          (process-environment (portal-real-rex--environment directory))
          ;; Its home is another, so "~" must not appear in its directory.
          (default-directory (file-name-as-directory directory))
@@ -54,7 +59,6 @@ another server or to the user's files."
          ready)
     (unwind-protect
         (progn
-          (make-directory "home")
           (setf (portal-real-rex-process server)
                 (make-process :name "rex-server" :noquery t :connection-type 'pipe
                               :buffer (generate-new-buffer " *rex-server*")
@@ -71,8 +75,8 @@ another server or to the user's files."
           server)
       (unless ready (portal-real-rex-stop server)))))
 
-(defun portal-real-rex-stop (server)
-  "Stop SERVER, which ends its blocks' programs, and remove its directory."
+(defun portal-real-rex--end (server)
+  "End SERVER's rex, which ends its blocks' programs."
   (when-let* ((process (portal-real-rex-process server)))
     (let ((deadline (+ (float-time) 5)))
       (when (process-live-p process)
@@ -80,8 +84,21 @@ another server or to the user's files."
         (while (and (process-live-p process) (< (float-time) deadline))
           (accept-process-output process 0.05))
         (delete-process process))
-      (kill-buffer (process-buffer process))))
+      (kill-buffer (process-buffer process)))
+    (setf (portal-real-rex-process server) nil)))
+
+(defun portal-real-rex-stop (server)
+  "Stop SERVER, which ends its blocks' programs, and remove its directory."
+  (portal-real-rex--end server)
   (delete-directory (portal-real-rex-directory server) t))
+
+(defun portal-real-rex-restart (server &optional before-start)
+  "Stop SERVER and start it again on the same socket, restoring nothing.
+Its blocks end with it, and it comes back with none.  BEFORE-START, a
+function, runs while it is stopped.  Return SERVER once it is ready."
+  (portal-real-rex--end server)
+  (when before-start (funcall before-start))
+  (portal-real-rex--run server))
 
 (defun portal-real-rex-cli (server &rest arguments)
   "Run rex with ARGUMENTS against SERVER alone, and return what it printed.

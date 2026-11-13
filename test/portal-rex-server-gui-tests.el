@@ -20,6 +20,13 @@ Messages arrive by the module's record, as between commands."
       (accept-process-output nil 0.05))
     (should (funcall done))))
 
+(defun portal-rex-server-gui-tests--messages (function)
+  "Call FUNCTION and return what it added to *Messages*."
+  (let ((start (with-current-buffer (messages-buffer) (point-max))))
+    (funcall function)
+    (with-current-buffer (messages-buffer)
+      (buffer-substring-no-properties start (point-max)))))
+
 (defun portal-rex-server-gui-tests--new-session (server label)
   "Create a session called LABEL on SERVER with rex, and return its ID.
 Its one block runs cat, without a login shell."
@@ -568,6 +575,102 @@ Its one block runs cat, without a login shell."
                 (portal-rex-server-gui-tests--wait
                  (lambda () (string-search "away-42" (portal--terminal-text target))))
                 (should (string-search "before-42" (portal--terminal-text target))))))
+        (mapc #'portal-rex-disconnect (portal-rex-connections))))))
+
+(ert-deftest portal-rex-server-gui-a-flood-reaches-its-buffer-whole ()
+  :tags '(:gui)
+  ;; What only a real server shows: a block's output, flooded while Emacs
+  ;; reads slowly, reaching its terminal whole, whether the server held it
+  ;; all or asked for a new stream; and C-c stopping a flood.
+  (portal-real-rex-with (server)
+    (let* ((session (plist-get (portal-real-rex-cli server "new" "flood" "--shell" "none" "--json"
+                                                    "--" "/bin/sh")
+                               :session_id))
+           (connection (portal-rex-connect (portal-real-rex-socket server)))
+           (buffer (car (portal-rex-buffers connection session)))
+           (block (buffer-local-value 'portal-rex-block-id buffer))
+           (screen (lambda () (portal-rex-server-gui-tests--screen server session block)))
+           (last 300000)
+           (tail (mapconcat (lambda (number) (format "%d\n" number))
+                            (number-sequence (- last 20) last) "")))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (switch-to-buffer buffer)
+            (redisplay t)
+            (let ((target portal-view--target))
+              (portal-rex-server-gui-tests--wait
+               (lambda () (equal (plist-get (plist-get (portal--inspect target) :rex) :state) "live")))
+              ;; The history cleared after it, on both sides: a terminal read
+              ;; whole with megabytes of history behind it comes back short.
+              (portal--terminal-paste target (format "seq 1 %d; printf '\\033[3J'; echo flood-done" last) t)
+              ;; Emacs reads nothing for three seconds, as a long command
+              ;; would hold it, while the program writes megabytes.
+              (let ((end (+ (float-time) 3)))
+                (while (< (float-time) end)))
+              (portal-rex-server-gui-tests--wait
+               (lambda () (string-search "\nflood-done\n" (portal--terminal-text target))))
+              (should (string-search tail (portal--terminal-text target)))
+              (should (string-search tail (funcall screen)))
+              (should (equal (plist-get (plist-get (portal--inspect target) :rex) :state) "live"))
+              ;; A flood that does not end stops with C-c, promptly.
+              (portal--terminal-paste target "yes rex-flood" t)
+              (portal-rex-server-gui-tests--wait
+               (lambda () (string-search "rex-flood\nrex-flood\n" (portal--terminal-text target))))
+              (let ((started (float-time)))
+                (select-frame-set-input-focus (selected-frame))
+                (should (portal-view--with-frame-title (selected-frame)
+                                                       #'portal-test-native-target-frame))
+                (portal-test-native-focus-target)
+                (portal-terminal-focus)
+                (portal-rex-server-gui-tests--keys (list 8 (ash 1 18) "\C-c"))
+                (portal--terminal-paste target "printf '\\033[3J'; echo stopped-$((6*7))" t)
+                (portal-rex-server-gui-tests--wait
+                 (lambda () (string-search "\nstopped-42\n" (portal--terminal-text target))))
+                (message "Rex flood stopped in %.1f seconds" (- (float-time) started))
+                (should (< (- (float-time) started) 5)))))
+        (portal-test-native-target-frame nil)
+        (mapc #'portal-rex-disconnect (portal-rex-connections))))))
+
+(ert-deftest portal-rex-server-gui-a-restarted-server-has-its-own-buffers ()
+  :tags '(:gui)
+  ;; What only a real server shows: stopped and started again, it has new
+  ;; sessions or none, and Emacs, which connects again by itself, ends
+  ;; with the buffers the new server has and one message about what went.
+  (portal-real-rex-with (server)
+    (let* ((session (portal-rex-server-gui-tests--new-session server "before"))
+           (connection (portal-rex-connect (portal-real-rex-socket server)))
+           (name (abbreviate-file-name (portal-real-rex-socket server)))
+           (names (lambda () (sort (mapcar #'buffer-name (portal-rex-buffers connection)) #'string<)))
+           said)
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (switch-to-buffer (car (portal-rex-buffers connection session)))
+            (redisplay t)
+            (should (equal (funcall names) '("*rex: before/shell*")))
+            (setq said
+                  (portal-rex-server-gui-tests--messages
+                   (lambda ()
+                     (portal-real-rex-restart
+                      server
+                      (lambda ()
+                        ;; Stopped: Emacs keeps the buffer, marked.
+                        (portal-rex-server-gui-tests--wait
+                         (lambda () (eq (portal-rex-connection-state connection) 'lost)))
+                        (should (equal (funcall names) '("*rex: before/shell*")))))
+                     (portal-rex-server-gui-tests--new-session server "after")
+                     (portal-rex-server-gui-tests--wait
+                      (lambda () (equal (funcall names) '("*rex: after/shell*"))))
+                     (portal-rex-server-gui-tests--wait (lambda () (portal-rex-live-p connection))))))
+            (should (string-match-p
+                     (format "\\`Lost the Rex server at %s: [^\n]*; connecting again\nBack on the Rex server at %s; its block \\*rex: before/shell\\* went meanwhile\n\\'"
+                             (regexp-quote name) (regexp-quote name))
+                     said))
+            ;; A new client: the old one went with the old server.
+            (should (memq (plist-get (plist-get (portal-rex-connection-welcome connection) :client)
+                                     :resumed)
+                          '(nil :false))))
         (mapc #'portal-rex-disconnect (portal-rex-connections))))))
 
 (provide 'portal-rex-server-gui-tests)

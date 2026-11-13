@@ -388,9 +388,10 @@ one message says what went meanwhile."
          (went (cl-remove-if (lambda (block-id)
                                (portal-rex-block-buffer connection block-id))
                              before))
-         (names (mapcar (lambda (block-id)
-                          (cdr (assoc block-id (portal-rex-connection-gone connection))))
-                        went)))
+         (names (sort (mapcar (lambda (block-id)
+                                (cdr (assoc block-id (portal-rex-connection-gone connection))))
+                              went)
+                      #'string<)))
     (setf (portal-rex-connection-gone connection) nil)
     (portal-rex--mark connection nil)
     ;; Lost again meanwhile, it resumes when it is next back.
