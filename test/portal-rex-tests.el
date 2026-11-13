@@ -2516,6 +2516,44 @@ in its order, giving the frame TABS where its frameset would."
           (should (equal (portal-rex-tests--said)
                          "Could not restore Rex block play/new: it has closed")))))))
 
+(ert-deftest portal-rex-restore-says-what-a-server-slow-to-list-holds-back ()
+  ;; The server takes the connection, then does not list its blocks in
+  ;; time: the placeholders say so, once, and become their blocks' buffers
+  ;; when the answer comes.
+  (portal-rex-tests--with (server)
+    (portal-rex-tests--restoring
+      (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+      (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api"))
+      (let* ((socket (abbreviate-file-name (portal-fake-rex-socket server)))
+             (waiting (portal-rex-desktop-restore
+                       nil "*rex: work/api*" (portal-rex-tests--record socket "1" "a" "api" "work")))
+             (portal-rex-timeout 0.3)
+             connection)
+        (portal-fake-rex-command server :hold "session.list_blocks")
+        (should (equal
+                 (string-trim-right
+                  (portal-rex-tests--messages
+                    (portal-rex--restore)
+                    (setq connection (car portal-rex--connections))
+                    ;; Batch Emacs takes the server's messages by asking
+                    ;; for them; its timer gives up waiting for the list,
+                    ;; and the next says why.
+                    (let ((deadline (+ (float-time) 2)))
+                      (while (and (or (portal-rex-connection-opening connection)
+                                      portal-rex--report-timer)
+                                  (< (float-time) deadline))
+                        (portal-rex--pump connection)
+                        (accept-process-output nil 0.05)))))
+                 (format "Could not restore Rex block work/api: The Rex server at %s has not listed its blocks within 0.3 seconds; each comes when it does"
+                         socket)))
+        (should (portal-rex-live-p connection))
+        (with-current-buffer waiting
+          (should (eq major-mode 'portal-rex-placeholder-mode))
+          (should (string-search "has not listed its blocks" (buffer-string))))
+        (portal-fake-rex-command server :release "session.list_blocks")
+        (portal-rex-tests--settle connection)
+        (should (eq (portal-rex-block-buffer connection "block:1") waiting))))))
+
 (ert-deftest portal-rex-restore-says-once-what-it-could-not-restore ()
   (portal-rex-tests--with (server)
     (portal-rex-tests--restoring

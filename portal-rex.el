@@ -1603,9 +1603,21 @@ This Mac's server too, when `portal-rex-connect-at-startup' says so."
                   :test #'equal))
     (dolist (server (nreverse servers))
       (condition-case failure
-          (portal-rex--open-soon (portal-rex--server-socket server)
-                                 (lambda (connection why)
-                                   (unless connection (portal-rex--still-waiting server why))))
+          (portal-rex--open-soon
+           (portal-rex--server-socket server)
+           (lambda (connection why)
+             (cond
+              ((null connection) (portal-rex--still-waiting server why))
+              ;; Connected, with blocks not listed in time: they come when
+              ;; the server answers.
+              ((seq-some (lambda (buffer)
+                           (equal (alist-get 'server (buffer-local-value 'portal-rex--awaited
+                                                                         buffer))
+                                  server))
+                         (portal-rex--placeholders))
+               (portal-rex--still-waiting
+                server (format "The Rex server at %s has not listed its blocks within %s seconds; each comes when it does"
+                               server portal-rex-timeout))))))
         (user-error (portal-rex--still-waiting server (cadr failure)))))))
 
 ;; In the autoloads, so that the option alone is enough: Portal is not
