@@ -449,7 +449,8 @@ against both servers: the handshake, `server.version`, `session.list`,
 calls the core makes to show a block, with the shapes of their answers, how
 a block's size follows its owner as Emacs and a second client of the
 test's own claim and size it, and an idle block ended by killing its
-buffer, with the two replies that say it is idle. The `rex` suite runs them against the fake, the tier against
+buffer, with the two replies that say it is idle, and a buffer finding its
+block again by ID after Emacs reconnects. The `rex` suite runs them against the fake, the tier against
 a real server. When only the tier's run fails, the real server has moved:
 bring the fake, and Portal, into line with it. Add a check there when the fake
 can answer it as cheaply as the real server.

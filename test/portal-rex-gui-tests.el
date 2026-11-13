@@ -640,5 +640,85 @@ and the buffer current."
         (mapc #'portal-rex-disconnect (portal-rex-connections))
         (kill-buffer "*rex-gui-elsewhere*")))))
 
+(ert-deftest portal-rex-gui-desktop-puts-blocks-back-in-their-panes ()
+  :tags '(:gui)
+  ;; Three blocks across two tabs and a split; Emacs quits and starts
+  ;; again with the desktop: the same blocks in the same panes, showing
+  ;; their screens, with no command given.
+  (require 'desktop)
+  (require 'tab-bar)
+  (portal-fake-rex-with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")
+                                               (:session_id "session:b" :label "play")])
+    (portal-fake-rex-command server :blocks '(:session:a [(:block_id "block:1" :label "api")
+                                                         (:block_id "block:2" :label "logs")]
+                                              :session:b [(:block_id "block:3" :label "shell")]))
+    (portal-fake-rex-command server :screen '(:block:1 "\e[H\e[2Japi screen"
+                                              :block:2 "\e[H\e[2Jlogs screen"
+                                              :block:3 "\e[H\e[2Jshell screen"))
+    (let* ((directory (make-temp-file "rex-desktop" t))
+           (desktop-globals-to-save nil)
+           (desktop-load-locked-desktop t)
+           (desktop-restore-frames t)
+           (desktop-restore-eager t)
+           (desktop-dirname nil)
+           (desktop-buffers-not-to-save-function
+            (lambda (_file name &rest _) (string-prefix-p "*rex: " name)))
+           (portal-rex-socket (portal-fake-rex-socket server))
+           (tabs (and (boundp 'tab-bar-mode) tab-bar-mode))
+           (configuration (current-window-configuration))
+           (shows (lambda (window text)
+                    (portal-rex-gui-tests--wait
+                     (lambda ()
+                       (let ((target (buffer-local-value 'portal-view--target
+                                                         (window-buffer window))))
+                         (and target
+                              (equal (portal-rex-gui-tests--state target) "live")
+                              (string-search text (portal--terminal-text target)))))))))
+      (unwind-protect
+          (progn
+            (portal-rex-connect)
+            (tab-bar-mode 1)
+            (tab-bar-close-other-tabs)
+            (delete-other-windows)
+            (switch-to-buffer "*rex: work/api*")
+            (set-window-buffer (split-window-below) "*rex: work/logs*")
+            (tab-bar-new-tab)
+            (delete-other-windows)
+            (switch-to-buffer "*rex: play/shell*")
+            (redisplay t)
+            (desktop-save directory t)
+            ;; Emacs quits: its buffers go, and Rex keeps the blocks.
+            (mapc #'portal-rex-disconnect (portal-rex-connections))
+            (tab-bar-close-other-tabs)
+            (delete-other-windows)
+            (switch-to-buffer "*scratch*")
+            ;; It starts again and reads the desktop, which waits for no server.
+            (let ((inhibit-message t))
+              (desktop-read directory))
+            (should-not (portal-rex-connections))
+            (should (equal (buffer-local-value 'major-mode (window-buffer))
+                           'portal-rex-placeholder-mode))
+            ;; Once idle, it connects, and each pane shows its block.
+            (portal-rex-gui-tests--wait (lambda () (null (portal-rex--placeholders))))
+            (should (equal (buffer-name (window-buffer)) "*rex: play/shell*"))
+            (should (= (length (window-list nil 'nomini)) 1))
+            (funcall shows (selected-window) "shell screen")
+            (tab-bar-select-tab 1)
+            (redisplay t)
+            (let ((windows (window-list nil 'nomini (frame-first-window))))
+              (should (equal (mapcar (lambda (window) (buffer-name (window-buffer window))) windows)
+                             '("*rex: work/api*" "*rex: work/logs*")))
+              (funcall shows (car windows) "api screen")
+              (funcall shows (cadr windows) "logs screen")))
+        (mapc #'portal-rex-disconnect (portal-rex-connections))
+        (mapc #'kill-buffer (portal-rex--placeholders))
+        (ignore-errors (desktop-release-lock directory))
+        (setq desktop-dirname nil)
+        (tab-bar-close-other-tabs)
+        (tab-bar-mode (if tabs 1 -1))
+        (set-window-configuration configuration)
+        (delete-directory directory t)))))
+
 (provide 'portal-rex-gui-tests)
 ;;; portal-rex-gui-tests.el ends here

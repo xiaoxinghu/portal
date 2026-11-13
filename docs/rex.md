@@ -8,8 +8,8 @@ show them. Portal is becoming a client of that server. Today it can connect to
 one, give each of its blocks a buffer that follows the server and shows the
 block's screen, a terminal you type in with its title, directory and
 program, make, rename and destroy sessions, start new terminals in them, end
-a block by killing its buffer, and call its methods and receive its events
-from Lisp; see
+a block by killing its buffer, put blocks back in their windows after Emacs
+restarts, and call its methods and receive its events from Lisp; see
 [what is not built](#what-is-not-built).
 
 Rex is optional. Portal's own [terminals](terminals.md) run their shells
@@ -22,6 +22,7 @@ themselves and need no Rex installed.
 - [End a block](#end-a-block)
 - [A block's details](#a-blocks-details)
 - [Portal's terminal commands](#portals-terminal-commands)
+- [Restore the arrangement](#restore-the-arrangement)
 - [Appearance](#appearance)
 - [Call the server](#call-the-server)
 - [Receive events](#receive-events)
@@ -450,6 +451,91 @@ moment Emacs connects:
 | Embark's terminal actions | Select, rename, set the project and kill as above; Dired and copying the directory need the block's directory, known once it has been shown; "another shell" starts one of Portal's own terminals there. |
 | `portal-terminal-toggle`, the quick terminal | Never a block's buffer: a project's quick terminal is always one of Portal's own. Toggled from a block's buffer, it goes by the project being edited, as from any other. |
 
+## Restore the arrangement
+
+Rex keeps the programs, and Emacs keeps the arrangement: which block each
+window shows. Emacs's own means save it, bookmarks and the desktop, and
+find each block again by its ID, which never changes and is never reused.
+Rex's own windows, splits and tabs play no part.
+
+### Bookmarks
+
+`C-x r m` (`bookmark-set`) in a block's buffer makes a bookmark of the
+block, called `rex: SESSION/BLOCK` from its labels. It records the block's
+server and ID, and the labels only to read. `C-x r b` (`bookmark-jump`)
+connects to the server if Emacs is not connected, and shows the block's
+buffer. When it cannot, it says why: the block has closed, the server is
+not running, or the bookmark names a server on another machine, which
+Portal cannot reach yet.
+
+### The desktop
+
+With `desktop-save-mode` on, the desktop saves each block's buffer with the
+same record, and restoring it puts every block back in its windows, across
+tabs and splits, its program still running. Restoring waits for no server,
+so Emacs starts as fast as it does without Rex:
+
+1. While the desktop is read, each block's buffer comes back at once, under
+   its old name, as a placeholder that says which block it stands for and
+   what it waits for. The windows and tabs show the placeholders.
+2. Once Emacs has started, it connects to the servers the placeholders
+   name, without waiting for them: their answers arrive as events do,
+   between commands.
+3. As each block is listed, its placeholder becomes the block's buffer, in
+   the windows that show it, which show the block's screen.
+
+Then Emacs says once, in the echo area, what it could not restore:
+
+| When | The placeholder |
+| --- | --- |
+| The block has closed | Is killed: the block's ID is never used again. |
+| The server is not running, or does not answer within `portal-rex-timeout` seconds | Waits, and says why. `M-x portal-rex-connect` restores it once the server is up. |
+| The record names a server on another machine | Waits: Portal connects only to the server on this Mac. |
+
+A desktop read while Emacs is connected to the server gives the blocks'
+buffers themselves. Placeholders are saved as their blocks' buffers are,
+so a desktop saved while a server was down still holds its blocks.
+
+What else comes back:
+
+- A tab or a window configuration that Emacs holds while it runs, in
+  `tab-bar-history` or a register, holds the buffer itself. A placeholder
+  is the block's buffer once restored, so these keep showing the block.
+- A tab saved in the desktop names its buffers, and finds them by name when
+  first selected. A block's buffer comes back under the name it was saved
+  with; a block relabelled while Emacs was not running takes its new name,
+  and the saved tabs are told it.
+- The desktop saves only the buffers that `desktop-buffers-not-to-save`
+  lets through. A regexp that leaves out every buffer whose name starts
+  with `*` leaves out the blocks' buffers too.
+- `desktop-revert` and `desktop-change-dir` kill every buffer first, the
+  blocks' among them: those blocks run on, without buffers, until Emacs
+  next connects.
+
+### Connect at startup
+
+Set `portal-rex-connect-at-startup` to connect to this Mac's server once
+Emacs has started, as a desktop with Rex buffers does whatever it says. It
+is off by default. Emacs does not wait for the server here either, and
+says once why it could not connect.
+
+### The record
+
+A bookmark and the desktop hold the same alist:
+
+```elisp
+((server . "~/Library/Application Support/rex/server.sock")
+ (block . "block:01a1…")
+ (session . "session:01a1…")
+ (block-label . "api")
+ (session-label . "work"))
+```
+
+`server` is the server's socket, or the label of a host in Rex's host
+list once servers on other machines are built. `block` is what finds the
+block. The session's ID and the labels name the block in messages and in
+a placeholder.
+
 ## Appearance
 
 A block's view is drawn with Portal's terminal theme and the frame's text
@@ -596,5 +682,4 @@ pin when it would.
 Portal's Rex client is being built in steps. Not built yet:
 
 - Reconnecting, and resuming a block's output after a dropped connection.
-- Restoring the arrangement of Rex terminals with bookmarks or the desktop.
 - Servers on other machines.

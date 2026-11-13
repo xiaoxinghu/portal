@@ -48,6 +48,10 @@ _Avoid_: project, workspace; calling a connection a session. The "terminal sessi
 One program on a Rex server with its screen, such as a shell: what one terminal shows. It belongs to one session for its whole life, and its ID never changes and is never reused. While Emacs is connected to its server it has exactly one buffer, named from its session's label and its own, which comes and goes with the block: killing the buffer ends the block, after a question while it may be busy, and burying it keeps the block running. Once a window shows that buffer, a terminal view in it shows the block's screen, and keeps it current until the buffer goes, shown or not.
 _Avoid_: pane, tab, window (Rex's own layout terms), terminal (the view kind that shows it)
 
+**Placeholder**:
+A buffer that stands for a block while Emacs is not connected to its server, made when a desktop is restored. It says which block it stands for and what it waits for. Once Emacs connects, it becomes that block's buffer, so the windows and tabs that held it hold the block; one whose block has closed is killed.
+_Avoid_: stub, dummy buffer
+
 **Fed terminal**:
 A terminal view that runs no program of its own: what it shows is the output of a block on a Rex server, fed to it by Portal, and what is typed in it goes to that block. Its title, directory, program and exit are its block's, as the server reports them, and so is its grid, whatever the size of its pane.
 _Avoid_: remote terminal, Rex view (it is a terminal view like any other)

@@ -2094,5 +2094,305 @@ It and those before it are taken: a later call finds only newer ones."
                                "Rex session for the terminal (a new name creates one): ")))))
         (delete-directory root t)))))
 
+;;; Restoring the arrangement
+
+(defmacro portal-rex-tests--restoring (&rest body)
+  "Run BODY with nothing to restore or say, and leave nothing behind.
+The placeholders BODY leaves are killed, and the timers it arms cancelled."
+  (declare (indent 0))
+  `(let ((portal-rex--unrestored nil)
+         (portal-rex-connect-at-startup nil))
+     (unwind-protect (progn ,@body)
+       (mapc #'kill-buffer (portal-rex--placeholders))
+       (dolist (timer '(portal-rex--restore-timer portal-rex--report-timer))
+         (when (timerp (symbol-value timer)) (cancel-timer (symbol-value timer)))
+         (set timer nil)))))
+
+(defun portal-rex-tests--said ()
+  "Return what Portal says, now, about what it could not restore."
+  (string-trim-right (portal-rex-tests--messages (portal-rex--report-unrestored))))
+
+(defun portal-rex-tests--restore ()
+  "Start restoring, as Emacs does once idle, and wait until every connection has opened."
+  (portal-rex--restore)
+  (dolist (connection (copy-sequence portal-rex--connections))
+    (portal-rex-tests--until connection
+                             (lambda () (not (portal-rex-connection-opening connection))))))
+
+(defun portal-rex-tests--record (server block session &optional block-label session-label)
+  "Return the record of BLOCK, in SESSION on SERVER, a socket or a host."
+  `((server . ,server) (block . ,(concat "block:" block)) (session . ,(concat "session:" session))
+    (block-label . ,(or block-label block)) (session-label . ,(or session-label session))))
+
+(ert-deftest portal-rex-fake-reattaches-as-a-real-server ()
+  ;; The same check runs against a real server in the real-server tier.
+  (portal-rex-tests--with (server)
+    (portal-rex-tests--restoring
+      (let ((connection (portal-rex-tests--connect server)))
+        (portal-rex-parity-check-reattach connection "block:fake-1")))))
+
+(ert-deftest portal-rex-bookmark-names-the-block-and-jumps-to-it ()
+  (portal-rex-tests--with (server)
+    (portal-rex-tests--restoring
+      (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+      (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api")
+                                (portal-rex-tests--block "2" "logs"))
+      (let* ((socket (portal-fake-rex-socket server))
+             (bookmark-alist nil)
+             (bookmark-save-flag nil)
+             (bookmark-default-file (expand-file-name "bookmarks" (portal-fake-rex-directory server)))
+             (connection (portal-rex-tests--connect server))
+             (jump (lambda (name)
+                     (let (shown)
+                       (save-current-buffer
+                         (bookmark-jump name (lambda (buffer) (setq shown buffer))))
+                       shown))))
+        (with-current-buffer "*rex: work/api*"
+          ;; A bookmark records the server and the block's ID; the labels
+          ;; are there to read.
+          (should (equal (portal-rex-bookmark-make-record)
+                         `("rex: work/api"
+                           (server . ,(abbreviate-file-name socket))
+                           (block . "block:1") (session . "session:a")
+                           (block-label . "api") (session-label . "work")
+                           (handler . portal-rex-bookmark-jump))))
+          (bookmark-set "api"))
+        (with-current-buffer "*rex: work/logs*" (bookmark-set "logs"))
+        (with-temp-buffer
+          (should-error (portal-rex-bookmark-make-record) :type 'user-error))
+        ;; Emacs connected, the jump shows the block's buffer.
+        (should (eq (funcall jump "api") (portal-rex-block-buffer connection "block:1")))
+        ;; Disconnected, it connects first.
+        (portal-rex-disconnect connection)
+        (should-not (portal-rex-buffers))
+        (let ((shown (funcall jump "logs")))
+          (should (equal (buffer-name shown) "*rex: work/logs*"))
+          (should (eq shown (portal-rex-block-buffer (car (portal-rex-connections)) "block:2"))))
+        ;; A block that has closed is gone, and the jump says so.
+        (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api"))
+        (portal-rex-disconnect (car (portal-rex-connections)))
+        (should (equal (cadr (should-error (funcall jump "logs") :type 'user-error))
+                       (format "Rex block work/logs has closed: it is gone from the server at %s"
+                               (abbreviate-file-name socket))))
+        ;; So does one whose buffer was killed by hand, while Emacs stays
+        ;; connected.
+        (let ((inhibit-message t))
+          (kill-buffer "*rex: work/api*"))
+        (should (string-prefix-p "Rex block work/api still runs, but its buffer was killed"
+                                 (cadr (should-error (funcall jump "api") :type 'user-error))))
+        (portal-rex-disconnect (car (portal-rex-connections)))
+        ;; No server, and a server on another machine: each says why.
+        (portal-fake-rex-command server :upgrade "refuse")
+        (should (string-prefix-p (format "Cannot connect to the Rex server at %s: The server refused"
+                                         (abbreviate-file-name socket))
+                                 (cadr (should-error (funcall jump "api") :type 'user-error))))
+        (should-not portal-rex--connections)
+        (portal-fake-rex-command server :upgrade "ok")
+        (bookmark-prop-set "api" 'server "studio")
+        (should (equal (cadr (should-error (funcall jump "api") :type 'user-error))
+                       "Cannot reach the Rex host studio: Portal connects only to the Rex server on this Mac"))
+        (should-not portal-rex--connections)))))
+
+(defvar desktop-buffer-ok-count)
+(defvar desktop-buffer-fail-count)
+(defvar desktop-first-buffer)
+
+(defun portal-rex-tests--read-desktop (directory)
+  "Restore the buffers of the desktop saved in DIRECTORY.
+`desktop-read' does nothing in batch Emacs; this evaluates the desktop
+file, which restores each buffer, and runs the hook it runs after."
+  (let ((inhibit-message t)
+        (desktop-buffer-ok-count 0)
+        (desktop-buffer-fail-count 0)
+        (desktop-first-buffer nil))
+    (load (desktop-full-file-name directory) nil t t)
+    (run-hooks 'desktop-after-read-hook)))
+
+(ert-deftest portal-rex-desktop-restores-each-block-into-its-buffer ()
+  (require 'desktop)
+  (portal-rex-tests--with (server)
+    (portal-rex-tests--restoring
+      (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")
+                                                 (:session_id "session:b" :label "play")])
+      (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api")
+                                (portal-rex-tests--block "2" "logs"))
+      (portal-rex-tests--blocks server "b" (portal-rex-tests--block "3" "shell")
+                                (portal-rex-tests--block "4" "shell"))
+      (let* ((directory (portal-fake-rex-directory server))
+             (desktop-globals-to-save nil)
+             (desktop-locals-to-save nil)
+             (desktop-restore-frames nil)
+             (desktop-load-locked-desktop t)
+             (desktop-dirname nil)
+             (desktop-base-file-name "rex-desktop")
+             (desktop-base-lock-name "rex-desktop.lock")
+             (desktop-buffer-mode-handlers desktop-buffer-mode-handlers)
+             (connection (portal-rex-tests--connect server))
+             (api (portal-rex-block-buffer connection "block:1"))
+             (shell (portal-rex-block-buffer connection "block:4")))
+        ;; Plain buffers are not part of this.
+        (cl-letf (((symbol-function 'desktop-save-buffer-p)
+                   (lambda (_file name &rest _)
+                     (string-prefix-p "*rex: " name))))
+          (save-window-excursion
+            (delete-other-windows)
+            (switch-to-buffer api)
+            (let ((other (split-window)))
+              (set-window-buffer other shell)
+              ;; A tab not selected names its windows' buffers.
+              (let* ((saved (window-state-get (frame-root-window) t))
+                     (tabs `((current-tab (name . "here")) (tab (name . "there") (ws . ,saved))))
+                     (old-tabs (frame-parameter nil 'tabs)))
+                (desktop-save directory t)
+                (desktop-release-lock directory)
+                ;; Emacs quits; the block whose buffer is api is relabelled,
+                ;; and logs closes, meanwhile.
+                (portal-rex-disconnect connection)
+                (should-not (portal-rex-buffers))
+                (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api-2"))
+                (unwind-protect
+                    (progn
+                      (set-frame-parameter nil 'tabs tabs)
+                      (portal-rex-tests--read-desktop directory)
+                      ;; At once, without the server: a placeholder of each, under
+                      ;; its old name, which says what it waits for.
+                      (should-not portal-rex--connections)
+                      (should (equal (sort (mapcar #'buffer-name (portal-rex--placeholders)) #'string<)
+                                     '("*rex: play/shell*" "*rex: play/shell*<2>"
+                                       "*rex: work/api*" "*rex: work/logs*")))
+                      (with-current-buffer "*rex: play/shell*<2>"
+                        (should (eq major-mode 'portal-rex-placeholder-mode))
+                        (should (string-search "block:4 on the server at" (buffer-string)))
+                        (should (string-search "Emacs has not connected to its server yet."
+                                               (buffer-string)))
+                        (should buffer-read-only)
+                        (should-not portal-input-mode))
+                      ;; Emacs connects once idle, and asks for no answer meanwhile.
+                      (should (timerp portal-rex--restore-timer))
+                      (let ((placeholders (mapcar (lambda (name) (cons name (get-buffer name)))
+                                                  '("*rex: work/api*" "*rex: play/shell*"
+                                                    "*rex: play/shell*<2>"))))
+                        (portal-rex-tests--restore)
+                        (setq connection (car (portal-rex-connections)))
+                        ;; Each placeholder is its block's buffer now; the
+                        ;; relabelled one takes its new name, which the tab learns.
+                        (should (eq (portal-rex-block-buffer connection "block:1")
+                                    (cdr (assoc "*rex: work/api*" placeholders))))
+                        (should (eq (portal-rex-block-buffer connection "block:3")
+                                    (cdr (assoc "*rex: play/shell*" placeholders))))
+                        (should (eq (portal-rex-block-buffer connection "block:4")
+                                    (cdr (assoc "*rex: play/shell*<2>" placeholders))))
+                        (should (equal (portal-rex-tests--names)
+                                       '("*rex: play/shell*" "*rex: play/shell*<2>"
+                                         "*rex: work/api-2*")))
+                        (with-current-buffer (portal-rex-block-buffer connection "block:4")
+                          (should (eq major-mode 'portal-terminal-mode))
+                          (should (equal portal-rex-session-id "session:b"))
+                          (should (string-search "once a window shows this buffer" (buffer-string))))
+                        (let ((state (alist-get 'ws (cdr (nth 1 (frame-parameter nil 'tabs))))))
+                          (window-state-put state (frame-root-window))
+                          (should (equal (mapcar #'buffer-name
+                                                 (mapcar #'window-buffer (window-list nil 'nomini)))
+                                         '("*rex: work/api-2*" "*rex: play/shell*<2>")))))
+                      ;; The closed block's placeholder has gone, and Emacs says so once.
+                      (should-not (portal-rex--placeholders))
+                      (should-not (get-buffer "*rex: work/logs*"))
+                      (should (equal (portal-rex-tests--said)
+                                     "Could not restore Rex block work/logs: it has closed"))
+                      (should (equal (portal-rex-tests--said) ""))
+                      ;; Reading the desktop while connected gives the blocks' buffers.
+                      (portal-rex-tests--read-desktop directory)
+                      (should-not (portal-rex--placeholders))
+                      (should (equal (portal-rex-tests--names)
+                                     '("*rex: play/shell*" "*rex: play/shell*<2>"
+                                       "*rex: work/api-2*"))))
+                  (set-frame-parameter nil 'tabs old-tabs))))))))))
+
+(ert-deftest portal-rex-restore-says-once-what-it-could-not-restore ()
+  (portal-rex-tests--with (server)
+    (portal-rex-tests--restoring
+      (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+      (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api"))
+      (let* ((socket (abbreviate-file-name (portal-fake-rex-socket server)))
+             (missing (abbreviate-file-name
+                       (expand-file-name "none" (portal-fake-rex-directory server))))
+             (make (lambda (name record)
+                     (with-current-buffer (portal-rex-desktop-restore nil name record)
+                       (current-buffer)))))
+        ;; A stopped server, a host Portal cannot reach, a block that has
+        ;; closed, and a server that is not answering yet.
+        (funcall make "gone" (portal-rex-tests--record missing "9" "z"))
+        (funcall make "far" (portal-rex-tests--record "studio" "8" "y" "far" "home"))
+        (funcall make "*rex: work/old*" (portal-rex-tests--record socket "7" "a" "old" "work"))
+        (funcall make "*rex: work/api*" (portal-rex-tests--record socket "1" "a" "api" "work"))
+        (portal-fake-rex-command server :upgrade "refuse")
+        (let ((portal-rex-timeout 0.3))
+          (portal-rex-tests--restore))
+        ;; Nothing connected; each waits and says why.
+        (should-not portal-rex--connections)
+        (with-current-buffer "far"
+          (should (string-search "Cannot reach the Rex host studio" (buffer-string))))
+        (with-current-buffer "gone"
+          (should (string-search "No Rex server is running: there is no socket at" (buffer-string))))
+        (should (equal (portal-rex-tests--said)
+                       (concat
+                        (format "Could not restore Rex block z/9: No Rex server is running: there is no socket at %s; " missing)
+                        "Could not restore Rex block home/far: Cannot reach the Rex host studio: Portal connects only to the Rex server on this Mac; "
+                        (format "Could not restore Rex blocks work/old, work/api: Cannot connect to the Rex server at %s: The server refused the connection: HTTP/1.1 400 Bad Request" socket))))
+        ;; Once the server takes connections, connecting restores what it
+        ;; can, and says what has closed.
+        (portal-fake-rex-command server :upgrade "ok")
+        (let ((connection (portal-rex-tests--connect server)))
+          (should (eq (portal-rex-block-buffer connection "block:1") (get-buffer "*rex: work/api*")))
+          (should-not (get-buffer "*rex: work/old*"))
+          (should (equal (portal-rex-tests--said)
+                         "Could not restore Rex block work/old: it has closed"))
+          (should (equal (sort (mapcar #'buffer-name (portal-rex--placeholders)) #'string<)
+                         '("far" "gone"))))))))
+
+(ert-deftest portal-rex-connect-at-startup-waits-for-nothing ()
+  (portal-rex-tests--with (server)
+    (portal-rex-tests--restoring
+      ;; Off, as by default: nothing.
+      (portal-rex--at-startup)
+      (should-not portal-rex--restore-timer)
+      (let ((portal-rex-connect-at-startup t)
+            (portal-rex-socket (portal-fake-rex-socket server)))
+        (portal-rex--at-startup)
+        (should (timerp portal-rex--restore-timer))
+        ;; It returns before the server has answered.
+        (portal-fake-rex-command server :hold "session.attach_all")
+        (portal-rex--restore)
+        (let ((connection (car portal-rex--connections)))
+          (should connection)
+          (should-not (portal-rex-live-p connection))
+          (portal-fake-rex-command server :release "session.attach_all")
+          (portal-rex-tests--until connection
+                                   (lambda () (not (portal-rex-connection-opening connection))))
+          (should (portal-rex-live-p connection))
+          (should (equal (portal-rex-tests--names) '("*rex: fake/shell*")))
+          (should (equal (portal-rex-tests--said) ""))
+          (portal-rex-disconnect connection))
+        ;; A server that never answers is given up after the timeout, and
+        ;; one that is stopped at once; each is said once.
+        (portal-fake-rex-command server :welcome :false)
+        (should (equal (string-trim-right
+                        (portal-rex-tests--messages
+                          (let ((portal-rex-timeout 0.3))
+                            (portal-rex--restore)
+                            (let ((connection (car portal-rex--connections)))
+                              ;; Its timer gives up, and the next says why.
+                              (while (or (portal-rex-connection-opening connection)
+                                         portal-rex--report-timer)
+                                (accept-process-output nil 0.05))))))
+                       (format "The Rex server at %s did not answer within 0.3 seconds"
+                               (abbreviate-file-name (portal-fake-rex-socket server)))))
+        (should-not portal-rex--connections)
+        (portal-fake-rex-command server :welcome t)
+        (let ((portal-rex-socket (expand-file-name "none" (portal-fake-rex-directory server))))
+          (portal-rex--restore))
+        (should-not portal-rex--connections)
+        (should (string-prefix-p "No Rex server is running" (portal-rex-tests--said)))))))
+
 (provide 'portal-rex-tests)
 ;;; portal-rex-tests.el ends here
