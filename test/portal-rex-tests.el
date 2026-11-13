@@ -2438,6 +2438,41 @@ desktop's frameset would, and runs the hook `desktop-read' runs after."
                                    (list first second))))
                 (set-frame-parameter nil 'tabs old-tabs)))))))))
 
+(ert-deftest portal-rex-desktop-restoring-lazily-while-connected-keeps-names ()
+  ;; A desktop that restores its buffers lazily, from an idle timer after
+  ;; it has been read, while Emacs is connected.
+  (require 'desktop)
+  (portal-rex-tests--with (server)
+    (portal-rex-tests--restoring
+      (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+      (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "a")
+                                (portal-rex-tests--block "2" "b"))
+      (let* ((directory (portal-fake-rex-directory server))
+             (desktop-globals-to-save nil)
+             (desktop-locals-to-save nil)
+             (desktop-restore-frames nil)
+             (desktop-restore-eager 0)
+             (desktop-base-file-name "rex-desktop")
+             (desktop-base-lock-name "rex-desktop.lock")
+             (desktop-buffer-args-list nil)
+             (connection (portal-rex-tests--connect server)))
+        (cl-letf (((symbol-function 'desktop-save-buffer-p)
+                   (lambda (_file name &rest _) (equal name "*rex: work/a*"))))
+          (desktop-save directory t)
+          (desktop-release-lock directory)
+          (portal-rex-tests--read-desktop directory)
+          ;; Nothing yet: the buffer waits to be restored.
+          (should desktop-buffer-args-list)
+          (let ((inhibit-message t))
+            (desktop-lazy-complete))
+          ;; Once idle, every block's buffer has its own name back.
+          (let ((deadline (+ (float-time) 2)))
+            (while (and portal-rex--desktop-parked (< (float-time) deadline))
+              (accept-process-output nil 0.05)))
+          (should-not portal-rex--desktop-parked)
+          (should (equal (portal-rex-tests--names connection)
+                         '("*rex: work/a*" "*rex: work/b*"))))))))
+
 (ert-deftest portal-rex-restore-says-once-what-it-could-not-restore ()
   (portal-rex-tests--with (server)
     (portal-rex-tests--restoring

@@ -1688,9 +1688,14 @@ Signal a `user-error' saying why there is none."
 The desktop gives each buffer it restores the name it was saved with,
 and windows and tabs find it by that name.  A name another block's
 buffer has now, as when two blocks swapped labels, would make it
-another; under passing names, each restored buffer gets its own."
+another; under passing names, each restored buffer gets its own.
+The names come back once the desktop has been read, or, for a buffer
+the desktop restores lazily, once Emacs is next idle."
   (unless portal-rex--desktop-parked
     (setq portal-rex--desktop-parked t)
+    ;; A lazy restore runs after `desktop-after-read-hook'; the read itself
+    ;; lets no timer run before that hook.
+    (run-at-time 0 nil #'portal-rex--desktop-read)
     (dolist (buffer (portal-rex-buffers))
       (with-current-buffer buffer
         (portal-rex--rename (generate-new-buffer-name " *rex: restoring*"))))))
@@ -1699,7 +1704,8 @@ another; under passing names, each restored buffer gets its own."
   "Give the blocks' buffers their own names back once a desktop has been read.
 A buffer restored under its saved name keeps it unless its labels moved;
 a renamed one tells the saved tabs, each in turn, so they follow their
-blocks.  On `desktop-after-read-hook'."
+blocks.  On `desktop-after-read-hook', and once Emacs is idle after
+the blocks' buffers were moved off their names."
   (when portal-rex--desktop-parked
     (setq portal-rex--desktop-parked nil)
     (dolist (buffer (portal-rex-buffers))
