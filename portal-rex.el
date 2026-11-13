@@ -1687,11 +1687,15 @@ which it starts doing once idle.  Restoring never waits for a server."
            (connection (and socket (cl-find socket (portal-rex-connections)
                                             :key #'portal-rex-connection-socket :test #'equal))))
       (cond
-       ;; One kept through `desktop-clear', as by `desktop-revert'.
-       ((seq-find (lambda (buffer)
-                    (equal (alist-get 'block (buffer-local-value 'portal-rex--awaited buffer))
-                           (alist-get 'block record)))
-                  (portal-rex--placeholders socket)))
+       ;; One kept through `desktop-clear', as by `desktop-revert', which
+       ;; tries its server again.
+       ((when-let* ((kept (seq-find (lambda (buffer)
+                                      (equal (alist-get 'block (buffer-local-value
+                                                                'portal-rex--awaited buffer))
+                                             (alist-get 'block record)))
+                                    (portal-rex--placeholders socket))))
+          (portal-rex--restore-soon)
+          kept))
        ((null connection)
         (portal-rex--restore-soon)
         (portal-rex--make-placeholder name record "Emacs has not connected to its server yet."))

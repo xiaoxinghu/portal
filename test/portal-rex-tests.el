@@ -2479,8 +2479,12 @@ in its order, giving the frame TABS where its frameset would."
         (should (eq (portal-rex-block-buffer connection "block:1") buffer))
         (should (buffer-live-p placeholder))
         (should-not (member "block.close" (portal-rex-tests--asked server connection)))
-        ;; The desktop read after finds the placeholder, and makes no other.
+        ;; The desktop read after finds the placeholder, makes no other, and
+        ;; tries its server again.
+        (when (timerp portal-rex--restore-timer) (cancel-timer portal-rex--restore-timer))
+        (setq portal-rex--restore-timer nil)
         (should (eq (portal-rex-desktop-restore nil "*rex: home/far*" record) placeholder))
+        (should (timerp portal-rex--restore-timer))
         (should (equal (mapcar #'buffer-name (portal-rex--placeholders)) '("*rex: home/far*")))))))
 
 (ert-deftest portal-rex-restore-says-once-what-it-could-not-restore ()
