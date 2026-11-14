@@ -101,9 +101,15 @@ other left off.
 `host/slides.ts` is the deck, kept apart from the page and React: the frames
 in slide order, and slide images kept per frame. A frame's image is made again
 only when the frame, an element in it by `frameId`, or an element in no frame
-reaching into it changed version, or when the drawing's files or background
-changed. Images come from Excalidraw's `exportToSvg` with `exportingFrame`,
-when Arrange is entered and 150 ms after each scene change while it is shown.
+reaching into it changed version, or when the drawing's files, background or
+the slides' theme changed. Images come from Excalidraw's `exportToSvg` with
+`exportingFrame`, when Arrange is entered and 150 ms after each scene change
+while it is shown. The theme is the page's `prefers-color-scheme`, unless the
+console's switch chose one, which the page keeps in a variable until it
+reloads. A dark slide is the export with `exportWithDarkMode`: Excalidraw puts
+a CSS filter on the outer `<svg>`, which WebKit draws in an `<img>`, and the
+opposite on each embedded picture, which it does not, inside an SVG; the page
+replaces those with the same filter as SVG filter primitives.
 While Arrange or the console is shown, a capture listener on the window,
 registered before the editor mounts, stops every key before the editor's own
 listeners.
