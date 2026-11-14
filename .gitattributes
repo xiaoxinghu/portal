@@ -1,2 +1,6 @@
 # Upstream license texts are kept byte for byte.
 licenses/texts/** -whitespace -text
+
+# Patches are git format-patch output, whose blank context lines are a lone
+# space; git am needs them as they are.
+native/patches/** -whitespace
