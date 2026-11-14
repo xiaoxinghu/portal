@@ -89,8 +89,9 @@ slide nearest the middle of its view. Two windows show them:
   covers it or it is on another Space. Customize
   `portal-excalidraw-slides-frame-parameters` to place or size it.
 - The drawing's pane becomes the **console**, for the speaker: the current
-  slide, large; the next one, small, or **End** after the last; the current
-  slide's notes, their line breaks kept, scrolling when they are long; `3 / 12`
+  slide, as large as fits whatever its frame's size; the next one, small,
+  or **End** after the last; the current slide's notes, their line breaks
+  kept, scrolling when they are long; `3 / 12`
   and the slide's name; the time of day and the time since presenting
   started, in minutes and seconds, which **Reset** sets back to zero; and
   **Previous**, **Next** and **Stop**. Neither clock is saved. The console
