@@ -132,6 +132,9 @@ slide nearest the middle of its view. Two windows show them:
   line says `:Present 3/12`.
   **Dark slides** or **Light slides** in the console flips the slides, in
   both windows and in Arrange, whatever the system's appearance from then on.
+  It has no key: `Option-Tab`, or `Tab` with macOS's keyboard navigation on,
+  reaches it, and `Space` or `Return` presses it, after which `Space` shows
+  the next slide again.
   The choice lasts as long as the drawing's page: stopping and presenting
   again keeps it, and reopening the drawing follows the system again. It
   changes neither the drawing nor the buffer, and the editor and the console

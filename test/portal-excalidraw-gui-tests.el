@@ -770,10 +770,11 @@ label; and check it."
 
 (ert-deftest portal-excalidraw-gui-slides-follow-the-appearance-and-the-switch ()
   :tags '(:gui)
-  ;; A white picture in the slide: it stays white in a dark slide.
+  ;; A white picture in the first slide: it stays white in a dark slide.
   (portal-excalidraw-gui--drawing
       (list (portal-excalidraw-gui--frame "opening" "Opening" 0 0 0 320 180)
-            (append portal-excalidraw-gui--picture '(:frameId "opening")))
+            (append portal-excalidraw-gui--picture '(:frameId "opening"))
+            (portal-excalidraw-gui--frame "closing" "Closing" 1 0 400 160 90))
       portal-excalidraw-gui--pixel
     (let ((main (selected-frame))
           (appearance portal-web-appearance)
@@ -788,19 +789,33 @@ label; and check it."
             (portal-web-gui--run-until 'portal-web-opened)
             (portal-web-gui--run-until 'portal-excalidraw-command)
             (portal-excalidraw--wait (lambda () (equal portal-excalidraw--mode "present")))
-            (let ((frame portal-excalidraw--slides-frame))
+            (let ((frame portal-excalidraw--slides-frame)
+                  (count "return document.querySelector('.portal-present-count').textContent;"))
+              (portal-excalidraw-gui--key 115 (ash 1 23) (string #xF729)) ; Home
               (portal-excalidraw-gui--slides-in
                frame main '(("dark" "light") ("dark" "light") "Light slides"))
-              ;; The switch makes them light, in both windows at once, and
-              ;; then dark again.
-              (portal-excalidraw-gui--js
-               "document.querySelector('.portal-present-theme').click(); return true;")
-              (portal-excalidraw-gui--slides-in
-               frame main '(("light" "light") ("light" "light") "Dark slides"))
-              (portal-excalidraw-gui--js
-               "document.querySelector('.portal-present-theme').click(); return true;")
-              (portal-excalidraw-gui--slides-in
-               frame main '(("dark" "light") ("dark" "light") "Light slides"))
+              ;; The switch, reached with Option-Tab, as WebKit reaches a
+              ;; button unless macOS's keyboard navigation is on, makes them
+              ;; light with Space, in both windows at once, and then dark
+              ;; again with Return; it moves no slide.
+              (dolist (key '((49 " " ("light" "light") "Dark slides")
+                             (36 "\r" ("dark" "light") "Light slides")))
+                (portal-excalidraw-gui--key 48 (ash 1 19) "\t")
+                (portal-excalidraw-gui--until
+                 (lambda () (portal-excalidraw-gui--js
+                             "return document.activeElement?.className === 'portal-present-theme';")))
+                (should (portal-excalidraw-gui--js
+                         "return document.activeElement?.className === 'portal-present-theme';"))
+                (portal-excalidraw-gui--key (nth 0 key) 0 (nth 1 key))
+                (portal-excalidraw-gui--slides-in
+                 frame main (list (nth 2 key) (nth 2 key) (nth 3 key)))
+                (should (equal (portal-excalidraw-gui--js count) "1 / 2")))
+              ;; The console has the keyboard back: Space shows the next slide.
+              (portal-excalidraw-gui--key 49 0 " ")
+              (portal-excalidraw-gui--until
+               (lambda () (equal (portal-excalidraw-gui--js count) "2 / 2")))
+              (should (equal (portal-excalidraw-gui--js count) "2 / 2"))
+              (portal-excalidraw-gui--key 115 (ash 1 23) (string #xF729)) ; Home
               ;; Chosen, the theme outlasts a change of the page's appearance.
               (setq portal-web-appearance 'light)
               (portal-excalidraw-gui--until
