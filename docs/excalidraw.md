@@ -119,8 +119,8 @@ slide nearest the middle of its view. Two windows show them:
   to a projector and make it fullscreen (`M-x toggle-frame-fullscreen` or the
   green button): while a slide window is open, frames resize to the pixel, so
   a fullscreen one fills the display. It keeps drawing while another window
-  covers it or it is on another Space. Customize
-  `portal-excalidraw-slides-frame-parameters` to place or size it.
+  covers it or it is on another Space. The mouse pointer hides over it.
+  Customize `portal-excalidraw-slides-frame-parameters` to place or size it.
 - The drawing's pane becomes the **console**, for the speaker: the current
   slide, as large as fits whatever its frame's size; the next one, small,
   or **End** after the last; the current slide's notes, their line breaks

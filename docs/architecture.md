@@ -34,6 +34,22 @@ change never reach the newly focused feature.
 Features own their state and cleanup: closing a web view leaves terminals intact,
 and vice versa.
 
+The mouse pointer over a view is the view's, though Emacs keeps one cursor
+rectangle over its whole frame, views included. A terminal holds the pointer
+Ghostty asks for in a cursor rectangle of its own, which wins over Emacs's.
+WebKit sets no pointer while the window applies a cursor rectangle's, so a
+surface that says it sets the pointer itself (`setsPointer`, a web page's)
+needs the window's rectangles off while the mouse is in it. That switch is
+window-wide, so `NativeHost`, one per frame, owns it: a tracking area on each
+such surface turns the rectangles off on entering and back on once the mouse
+is in none, counting the surfaces it is in. A surface hidden, removed or
+moved to another window, as for fullscreen, leaves the count, since no exit
+comes then. Each switch has AppKit work the pointer out again, and while the
+rectangles are off, `NativeHost` puts back the pointer AppKit resets to the
+arrow when Emacs redoes its rectangle. Turning a terminal's rectangle off
+would lose its pointer, so a terminal never sets `setsPointer`. A drag keeps
+the pointer it started with: the tracking area is not active during one.
+
 ## C bindings and platform interface
 
 The C bindings register every Lisp function, convert arguments and results, and
