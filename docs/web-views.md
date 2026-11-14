@@ -294,6 +294,10 @@ scripts, styles and images. JavaScript is enabled by default.
   dismisses it. WebKit asks before leaving only a page the user has
   interacted with, and closing the view never asks.
   `(portal-web-open-hosted "/dialogs")` opens a page that tries each one.
+- The mouse pointer over a page is the page's: the hand over a link, the
+  I-beam over text, and any CSS `cursor`, including `none`, which hides it, as
+  the [slide window](excalidraw.md#presenting) does. Off the page, Emacs's pointer comes
+  back, and when the page is hidden or closed with the mouse over it.
 - A page can go fullscreen, as a video player's button does, and Escape
   leaves fullscreen; [fullscreen pages](keyboard.md#fullscreen-pages) says
   where the keyboard goes.
