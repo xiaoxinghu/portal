@@ -94,6 +94,10 @@ other TUIs use the real protocol engine, not Emacs text, WebKit or Bun.
 - Mouse-select and use `Command-C` / `Command-V` for the macOS clipboard;
   trackpad or mouse wheel scrolls. Non-Latin IME composition remains manually
   unverified.
+- The mouse pointer over a terminal is the one Ghostty asks for: the I-beam
+  over its text, the hand over a link while Command is held, and the arrow
+  while a program, such as Vim or tmux, has the mouse. A fed terminal's pane
+  shows it beside the grid too.
 - `quit-window`, buffer switching and frame deletion only hide terminals;
   redisplay returns the same running shell. Buffer kill or
   `portal-terminal-close` ends its shell; `portal-terminal-close-all` ends all
