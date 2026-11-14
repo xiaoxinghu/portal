@@ -48,6 +48,7 @@ import {
 	slideFrames,
 	slideName,
 	slideNotes,
+	type Theme,
 	withNotes,
 } from "./slides";
 
@@ -81,6 +82,25 @@ const prefersDarkScheme = () => darkScheme.matches;
 function subscribeToColorScheme(onChange: () => void) {
 	darkScheme.addEventListener("change", onChange);
 	return () => darkScheme.removeEventListener("change", onChange);
+}
+
+/** The theme the console chose for the slides, which holds until the page
+ * reloads; without one, they follow the system, as the editor does. */
+let chosenTheme: Theme | undefined;
+const themeListeners = new Set<() => void>();
+const slideTheme = (): Theme =>
+	chosenTheme ?? (prefersDarkScheme() ? "dark" : "light");
+function subscribeToSlideTheme(onChange: () => void) {
+	themeListeners.add(onChange);
+	const stop = subscribeToColorScheme(onChange);
+	return () => {
+		themeListeners.delete(onChange);
+		stop();
+	};
+}
+function chooseSlideTheme(theme: Theme) {
+	chosenTheme = theme;
+	for (const listener of themeListeners) listener();
 }
 
 let api: ExcalidrawImperativeAPI | undefined;
@@ -328,30 +348,67 @@ function Editor({
 	);
 }
 
-/** The scene's slides are made of, as the editor has it now. */
+/** The scene's slides are made of, as the editor has it now, in the
+ * slides' theme. */
 function currentScene(editor: ExcalidrawImperativeAPI): Scene {
 	return {
 		elements: editor.getSceneElements(),
 		files: editor.getFiles(),
 		background: editor.getAppState().viewBackgroundColor,
+		theme: slideTheme(),
 	};
 }
 
-/** A slide's image: the frame alone, on the scene's background, never in
- * dark mode, so it looks the same whichever Emacs shows it. */
+/** The filter Excalidraw 0.18.1's dark export puts on each embedded image,
+ * the opposite of the slide's own, so that a photo keeps its colours. */
+const IMAGE_INVERT_FILTER = "invert(100%) hue-rotate(180deg) saturate(1.25)";
+
+/** Give the embedded images of SVG, a dark export, their colours back.
+ * WebKit draws a CSS filter function in a `filter` attribute only on the
+ * outer <svg>, where the slide's own goes, and ignores Excalidraw's on each
+ * image; this puts the same filter there as SVG filter primitives, which it
+ * draws. */
+function keepImageColours(svg: SVGSVGElement) {
+	const images = svg.querySelectorAll(`use[filter="${IMAGE_INVERT_FILTER}"]`);
+	if (!images.length) return;
+	const id = "portal-image-colours";
+	const filter = new DOMParser().parseFromString(
+		`<filter xmlns="http://www.w3.org/2000/svg" id="${id}"
+			color-interpolation-filters="sRGB" x="0" y="0" width="1" height="1">
+			<feComponentTransfer>
+				<feFuncR type="linear" slope="-1" intercept="1"/>
+				<feFuncG type="linear" slope="-1" intercept="1"/>
+				<feFuncB type="linear" slope="-1" intercept="1"/>
+			</feComponentTransfer>
+			<feColorMatrix type="hueRotate" values="180"/>
+			<feColorMatrix type="saturate" values="1.25"/>
+		</filter>`,
+		"image/svg+xml",
+	).documentElement;
+	(svg.querySelector("defs") ?? svg).append(
+		svg.ownerDocument.importNode(filter, true),
+	);
+	for (const image of images) image.setAttribute("filter", `url(#${id})`);
+}
+
+/** A slide's image: the frame alone, on the scene's background, in the
+ * scene's theme. Dark is Excalidraw's dark export, as the editor's dark
+ * theme shows the drawing: inverted, with photos in their own colours. */
 async function renderSlide(frame: Frame, scene: Scene) {
+	const dark = scene.theme === "dark";
 	const svg = await exportToSvg({
 		elements: scene.elements.filter(
 			(element): element is NonDeleted<ExcalidrawElement> => !element.isDeleted,
 		),
 		appState: {
 			exportBackground: true,
-			exportWithDarkMode: false,
+			exportWithDarkMode: dark,
 			viewBackgroundColor: scene.background,
 		},
 		files: scene.files,
 		exportingFrame: frame,
 	});
+	if (dark) keepImageColours(svg);
 	const text = svg.outerHTML;
 	return {
 		svg: text,
@@ -463,12 +520,16 @@ type Drag = {
 
 /** The editor's slides, in order, kept up to date with its scene, and the
  * one whose id is SLIDE_ID, or the first; their images are drawn now, and
- * again a moment after each change to the scene. SET_SCENE shows the
- * editor's scene at once, as after an edit. */
+ * again a moment after each change to the scene or the slides' theme.
+ * SET_SCENE shows the editor's scene at once, as after an edit. */
 function useDeck(editor: ExcalidrawImperativeAPI, slideId: string | undefined) {
 	const [scene, setScene] = useState(() => currentScene(editor));
 	const frames = useMemo(() => slideFrames(scene.elements), [scene.elements]);
 	useSyncExternalStore(subscribeToImages, () => imagesVersion);
+	const theme = useSyncExternalStore(subscribeToSlideTheme, slideTheme);
+	useEffect(() => {
+		setScene((shown) => (shown.theme === theme ? shown : { ...shown, theme }));
+	}, [theme]);
 	useEffect(() => {
 		slideImages.update(scene);
 	}, [scene]);
@@ -485,7 +546,7 @@ function useDeck(editor: ExcalidrawImperativeAPI, slideId: string | undefined) {
 	}, [editor]);
 	const found = frames.findIndex((frame) => frame.id === slideId);
 	const index = found < 0 ? 0 : found;
-	return { setScene, frames, index, current: frames[index] };
+	return { setScene, frames, index, current: frames[index], theme };
 }
 
 /** The Arrange screen: the slides in order, the selected one large, and its
@@ -869,8 +930,9 @@ function useClock() {
 
 /** The console, while presenting: the slide the slide window shows, large;
  * the next one, small; its notes; where it is in the deck; the time of day
- * and the time since presenting started; and the buttons that move and
- * stop. It covers the editor, as Arrange does, drives the slide window and
+ * and the time since presenting started; the buttons that move and stop;
+ * and the one that makes the slides light or dark, for as long as the page
+ * lasts. It covers the editor, as Arrange does, drives the slide window and
  * tells Emacs which slide shows. It edits nothing. */
 function Present({
 	editor,
@@ -883,7 +945,8 @@ function Present({
 	onSelect: (id: string) => void;
 	onStop: () => void;
 }) {
-	const { frames, index, current } = useDeck(editor, slideId);
+	const { frames, index, current, theme } = useDeck(editor, slideId);
+	const otherTheme = theme === "dark" ? "light" : "dark";
 	const image = current && slideImages.image(current.id);
 	const count = frames.length;
 	const following = frames[index + 1];
@@ -1012,6 +1075,15 @@ function Present({
 					disabled={index >= count - 1}
 				>
 					Next
+				</button>
+				<button
+					type="button"
+					tabIndex={-1}
+					className="portal-present-theme"
+					title={`Show the slides ${otherTheme}, whatever the system's appearance`}
+					onClick={() => chooseSlideTheme(otherTheme)}
+				>
+					{otherTheme === "dark" ? "Dark slides" : "Light slides"}
 				</button>
 				<button
 					type="button"
