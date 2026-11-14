@@ -657,4 +657,251 @@ Deleting a frame is recorded in `portal-excalidraw-test--frames'."
     (portal-excalidraw-test--gone drawing slides frame)
     (with-current-buffer drawing (should (equal portal-excalidraw--mode "draw")))))
 
+;; The scratch drawing: one file, written on every change, asking nothing.
+
+(defmacro portal-excalidraw-test--scratch (&rest body)
+  "Run BODY with the scratch drawing open in `scratch', its buffer.
+Its file, `file', is in a directory of its own, which BODY may remove.
+Every question Emacs could ask fails the test.  `sent' holds what Emacs
+sent the page, newest first; the page answers a snapshot with
+`portal-excalidraw-test--scene', the edit it still had in flight."
+  (declare (indent 0))
+  `(let* ((directory (make-temp-file "portal-scratch-" t))
+          (file (expand-file-name "portal/scratch.excalidraw" directory))
+          (portal-excalidraw-scratch-file file)
+          (sent nil)
+          scratch)
+     (unwind-protect
+         (cl-letf (((symbol-function 'portal-excalidraw--start) #'ignore)
+                   ((symbol-function 'portal-web-send)
+                    (lambda (message)
+                      (push message sent)
+                      (when (equal (plist-get message :type) "snapshot")
+                        (portal-excalidraw--message
+                         (list :type "snapshot" :request (plist-get message :request)
+                               :json portal-excalidraw-test--scene)))))
+                   ((symbol-function 'yes-or-no-p) (lambda (prompt) (ert-fail prompt)))
+                   ((symbol-function 'y-or-n-p) (lambda (prompt) (ert-fail prompt)))
+                   ((symbol-function 'ask-user-about-supersession-threat)
+                    (lambda (_) (ert-fail "Asked about a file changed on disk")))
+                   ((symbol-function 'ask-user-about-lock)
+                    (lambda (&rest _) (ert-fail "Asked about a lock"))))
+           (setq scratch (portal-excalidraw--scratch-buffer))
+           (with-current-buffer scratch
+             (portal-excalidraw--message (list :type "loaded" :json portal-excalidraw--empty))
+             ,@body))
+       (when (buffer-live-p scratch)
+         (with-current-buffer scratch
+           (setq portal-excalidraw--ready nil)
+           (set-buffer-modified-p nil))
+         (kill-buffer scratch))
+       (delete-directory directory t))))
+
+(defun portal-excalidraw-test--file (file)
+  "FILE's text, or nil when it is missing."
+  (when (file-exists-p file)
+    (with-temp-buffer (insert-file-contents file) (buffer-string))))
+
+(ert-deftest portal-excalidraw-scratch-is-made-with-its-directory ()
+  (portal-excalidraw-test--scratch
+    (should (eq major-mode 'portal-excalidraw-mode))
+    (should (equal buffer-file-name file))
+    (should (equal (portal-excalidraw-test--file file) portal-excalidraw--empty))
+    (should-not (buffer-modified-p))
+    ;; Asked again, it is the same buffer.
+    (should (eq (portal-excalidraw--scratch-buffer) scratch))))
+
+(ert-deftest portal-excalidraw-scratch-change-writes-the-file ()
+  (portal-excalidraw-test--scratch
+    ;; The page marks it modified first, and writes nothing until the change.
+    (portal-excalidraw--message '(:type "dirty"))
+    (should-not (buffer-modified-p))
+    (portal-excalidraw--message (list :type "change" :json portal-excalidraw-test--scene))
+    (should (equal (portal-excalidraw-test--file file)
+                   (concat portal-excalidraw-test--scene "\n")))
+    (should-not (buffer-modified-p))
+    ;; The page is told it is saved, and was asked for nothing.
+    (should (equal (plist-get (car sent) :type) "saved"))
+    (should-not (cl-find "snapshot" sent :key (lambda (m) (plist-get m :type)) :test #'equal))
+    ;; A change back writes again.
+    (portal-excalidraw--message (list :type "change" :json portal-excalidraw--empty))
+    (should (equal (portal-excalidraw-test--file file) portal-excalidraw--empty))))
+
+(ert-deftest portal-excalidraw-scratch-overwrites-a-file-changed-on-disk ()
+  (portal-excalidraw-test--scratch
+    (set-file-times file (time-subtract nil 60))
+    (set-visited-file-modtime)
+    ;; Another Emacs writes its own drawing to the file.
+    (write-region "{\"type\":\"excalidraw\",\"elements\":[]}\n" nil file nil 'silent)
+    (portal-excalidraw--message (list :type "change" :json portal-excalidraw-test--scene))
+    (should (equal (portal-excalidraw-test--file file)
+                   (concat portal-excalidraw-test--scene "\n")))
+    (should-not (buffer-modified-p))))
+
+(ert-deftest portal-excalidraw-scratch-failed-write-keeps-it-modified ()
+  (portal-excalidraw-test--scratch
+    (set-file-modes file #o444)
+    (let (said)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format &rest args) (push (apply #'format-message format args) said))))
+        (portal-excalidraw--message (list :type "change" :json portal-excalidraw-test--scene)))
+      (should (cl-find-if (lambda (line) (string-prefix-p "Scratch drawing not saved" line))
+                          said)))
+    (should (buffer-modified-p))
+    (should-not portal-excalidraw--error)
+    (should (equal (portal-excalidraw-test--file file) portal-excalidraw--empty))
+    ;; The next change tries again.
+    (set-file-modes file #o644)
+    (portal-excalidraw--message (list :type "change" :json portal-excalidraw-test--scene))
+    (should-not (buffer-modified-p))
+    (should (equal (portal-excalidraw-test--file file)
+                   (concat portal-excalidraw-test--scene "\n")))))
+
+(ert-deftest portal-excalidraw-scratch-remakes-a-removed-directory ()
+  (portal-excalidraw-test--scratch
+    (delete-directory (file-name-directory file) t)
+    (portal-excalidraw--message (list :type "change" :json portal-excalidraw-test--scene))
+    (should-not (buffer-modified-p))
+    (should (equal (portal-excalidraw-test--file file)
+                   (concat portal-excalidraw-test--scene "\n")))))
+
+(ert-deftest portal-excalidraw-scratch-killed-writes-what-is-in-flight ()
+  (portal-excalidraw-test--scratch
+    (setq portal-excalidraw--ready t)
+    ;; The page has an edit it has not sent yet; killing asks nothing.
+    (kill-buffer scratch)
+    (should-not (buffer-live-p scratch))
+    (should (equal (portal-excalidraw-test--file file)
+                   (concat portal-excalidraw-test--scene "\n")))))
+
+(ert-deftest portal-excalidraw-scratch-killed-with-a-failed-page-asks-nothing ()
+  (portal-excalidraw-test--scratch
+    (setq portal-excalidraw--ready t portal-excalidraw--error "WebKit stopped")
+    (portal-excalidraw--scene portal-excalidraw-test--scene)
+    (set-file-modes file #o444)
+    (let ((inhibit-message t)) (kill-buffer scratch))
+    (should-not (buffer-live-p scratch))))
+
+(ert-deftest portal-excalidraw-scratch-quitting-writes-what-is-in-flight ()
+  (portal-excalidraw-test--scratch
+    (setq portal-excalidraw--ready t)
+    (let ((confirm-kill-emacs nil) (confirm-kill-processes nil) killed)
+      (cl-letf (((symbol-function 'kill-emacs) (lambda (&rest _) (setq killed t))))
+        (save-buffers-kill-emacs))
+      (should killed))
+    (should (equal (portal-excalidraw-test--file file)
+                   (concat portal-excalidraw-test--scene "\n")))
+    (should-not (buffer-modified-p))))
+
+(ert-deftest portal-excalidraw-scratch-quitting-writes-a-drawing-left-modified ()
+  ;; A write failed, and the file is writable again by the time Emacs quits.
+  (portal-excalidraw-test--scratch
+    (portal-excalidraw--scene portal-excalidraw-test--scene)
+    (should (buffer-modified-p))
+    (let ((confirm-kill-emacs nil) (confirm-kill-processes nil) killed)
+      (cl-letf (((symbol-function 'kill-emacs) (lambda (&rest _) (setq killed t))))
+        (save-buffers-kill-emacs))
+      (should killed))
+    (should (equal (portal-excalidraw-test--file file)
+                   (concat portal-excalidraw-test--scene "\n")))))
+
+(ert-deftest portal-excalidraw-scratch-written-to-another-file-is-an-ordinary-drawing ()
+  (portal-excalidraw-test--scratch
+    (setq portal-excalidraw--ready t)
+    (portal-excalidraw--message (list :type "change" :json portal-excalidraw-test--scene))
+    (let ((copy (expand-file-name "copy.excalidraw" directory)))
+      (write-file copy)
+      (should (equal (portal-excalidraw-test--file copy)
+                     (concat portal-excalidraw-test--scene "\n")))
+      ;; It saves when asked, as other drawings do.
+      (portal-excalidraw--message (list :type "change" :json portal-excalidraw--empty))
+      (should (buffer-modified-p))
+      (should (equal (portal-excalidraw-test--file copy)
+                     (concat portal-excalidraw-test--scene "\n")))
+      ;; The scratch drawing is its file's again, in a buffer of its own.
+      (let ((again (portal-excalidraw--scratch-buffer)))
+        (unwind-protect
+            (with-current-buffer again
+              (should-not (eq again scratch))
+              (should (equal buffer-file-name file))
+              (should (equal (buffer-string) (concat portal-excalidraw-test--scene "\n"))))
+          (kill-buffer again))))))
+
+(ert-deftest portal-excalidraw-other-drawings-are-not-written-on-change ()
+  (let ((file (make-temp-file "portal-drawing-" nil ".excalidraw" portal-excalidraw--empty)))
+    (unwind-protect
+        (portal-excalidraw-test--buffer
+          (setq buffer-file-name file)
+          (set-visited-file-modtime)
+          (portal-excalidraw--message '(:type "dirty"))
+          (should (buffer-modified-p))
+          (portal-excalidraw--message (list :type "change" :json portal-excalidraw-test--scene))
+          (should (buffer-modified-p))
+          (should (equal (portal-excalidraw-test--file file) portal-excalidraw--empty)))
+      (delete-file file))))
+
+(ert-deftest portal-excalidraw-scratch-command-shows-it-and-puts-it-away ()
+  (portal-fake-native-reset)
+  (let* ((directory (make-temp-file "portal-scratch-" t))
+         (portal-excalidraw-scratch-file (expand-file-name "scratch.excalidraw" directory))
+         (before (get-buffer-create "*before scratch*"))
+         (other (get-buffer-create "*other window*"))
+         scratch)
+    (cl-letf (((symbol-function 'portal-start-server) #'ignore)
+              ((symbol-function 'portal-server-url) (lambda () "http://127.0.0.1:1/token")))
+      (save-window-excursion
+        (unwind-protect
+            (progn
+              (delete-other-windows)
+              (switch-to-buffer before)
+              (let ((right (split-window-right)))
+                (set-window-buffer right other)
+                (portal-excalidraw-scratch)
+                (setq scratch (current-buffer))
+                (portal-view-sync)
+                (let ((target (buffer-local-value 'portal-view--target scratch)))
+                  ;; Shown in the selected window, with the keyboard.
+                  (should (eq (window-buffer) scratch))
+                  (should (equal buffer-file-name portal-excalidraw-scratch-file))
+                  (should (plist-get (portal--inspect target) :focused))
+                  (should (eq (window-buffer right) other))
+                  ;; Called again, the window shows what it did, and Emacs
+                  ;; has the keyboard.
+                  (portal-excalidraw-scratch)
+                  (portal-view-sync)
+                  (should (eq (window-buffer) before))
+                  (should-not (plist-get (portal--inspect target) :focused))
+                  (should-not (plist-get (portal--inspect target) :visible))
+                  ;; Called from another window, it shows there, the same
+                  ;; drawing, its view and the keyboard with it.
+                  (select-window right)
+                  (portal-excalidraw-scratch)
+                  (portal-view-sync)
+                  (should (eq (window-buffer right) scratch))
+                  (should (equal (buffer-local-value 'portal-view--target scratch) target))
+                  (should (plist-get (portal--inspect target) :focused))
+                  ;; Shown in the first window too, the view comes along.
+                  (select-window (previous-window))
+                  (portal-excalidraw-scratch)
+                  (portal-view-sync)
+                  (should (eq (buffer-local-value 'portal-view--window scratch)
+                              (selected-window)))
+                  (should (plist-get (portal--inspect target) :focused))
+                  ;; Put away there, Emacs has the keyboard, though the other
+                  ;; window still shows the drawing.
+                  (portal-excalidraw-scratch)
+                  (portal-view-sync)
+                  (should (eq (window-buffer) before))
+                  (should (eq (window-buffer right) scratch))
+                  (should-not (plist-get (portal--inspect target) :focused)))))
+          (when (buffer-live-p scratch)
+            (with-current-buffer scratch
+              (setq portal-excalidraw--ready nil)
+              (set-buffer-modified-p nil))
+            (kill-buffer scratch))
+          (kill-buffer before)
+          (kill-buffer other)
+          (delete-directory directory t))))
+    (should-not (portal-fake-native-targets))))
+
 (provide 'portal-excalidraw-tests)
