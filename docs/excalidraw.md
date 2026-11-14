@@ -72,9 +72,12 @@ after the mode's name meanwhile. A drawing without frames says so.
   frame's `customData.presenterNotes`, plain text. Both are kept in the
   drawing's file, so Excalidraw+ reads them too.
 - A slide's image is the frame alone, cut at its edge, on the drawing's
-  background, and looks the same in a light or dark Emacs. Arrange draws again
-  only the slides whose frame or contents changed since it last drew them; a
-  new name, number or notes do not change the image.
+  background. Slides follow the system's light or dark appearance, as the
+  editor does, in Arrange, the console and the slide window alike, and change
+  when it changes: dark slides are Excalidraw's dark theme, with pictures in
+  their own colours. The console's switch overrides it.
+  Arrange draws again only the slides whose frame or contents changed since it
+  last drew them; a new name, number or notes do not change the image.
 - Arrange opens at the slide nearest the middle of the editor's view. `Up` and
   `Down` select a slide; `Return`, or a double click, edits it: the editor comes
   back showing that frame. `Escape`, the **Draw** button or
@@ -127,6 +130,15 @@ slide nearest the middle of its view. Two windows show them:
   **Previous**, **Next** and **Stop**. Neither clock is saved. The console
   only shows notes: edit them in Arrange. It keeps the keyboard, and the mode
   line says `:Present 3/12`.
+  **Dark slides** or **Light slides** in the console flips the slides, in
+  both windows and in Arrange, whatever the system's appearance from then on.
+  It has no key: `Option-Tab`, or `Tab` with macOS's keyboard navigation on,
+  reaches it, and `Space` or `Return` presses it, after which `Space` shows
+  the next slide again.
+  The choice lasts as long as the drawing's page: stopping and presenting
+  again keeps it, and reopening the drawing follows the system again. It
+  changes neither the drawing nor the buffer, and the editor and the console
+  keep following the system.
 
 `Right`, `Down`, `Space` and `Page Down` show the next slide; `Left`, `Up` and
 `Page Up` the previous; `Home` and `End` the first and the last. They work in

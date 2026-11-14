@@ -305,6 +305,9 @@ body {
 	padding: 4px 10px;
 	font-size: 12px;
 }
+/* The switch between light and dark slides stands apart from moving
+   through them, as Stop does. */
+.portal-present-theme,
 .portal-present-stop {
 	margin-left: 24px;
 }
