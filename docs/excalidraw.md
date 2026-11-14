@@ -139,6 +139,12 @@ slide nearest the middle of its view. Two windows show them:
   again keeps it, and reopening the drawing follows the system again. It
   changes neither the drawing nor the buffer, and the editor and the console
   keep following the system.
+  Dragging on the console's current slide draws a red line, a **laser**: it
+  shows in the slide window over the same part of the slide, whatever the
+  size of either window, starts to fade when you let go and is gone 2
+  seconds later. Showing another slide drops every line at once. The laser
+  has no mode, key or button, and nothing of it is saved: it never touches
+  the drawing or the buffer.
 
 `Right`, `Down`, `Space` and `Page Down` show the next slide; `Left`, `Up` and
 `Page Up` the previous; `Home` and `End` the first and the last. They work in
