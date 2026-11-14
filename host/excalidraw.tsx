@@ -32,11 +32,16 @@ import "@excalidraw/excalidraw/index.css";
 import "./excalidraw.css";
 import {
 	type AudienceMessage,
+	drawLaser,
 	elapsed,
+	LASER_FADE,
+	type LaserMessage,
 	type PresentKey,
 	presentKey,
 	type ShowMessage,
+	type Stroke,
 	slideBy,
+	slidePoint,
 	stepSlide,
 } from "./present";
 import {
@@ -912,6 +917,121 @@ function showSlide(
 	audience.postMessage(show, location.origin);
 }
 
+/** Send the slide window the laser's lines, LASER. */
+function showLaser(laser: LaserMessage) {
+	if (!audience || audience.closed) return;
+	audience.postMessage(laser, location.origin);
+}
+
+let strokeIds = 0;
+
+/** The laser on the console's current slide, CURRENT, slide INDEX: a line
+ * dragged there shows on the console and in the slide window, and fades
+ * away once the pointer lifts. Moving to another slide drops every line.
+ * The lines are the console's alone: nothing is saved or sent to Emacs.
+ * Returns the props of the <svg> laid over the slide, and a function that
+ * sends the slide window the lines again. */
+function useLaser(current: Frame | undefined, index: number) {
+	const layer = useRef<SVGSVGElement>(null);
+	const strokes = useRef<Stroke[]>([]);
+	const drawing = useRef<{ pointer: number; stroke: Stroke }>(undefined);
+	const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
+	const request = useRef<number>(undefined);
+	const slide = useRef({ index, width: 0, height: 0 });
+	slide.current = {
+		index,
+		width: current?.width ?? 0,
+		height: current?.height ?? 0,
+	};
+
+	const show = useCallback(() => {
+		if (request.current !== undefined) cancelAnimationFrame(request.current);
+		request.current = undefined;
+		const laser: LaserMessage = {
+			type: "laser",
+			...slide.current,
+			strokes: strokes.current,
+		};
+		if (layer.current) drawLaser(layer.current, laser);
+		showLaser(laser);
+	}, []);
+	// While drawing, both pages are drawn again at most once a frame.
+	const schedule = useCallback(() => {
+		request.current ??= requestAnimationFrame(show);
+	}, [show]);
+	const drop = useCallback(() => {
+		for (const timer of timers.current) clearTimeout(timer);
+		timers.current.clear();
+		strokes.current = [];
+		drawing.current = undefined;
+	}, []);
+
+	const id = current?.id;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a move to another slide drops every line.
+	useEffect(() => {
+		drop();
+		show();
+	}, [id, index, drop, show]);
+	useEffect(
+		() => () => {
+			drop();
+			if (request.current !== undefined) cancelAnimationFrame(request.current);
+		},
+		[drop],
+	);
+
+	const point = (event: ReactPointerEvent<SVGSVGElement>) => {
+		const { width, height } = slide.current;
+		return slidePoint(
+			event.clientX,
+			event.clientY,
+			event.currentTarget.getBoundingClientRect(),
+			width,
+			height,
+		);
+	};
+	const lift = (event: ReactPointerEvent<SVGSVGElement>) => {
+		const line = drawing.current;
+		if (!line || line.pointer !== event.pointerId) return;
+		drawing.current = undefined;
+		line.stroke.fading = true;
+		const timer = setTimeout(() => {
+			timers.current.delete(timer);
+			strokes.current = strokes.current.filter((s) => s !== line.stroke);
+			schedule();
+		}, LASER_FADE);
+		timers.current.add(timer);
+		schedule();
+	};
+	const props = {
+		ref: layer,
+		onPointerDown: (event: ReactPointerEvent<SVGSVGElement>) => {
+			if (event.button !== 0 || drawing.current) return;
+			const { point: at, inside } = point(event);
+			if (!inside) return;
+			event.preventDefault();
+			event.currentTarget.setPointerCapture(event.pointerId);
+			const stroke = { id: ++strokeIds, points: [...at], fading: false };
+			strokes.current = [...strokes.current, stroke];
+			drawing.current = { pointer: event.pointerId, stroke };
+			schedule();
+		},
+		onPointerMove: (event: ReactPointerEvent<SVGSVGElement>) => {
+			const line = drawing.current;
+			if (!line || line.pointer !== event.pointerId) return;
+			const [x, y] = point(event).point;
+			const points = line.stroke.points;
+			if (x === points.at(-2) && y === points.at(-1)) return;
+			points.push(x, y);
+			schedule();
+		},
+		onPointerUp: lift,
+		onPointerCancel: lift,
+		onLostPointerCapture: lift,
+	};
+	return { props, resend: show };
+}
+
 /** The time now, in milliseconds, again at each second's turn. */
 function useClock() {
 	const [now, setNow] = useState(() => Date.now());
@@ -967,8 +1087,12 @@ function Present({
 
 	// The slide window shows the current slide once it is ready, and again
 	// whenever the slide or its image changes; nothing is sent through Emacs.
+	const laser = useLaser(current, index);
 	const send = useRef(() => {});
-	send.current = () => showSlide(image, index, count);
+	send.current = () => {
+		showSlide(image, index, count);
+		laser.resend();
+	};
 	useEffect(() => showSlide(image, index, count), [image, index, count]);
 	// Emacs shows where presenting is in the mode line.
 	useEffect(() => {
@@ -1041,10 +1165,17 @@ function Present({
 			<div className="portal-present-body">
 				<main className="portal-present-stage">
 					{current && (
-						<SlideImage
-							frame={current}
-							alt={`Slide ${index + 1}: ${slideName(current)}`}
-						/>
+						<div className="portal-present-slide">
+							<SlideImage
+								frame={current}
+								alt={`Slide ${index + 1}: ${slideName(current)}`}
+							/>
+							<svg
+								className="portal-present-laser"
+								aria-hidden="true"
+								{...laser.props}
+							/>
+						</div>
 					)}
 				</main>
 				<aside className="portal-present-side">
