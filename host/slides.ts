@@ -165,18 +165,23 @@ export function frameStamp(
 	return parts.join(" ");
 }
 
+/** The colours a slide is drawn in: as drawn, or dark as Excalidraw's
+ * dark theme shows it. */
+export type Theme = "light" | "dark";
+
 /** What a slide image is made from. */
 export type Scene = {
 	elements: readonly ExcalidrawElement[];
 	files: BinaryFiles;
 	background: string;
+	theme: Theme;
 };
 
 export type Render<Image> = (frame: Frame, scene: Scene) => Promise<Image>;
 
 /** The slides' images, kept per frame. An update makes again only the images
- * of frames whose stamp changed, or every image when the files map or the
- * background did. ON_IMAGE hears of each new image; ON_ERROR of each frame
+ * of frames whose stamp changed, or every image when the files map, the
+ * background or the theme did. ON_IMAGE hears of each new image; ON_ERROR of each frame
  * whose image failed, which stays stale for the next update to try again. */
 export class SlideImages<Image> {
 	#render: Render<Image>;
@@ -185,6 +190,7 @@ export class SlideImages<Image> {
 	#images = new Map<string, { stamp: string; image: Image }>();
 	#files: BinaryFiles | undefined;
 	#background: string | undefined;
+	#theme: Theme | undefined;
 	#next: Scene | undefined;
 	#running: Promise<void> | undefined;
 
@@ -205,7 +211,9 @@ export class SlideImages<Image> {
 	/** The slides of SCENE whose images are missing or out of date. */
 	stale(scene: Scene): Frame[] {
 		const all =
-			scene.files !== this.#files || scene.background !== this.#background;
+			scene.files !== this.#files ||
+			scene.background !== this.#background ||
+			scene.theme !== this.#theme;
 		return slideFrames(scene.elements).filter(
 			(frame) =>
 				all ||
@@ -240,6 +248,7 @@ export class SlideImages<Image> {
 			if (!live.has(id)) this.#images.delete(id);
 		this.#files = scene.files;
 		this.#background = scene.background;
+		this.#theme = scene.theme;
 		for (const frame of stale) {
 			const stamp = frameStamp(frame, scene.elements);
 			try {

@@ -234,6 +234,7 @@ const scene = (elements: readonly ExcalidrawElement[], more = {}): Scene => ({
 	elements,
 	files,
 	background: "#ffffff",
+	theme: "light",
 	...more,
 });
 
@@ -362,6 +363,16 @@ test("new files or a new background render every slide again", async () => {
 		"one",
 		"two",
 	]);
+});
+
+test("a new theme renders every slide again, and the same one none", async () => {
+	const { images, update } = renderer();
+	await update(scene(deck()));
+	const dark = scene(deck(), { theme: "dark" });
+	expect(images.stale(dark).map((each) => each.id)).toEqual(["one", "two"]);
+	expect(await update(dark)).toEqual(["one", "two"]);
+	expect(await update(scene(deck(), { theme: "dark" }))).toEqual([]);
+	expect(await update(scene(deck()))).toEqual(["one", "two"]);
 });
 
 test("a new slide is rendered and a removed one forgotten", async () => {
