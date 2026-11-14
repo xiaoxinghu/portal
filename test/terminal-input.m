@@ -293,6 +293,62 @@ static emacs_value pointer(emacs_env *env, ptrdiff_t nargs, emacs_value *args, v
     return env->funcall(env, env->intern(env, "cons"), 2, pair);
 }
 
+/* Move the pointer to X Y, points from the top-left corner of the targeted
+   frame's content view, as a mouse does: warp it there, then send AppKit the
+   mouse-moved event, with modifier FLAGS held, to the window under the
+   point if it is Emacs's, else to the targeted one. A posted HID event needs
+   an Accessibility grant; AppKit's tracking areas, cursor rectangles and
+   WebKit take this one for a mouse's. Return t, or nil without a window. */
+static emacs_value mouseMove(emacs_env *env, ptrdiff_t nargs, emacs_value *args, void *data)
+{
+    (void)data;
+    NSWindow *window = activeWindow();
+    NSView *content = window.contentView;
+    if (!content) return env->intern(env, "nil");
+    CGFloat x = env->extract_float(env, env->funcall(env, env->intern(env, "float"), 1, &args[0]));
+    CGFloat y = env->extract_float(env, env->funcall(env, env->intern(env, "float"), 1, &args[1]));
+    NSEventModifierFlags flags = nargs > 2 && env->is_not_nil(env, args[2])
+        ? (NSEventModifierFlags)env->extract_integer(env, args[2]) : 0;
+    NSPoint local = NSMakePoint(content.bounds.origin.x + x,
+                                content.isFlipped ? content.bounds.origin.y + y : NSMaxY(content.bounds) - y);
+    NSPoint screen = [window convertPointToScreen:[content convertPoint:local toView:nil]];
+    CGFloat top = NSMaxY(NSScreen.screens.firstObject.frame);
+    CGWarpMouseCursorPosition(CGPointMake(screen.x, top - screen.y));
+    NSInteger number = [NSWindow windowNumberAtPoint:screen belowWindowWithWindowNumber:0];
+    NSWindow *under = [NSApp windowWithWindowNumber:number] ?: window;
+    [NSApp sendEvent:[NSEvent mouseEventWithType:NSEventTypeMouseMoved
+        location:[under convertPointFromScreen:screen] modifierFlags:flags
+        timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:under.windowNumber
+        context:nil eventNumber:0 clickCount:0 pressure:0]];
+    return env->intern(env, "t");
+}
+
+/* The pointer this process shows, by name: arrow, ibeam, hand,
+   not-allowed or crosshair, matched as the object or by image and hot
+   spot; other for any other, nil for none. */
+static emacs_value cursor(emacs_env *env, ptrdiff_t nargs, emacs_value *args, void *data)
+{
+    (void)nargs; (void)args; (void)data;
+    NSCursor *current = NSCursor.currentCursor;
+    if (!current) return env->intern(env, "nil");
+    NSDictionary<NSString *, NSCursor *> *known = @{
+        @"arrow": NSCursor.arrowCursor, @"ibeam": NSCursor.IBeamCursor,
+        @"hand": NSCursor.pointingHandCursor, @"not-allowed": NSCursor.operationNotAllowedCursor,
+        @"crosshair": NSCursor.crosshairCursor,
+    };
+    NSString *name = nil;
+    for (NSString *key in known) if (known[key] == current) name = key;
+    if (!name) {
+        NSData *image = current.image.TIFFRepresentation;
+        for (NSString *key in known) {
+            if (NSEqualPoints(known[key].hotSpot, current.hotSpot)
+                && [known[key].image.TIFFRepresentation isEqual:image]) name = key;
+        }
+    }
+    name = name ?: @"other";
+    return env->make_string(env, name.UTF8String, (ptrdiff_t)strlen(name.UTF8String));
+}
+
 /* Compose TEXT in the targeted window's first responder as an input method
    does: as marked text or, with COMMIT, inserted, ending the composition.
    Emacs reads either only while it handles an event, so a one-shot monitor
@@ -486,6 +542,14 @@ int emacs_module_init(struct emacs_runtime *runtime)
     args[0] = env->intern(env, "portal-test-pointer");
     args[1] = env->make_function(env, 0, 2, pointer,
         "Move the pointer to X Y, AppKit points, if given; return its position as (X . Y).", NULL);
+    env->funcall(env, env->intern(env, "fset"), 2, args);
+    args[0] = env->intern(env, "portal-test-mouse-move");
+    args[1] = env->make_function(env, 2, 3, mouseMove,
+        "Move the pointer to X Y in the targeted frame as a mouse does, holding modifier FLAGS.", NULL);
+    env->funcall(env, env->intern(env, "fset"), 2, args);
+    args[0] = env->intern(env, "portal-test-cursor");
+    args[1] = env->make_function(env, 0, 0, cursor,
+        "The name of the pointer this process shows, such as \"hand\".", NULL);
     env->funcall(env, env->intern(env, "fset"), 2, args);
     args[0] = env->intern(env, "portal-test-compose");
     args[1] = env->make_function(env, 1, 2, compose,
