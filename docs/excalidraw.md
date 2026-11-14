@@ -50,8 +50,8 @@ configuration, as for any Portal command.
   file changed on disk, as with two Emacsen drawing in it, the drawing
   overwrites it: the last write wins. A write that fails says so in the echo
   area and keeps the buffer modified, and the next change tries again.
-  Emacs asks before killing it only while the last write failed, as the
-  drawing is then in no file.
+  Only while writing fails do killing its buffer and quitting Emacs ask, as
+  for any unsaved file: the drawing is then in no file.
 - Nothing empties it, and nothing offers to. `C-x C-w` writes it to another
   file: the buffer becomes that file's, an ordinary drawing, and the command
   opens the scratch drawing from its own file again.

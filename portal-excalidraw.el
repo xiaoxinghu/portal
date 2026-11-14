@@ -577,8 +577,6 @@ No key is bound; bind this command in your configuration."
         ;; Two Emacsen drawing in it would ask about each other's locks;
         ;; the last write wins.
         (setq-local create-lockfiles nil)
-        ;; Quitting saves it with the others, without asking.
-        (setq-local buffer-save-without-query t)
         ;; Every change is written already.
         (auto-save-mode -1)
         (add-hook 'after-set-visited-file-name-hook
@@ -591,7 +589,6 @@ another file, as after \[write-file].  The next
 `portal-excalidraw-scratch' opens the scratch drawing's file again."
   (setq portal-excalidraw--scratch nil)
   (kill-local-variable 'create-lockfiles)
-  (kill-local-variable 'buffer-save-without-query)
   (remove-hook 'after-set-visited-file-name-hook #'portal-excalidraw--scratch-renamed t)
   (when auto-save-default (auto-save-mode 1)))
 
@@ -639,16 +636,18 @@ leaves the buffer modified, so that the next change tries again."
           (save-buffer))
       (error (message "Scratch drawing not saved: %s" (error-message-string err))))))
 
-(defun portal-excalidraw--quit ()
-  "Write what each scratch drawing still has in flight, as Emacs quits.
-A modified one was written already, with the buffers Emacs saves first."
+(defun portal-excalidraw--quit (&rest _)
+  "Write each scratch drawing, with what it still has in flight, as Emacs
+quits.  This comes before `save-buffers-kill-emacs' offers to save
+buffers, so that the scratch drawing is written as on any change, asking
+nothing.  Only one whose write fails now is left to Emacs, which asks
+about it as about any unsaved file: it is in no file."
   (dolist (buffer (buffer-list))
     (when (buffer-local-value 'portal-excalidraw--scratch buffer)
       (with-current-buffer buffer
         (portal-excalidraw--scratch-flush)
-        (portal-excalidraw--write-scratch))))
-  t)
-(add-hook 'kill-emacs-query-functions #'portal-excalidraw--quit)
+        (portal-excalidraw--write-scratch)))))
+(advice-add 'save-buffers-kill-emacs :before #'portal-excalidraw--quit)
 
 (provide 'portal-excalidraw)
 ;;; portal-excalidraw.el ends here
