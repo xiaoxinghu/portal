@@ -83,6 +83,11 @@ private final class FedPane: NSView {
     override func mouseDown(with event: NSEvent) {
         if let terminal { window?.makeFirstResponder(terminal) }
     }
+    /// Beside the grid, the pointer is the terminal's too.
+    override func resetCursorRects() {
+        guard let terminal else { return super.resetCursorRects() }
+        addCursorRect(visibleRect, cursor: terminal.pointer)
+    }
 }
 
 /// Where a fed terminal's in-memory session reports the grid its terminal
@@ -95,7 +100,8 @@ private final class GridWatch {
 @MainActor
 private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     TerminalSurfacePwdDelegate, TerminalSurfaceGridResizeDelegate, TerminalSurfaceLifecycleDelegate,
-    TerminalSurfaceCloseDelegate, TerminalSurfaceOpenURLDelegate, TerminalSurfaceProgressReportDelegate, NativeSurface {
+    TerminalSurfaceCloseDelegate, TerminalSurfaceOpenURLDelegate, TerminalSurfaceProgressReportDelegate,
+    TerminalSurfaceMouseShapeDelegate, NativeSurface {
     var nativeView: NSView { pane ?? self }
     var input: NativeInput? { session?.input }
     weak var session: TerminalSession?
@@ -115,6 +121,9 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     /// program, so it is sampled at each report and about once a second.
     var program = ""
     private var programTimer: Timer?
+    /// The pointer Ghostty last asked for: the hand over a link it would
+    /// open, the I-beam over text, the arrow while a program has the mouse.
+    private var mouseShape: TerminalMouseShape = .text
     /// A fed terminal's session: its output comes from the core and what it
     /// writes goes to the core. Nil for a terminal with its own pty.
     let fed: InMemoryTerminalSession?
@@ -352,6 +361,30 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
             session?.returnFocus()
         }
     }
+    /// Ghostty's pointer, held in the terminal's own cursor rectangle,
+    /// which wins over the one Emacs keeps over its whole frame and holds
+    /// through Emacs redoing its own. Ghostty reports again at each move
+    /// over a link; only a new shape redoes the rectangles.
+    func terminalDidChangeMouseShape(_ shape: TerminalMouseShape) {
+        guard shape != mouseShape else { return }
+        mouseShape = shape
+        window?.invalidateCursorRects(for: self)
+        if let pane { window?.invalidateCursorRects(for: pane) }
+    }
+
+    var pointer: NSCursor {
+        switch mouseShape {
+        case .pointer: .pointingHand
+        case .text: .iBeam
+        case .notAllowed: .operationNotAllowed
+        case .default, .other: .arrow
+        }
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(visibleRect, cursor: pointer)
+    }
+
     func terminalDidRequestOpenURL(_ text: String, kind: TerminalOpenURLKind) {
         guard let url = URL(string: text),
               ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") else { return }

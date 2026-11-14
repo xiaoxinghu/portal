@@ -12,6 +12,8 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
     NativeSurface {
     var nativeView: NSView { self }
     weak var input: NativeInput?
+    /// WebKit sets the pointer the page asks for (`NativeHost`).
+    var setsPointer: Bool { true }
 
     /// The core decides what each key does: the page gets typing, and is
     /// offered each chord (`offer`), which Emacs gets if the page does not
