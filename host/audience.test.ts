@@ -4,7 +4,17 @@
 import { expect, test } from "bun:test";
 import { assets } from "./.generated/assets";
 import { respond } from "./app";
-import { elapsed, presentKey, slideBy, stepSlide } from "./present";
+import {
+	elapsed,
+	isLaser,
+	LASER_FADE,
+	laserWidth,
+	presentKey,
+	slideBy,
+	slidePoint,
+	stepSlide,
+	strokePath,
+} from "./present";
 
 const authority = "127.0.0.1:4321";
 const token = "0123456789abcdef0123456789abcdef";
@@ -144,4 +154,60 @@ test("the time presenting is minutes and seconds, the minutes going past an hour
 	expect(elapsed(75 * 60_000 + 3_000)).toBe("75:03");
 	// A clock set back to zero a moment ago, before the next tick.
 	expect(elapsed(-400)).toBe("0:00");
+});
+
+test("a laser line fades for 2 seconds and is as wide as its slide allows", () => {
+	expect(LASER_FADE).toBe(2000);
+	// Twice the slide, twice the line, so it looks the same at any size.
+	expect(laserWidth(3200, 1800)).toBe(2 * laserWidth(1600, 900));
+	expect(laserWidth(900, 1600)).toBe(laserWidth(1600, 900));
+});
+
+test("a point on the screen is in the slide's units wherever the slide is drawn", () => {
+	// A 1600 by 900 slide in a box twice as wide as it is drawn: half its
+	// size, with bars left and right.
+	const wide = { left: 10, top: 20, width: 1600, height: 450 };
+	expect(slidePoint(410, 20, wide, 1600, 900)).toEqual({
+		point: [0, 0],
+		inside: true,
+	});
+	expect(slidePoint(1210, 470, wide, 1600, 900)).toEqual({
+		point: [1600, 900],
+		inside: true,
+	});
+	expect(slidePoint(810, 245, wide, 1600, 900).point).toEqual([800, 450]);
+	// The bars are not the slide.
+	expect(slidePoint(400, 245, wide, 1600, 900)).toEqual({
+		point: [-20, 450],
+		inside: false,
+	});
+	// In a tall box the bars are above and below, and a point is a tenth
+	// of a unit at most.
+	const tall = { left: 0, top: 0, width: 300, height: 1000 };
+	expect(slidePoint(150, 500, tall, 1600, 900).point).toEqual([800, 450]);
+	expect(slidePoint(0, 415.625, tall, 1600, 900)).toEqual({
+		point: [0, 0],
+		inside: true,
+	});
+	expect(slidePoint(100, 400, tall, 1600, 900).inside).toBe(false);
+	expect(slidePoint(100.01, 500, tall, 1600, 900).point).toEqual([533.4, 450]);
+});
+
+test("a line is a path through its points, smoothed through their midpoints", () => {
+	expect(strokePath([])).toBe("");
+	// One point is a dot, which round caps draw.
+	expect(strokePath([5, 6])).toBe("M5 6l0 0");
+	expect(strokePath([0, 0, 10, 10])).toBe("M0 0L10 10");
+	expect(strokePath([0, 0, 10, 0, 10, 10, 20, 10.5])).toBe(
+		"M0 0Q10 0 10 5Q10 10 15 10.3L20 10.5",
+	);
+});
+
+test("the slide window takes a laser message only whole", () => {
+	const laser = { type: "laser", index: 0, width: 16, height: 9, strokes: [] };
+	expect(isLaser(laser)).toBe(true);
+	expect(isLaser({ ...laser, strokes: undefined })).toBe(false);
+	expect(isLaser({ ...laser, width: "16" })).toBe(false);
+	expect(isLaser({ ...laser, type: "show" })).toBe(false);
+	expect(isLaser(null)).toBe(false);
 });
