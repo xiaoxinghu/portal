@@ -546,6 +546,38 @@ seconds."
                     /^\\d+:\\d\\d$/.test(document.querySelector('.portal-present-elapsed')?.textContent ?? '')];")
           nil))
 
+(defun portal-excalidraw-gui--fit ()
+  "How the console draws its slides, once their images are drawn: whether
+the current slide fills its stage, less the padding, in one dimension;
+whether the next slide fills its box so, or nil at the end; and whether
+the current slide is drawn larger than the next, or nil at the end.
+A slide is drawn as large as fits its image's box, at its own shape."
+  (append (portal-excalidraw-gui--js
+           "const drawn = (image) => {
+              const box = image.getBoundingClientRect();
+              const scale = Math.min(box.width / image.naturalWidth,
+                                     box.height / image.naturalHeight);
+              return [image.naturalWidth * scale, image.naturalHeight * scale];
+            };
+            const fills = ([width, height], [boxWidth, boxHeight]) =>
+              Math.abs(width - boxWidth) < 1 || Math.abs(height - boxHeight) < 1;
+            const stage = document.querySelector('.portal-present-stage');
+            const current = stage?.querySelector('img');
+            const next = document.querySelector('.portal-present-next-image img');
+            if (![current, next].every(image => !image || (image.complete && image.naturalWidth > 0))
+                || !current)
+              return null;
+            const style = getComputedStyle(stage);
+            const inner = [stage.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+                           stage.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)];
+            const slide = drawn(current);
+            const box = next?.parentElement;
+            const following = next && drawn(next);
+            return [fills(slide, inner),
+                    next ? fills(following, [box.clientWidth, box.clientHeight]) : null,
+                    next ? slide[0] > following[0] && slide[1] > following[1] : null];")
+          nil))
+
 (defun portal-excalidraw-gui--mode-line (drawing expected)
   "Wait until DRAWING's mode line says EXPECTED, a regexp, and check it."
   (with-current-buffer drawing
@@ -555,12 +587,15 @@ seconds."
 
 (ert-deftest portal-excalidraw-gui-presents-in-a-slide-window-and-stops ()
   :tags '(:gui)
+  ;; The closing slide's frame is smaller than the console's every space
+  ;; for a slide, the opening slide's larger.
   (portal-excalidraw-gui--drawing
-      (list (portal-excalidraw-gui--frame "closing" "Closing" 1 2000 2000 400 225)
+      (list (portal-excalidraw-gui--frame "closing" "Closing" 1 2000 2000 160 90)
             (portal-excalidraw-gui--frame "opening" "Opening" 0 0 0 1600 900
                                           "Say hello.\nThen wave.")
             (append (portal-excalidraw-gui--text "hello" "Hello") '(:frameId "opening"))
-            (append (portal-excalidraw-gui--text "bye" "Bye") '(:frameId "closing" :x 2050 :y 2050)))
+            (append (portal-excalidraw-gui--text "bye" "Bye")
+                    '(:frameId "closing" :x 2020 :y 2020 :width 100)))
       nil
     (let ((main (selected-frame))
           (frames (length (frame-list)))
@@ -593,6 +628,12 @@ seconds."
           (portal-excalidraw-gui--until
            (lambda () (equal (portal-excalidraw-gui--console) expected)))
           (should (equal (portal-excalidraw-gui--console) expected)))
+        ;; Each slide is as large as its space allows, whatever its frame's
+        ;; size: the next, a small frame, fills its box, and the current
+        ;; slide is larger.
+        (portal-excalidraw-gui--until
+         (lambda () (equal (portal-excalidraw-gui--fit) '(t t t))))
+        (should (equal (portal-excalidraw-gui--fit) '(t t t)))
         ;; Next in the console.
         (apply #'portal-excalidraw-gui--key portal-excalidraw-gui--right)
         (portal-excalidraw-gui--showing frame main 2)
@@ -607,6 +648,10 @@ seconds."
         (portal-excalidraw-gui--showing frame main 2)
         (portal-excalidraw-gui--mode-line document ":Present 2/2")
         (should (equal (portal-excalidraw-gui--console) '("End" "No notes." "pre-wrap" t t)))
+        ;; A small frame fills the stage too.
+        (portal-excalidraw-gui--until
+         (lambda () (equal (portal-excalidraw-gui--fit) '(t nil nil))))
+        (should (equal (portal-excalidraw-gui--fit) '(t nil nil)))
         (execute-kbd-macro (kbd "C-c C-p"))
         (portal-excalidraw-gui--showing frame main 1)
         (portal-excalidraw-gui--mode-line document ":Present 1/2")
