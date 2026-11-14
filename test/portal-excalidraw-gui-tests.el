@@ -702,6 +702,137 @@ A slide is drawn as large as fits its image's box, at its own shape."
           (portal-excalidraw--flush)
           (should-not (buffer-modified-p)))))))
 
+;; The laser.
+
+(defconst portal-excalidraw-gui--laser-pages
+  '((console ".portal-present-stage img" ".portal-present-laser")
+    (slides "#slide" "#laser"))
+  "Each page's slide image and the laser's layer over it.")
+
+(defun portal-excalidraw-gui--watch-laser (page)
+  "The JavaScript that records, from now on, when the laser's first line
+shows in PAGE and when it goes, and where it lies on the slide: the
+edges of its box in hundredths of the slide as the page draws it."
+  (pcase-let ((`(,image ,layer) (alist-get page portal-excalidraw-gui--laser-pages)))
+    (format "window.laserWatch?.disconnect();
+             const layer = document.querySelector('%s');
+             const record = window.laserRecord = {added: null, removed: null, box: null};
+             const look = () => {
+               const path = layer.querySelector('path');
+               if (path) {
+                 record.added ??= performance.now();
+                 const slide = document.querySelector('%s');
+                 const box = slide.getBoundingClientRect();
+                 const scale = Math.min(box.width / slide.naturalWidth,
+                                        box.height / slide.naturalHeight);
+                 const width = slide.naturalWidth * scale, height = slide.naturalHeight * scale;
+                 const left = box.left + (box.width - width) / 2;
+                 const top = box.top + (box.height - height) / 2;
+                 const line = path.getBoundingClientRect();
+                 record.box = [(line.left - left) / width, (line.top - top) / height,
+                               (line.right - left) / width, (line.bottom - top) / height]
+                   .map(edge => Math.round(edge * 100));
+               } else if (record.added !== null) record.removed ??= performance.now();
+             };
+             window.laserWatch = new MutationObserver(look);
+             window.laserWatch.observe(layer, {subtree: true, childList: true, attributes: true});
+             return true;"
+            layer image)))
+
+(defun portal-excalidraw-gui--laser (frame console)
+  "What the laser's watch saw in the console, in frame CONSOLE, and the
+slide window, in FRAME: for each, whether a line showed, how many
+milliseconds later it went or nil, and its box on the slide."
+  (let ((script "const record = window.laserRecord;
+                 return [record.added !== null,
+                         record.removed === null ? null : Math.round(record.removed - record.added),
+                         record.box];"))
+    (list (append (portal-excalidraw-gui--js script) nil)
+          (append (portal-excalidraw-gui--in-frame frame script console) nil))))
+
+(defun portal-excalidraw-gui--drag-laser (frame console)
+  "Watch the laser in both pages, then drag across the console's current
+slide, from a quarter of its width to three quarters, halfway down. The
+console is in frame CONSOLE, the slide window in FRAME."
+  (should (portal-excalidraw-gui--in-frame
+           frame (portal-excalidraw-gui--watch-laser 'slides) console))
+  (should (portal-excalidraw-gui--js (portal-excalidraw-gui--watch-laser 'console)))
+  (let ((points (portal-excalidraw-gui--js
+                 "const slide = document.querySelector('.portal-present-stage img');
+                  const box = slide.getBoundingClientRect();
+                  const scale = Math.min(box.width / slide.naturalWidth,
+                                         box.height / slide.naturalHeight);
+                  const width = slide.naturalWidth * scale, height = slide.naturalHeight * scale;
+                  const left = box.left + (box.width - width) / 2;
+                  const top = box.top + (box.height - height) / 2;
+                  return [left + width / 4, top + height / 2,
+                          left + width * 3 / 4, top + height / 2].map(Math.round);")))
+    (should (apply #'portal-test-native-drag (append points nil)))))
+
+(defun portal-excalidraw-gui--near (box expected)
+  "Whether BOX, edges in hundredths, is within 2 of EXPECTED's."
+  (and box (cl-every (lambda (edge want) (<= (abs (- edge want)) 2))
+                     (append box nil) expected)))
+
+(ert-deftest portal-excalidraw-gui-laser-shows-in-the-slide-window-and-fades ()
+  :tags '(:gui)
+  ;; The slides are of different shapes, and neither is the shape of the
+  ;; console's stage or of the slide window.
+  (portal-excalidraw-gui--drawing
+      (list (portal-excalidraw-gui--frame "opening" "Opening" 0 0 0 1600 900)
+            (portal-excalidraw-gui--frame "closing" "Closing" 1 0 1000 800 800))
+      nil
+    (let ((main (selected-frame))
+          (saved (portal-excalidraw-gui--file-text (buffer-file-name document))))
+      (portal-excalidraw-present)
+      (portal-web-gui--run-until 'portal-web-opened)
+      (portal-web-gui--run-until 'portal-excalidraw-command)
+      (let ((frame portal-excalidraw--slides-frame))
+        (portal-excalidraw-gui--key 115 (ash 1 23) (string #xF729)) ; Home
+        (portal-excalidraw-gui--showing frame main 1)
+        (should (portal-view--with-frame-title main #'portal-test-native-target-frame))
+        ;; A line dragged on the console's slide shows in both pages over
+        ;; the same part of the slide, though each draws it at its own size.
+        (portal-excalidraw-gui--drag-laser frame main)
+        (let ((line '(25 50 75 50)) seen)
+          (portal-excalidraw-gui--until
+           (lambda ()
+             (setq seen (portal-excalidraw-gui--laser frame main))
+             (cl-every (lambda (page) (portal-excalidraw-gui--near (nth 2 page) line)) seen)))
+          (should (portal-excalidraw-gui--near (nth 2 (nth 0 seen)) line))
+          (should (portal-excalidraw-gui--near (nth 2 (nth 1 seen)) line))
+          ;; Each fades once the pointer lifts and is gone 2 seconds later.
+          (portal-excalidraw-gui--until
+           (lambda ()
+             (setq seen (portal-excalidraw-gui--laser frame main))
+             (cl-every (lambda (page) (nth 1 page)) seen)))
+          (dolist (page seen)
+            (should (car page))
+            (should (<= 1800 (nth 1 page) 3500))))
+        ;; A line drawn, then a move to the next slide: neither page keeps
+        ;; it until it fades.
+        (portal-excalidraw-gui--drag-laser frame main)
+        (portal-excalidraw-gui--until
+         (lambda () (cl-every #'car (portal-excalidraw-gui--laser frame main))))
+        (apply #'portal-excalidraw-gui--key portal-excalidraw-gui--right)
+        (portal-excalidraw-gui--showing frame main 2)
+        (let (seen)
+          (portal-excalidraw-gui--until
+           (lambda ()
+             (setq seen (portal-excalidraw-gui--laser frame main))
+             (cl-every (lambda (page) (nth 1 page)) seen)))
+          (dolist (page seen)
+            (should (car page))
+            (should (< (nth 1 page) 1500))))
+        (with-current-buffer document (portal-excalidraw-stop-presenting))
+        (should-not (frame-live-p frame)))
+      ;; None of it touches the drawing.
+      (with-current-buffer document
+        (portal-excalidraw--flush)
+        (should-not (buffer-modified-p))
+        (should (equal (portal-excalidraw-gui--file-text (buffer-file-name document))
+                       saved))))))
+
 (ert-deftest portal-excalidraw-gui-present-and-stop-at-once-leave-no-slide-window ()
   :tags '(:gui)
   ;; Both reach the page before React draws either screen.
