@@ -803,4 +803,106 @@ A slide is drawn as large as fits its image's box, at its own shape."
         (with-current-buffer document (portal-excalidraw-stop-presenting))
         (should-not (frame-live-p frame))))))
 
+;; The scratch drawing.
+
+(defun portal-excalidraw-gui--rectangles (json)
+  "How many rectangles drawing JSON holds, or nil when JSON is nil."
+  (when json
+    (cl-count-if (lambda (element)
+                   (and (equal (plist-get element :type) "rectangle")
+                        (not (plist-get element :isDeleted))))
+                 (plist-get (json-parse-string json :object-type 'plist
+                                               :false-object nil :null-object nil)
+                            :elements))))
+
+(defun portal-excalidraw-gui--file-text (file)
+  "FILE's text, or nil when it is missing."
+  (when (file-exists-p file)
+    (with-temp-buffer (insert-file-contents file) (buffer-string))))
+
+(defun portal-excalidraw-gui--draw-rectangle (x1 y1 x2 y2)
+  "Draw a rectangle from X1 Y1 to X2 Y2 in the page, with the mouse."
+  (should (portal-excalidraw-gui--js
+           "document.querySelector('[data-testid=toolbar-rectangle]').click(); return true;"))
+  (should (portal-test-native-drag x1 y1 x2 y2)))
+
+(ert-deftest portal-excalidraw-gui-scratch-keeps-its-drawing-and-asks-nothing ()
+  :tags '(:gui)
+  (skip-unless (eq window-system 'ns))
+  (save-window-excursion
+    (let* ((directory (make-temp-file "portal-scratch-gui-" t))
+           (file (expand-file-name "portal/scratch.excalidraw" directory))
+           (portal-excalidraw-scratch-file file)
+           (before (get-buffer-create "*before scratch*"))
+           scratch)
+      (unwind-protect
+          (cl-letf (((symbol-function 'yes-or-no-p) (lambda (prompt) (ert-fail prompt)))
+                    ((symbol-function 'y-or-n-p) (lambda (prompt) (ert-fail prompt)))
+                    ((symbol-function 'kill-buffer--possibly-save)
+                     (lambda (_) (ert-fail "Asked before killing the scratch drawing"))))
+            (delete-other-windows)
+            (switch-to-buffer before)
+            (select-frame-set-input-focus (selected-frame))
+            (sit-for 0.1)
+            (should (portal-view--with-frame-title (selected-frame)
+                                                   #'portal-test-native-target-frame))
+            ;; The command shows it here, ready to draw in.
+            (portal-excalidraw-scratch)
+            (setq scratch (current-buffer))
+            (should (eq (window-buffer) scratch))
+            (portal-excalidraw--wait (lambda () portal-excalidraw--ready))
+            (portal-view-sync)
+            (should (portal-excalidraw-gui--until
+                     (lambda () (portal-input-focused-p scratch))))
+            ;; Each rectangle is in the file within a second.
+            (dolist (shape '((1 (150 150 250 220)) (2 (300 150 400 220))))
+              (apply #'portal-excalidraw-gui--draw-rectangle (cadr shape))
+              (let ((deadline (+ (float-time) 1)))
+                (while (and (not (eql (portal-excalidraw-gui--rectangles
+                                       (portal-excalidraw-gui--file-text file))
+                                      (car shape)))
+                            (< (float-time) deadline))
+                  (accept-process-output nil 0.02)))
+              (should (eql (portal-excalidraw-gui--rectangles
+                            (portal-excalidraw-gui--file-text file))
+                           (car shape))))
+            (should-not (buffer-modified-p scratch))
+            ;; Put away, the window shows what it did, and Emacs has the keyboard.
+            (let ((target (portal-view-target)))
+              (portal-excalidraw-scratch)
+              (redisplay t)
+              (portal-view-sync)
+              (should (eq (window-buffer) before))
+              (should-not (plist-get (portal--inspect target) :visible))
+              (should (portal-excalidraw-gui--until
+                       (lambda () (not (portal-input-focused-p scratch)))))
+              ;; Shown again, it is the same page, with its undo history.
+              (portal-excalidraw-scratch)
+              (should (eq (window-buffer) scratch))
+              (should (equal (portal-view-target) target))
+              (portal-terminal-test--wait
+               (lambda () (portal-excalidraw-gui--js "return document.hasFocus();")))
+              (apply #'portal-excalidraw-gui--key portal-excalidraw-gui--command-z)
+              (should (portal-excalidraw-gui--until
+                       (lambda () (eql (portal-excalidraw-gui--rectangles
+                                        (portal-excalidraw-gui--file-text file))
+                                       1)))))
+            ;; Killed and shown again, it comes from the file.
+            (kill-buffer scratch)
+            (should-not (buffer-live-p scratch))
+            (portal-excalidraw-scratch)
+            (setq scratch (current-buffer))
+            (portal-excalidraw--wait (lambda () portal-excalidraw--ready))
+            (portal-excalidraw--flush)
+            (should (eql (portal-excalidraw-gui--rectangles (buffer-string)) 1))
+            (should-not (buffer-modified-p)))
+        (when (buffer-live-p scratch)
+          (with-current-buffer scratch
+            (portal-excalidraw--close)
+            (set-buffer-modified-p nil)
+            (kill-buffer scratch)))
+        (kill-buffer before)
+        (portal-test-native-target-frame nil)
+        (delete-directory directory t)))))
+
 (provide 'portal-excalidraw-gui-tests)
