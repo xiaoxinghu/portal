@@ -984,6 +984,16 @@ function Present({
 			goTo(slideBy(index, delta, count));
 		};
 		screenKeys = (event) => {
+			// The theme switch, the one control Tab reaches, as it has no key
+			// of its own, takes Space and Return as a button does.
+			const plain =
+				!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+			if (
+				plain &&
+				(event.key === " " || event.key === "Enter") &&
+				event.target instanceof HTMLButtonElement
+			)
+				return;
 			const key = presentKey(event);
 			if (!key) return;
 			event.preventDefault();
@@ -1078,10 +1088,13 @@ function Present({
 				</button>
 				<button
 					type="button"
-					tabIndex={-1}
 					className="portal-present-theme"
 					title={`Show the slides ${otherTheme}, whatever the system's appearance`}
-					onClick={() => chooseSlideTheme(otherTheme)}
+					onClick={() => {
+						chooseSlideTheme(otherTheme);
+						// The console has the keyboard again, so Space shows the next slide.
+						pane.current?.focus();
+					}}
 				>
 					{otherTheme === "dark" ? "Dark slides" : "Light slides"}
 				</button>
