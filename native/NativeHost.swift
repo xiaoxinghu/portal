@@ -14,10 +14,32 @@ protocol NativeInputHandler: AnyObject {
 protocol NativeSurface: NativeInputHandler {
     var nativeView: NSView { get }
     var input: NativeInput? { get }
+    /// The surface sets the pointer itself, as a web page does, which it
+    /// can only while its window's cursor rectangles are off. A surface
+    /// that holds its pointer in a cursor rectangle of its own, as a
+    /// terminal does, needs them on.
+    var setsPointer: Bool { get }
 }
 
 extension NativeSurface {
     var input: NativeInput? { nil }
+    var setsPointer: Bool { false }
+}
+
+/// Tells its host when the mouse enters or leaves a surface that sets the
+/// pointer. Its tracking area holds it.
+@MainActor
+private final class PointerWatch: NSObject {
+    weak var host: NativeHost?
+    let surface: ObjectIdentifier
+
+    init(host: NativeHost, surface: ObjectIdentifier) {
+        self.host = host
+        self.surface = surface
+    }
+
+    @objc func mouseEntered(_ event: NSEvent) { host?.pointerEntered(surface) }
+    @objc func mouseExited(_ event: NSEvent) { host?.pointerExited(surface) }
 }
 
 @MainActor
@@ -45,6 +67,16 @@ final class NativeHost: NSObject {
     weak var view: NSView?
     private weak var editor: NSResponder?
     private var surfaces: [ObjectIdentifier: WeakSurface] = [:]
+    /// Each surface's tracking area that watches the mouse for the pointer,
+    /// for the surfaces that set it.
+    private var pointerAreas: [ObjectIdentifier: NSTrackingArea] = [:]
+    /// The surfaces the mouse is in, of those that set the pointer. While
+    /// there are any, the window's cursor rectangles are off.
+    private var pointerInside: Set<ObjectIdentifier> = []
+    /// Run-loop observers that keep the page's pointer while the
+    /// rectangles are off (`keepPointer`), and the pointer they keep.
+    private var pointerKeepers: [CFRunLoopObserver] = []
+    private var keptPointer: NSCursor?
 
     private init(view: NSView) {
         self.view = view
@@ -80,6 +112,7 @@ final class NativeHost: NSObject {
     @objc private func windowUpdated() {
         reclaimKeyboard()
         refreshOwnership()
+        releasePointer()
     }
 
     /// Tell the core which views gained or lost the keyboard; it tells Emacs.
@@ -119,6 +152,7 @@ final class NativeHost: NSObject {
         surfaces[ObjectIdentifier(surface)] = WeakSurface(surface)
         if child.superview !== view { view.addSubview(child) }
         child.isHidden = false
+        watchPointer(surface)
         child.layoutSubtreeIfNeeded()
         refreshOwnership()
         Self.startMonitoring()
@@ -128,18 +162,112 @@ final class NativeHost: NSObject {
     func hide(_ surface: any NativeSurface) {
         returnFocus(from: surface.nativeView)
         surface.nativeView.isHidden = true
+        releasePointer()
     }
 
     func remove(_ surface: any NativeSurface) {
         returnFocus(from: surface.nativeView)
         surfaces[ObjectIdentifier(surface)] = nil
+        if let area = pointerAreas.removeValue(forKey: ObjectIdentifier(surface)) {
+            surface.nativeView.removeTrackingArea(area)
+        }
         surface.nativeView.removeFromSuperview()
+        releasePointer()
         let hosts = Self.frames.objectEnumerator()?.allObjects as? [NativeHost] ?? []
         if hosts.allSatisfy({ $0.surfaces.values.allSatisfy { $0.value == nil } }) {
             if let monitor = Self.keyMonitor { NSEvent.removeMonitor(monitor) }
             Self.keyMonitor = nil
             Self.pressedKeys.removeAll()
         }
+    }
+
+    // The pointer over a web page. Emacs keeps one cursor rectangle over its
+    // whole frame, Portal's views included, and WebKit sets no pointer while
+    // the window applies a cursor rectangle's. So while the mouse is in a
+    // surface that sets the pointer, the window's cursor rectangles are off.
+    // The switch is window-wide and not counted, so this host, one per
+    // frame, owns it, and counts.
+
+    private func watchPointer(_ surface: any NativeSurface) {
+        let id = ObjectIdentifier(surface)
+        guard surface.setsPointer, pointerAreas[id] == nil else { return }
+        // Not during a drag: a divider dragged across the page, or a
+        // selection dragged out of it, keeps the pointer it started with.
+        // AppKit sends the entry or exit when the button is released.
+        let watch = PointerWatch(host: self, surface: id)
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                  owner: watch, userInfo: ["watch": watch])
+        surface.nativeView.addTrackingArea(area)
+        pointerAreas[id] = area
+    }
+
+    /// Whether the mouse being in SURFACE counts: it is in this host's
+    /// window, shown. A page in fullscreen is in a window of its own, which
+    /// has no Emacs rectangle to switch off.
+    private func pointerCounts(_ id: ObjectIdentifier) -> Bool {
+        guard let window = view?.window, let surface = surfaces[id]?.value else { return false }
+        let child = surface.nativeView
+        return child.window === window && !child.isHiddenOrHasHiddenAncestor
+    }
+
+    fileprivate func pointerEntered(_ id: ObjectIdentifier) {
+        guard pointerCounts(id), pointerInside.insert(id).inserted, pointerInside.count == 1 else { return }
+        switchCursorRects(on: false)
+    }
+
+    fileprivate func pointerExited(_ id: ObjectIdentifier) {
+        guard pointerInside.remove(id) != nil, pointerInside.isEmpty else { return }
+        switchCursorRects(on: true)
+    }
+
+    /// Forget the surfaces the mouse can no longer be in: hidden, removed,
+    /// or moved to another window, as to another frame's or to fullscreen.
+    /// No exit comes then.
+    private func releasePointer() {
+        guard !pointerInside.isEmpty else { return }
+        pointerInside = pointerInside.filter(pointerCounts)
+        if pointerInside.isEmpty { switchCursorRects(on: true) }
+    }
+
+    /// Turn the window's cursor rectangles on or off, then have AppKit work
+    /// the pointer out again: until it does, it keeps the pointer of the
+    /// rectangle it last applied, and WebKit is refused meanwhile.
+    private func switchCursorRects(on: Bool) {
+        keepPointer(!on)
+        guard let view, let window = view.window else { return }
+        if on { window.enableCursorRects() } else { window.disableCursorRects() }
+        window.invalidateCursorRects(for: view)
+    }
+
+    /// Emacs redoes its rectangle as it handles mouse moves and redisplays,
+    /// and AppKit then works the pointer out again in a run-loop observer,
+    /// as Core Animation commits. With the rectangles off, that sets the
+    /// arrow, often after the page has set its pointer for the last move,
+    /// and WebKit sets it again only at the next one. Nothing else sets the
+    /// pointer among the run loop's observers, so a pointer changed while
+    /// they run is put back: one observer before all the others notes it,
+    /// one after them all compares.
+    private func keepPointer(_ on: Bool) {
+        let loop = CFRunLoopGetMain()
+        guard on else {
+            for observer in pointerKeepers { CFRunLoopRemoveObserver(loop, observer, .commonModes) }
+            pointerKeepers = []
+            keptPointer = nil
+            return
+        }
+        guard pointerKeepers.isEmpty else { return }
+        let activities = CFRunLoopActivity.allActivities.rawValue
+        let before = CFRunLoopObserverCreateWithHandler(nil, activities, true, CFIndex.min) { [weak self] _, _ in
+            MainActor.assumeIsolated { self?.keptPointer = NSCursor.current }
+        }
+        let after = CFRunLoopObserverCreateWithHandler(nil, activities, true, CFIndex.max) { [weak self] _, _ in
+            MainActor.assumeIsolated {
+                guard let kept = self?.keptPointer, NSCursor.current !== kept else { return }
+                kept.set()
+            }
+        }
+        pointerKeepers = [before, after].compactMap { $0 }
+        for observer in pointerKeepers { CFRunLoopAddObserver(loop, observer, .commonModes) }
     }
 
     private static func startMonitoring() {
