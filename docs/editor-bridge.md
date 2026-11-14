@@ -131,6 +131,16 @@ but `mode` and `slide`:
   slide's SVG, index from 0, when it says `{type: "ready"}`, when the current
   slide changes, and when that slide's image changes. It decodes each slide
   before showing it.
+- The drawing's page sends it `{type: "laser", index, width, height, strokes}`,
+  every line of the laser on slide `index`, whose frame is `width` by
+  `height`: each stroke `{id, points, fading}`, its points x, y pairs in the
+  frame's units. It sends it at most once an animation frame while a line is
+  drawn or goes, when the slide changes, with no lines, and on `ready`. The
+  slide window replaces what it shows, keeps the path of a stroke whose id it
+  has so its fade goes on, and shows lines only over the slide they are for.
+  Both pages draw them with `drawLaser` (`host/present.ts`) in an `<svg>`
+  whose `viewBox` is the frame's size, laid over the slide image and clipped
+  to the slide. Nothing about the laser reaches Emacs.
 - It sends `{type: "key", key}`, `key` one of `next`, `previous`, `first`,
   `last` and `stop`, for the presenting keys (`host/present.ts`) pressed while
   it has the keyboard; the console moves as for its own keys.
@@ -228,7 +238,7 @@ from Emacs and the slide in the mode line.
 `host/slides.test.ts` covers slide order and which images a change makes
 stale; `host/audience.test.ts` the slide window's page, served offline and
 apart from the editor's bundle, the presenting keys, moving by a number of
-slides and the time presenting.
+slides, the time presenting, and the laser's points, paths and messages.
 
 `ctest --test-dir build -R web-core` runs `test/portal-web-tests.c`, the core's bridge and
 web rules against the fake platform: message order and coalescing, draining
@@ -250,7 +260,10 @@ image round trips, several drawings, revert, hidden-state retention, rapid
 slide and saving from it, and presenting: the slide window shows the slide,
 the console's next slide, notes and clocks, next from the console, from the
 slide window and by `C-c C-n` and `C-c C-p` in Emacs with the mode line
-following, and stopping, which takes the slide window and its frame. In the full set, a covered slide window still
+following, stopping, which takes the slide window and its frame, and the
+laser: a line dragged on the console's slide shows in the slide window over
+the same part of the slide, both go 2 seconds after it is drawn, and the next
+slide drops it at once. In the full set, a covered slide window still
 draws, and fullscreen fills the display. The test-only JavaScript evaluator is absent from
 the production module. That the editor works offline, loading its modules and
 fonts only from the app host, is an [app host check](testing.md#app-host-checks).
