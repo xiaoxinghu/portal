@@ -794,16 +794,41 @@ sent the page, newest first; the page answers a snapshot with
     (should-not (buffer-modified-p))))
 
 (ert-deftest portal-excalidraw-scratch-quitting-writes-a-drawing-left-modified ()
-  ;; A write failed, and the file is writable again by the time Emacs quits.
+  ;; A write failed, the file is writable again by the time Emacs quits,
+  ;; and another Emacs wrote it meanwhile.
   (portal-excalidraw-test--scratch
     (portal-excalidraw--scene portal-excalidraw-test--scene)
     (should (buffer-modified-p))
+    (set-file-times file (time-subtract nil 60))
+    (set-visited-file-modtime)
+    (write-region "{\"type\":\"excalidraw\",\"elements\":[]}\n" nil file nil 'silent)
     (let ((confirm-kill-emacs nil) (confirm-kill-processes nil) killed)
       (cl-letf (((symbol-function 'kill-emacs) (lambda (&rest _) (setq killed t))))
         (save-buffers-kill-emacs))
       (should killed))
     (should (equal (portal-excalidraw-test--file file)
                    (concat portal-excalidraw-test--scene "\n")))))
+
+(ert-deftest portal-excalidraw-scratch-quitting-leaves-a-drawing-in-no-file-to-emacs ()
+  ;; The file still cannot be written: Emacs asks, as for any unsaved file,
+  ;; and nothing signals.
+  (portal-excalidraw-test--scratch
+    (portal-excalidraw--scene portal-excalidraw-test--scene)
+    (set-file-modes file #o444)
+    (let ((confirm-kill-emacs nil) (confirm-kill-processes nil) killed asked)
+      (cl-letf (((symbol-function 'kill-emacs) (lambda (&rest _) (setq killed t)))
+                ((symbol-function 'map-y-or-n-p)
+                 (lambda (_prompter _actor list &rest _)
+                   (setq asked (append asked list))
+                   0))
+                ((symbol-function 'yes-or-no-p) (lambda (_) nil))
+                ((symbol-function 'message) #'ignore))
+        (save-buffers-kill-emacs))
+      (should (memq scratch asked))
+      (should-not killed))
+    (should (buffer-modified-p))
+    (should (equal (portal-excalidraw-test--file file) portal-excalidraw--empty))
+    (set-file-modes file #o644)))
 
 (ert-deftest portal-excalidraw-scratch-written-to-another-file-is-an-ordinary-drawing ()
   (portal-excalidraw-test--scratch
