@@ -32,7 +32,7 @@ JavaScript's false and null are nil."
 
 (defconst portal-excalidraw-gui--pixel
   (list :pixel (list :id "pixel" :mimeType "image/png" :created 1
-                     :dataURL "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jS1sAAAAASUVORK5CYII="))
+                     :dataURL "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="))
   "The image files of a drawing with `portal-excalidraw-gui--picture'.")
 
 (defun portal-excalidraw-gui--write (file elements &optional files)
@@ -723,6 +723,125 @@ A slide is drawn as large as fits its image's box, at its own shape."
       (should (= (length (frame-list)) frames))
       (portal-excalidraw--flush)
       (should-not (buffer-modified-p)))))
+
+(defun portal-excalidraw-gui--shades-script (selector)
+  "A script returning the shades of the slide image SELECTOR finds, once
+it is drawn: at its bottom right, the drawing's background, and at its top
+left, where `portal-excalidraw-gui--picture' is, each \"dark\", \"light\"
+or the colour between."
+  (format "const slide = document.querySelector(%S);
+           if (!slide?.complete || !slide.naturalWidth) return null;
+           const canvas = document.createElement('canvas');
+           [canvas.width, canvas.height] = [slide.naturalWidth, slide.naturalHeight];
+           const context = canvas.getContext('2d');
+           context.drawImage(slide, 0, 0);
+           const shade = (x, y) => {
+             const [r, g, b] = context.getImageData(
+               Math.floor(x * canvas.width), Math.floor(y * canvas.height), 1, 1).data;
+             const light = (r + g + b) / 3;
+             return light < 64 ? 'dark' : light > 192 ? 'light' : `${r},${g},${b}`;
+           };
+           return [shade(0.75, 0.75), shade(0.1, 0.15)];"
+          selector))
+
+(defun portal-excalidraw-gui--shades (selector)
+  "The shades of the slide image SELECTOR finds in the page, as
+`portal-excalidraw-gui--shades-script' says."
+  (append (portal-excalidraw-gui--js (portal-excalidraw-gui--shades-script selector))
+          nil))
+
+(defun portal-excalidraw-gui--slides-in (frame console expected)
+  "Wait until the slide window in FRAME and the console in frame CONSOLE
+show EXPECTED: the shades of each one's slide, then the console's switch's
+label; and check it."
+  (let (seen)
+    (portal-excalidraw-gui--until
+     (lambda ()
+       (equal expected
+              (setq seen
+                    (list (append (portal-excalidraw-gui--in-frame
+                                   frame (portal-excalidraw-gui--shades-script "#slide")
+                                   console)
+                                  nil)
+                          (portal-excalidraw-gui--shades ".portal-present-stage img")
+                          (portal-excalidraw-gui--js
+                           "return document.querySelector('.portal-present-theme')?.textContent ?? null;"))))))
+    (should (equal seen expected))))
+
+(ert-deftest portal-excalidraw-gui-slides-follow-the-appearance-and-the-switch ()
+  :tags '(:gui)
+  ;; A white picture in the first slide: it stays white in a dark slide.
+  (portal-excalidraw-gui--drawing
+      (list (portal-excalidraw-gui--frame "opening" "Opening" 0 0 0 320 180)
+            (append portal-excalidraw-gui--picture '(:frameId "opening"))
+            (portal-excalidraw-gui--frame "closing" "Closing" 1 0 400 160 90))
+      portal-excalidraw-gui--pixel
+    (let ((main (selected-frame))
+          (appearance portal-web-appearance)
+          (saved (with-temp-buffer
+                   (insert-file-contents (buffer-file-name document))
+                   (buffer-string))))
+      (unwind-protect
+          (progn
+            ;; The page is dark, so the slides are.
+            (setq portal-web-appearance 'dark)
+            (portal-excalidraw-present)
+            (portal-web-gui--run-until 'portal-web-opened)
+            (portal-web-gui--run-until 'portal-excalidraw-command)
+            (portal-excalidraw--wait (lambda () (equal portal-excalidraw--mode "present")))
+            (let ((frame portal-excalidraw--slides-frame)
+                  (count "return document.querySelector('.portal-present-count').textContent;"))
+              (portal-excalidraw-gui--key 115 (ash 1 23) (string #xF729)) ; Home
+              (portal-excalidraw-gui--slides-in
+               frame main '(("dark" "light") ("dark" "light") "Light slides"))
+              ;; The switch, reached with Option-Tab, as WebKit reaches a
+              ;; button unless macOS's keyboard navigation is on, makes them
+              ;; light with Space, in both windows at once, and then dark
+              ;; again with Return; it moves no slide.
+              (dolist (key '((49 " " ("light" "light") "Dark slides")
+                             (36 "\r" ("dark" "light") "Light slides")))
+                (portal-excalidraw-gui--key 48 (ash 1 19) "\t")
+                (portal-excalidraw-gui--until
+                 (lambda () (portal-excalidraw-gui--js
+                             "return document.activeElement?.className === 'portal-present-theme';")))
+                (should (portal-excalidraw-gui--js
+                         "return document.activeElement?.className === 'portal-present-theme';"))
+                (portal-excalidraw-gui--key (nth 0 key) 0 (nth 1 key))
+                (portal-excalidraw-gui--slides-in
+                 frame main (list (nth 2 key) (nth 2 key) (nth 3 key)))
+                (should (equal (portal-excalidraw-gui--js count) "1 / 2")))
+              ;; The console has the keyboard back: Space shows the next slide.
+              (portal-excalidraw-gui--key 49 0 " ")
+              (portal-excalidraw-gui--until
+               (lambda () (equal (portal-excalidraw-gui--js count) "2 / 2")))
+              (should (equal (portal-excalidraw-gui--js count) "2 / 2"))
+              (portal-excalidraw-gui--key 115 (ash 1 23) (string #xF729)) ; Home
+              ;; Chosen, the theme outlasts a change of the page's appearance.
+              (setq portal-web-appearance 'light)
+              (portal-excalidraw-gui--until
+               (lambda () (not (portal-excalidraw-gui--js
+                                "return matchMedia('(prefers-color-scheme: dark)').matches;"))))
+              (sit-for 0.5)
+              (portal-excalidraw-gui--slides-in
+               frame main '(("dark" "light") ("dark" "light") "Light slides"))
+              ;; Arrange shows the slides the console chose.
+              (with-current-buffer document (portal-excalidraw-stop-presenting))
+              (portal-excalidraw--wait (lambda () (equal portal-excalidraw--mode "arrange")))
+              (should-not (frame-live-p frame))
+              (portal-excalidraw-gui--until
+               (lambda () (equal (portal-excalidraw-gui--shades ".portal-stage-image img")
+                                 '("dark" "light"))))
+              (should (equal (portal-excalidraw-gui--shades ".portal-stage-image img")
+                             '("dark" "light")))))
+        (setq portal-web-appearance appearance))
+      ;; None of it touches the drawing.
+      (with-current-buffer document
+        (portal-excalidraw--flush)
+        (should-not (buffer-modified-p))
+        (should (equal (with-temp-buffer
+                         (insert-file-contents (buffer-file-name document))
+                         (buffer-string))
+                       saved))))))
 
 (defun portal-excalidraw-gui--page-size (frame console)
   "The size of the page the slide window in FRAME shows, as [WIDTH HEIGHT]."
