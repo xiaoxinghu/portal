@@ -87,7 +87,8 @@ or `portal-input-double-escape` to leave with Escape typed twice.
 `q` hides the view; killing its buffer closes it.
 
 Try `M-x portal-terminal` for a shell, `M-x portal-render-markdown` for a saved
-Markdown file, or `M-x portal-excalidraw` for a local drawing. Loading Portal registers no global
+Markdown file, `M-x portal-excalidraw` for a local drawing, or
+`M-x portal-excalidraw-scratch` for a drawing that is always there and saves itself. Loading Portal registers no global
 shortcuts. Runtime use needs neither Bun nor Node nor adjacent web assets; see
 [distribution layout](CONTRIBUTING.md#build-outputs-and-distribution).
 

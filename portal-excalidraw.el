@@ -30,6 +30,9 @@ or \"present\".")
   "The buffer of the drawing's slide window while presenting, or nil.")
 (defvar-local portal-excalidraw--slides-frame nil
   "The frame made to show the drawing's slide window, or nil.")
+(defvar-local portal-excalidraw--scratch nil
+  "Non-nil in the scratch drawing, which writes its file on every change
+and asks nothing.  See `portal-excalidraw-scratch'.")
 
 (defcustom portal-excalidraw-slides-frame-parameters
   '((minibuffer . nil) (tool-bar-lines . 0) (tab-bar-lines . 0) (menu-bar-lines . 0)
@@ -138,6 +141,7 @@ The first save of a new drawing asks for a filename."
          (modified (buffer-modified-p))
          (inhibit-read-only t))
     (unless (equal text (buffer-string))
+      (when portal-excalidraw--scratch (portal-excalidraw--take-disk))
       (erase-buffer)
       (insert text))
     (when (and initial (not modified)) (setq portal-excalidraw--saved text))
@@ -156,10 +160,14 @@ Never prompt in this function."
         ("loaded"
          (portal-excalidraw--scene (plist-get message :json) t)
          (setq portal-excalidraw--ready t portal-excalidraw--error nil))
-        ("dirty" (set-buffer-modified-p t))
+        ;; The scratch drawing is written as the change arrives: marked
+        ;; modified before, Emacs would ask before killing it meanwhile.
+        ("dirty" (unless portal-excalidraw--scratch (set-buffer-modified-p t)))
         ("mode" (portal-excalidraw--screen (plist-get message :mode)))
         ("slide" (portal-excalidraw--presented message))
-        ("change" (portal-excalidraw--scene (plist-get message :json)))
+        ("change"
+         (portal-excalidraw--scene (plist-get message :json))
+         (when portal-excalidraw--scratch (portal-excalidraw--write-scratch)))
         ("snapshot"
          (when (eql (plist-get message :request) portal-excalidraw--request)
            (portal-excalidraw--scene (plist-get message :json))
@@ -436,7 +444,9 @@ of the display.  Afterwards, `frame-resize-pixelwise' is as it was."
         (portal-excalidraw--flush)
         (when (or (not buffer-file-name) (not (file-exists-p buffer-file-name)))
           (set-buffer-modified-p t))
-        (let ((portal-excalidraw--flushing t)) (save-buffer arg)))
+        (if portal-excalidraw--scratch
+            (portal-excalidraw--write-scratch)
+          (let ((portal-excalidraw--flushing t)) (save-buffer arg))))
     (error
      (when portal-excalidraw--ready
        (portal-web-send (list :type "error" :message (error-message-string err))))
@@ -449,12 +459,24 @@ of the display.  Afterwards, `frame-resize-pixelwise' is as it was."
     (portal-web-send (list :type "saved" :json portal-excalidraw--saved))))
 
 (defun portal-excalidraw--prepare-write ()
-  "Require a fresh scene, then let Emacs perform its normal file write."
-  (portal-excalidraw--flush)
+  "Require a fresh scene, then let Emacs perform its normal file write.
+The scratch drawing writes the scene it has when its page cannot say."
+  (if portal-excalidraw--scratch
+      (portal-excalidraw--scratch-flush)
+    (portal-excalidraw--flush))
   nil)
 
 (defun portal-excalidraw--query-kill ()
-  "Flush edits still in flight before the buffer is killed."
+  "Flush edits still in flight before the buffer is killed.
+The scratch drawing writes them, and asks nothing."
+  (if portal-excalidraw--scratch
+      (progn (portal-excalidraw--scratch-flush)
+             (portal-excalidraw--write-scratch)
+             t)
+    (portal-excalidraw--query-kill-drawing)))
+
+(defun portal-excalidraw--query-kill-drawing ()
+  "Flush edits still in flight, and ask before discarding any left unsaved."
   (let ((modified (buffer-modified-p)))
     (when (and portal-excalidraw--ready (not portal-excalidraw--error))
       (portal-excalidraw--flush))
@@ -502,6 +524,130 @@ Unsaved changes in the buffer are kept."
       (set-buffer-modified-p nil)
       (setq portal-excalidraw--saved text portal-excalidraw--error nil)
       (portal-excalidraw--start))))
+
+;; The scratch drawing: one drawing, always there, that saves itself.
+
+(defcustom portal-excalidraw-scratch-file
+  (locate-user-emacs-file "portal/scratch.excalidraw")
+  "The scratch drawing's file, which `portal-excalidraw-scratch' shows.
+It is a plain .excalidraw file, made with its directory when missing, and
+written on every change to the drawing."
+  :type 'file
+  :group 'portal)
+
+;;;###autoload
+(defun portal-excalidraw-scratch ()
+  "Show the scratch drawing in the selected window, or put it away.
+The scratch drawing is to drawing what *scratch* is to text: one drawing,
+always there, in `portal-excalidraw-scratch-file'.  Where the selected
+window does not show it, show it there, its view moving from wherever it
+was, and give it the keyboard.  Where it does, show the buffer the window
+showed before, and give Emacs the keyboard.  Each change to the drawing
+is in its file a moment later, with no prompt; killing its buffer and
+quitting Emacs write what is still in flight, and ask nothing.  When
+another program changed the file, the drawing overwrites it.
+No key is bound; bind this command in your configuration."
+  (interactive)
+  (let ((buffer (portal-excalidraw--scratch-buffer)))
+    (if (eq (window-buffer) buffer)
+        (portal-excalidraw--put-away buffer)
+      (switch-to-buffer buffer nil t)
+      (portal-view-focus))))
+
+(defun portal-excalidraw--scratch-buffer ()
+  "The scratch drawing's buffer, visiting its file, which is made if missing."
+  (let* ((file (expand-file-name portal-excalidraw-scratch-file))
+         (buffer (find-buffer-visiting file))
+         (opened (not buffer)))
+    (unless buffer
+      (make-directory (file-name-directory file) t)
+      (unless (file-exists-p file)
+        (write-region portal-excalidraw--empty nil file nil 'silent))
+      ;; A drawing with images can be larger than Emacs asks about.
+      (let ((large-file-warning-threshold nil))
+        (setq buffer (find-file-noselect file))))
+    (with-current-buffer buffer
+      (unless portal-excalidraw--scratch
+        (condition-case err
+            (unless (derived-mode-p 'portal-excalidraw-mode) (portal-excalidraw-mode))
+          (error (when opened (kill-buffer buffer))
+                 (user-error "The scratch drawing %s cannot be opened: %s"
+                             file (error-message-string err))))
+        (setq portal-excalidraw--scratch t)
+        ;; Two Emacsen drawing in it would ask about each other's locks;
+        ;; the last write wins.
+        (setq-local create-lockfiles nil)
+        ;; Every change is written already.
+        (auto-save-mode -1)
+        (add-hook 'after-set-visited-file-name-hook
+                  #'portal-excalidraw--scratch-renamed nil t)))
+    buffer))
+
+(defun portal-excalidraw--scratch-renamed ()
+  "Make the scratch drawing an ordinary drawing, now that it visits
+another file, as after \[write-file].  The next
+`portal-excalidraw-scratch' opens the scratch drawing's file again."
+  (setq portal-excalidraw--scratch nil)
+  (kill-local-variable 'create-lockfiles)
+  (remove-hook 'after-set-visited-file-name-hook #'portal-excalidraw--scratch-renamed t)
+  (when auto-save-default (auto-save-mode 1)))
+
+(defun portal-excalidraw--put-away (buffer)
+  "Show the buffer the selected window showed before scratch drawing BUFFER.
+The keyboard goes to Emacs, though another window shows BUFFER."
+  (switch-to-prev-buffer nil 'bury)
+  (portal-view-sync)
+  ;; Hiding the view gives Emacs the keyboard, but the view stays in
+  ;; another window showing BUFFER, which Emacs may not know has it yet.
+  (when-let* ((target (buffer-local-value 'portal-view--target buffer)))
+    (portal-input--action "unfocus" target)))
+
+(defun portal-excalidraw--take-disk ()
+  "Take the file on disk as this buffer's, so that changing or writing the
+buffer does not ask about a file changed on disk.  The last write wins."
+  (when (and buffer-file-name (not (verify-visited-file-modtime)))
+    (set-visited-file-modtime)))
+
+(defun portal-excalidraw--scratch-flush ()
+  "Bring the scratch drawing's buffer up to date, when its page can say.
+Without a page, or with one that fails to answer, the buffer stays as it
+is, with the last change the page sent."
+  (when (and portal-excalidraw--ready (not portal-excalidraw--error))
+    (condition-case err
+        (portal-excalidraw--flush)
+      (error (message "Scratch drawing: %s" (error-message-string err))))))
+
+(defun portal-excalidraw--write-scratch ()
+  "Write the scratch drawing's buffer to its file, when it is modified.
+It writes the buffer's scene, asking the page for none, and asks nothing:
+a file changed on disk is overwritten.  A failed write is a message, and
+leaves the buffer modified, so that the next change tries again."
+  (when (and buffer-file-name (buffer-modified-p))
+    (condition-case err
+        (let ((portal-excalidraw--flushing t)
+              (save-silently t)
+              (inhibit-message t)
+              ;; Never ask to delete excess backup versions; keep them.
+              (delete-old-versions (or delete-old-versions 'keep)))
+          (make-directory (file-name-directory buffer-file-name) t)
+          (unless (file-writable-p buffer-file-name)
+            (signal 'file-error (list "Cannot write" buffer-file-name)))
+          (portal-excalidraw--take-disk)
+          (save-buffer))
+      (error (message "Scratch drawing not saved: %s" (error-message-string err))))))
+
+(defun portal-excalidraw--quit (&rest _)
+  "Write each scratch drawing, with what it still has in flight, as Emacs
+quits.  This comes before `save-buffers-kill-emacs' offers to save
+buffers, so that the scratch drawing is written as on any change, asking
+nothing.  Only one whose write fails now is left to Emacs, which asks
+about it as about any unsaved file: it is in no file."
+  (dolist (buffer (buffer-list))
+    (when (buffer-local-value 'portal-excalidraw--scratch buffer)
+      (with-current-buffer buffer
+        (portal-excalidraw--scratch-flush)
+        (portal-excalidraw--write-scratch)))))
+(advice-add 'save-buffers-kill-emacs :before #'portal-excalidraw--quit)
 
 (provide 'portal-excalidraw)
 ;;; portal-excalidraw.el ends here

@@ -28,6 +28,36 @@ saves it. Existing `.excalidraw` files opened with `C-x C-f` or Dired enter
   Use it after a host restart if more Excalidraw assets need loading. Stopping
   the host leaves open drawings loaded.
 
+## The scratch drawing
+
+`M-x portal-excalidraw-scratch` is to drawing what `*scratch*` is to text: one
+drawing, always there, that saves itself. In a window that does not show it,
+the command shows it there, ready to draw in: the drawing has the keyboard,
+and its view moves there if another window had it. In the window that shows
+it, the same command puts it away: the window shows what it showed before, and
+Emacs has the keyboard. No key is bound; bind the command in your
+configuration, as for any Portal command.
+
+- It is one `.excalidraw` file, `portal-excalidraw-scratch-file`, by default
+  `portal/scratch.excalidraw` in your Emacs directory. The command makes the
+  file and its directory when they are missing, and visits it in
+  `portal-excalidraw-mode` like any drawing.
+- Each change is in the file a moment after the last stroke, with no prompt;
+  there is nothing to save. Put away, the drawing keeps its view and undo
+  history, so it comes back as it was; killing its buffer, or quitting Emacs,
+  writes what is still in flight, and the drawing comes back from the file.
+- It never asks: not to save, not to kill its buffer, not to quit. When the
+  file changed on disk, as with two Emacsen drawing in it, the drawing
+  overwrites it: the last write wins. A write that fails says so in the echo
+  area and keeps the buffer modified, and the next change tries again.
+  Only while writing fails do killing its buffer and quitting Emacs ask, as
+  for any unsaved file: the drawing is then in no file.
+- Nothing empties it, and nothing offers to. `C-x C-w` writes it to another
+  file: the buffer becomes that file's, an ordinary drawing, and the command
+  opens the scratch drawing from its own file again.
+
+Only the scratch drawing saves itself; every other drawing saves when asked.
+
 ## Slides
 
 A drawing's slides are its frames. **Slides** in the drawing's menu, or
