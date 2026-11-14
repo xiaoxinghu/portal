@@ -32,7 +32,7 @@ JavaScript's false and null are nil."
 
 (defconst portal-excalidraw-gui--pixel
   (list :pixel (list :id "pixel" :mimeType "image/png" :created 1
-                     :dataURL "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jS1sAAAAASUVORK5CYII="))
+                     :dataURL "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="))
   "The image files of a drawing with `portal-excalidraw-gui--picture'.")
 
 (defun portal-excalidraw-gui--write (file elements &optional files)
