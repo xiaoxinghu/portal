@@ -63,6 +63,10 @@ now, had the buffer switched into it; a pane not among them came from a
 split, or a new frame, since.")
 (defvar-local portal-view--showing nil
   "The windows that showed this buffer when its view was last placed.")
+(defvar-local portal-view--veil nil
+  "The overlay that hides the buffer's text in the pane that has its view.
+It covers the whole buffer, invisible only in `portal-view--window', and
+is deleted, kept for reuse, while the view is in no pane.")
 (defvar-local portal-view--closed-text nil
   "What this buffer says once its view has closed, or nil.
 It is non-nil exactly while the buffer's text is a placard, written by
@@ -239,6 +243,9 @@ the buffer cannot take it, as when it has a view already, it is closed."
           portal-view--showing nil)
     (remove-hook 'kill-buffer-hook #'portal-view-close t)
     (remove-hook 'change-major-mode-hook #'portal-view-close t)
+    (when portal-view--veil
+      (delete-overlay portal-view--veil)
+      (setq portal-view--veil nil))
     (unless portal-view--buffers
       (portal-view--hooks nil)
       (setq portal-view--live-windows nil))
@@ -254,8 +261,9 @@ the buffer cannot take it, as when it has a view already, it is closed."
 (defun portal-view-placard (noun closed)
   "Make the current buffer's text a placard for its view, a NOUN.
 NOUN names what the view shows, such as \"terminal\" or \"page\".  The
-view covers the text in the pane that has it, so the placard is read in
-the other panes showing the buffer: it says the view is in another pane
+view covers the text in the pane that has it, where the text is hidden
+too, as a view may show what is behind it, so the placard is read in the
+other panes showing the buffer: it says the view is in another pane
 and how to bring it here, as a browser's picture in picture leaves a
 placard where its video was.  Once the view closes, the text becomes
 CLOSED, a sentence such as \"This terminal has ended.\"."
@@ -328,7 +336,30 @@ another frame moves it there.  Nothing is sent when nothing moved.
       (let ((moved (not (eq window portal-view--window))))
         (setq portal-view--window window
               portal-view--showing windows)
+        (portal-view--veil window)
         (when moved (run-hooks 'portal-view-moved-hook))))))
+
+(defun portal-view--veil (window)
+  "Hide the current buffer's text in WINDOW, the pane that has its view.
+A view may show what is behind it, and the text behind it is Emacs's: a
+placard, or a file such as a drawing's.  The text stays in every other
+pane showing the buffer.  With WINDOW nil, the text is hidden nowhere."
+  (let ((veil portal-view--veil))
+    (cond
+     ((null window) (when veil (delete-overlay veil)))
+     (t
+      (unless veil
+        ;; Text inserted at its end, or into the emptied buffer, is hidden too.
+        (setq veil (make-overlay 1 1 nil nil t)
+              portal-view--veil veil)
+        (overlay-put veil 'invisible t)
+        (overlay-put veil 'portal-view-veil t))
+      (unless (eq (overlay-get veil 'window) window)
+        (overlay-put veil 'window window))
+      (let ((end (1+ (buffer-size))))
+        (unless (and (eq (overlay-buffer veil) (current-buffer))
+                     (eql (overlay-start veil) 1) (eql (overlay-end veil) end))
+          (move-overlay veil 1 end (current-buffer))))))))
 
 (defun portal-view-sync (&optional _frame)
   "Place or hide each Portal view to match the windows showing its buffer.
@@ -366,7 +397,8 @@ The next sync places each one wherever its buffer is still shown."
       (when (eq frame (car portal-view--geometry))
         (portal--hide portal-view--target)
         (setq portal-view--geometry nil
-              portal-view--window nil))
+              portal-view--window nil)
+        (portal-view--veil nil))
       (setq portal-view--showing (portal-view--outside frame portal-view--showing))))
   (setq portal-view--live-windows (portal-view--outside frame portal-view--live-windows)))
 
