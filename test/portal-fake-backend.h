@@ -18,7 +18,7 @@ struct portal_fake_calls {
     size_t copied, pasted; /* Copy and Paste commands given to views' apps. */
     size_t listed, themed, entered; /* Theme lists, themes applied, and Enters tried. */
     size_t sized, opaque; /* Terminal text sizes and opacities set. */
-    size_t appeared; /* Web appearances set. */
+    size_t appeared, see_through; /* Web appearances and opacities set. */
     size_t found, zoomed; /* Finds started in pages, and web zooms set. */
     size_t printed;       /* Pages printed, to files or in the print panel. */
 };

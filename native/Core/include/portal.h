@@ -169,10 +169,13 @@ bool portal_view_describe(portal_view *view, portal_text *state, portal_text *er
 
    A web view's options, passed to portal_view_create, are :hosted, a flag
    or a string, for a hosted app, whose view keeps no data between sessions
-   and runs the bridge and the links script; and :appearance, which the core
+   and runs the bridge and the links script; :appearance, which the core
    has checked is "light", "dark" or false, starting the view in that
-   portal_appearance, below: false for the system's.  The platform ignores
-   any other option.
+   portal_appearance, below: false for the system's; and :opacity, which
+   the core has checked is false or, in a hosted view, a number from 0 to
+   1, starting the view at that opacity, as portal_web_set_opacity says:
+   false for a view that never takes one.  The platform ignores any other
+   option.
 
    Load URL in WEB as a new document, adding it to WEB's history.  The core
    has checked that URL is an absolute http, https, file, data or about URL,
@@ -212,6 +215,16 @@ typedef enum portal_appearance {
    without loading it again. */
 bool portal_web_set_appearance(portal_view *web, portal_appearance appearance,
                                portal_text *error);
+/* Show the background of WEB's pages at OPACITY, from 0 to 1, which the
+   core has checked, from now on: the page on screen, without loading it
+   again, and each page it loads later.  WEB is a hosted view created with
+   an :opacity.  At 1 the view draws its backing behind the page as any
+   other web view does.  Below 1 it draws none, nor any behind the page's
+   overscroll, and the page learns OPACITY as the CSS custom property
+   --portal-view-opacity on its root element before any of its own script
+   runs, which the page's stylesheet applies to its own background: what is
+   behind the view shows through it. */
+bool portal_web_set_opacity(portal_view *web, double opacity, portal_text *error);
 /* Create a web view, detached, for the window the page in OPENER asked for
    with portal_web_window, below, passing REQUEST through.  The platform
    makes it from REQUEST, as its toolkit may require: on macOS, WebKit's

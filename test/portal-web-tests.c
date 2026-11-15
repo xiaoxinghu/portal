@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <math.h>
 #include <unistd.h>
 
 #include "channel.h"
@@ -591,6 +592,131 @@ static void test_an_appearance_reaches_every_web_view(void)
     close_view(second);
     close_view(third);
     close_view(terminal);
+}
+
+/* Open a web view with COUNT OPTIONS; return its target to free, or NULL
+   with *ERROR set. */
+static char *open_preview(const portal_option *options, size_t count, portal_text *error)
+{
+    portal_text target = {0};
+    return portal_views_open(text("web"), options, count, &target, error) ? target.data : NULL;
+}
+
+static const portal_option hosted_flag = {.name = {"hosted", 6}, .flag = true};
+
+static portal_option opacity_option(double opacity)
+{
+    return (portal_option) {.name = text("opacity"), .is_number = true, .number = opacity,
+                            .flag = true};
+}
+
+static void test_an_opacity_at_open(void)
+{
+    portal_text error = {0};
+    struct {
+        portal_option options[3];
+        size_t count;
+        const char *message;
+    } refused[] = {
+        {{hosted_flag, {.name = text("opacity"), .is_string = true, .string = text("0.5")}},
+         2,
+         "Option :opacity must be a number"},
+        {{hosted_flag, {.name = text("opacity"), .flag = true}}, 2,
+         "Option :opacity must be a number"},
+        {{hosted_flag, opacity_option(1.01)}, 2, "A page's opacity is a number from 0 to 1"},
+        {{hosted_flag, opacity_option(-0.01)}, 2, "A page's opacity is a number from 0 to 1"},
+        {{hosted_flag, opacity_option(NAN)}, 2, "A page's opacity is a number from 0 to 1"},
+        {{hosted_flag, opacity_option(0.5), opacity_option(2)}, 3,
+         "A page's opacity is a number from 0 to 1"},
+        /* Only Portal's own pages read it. */
+        {{opacity_option(0.5)}, 1, "Option :opacity is for a hosted page"},
+        {{hosted_flag, {.name = text("hosted")}, opacity_option(0.5)}, 3,
+         "Option :opacity is for a hosted page"},
+    };
+    for (size_t i = 0; i < sizeof refused / sizeof *refused; i++) {
+        struct portal_fake_calls before = portal_fake_calls();
+        CHECK(!open_preview(refused[i].options, refused[i].count, &error));
+        CHECK(says(&error, refused[i].message));
+        CHECK(portal_fake_calls().created == before.created);
+    }
+
+    /* Both ends pass, and nil is no opacity, in any view. */
+    const portal_option ends[] = {hosted_flag, opacity_option(0)};
+    char *clear = open_preview(ends, 2, &error);
+    CHECK(clear && shows(clear, "\"opacity\":0", NULL));
+    const portal_option opaque[] = {hosted_flag, opacity_option(1)};
+    char *solid = open_preview(opaque, 2, &error);
+    CHECK(solid && shows(solid, "\"opacity\":1", NULL));
+    const portal_option none[] = {{.name = text("opacity")}};
+    char *page = open_preview(none, 1, &error);
+    CHECK(page && shows(page, "\"opacity\":false", NULL));
+    close_view(clear);
+    close_view(solid);
+    close_view(page);
+}
+
+static void test_an_opacity_reaches_every_preview(void)
+{
+    portal_text error = {0};
+    /* It is checked even with no view open. */
+    struct portal_fake_calls before = portal_fake_calls();
+    CHECK(!portal_web_views_opacity(1.5, &error));
+    CHECK(says(&error, "A page's opacity is a number from 0 to 1"));
+    CHECK(portal_web_views_opacity(0.5, &error));
+    CHECK(same_calls(portal_fake_calls(), before));
+
+    /* Previews take it; other pages, hosted or not, and terminals do not. */
+    char *terminal = open_view("terminal", &error, "directory", "/", NULL);
+    char *page = open_web(false), *app = open_web(true);
+    const portal_option solid[] = {hosted_flag, opacity_option(1)};
+    char *first = open_preview(solid, 2, &error), *second = open_preview(solid, 2, &error);
+    before = portal_fake_calls();
+    CHECK(portal_web_views_opacity(0.85, &error));
+    CHECK(portal_fake_calls().see_through == before.see_through + 2);
+    CHECK(shows(first, "\"opacity\":0.85", NULL));
+    CHECK(shows(second, "\"opacity\":0.85", NULL));
+    const char *others[] = {terminal, page, app};
+    for (size_t i = 0; i < sizeof others / sizeof *others; i++) {
+        char *state = inspect(others[i]);
+        CHECK(state && !strstr(state, "\"opacity\""));
+        free(state);
+    }
+
+    /* One out of range, or not a number, touches no view; both ends pass. */
+    const double wrong[] = {-0.5, 1.000001, NAN, INFINITY};
+    for (size_t i = 0; i < sizeof wrong / sizeof *wrong; i++) {
+        before = portal_fake_calls();
+        CHECK(!portal_web_views_opacity(wrong[i], &error));
+        CHECK(says(&error, "A page's opacity is a number from 0 to 1"));
+        CHECK(same_calls(portal_fake_calls(), before));
+    }
+    CHECK(portal_web_views_opacity(0, &error));
+    CHECK(shows(second, "\"opacity\":0", NULL));
+    CHECK(portal_web_views_opacity(1, &error));
+    CHECK(shows(first, "\"opacity\":1", NULL));
+
+    /* A view that fails stops the rest; the views before it keep theirs. */
+    const portal_option broken[] = {
+        hosted_flag, opacity_option(1),
+        {.name = text("broken"), .is_string = true, .string = text("WebKit is gone")}};
+    char *third = open_preview(broken, 3, &error), *fourth = open_preview(solid, 2, &error);
+    CHECK(third && fourth);
+    CHECK(!portal_web_views_opacity(0.25, &error));
+    CHECK(says(&error, "WebKit is gone"));
+    CHECK(shows(second, "\"opacity\":0.25", NULL));
+    CHECK(shows(fourth, "\"opacity\":1", NULL));
+
+    /* A refusing platform changes nothing. */
+    portal_fake_refuse(true);
+    before = portal_fake_calls();
+    CHECK(!portal_web_views_opacity(0.5, &error));
+    CHECK(says(&error, "The fake refuses to run view primitives"));
+    portal_fake_refuse(false);
+    CHECK(same_calls(portal_fake_calls(), before));
+    CHECK(shows(first, "\"opacity\":0.25", NULL));
+    const char *views[] = {terminal, page, app, first, second, third, fourth};
+    for (size_t i = 0; i < sizeof views / sizeof *views; i++)
+        close_view((char *) views[i]);
 }
 
 /* The record a window's opening sent: its target, to free, after checking
@@ -1245,6 +1371,8 @@ int main(void)
     test_the_shared_links_script();
     test_appearance_at_open();
     test_an_appearance_reaches_every_web_view();
+    test_an_opacity_at_open();
+    test_an_opacity_reaches_every_preview();
     test_pages_open_windows();
     test_hosted_apps_open_windows_on_their_origin();
     test_windows_that_do_not_open();

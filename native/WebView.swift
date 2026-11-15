@@ -191,6 +191,50 @@ private final class WebPage: WKWebView, WKNavigationDelegate, WKUIDelegate, WKDo
         appearance = NSAppearance(named: NSApp.effectiveAppearance.isDark ? .darkAqua : .aqua)
     }
 
+    /// The opacity the page's background shows at, from 0 to 1.
+    private(set) var opacity = 1.0
+    /// While the opacity is below 1, the script that gives it to each document.
+    private var opacityScript: WKUserScript?
+
+    /// Show the page's background at OPACITY from now on, the page on screen
+    /// and each one loaded later (`portal_web_set_opacity`). Below 1 the view
+    /// draws no backing, through `drawsBackground`, which is not public but
+    /// which WebKit has long read by key-value coding, nor any under the
+    /// page's overscroll; and the page's root gets the custom property
+    /// `--portal-view-opacity`, which only Portal's own stylesheet reads. A
+    /// user script sets it before the document's own scripts run, in every
+    /// document; the page on screen gets it at once. At 1 the page is as any
+    /// other: the backing back, and no property.
+    func setOpacity(_ opacity: Double) {
+        guard opacity != self.opacity else { return }
+        self.opacity = opacity
+        let clear = opacity < 1
+        setValue(!clear, forKey: "drawsBackground")
+        underPageBackgroundColor = clear ? .clear : nil
+        let controller = configuration.userContentController
+        if let old = opacityScript {
+            // WebKit removes user scripts only all at once; the others go back in order.
+            let others = controller.userScripts.filter { $0 !== old }
+            controller.removeAllUserScripts()
+            others.forEach(controller.addUserScript)
+            opacityScript = nil
+        }
+        let property = "document.documentElement?.style"
+        let source = clear
+            ? "\(property).setProperty('--portal-view-opacity', '\(String(format: "%.3f", opacity))')"
+            : "\(property).removeProperty('--portal-view-opacity')"
+        if clear {
+            let script = WKUserScript(source: source, injectionTime: .atDocumentStart,
+                                      forMainFrameOnly: true, in: .defaultClient)
+            controller.addUserScript(script)
+            opacityScript = script
+        }
+        evaluateJavaScript(source, in: nil, in: .defaultClient)
+    }
+
+    /// Whether the view draws its backing behind the page.
+    var drawsBacking: Bool { (value(forKey: "drawsBackground") as? Bool) ?? true }
+
     required init?(coder: NSCoder) { nil }
 
     /// Load URL as a new document; a local file may read its directory.
@@ -1295,17 +1339,19 @@ final class WebSession: PortalView {
 
     /// With `:hosted`, the page keeps no data between sessions and gets the
     /// bridge's scripts. With `:inspectable`, Safari's Web Inspector may
-    /// attach to it. It starts in its `:appearance`, which the core has
-    /// checked.
+    /// attach to it. It starts in its `:appearance` and its `:opacity`,
+    /// which the core has checked.
     convenience init(target: String, options: ViewOptions) throws {
         let appearance = switch try options.string("appearance") {
         case "light": PORTAL_APPEARANCE_LIGHT
         case "dark": PORTAL_APPEARANCE_DARK
         default: PORTAL_APPEARANCE_SYSTEM
         }
-        self.init(page: WebPage(target: target, configuration: WKWebViewConfiguration(),
-                                hosted: options.flag("hosted"), inspectable: options.flag("inspectable")),
-                  appearance: appearance)
+        let page = WebPage(target: target, configuration: WKWebViewConfiguration(),
+                           hosted: options.flag("hosted"), inspectable: options.flag("inspectable"))
+        // The core passes an :opacity only with :hosted.
+        if let opacity = try options.number("opacity") { page.setOpacity(opacity) }
+        self.init(page: page, appearance: appearance)
     }
 
     /// The window the page in OPENER asked for. WebKit requires the page be
@@ -1373,6 +1419,8 @@ final class WebSession: PortalView {
 
     func show(_ appearance: portal_appearance) { page.show(appearance) }
 
+    func setOpacity(_ opacity: Double) { page.setOpacity(opacity) }
+
     func find(_ text: String, backward: Bool, caseSensitive: Bool, token: UInt64) {
         page.find(text, backward: backward, caseSensitive: caseSensitive, token: token)
     }
@@ -1390,7 +1438,9 @@ final class WebSession: PortalView {
     func describe() -> [(String, ViewValue)] {
         var state: [(String, ViewValue)] = [("loading", .flag(page.isLoading)),
                                             ("dark", .flag(page.effectiveAppearance.isDark)),
-                                            ("zoom", .integer(Int((page.pageZoom * 100).rounded())))]
+                                            ("zoom", .integer(Int((page.pageZoom * 100).rounded()))),
+                                            // Diagnostics: whether WebKit draws a backing behind the page.
+                                            ("backing", .flag(page.drawsBacking))]
         // Out of its pane, the page is entering, in or exiting fullscreen.
         switch page.fullscreenState {
         case .enteringFullscreen: state.append(("fullscreen", .string("entering")))

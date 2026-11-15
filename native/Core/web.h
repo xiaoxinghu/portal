@@ -21,7 +21,8 @@ bool portal_web_views_load(portal_string target, portal_string url, portal_text 
    as portal--web-go does; with no page to go to, nothing changes. */
 bool portal_web_views_go(portal_string target, portal_string step, portal_text *error);
 /* Check a web view's OPTIONS before the platform creates it: :appearance
-   must be "light", "dark" or nil.  A later duplicate option wins, and other
+   must be "light", "dark" or nil, and :opacity nil or a number from 0 to 1,
+   in a view that is :hosted.  A later duplicate option wins, and other
    options pass. */
 bool portal_web_views_check(const portal_option *options, size_t count, portal_text *error);
 /* Show every open web view's pages in APPEARANCE, "light" or "dark", or the
@@ -29,6 +30,12 @@ bool portal_web_views_check(const portal_option *options, size_t count, portal_t
    changes none.  If a view fails, the error is its own, the views before it
    keep the new appearance, and it and those after it keep their old one. */
 bool portal_web_views_appearance(const portal_string *appearance, portal_text *error);
+/* Show the pages' background at OPACITY, from 0 to 1, in every open web
+   view created with an :opacity, oldest first; other web views keep theirs.
+   An OPACITY out of range changes none.  If a view fails, the error is its
+   own, the views before it keep the new opacity, and it and those after it
+   keep their old one. */
+bool portal_web_views_opacity(double opacity, portal_text *error);
 /* Save web views' downloads in DIRECTORY, an absolute path, from now on. */
 bool portal_web_views_download_directory(portal_string directory, portal_text *error);
 /* Find TEXT, which must not be empty, in web view TARGET's page: the next

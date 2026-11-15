@@ -28,6 +28,7 @@
 (declare-function portal--web-receive "portal-web" (target))
 (declare-function portal--web-go "portal-web" (target step))
 (declare-function portal--web-appearance "portal-web" (appearance))
+(declare-function portal--web-opacity "portal-web" (opacity))
 (declare-function portal--inspect "portal-view" (target))
 (declare-function portal--close "portal-view" (target))
 (declare-function portal--web-download-directory "portal-web" (directory))
@@ -74,6 +75,29 @@ This sets `portal-web-appearance'."
    (list (cdr (assoc (completing-read "Web view appearance: " '("system" "light" "dark") nil t)
                      '(("light" . light) ("dark" . dark))))))
   (setq portal-web-appearance appearance))
+
+(defun portal-web--preview-opacity-changed (_symbol value operation _where)
+  "Check opacity VALUE and show open previews at it, on OPERATION `set'."
+  (when (eq operation 'set)
+    (unless (and (numberp value) (<= 0 value 1))
+      (error "Preview opacity must be a number from 0 to 1"))
+    (when (fboundp 'portal--web-opacity)
+      (portal--web-opacity value))))
+
+(defcustom portal-web-preview-opacity 1
+  "Opacity of the background of Markdown previews, from 0 to 1.
+Below 1, a preview's page background is drawn at that opacity, so what
+is behind the view shows through it; its text, code blocks, table
+headers and pictures stay solid.  Emacs's text is hidden under the
+view.  Other pages, Portal's own apps such as drawings included, keep
+their background.  This is meant for a frame that is itself
+see-through, such as a frosted one: in an ordinary frame, the preview
+shows Emacs's background through its own, tinting it.  Changes with
+`setq' or Customize apply to open and future previews without
+reloading them."
+  :type '(number :tag "Opacity, 0 to 1")
+  :group 'portal)
+(add-variable-watcher 'portal-web-preview-opacity #'portal-web--preview-opacity-changed)
 
 (defcustom portal-web-inspectable t
   "Whether Safari's Web Inspector may attach to web views.
@@ -200,7 +224,12 @@ needed; if it cannot start, the view stays at about:blank and
 `portal-web-reload' tries again.
 The view keeps no cookies or storage between Emacs sessions, and a page
 outside the app host opens in the default browser instead."
-  (prog1 (portal-web--open "about:blank" (list :hosted t))
+  (portal-web--open-hosted path nil))
+
+(defun portal-web--open-hosted (path options)
+  "Open a hosted web view with OPTIONS that loads app host PATH.
+See `portal-web-open-hosted'."
+  (prog1 (portal-web--open "about:blank" (append (list :hosted t) options))
     (setq portal-web--hosted-path path)
     (portal-web--load-hosted)))
 
@@ -836,7 +865,8 @@ pane, as does `portal-render-open-in-emacs' for the file on screen;
     (unless (and (file-regular-p path) (file-readable-p path))
       (user-error "Choose a readable regular file: %s" path))
     (portal-web--visit-hosted (portal-web--markdown-path path)
-                              (file-name-nondirectory path))
+                              (file-name-nondirectory path)
+                              (list :opacity portal-web-preview-opacity))
     (setq portal-web--markdown path)))
 
 (defun portal-web--markdown-path (file)
@@ -1052,10 +1082,11 @@ Receiving the messages lets the next ones send a new record."
 
 (setf (alist-get "bridge" portal-view-record-handlers nil nil #'equal) #'portal-web--bridge)
 
-(defun portal-web--visit-hosted (path name)
-  "Show the buffer for hosted app PATH, opening one called *portal: NAME*."
+(defun portal-web--visit-hosted (path name &optional options)
+  "Show the buffer for hosted app PATH, opening one called *portal: NAME*.
+A new view opens with OPTIONS besides :hosted."
   (portal-web--visit (portal-web--find 'portal-web--hosted-path path) name
-                     (lambda () (portal-web-open-hosted path))))
+                     (lambda () (portal-web--open-hosted path options))))
 
 (defun portal-web--load-hosted ()
   "Load this buffer's hosted app from the app host, starting the host if needed.

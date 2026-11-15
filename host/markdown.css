@@ -6,7 +6,15 @@
 	--muted: light-dark(#5c6470, #a7afbd);
 	--border: light-dark(#d8dee8, #38404d);
 	--code: light-dark(#f3f5f8, #202631);
-	background: light-dark(#ffffff, #15191f);
+	/* The page's background at the view's opacity, which Portal sets as
+	   --portal-view-opacity on the root of a see-through preview; without
+	   it, the page is opaque.  Code blocks, the table's header and pictures
+	   keep their own, solid. */
+	background: color-mix(
+		in srgb,
+		light-dark(#ffffff, #15191f) calc(var(--portal-view-opacity, 1) * 100%),
+		transparent
+	);
 	color: light-dark(#222831, #e2e7ef);
 	/* Prose stays near the readable line length; tables and code blocks may
 	   widen to the window, up to where their rows get hard to follow. */

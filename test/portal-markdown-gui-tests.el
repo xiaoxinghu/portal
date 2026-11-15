@@ -305,6 +305,65 @@ The folder is `portal-markdown-gui--directory'."
       (setq portal-web-appearance original)
       (modify-frame-parameters nil `((ns-appearance . ,frame-appearance))))))
 
+;; How the page shows through is WebKit's to draw: the test proves what
+;; crosses the seam, the backing and the property the stylesheet reads.
+(defun portal-markdown-gui--glass ()
+  "The preview's backing, its root's opacity property and background."
+  (list (plist-get (portal--inspect (portal-view-target)) :backing)
+        (portal-excalidraw-gui--js
+         (concat "const root = document.documentElement;"
+                 "return [root.style.getPropertyValue('--portal-view-opacity'),"
+                 " getComputedStyle(root).backgroundColor];"))))
+
+(ert-deftest portal-markdown-gui-a-see-through-preview-has-no-backing ()
+  :tags '(:gui)
+  (let ((original portal-web-preview-opacity))
+    (unwind-protect
+        (progn
+          (setq portal-web-preview-opacity 1)
+          (portal-markdown-gui--documents
+            ;; At 1, the default, the preview is as any other page.
+            (pcase-let ((`(,backing [,property ,solid]) (portal-markdown-gui--glass)))
+              (should (eq backing t))
+              (should (equal property ""))
+              (should-not (string-match-p "/" solid))
+              ;; Below 1 the open preview changes without loading again.
+              (portal-excalidraw-gui--js "window.portalStayed = true; return true;")
+              (setopt portal-web-preview-opacity 0.85)
+              (pcase-let ((`(,backing [,property ,glass]) (portal-markdown-gui--glass)))
+                (should-not backing)
+                (should (equal property "0.850"))
+                (should (string-match-p "/ 0\\.85)\\'" glass)))
+              (should (eq (portal-excalidraw-gui--js "return window.portalStayed === true;") t))
+              ;; The next page keeps it, and a later change reaches it.
+              (portal-markdown-gui--link "Other")
+              (portal-test--wait-for-page "other.md")
+              (pcase-let ((`(,backing [,property ,_]) (portal-markdown-gui--glass)))
+                (should-not backing)
+                (should (equal property "0.850")))
+              (setopt portal-web-preview-opacity 0.5)
+              (pcase-let ((`(,backing [,property ,glass]) (portal-markdown-gui--glass)))
+                (should-not backing)
+                (should (equal property "0.500"))
+                (should (string-match-p "/ 0\\.5)\\'" glass)))
+              ;; Another of Portal's pages keeps its backing.
+              (let ((preview (current-buffer)))
+                (portal-hello)
+                (portal-test--wait-for-page "Hello, world!")
+                (pcase-let ((`(,backing [,property ,_]) (portal-markdown-gui--glass)))
+                  (should (eq backing t))
+                  (should (equal property "")))
+                (kill-buffer)
+                (switch-to-buffer preview)
+                (portal-view-sync))
+              ;; Back at 1 the preview is as it was.
+              (setopt portal-web-preview-opacity 1)
+              (pcase-let ((`(,backing [,property ,opaque]) (portal-markdown-gui--glass)))
+                (should (eq backing t))
+                (should (equal property ""))
+                (should (equal opaque solid))))))
+      (setq portal-web-preview-opacity original))))
+
 ;; Printing lays the page out on paper.  Whether it prints light is WebKit's
 ;; and the stylesheet's, which host/markdown.test.ts checks has a print rule.
 (ert-deftest portal-markdown-gui-prints-to-pdf-pages ()
