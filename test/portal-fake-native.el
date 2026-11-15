@@ -362,6 +362,11 @@ module does."
 
 (defun portal--terminal-bindings (_json) t)
 (defun portal--terminal-theme (_theme) t)
+(defun portal--terminal-opacity (opacity)
+  "Show every terminal at OPACITY: the call is logged."
+  (portal-fake-native--call 'portal--terminal-opacity opacity)
+  (unless (numberp opacity) (signal 'wrong-type-argument (list 'numberp opacity)))
+  t)
 (defun portal--terminal-text-size (target points)
   "Show TARGET's text at POINTS, clamped: its state gets :points."
   (portal-fake-native--call 'portal--terminal-text-size target points)

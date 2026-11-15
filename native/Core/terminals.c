@@ -3,9 +3,9 @@
    primitives.  views.c owns their identity and lifecycle, and asks this file
    to check a terminal's options before the platform creates it.  The
    platform owns the terminal engine, its process and its theme catalog, and
-   reports changes to what a terminal describes.  The core keeps no theme or
-   text size: Lisp holds the theme and works out each terminal's size, and
-   passes them to each new terminal. */
+   reports changes to what a terminal describes.  The core keeps no theme,
+   opacity or text size: Lisp holds the theme and the opacity and works out
+   each terminal's size, and passes them to each new terminal. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -98,8 +98,20 @@ bool portal_terminals_check(const portal_option *options, size_t count, portal_t
     const portal_option *points = option(options, count, "points");
     if (points && !points->is_number && (points->is_string || points->flag))
         return fail_with(error, "Option :points must be a number");
+    const portal_option *opacity = option(options, count, "opacity");
+    if (opacity && !opacity->is_number && (opacity->is_string || opacity->flag))
+        return fail_with(error, "Option :opacity must be a number");
+    if (opacity && opacity->is_number && !portal_terminal_opacity_valid(opacity->number, error))
+        return false;
     const portal_option *theme = option(options, count, "theme");
     return !theme || !theme->is_string || known(theme->string, error);
+}
+
+bool portal_terminal_opacity_valid(double opacity, portal_text *error)
+{
+    /* NaN fails both comparisons. */
+    return (opacity >= 0 && opacity <= 1)
+        || fail_with(error, "A terminal's opacity is a number from 0 to 1");
 }
 
 /* Byte order, which for UTF-8 is code point order. */
@@ -171,6 +183,26 @@ bool portal_terminals_theme(const portal_string *name, portal_text *error)
         return false;
     struct theme theme = {name, error};
     return portal_views_each(PORTAL_TERMINAL, apply, &theme);
+}
+
+struct opacity {
+    double opacity;
+    portal_text *error;
+};
+
+static bool set_opacity(portal_view *terminal, void *context)
+{
+    struct opacity *opacity = context;
+    return portal_terminal_set_opacity(terminal, opacity->opacity, opacity->error);
+}
+
+bool portal_terminals_opacity(double opacity, portal_text *error)
+{
+    /* Check it before touching any terminal, even with none open. */
+    if (!portal_terminal_opacity_valid(opacity, error))
+        return false;
+    struct opacity context = {opacity, error};
+    return portal_views_each(PORTAL_TERMINAL, set_opacity, &context);
 }
 
 bool portal_terminals_text_size(portal_string target, double points, portal_text *error)

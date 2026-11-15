@@ -13,9 +13,10 @@
 /* Check a terminal's OPTIONS before the platform creates it: :directory must
    be a string, unless :fed is non-nil; :command, :argv and :theme a string
    or nil; :command and :argv mutually exclusive, and neither with :fed;
-   :theme a name the platform lists; and :points nil or a number, which may
-   be out of range: the platform clamps it with portal_terminal_points.  A
-   later duplicate option wins, and other options pass. */
+   :theme a name the platform lists; :points nil or a number, which may
+   be out of range: the platform clamps it with portal_terminal_points; and
+   :opacity nil or a number from 0 to 1.  A later duplicate option wins, and
+   other options pass. */
 bool portal_terminals_check(const portal_option *options, size_t count, portal_text *error);
 
 /* Whether OPTIONS make a fed terminal (portal.h): :fed, non-nil.  Rex
@@ -30,6 +31,16 @@ bool portal_terminals_themes(portal_text *json, portal_text *error);
    rejects the theme, the error is its own, the terminals before it keep the
    new theme, and it and those after it keep their old one. */
 bool portal_terminals_theme(const portal_string *name, portal_text *error);
+
+/* Whether OPACITY is a terminal's opacity: a number from 0 to 1, not NaN;
+   if not, set *ERROR. */
+bool portal_terminal_opacity_valid(double opacity, portal_text *error);
+
+/* Show every open terminal's background at OPACITY, from 0 to 1, oldest
+   first.  An OPACITY out of range changes none.  If a terminal rejects it,
+   the error is its own, the terminals before it keep the new opacity, and
+   it and those after it keep their old one. */
+bool portal_terminals_opacity(double opacity, portal_text *error);
 
 /* Show TARGET's text at POINTS, clamped with portal_terminal_points.  Other
    terminals keep their size. */
