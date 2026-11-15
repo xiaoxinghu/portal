@@ -345,6 +345,40 @@ Portal in your init file. Changes recolor running terminals, including hidden
 ones, and apply to new ones without restarting shells. `nil` restores Alabaster
 (light) and Afterglow (dark). Named themes ignore system appearance changes.
 
+In a frame that is itself see-through, such as one with a frosted
+background, terminals can be see-through too:
+
+```elisp
+(setq portal-terminal-opacity 0.85) ; from 0 to 1; the default, 1, is opaque
+```
+
+Below 1, every terminal draws its theme's background at that opacity, so
+the frame shows through it. Its text, cursor and selection stay solid,
+and so do cells a program gives a background of its own: a colored
+`ls`, a status line, and a full-screen program that paints its whole
+screen, such as vim with a color scheme or htop. That is Ghostty's rule
+for `background-opacity`, and Portal keeps it. A
+[Rex block](rex.md) held smaller than its pane is glass across the pane,
+with no seam around its grid. Changes apply to running terminals, hidden
+ones included, and to new ones, and outlast theme and text size changes.
+
+The text Emacs keeps in a view's buffer, the placard that says where the
+view is, is hidden in the pane that has the view, so it never shows
+through; other panes showing the buffer still show it.
+
+In an ordinary, opaque frame the terminal shows Emacs's own background
+through itself instead, tinting it. So set the opacity where the frame
+becomes see-through, and back to 1 where it stops. With the frost
+package, for example, whose global `frost-mode` makes the frame frosted:
+
+```elisp
+(add-hook 'frost-mode-hook
+          (lambda () (setq portal-terminal-opacity (if frost-mode 0.85 1))))
+```
+
+Portal does not ask whether a frame is see-through: the setting is the
+whole of it.
+
 A terminal's text is the size of Emacs text: the height of the `default`
 face in the frame that shows it, times its buffer's text scale. Portal has
 no size setting of its own. Whatever changes the base font changes the

@@ -46,11 +46,16 @@ private func terminalQuote(_ value: String) -> String {
 /// inside it. The terminal holds the grid its output is laid out for, at
 /// the pane's bottom-left, so a shell's prompt and cursor stay in view; the
 /// rest of the pane is the theme's background (`portal_terminal_hold_grid`).
+/// Below an opacity of 1 the pane alone draws that background, at the
+/// opacity, and the terminal's own is clear: drawn by both, the grid would
+/// show as a darker box (`portal_terminal_set_opacity`).
 @MainActor
 private final class FedPane: NSView {
     weak var terminal: HostedTerminal?
     /// The theme's background, for the light and the dark appearance.
     var background: NSColor = .textBackgroundColor { didSet { needsDisplay = true } }
+    /// The terminal's opacity, from 0 to 1, which the background is drawn at.
+    var opacity = 1.0 { didSet { needsDisplay = true } }
 
     init() {
         super.init(frame: .zero)
@@ -64,7 +69,7 @@ private final class FedPane: NSView {
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = background.cgColor
+            layer?.backgroundColor = background.cgColor.copy(alpha: CGFloat(opacity))
         }
     }
     override func viewDidChangeEffectiveAppearance() {
@@ -147,7 +152,7 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     /// The pane's grid and cell size, as last reported to the core.
     private var reportedPane: [UInt32] = []
 
-    init(directory: String?, command: String?, theme: TerminalTheme, points: Double,
+    init(directory: String?, command: String?, theme: TerminalTheme, points: Double, opacity: Double,
          fed: InMemoryTerminalSession? = nil, pane: FedPane? = nil) {
         self.fed = fed
         self.pane = pane
@@ -156,6 +161,7 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
         if let fed, let pane {
             configuration = TerminalSurfaceOptions(backend: .inMemory(fed))
             pane.terminal = self
+            pane.opacity = opacity
             pane.addSubview(self)
         } else {
             configuration = TerminalSurfaceOptions(
@@ -174,11 +180,45 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
             builder.withCustom("window-padding-y", "\(Int(Self.padding))")
             builder.withCustom("window-padding-balance", "false")
             builder.withFontSize(Float(points))
+            builder.withCustom("background-opacity", Self.configLiteral(Self.ownOpacity(opacity, fed: fed != nil)))
         }
     }
 
     /// The theme's background beside a fed terminal's grid.
     func setBackground(_ color: NSColor) { pane?.background = color }
+
+    /// The opacity Ghostty draws a terminal's own background at, for the
+    /// terminal's OPACITY: a fed terminal's pane draws it below 1.
+    static func ownOpacity(_ opacity: Double, fed: Bool) -> Double { fed && opacity < 1 ? 0 : opacity }
+
+    /// A number as Ghostty's configuration reads it, without an exponent.
+    private static func configLiteral(_ value: Double) -> String { String(format: "%.3f", value) }
+
+    /// The background opacity of the configuration Ghostty last took: its
+    /// last `background-opacity` line, or 1, Ghostty's default, without one.
+    var configuredOpacity: Double {
+        let entries = (controller?.renderedConfig.split(separator: "\n") ?? []).map {
+            $0.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+        }
+        let value = entries.last { $0.count == 2 && $0[0] == "background-opacity" }?[1]
+        return value.flatMap(Double.init) ?? 1
+    }
+
+    /// The opacity a fed terminal's pane draws its background at, or nil.
+    var paneOpacity: Double? { pane?.opacity }
+
+    /// Show the background at OPACITY from now on. A running terminal takes
+    /// it as the controller's per-session override, which outlasts later
+    /// themes and text sizes; only a new surface reads the configuration's line.
+    func setOpacity(_ opacity: Double) throws {
+        pane?.opacity = opacity
+        guard let controller else { return }
+        let own = TerminalConfiguration { $0.withBackgroundOpacity(Self.ownOpacity(opacity, fed: fed != nil)) }
+        guard controller.terminalConfiguration != own else { return }
+        guard controller.setTerminalConfiguration(own) else {
+            throw NativeError.message(controller.lastConfigurationIssue ?? "Could not change the terminal's opacity")
+        }
+    }
 
     // A fed terminal's grid and its pane's.
 
@@ -450,6 +490,7 @@ final class TerminalSession: PortalView {
         let directory = try options.string("directory")
         let theme = try Terminals.theme(named: options.string("theme"))
         let points = portal_terminal_points(try options.number("points") ?? Double(PORTAL_TERMINAL_POINTS))
+        let opacity = try options.number("opacity") ?? 1
         self.target = target
         let terminal: HostedTerminal
         if options.flag("fed") {
@@ -475,7 +516,7 @@ final class TerminalSession: PortalView {
             }
             let pane = FedPane()
             terminal = HostedTerminal(directory: directory, command: nil, theme: theme, points: points,
-                                      fed: session, pane: pane)
+                                      opacity: opacity, fed: session, pane: pane)
             self.pane = pane
             watch.terminal = terminal
             terminal.setBackground(try Terminals.background(named: options.string("theme")))
@@ -484,7 +525,7 @@ final class TerminalSession: PortalView {
                 throw NativeError.message("The core passed a terminal without a :directory")
             }
             terminal = HostedTerminal(directory: directory, command: try terminalCommand(options, directory: directory),
-                                      theme: theme, points: points)
+                                      theme: theme, points: points, opacity: opacity)
             pane = nil
         }
         if let issue = terminal.controller?.lastConfigurationIssue { throw NativeError.message(issue) }
@@ -528,7 +569,10 @@ final class TerminalSession: PortalView {
          ("rows", .integer(Int(terminal.grid?.rows ?? 0))),
          // Ghostty keeps a size as a Float; hundredths are what Lisp sent.
          ("points", .number((Double(terminal.fontSize ?? 0) * 100).rounded() / 100)),
-         ("layer", .string(terminal.layer.map { NSStringFromClass(type(of: $0)) } ?? ""))]
+         ("layer", .string(terminal.layer.map { NSStringFromClass(type(of: $0)) } ?? "")),
+         // Diagnostics: Ghostty's own background opacity, and a fed pane's.
+         ("ghostty-opacity", .number(terminal.configuredOpacity))]
+            + (terminal.paneOpacity.map { [("pane-opacity", .number($0))] } ?? [])
     }
 
     // The terminal primitives of native/Core/include/portal.h.
@@ -554,6 +598,8 @@ final class TerminalSession: PortalView {
             throw NativeError.message(controller.lastConfigurationIssue ?? "Could not apply terminal theme")
         }
     }
+
+    func setOpacity(_ opacity: Double) throws { try terminal.setOpacity(opacity) }
 
     /// Ghostty's own size binding, which marks the size as chosen, so a
     /// later theme, which reloads the configuration, keeps it.

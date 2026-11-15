@@ -410,6 +410,13 @@ public func portalTerminalApplyTheme(_ terminal: OpaquePointer, _ name: UnsafePo
     return perform(error) { try session(terminal, as: TerminalSession.self).applyTheme(name) } != nil
 }
 
+@_cdecl("portal_terminal_set_opacity")
+public func portalTerminalSetOpacity(_ terminal: OpaquePointer, _ opacity: Double,
+                                     _ error: UnsafeMutablePointer<portal_text>) -> Bool {
+    let terminal = native(terminal)
+    return perform(error) { try session(terminal, as: TerminalSession.self).setOpacity(opacity) } != nil
+}
+
 @_cdecl("portal_terminal_set_text_size")
 public func portalTerminalSetTextSize(_ terminal: OpaquePointer, _ points: Double,
                                       _ error: UnsafeMutablePointer<portal_text>) -> Bool {
