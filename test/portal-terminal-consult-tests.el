@@ -49,6 +49,63 @@
                                  consult-first enabled (buffer-string)))
                 (should (eq status 0))))))))))
 
+;; Each picker case reads once through `portal-terminal--read-choice' in a
+;; fresh Emacs whose config has not loaded Consult, with both readers stubbed
+;; to return their own names, and asserts on the reader and Consult after.
+(defun portal-terminal-consult-test--first-read (setup after-portal assertions)
+  "Read once in a fresh Emacs, then check ASSERTIONS.
+SETUP runs before Portal loads and AFTER-PORTAL after.  The read's
+result is in `chosen'."
+  (let ((form
+         `(progn
+            (setq load-path ',load-path)
+            (require 'cl-lib)
+            ,@setup
+            (load ,(locate-library "portal") nil t)
+            (require 'portal-terminal-choose)
+            ,@after-portal
+            (advice-add 'portal-terminal--completing-read :override
+                        (lambda (&rest _) 'completing-read))
+            (advice-add 'portal-terminal-consult--read :override
+                        (lambda (&rest _) 'consult))
+            (let ((chosen (portal-terminal--read-choice nil default-directory nil)))
+              ,@assertions))))
+    (with-temp-buffer
+      (let ((status (call-process (expand-file-name invocation-name invocation-directory)
+                                  nil t nil "--batch" "-Q" "--eval"
+                                  (prin1-to-string form))))
+        (ert-info ((buffer-string))
+          (should (eq status 0)))))))
+
+(ert-deftest portal-terminal-consult-first-picker-loads-consult ()
+  ;; A config that loads Consult lazily opens a picker before anything else
+  ;; loads Consult: the picker loads it, and reads with it.
+  (portal-terminal-consult-test--first-read
+   '((cl-assert (locate-library "consult")))
+   '((cl-assert (not (featurep 'consult))))
+   '((cl-assert (featurep 'consult))
+     (cl-assert portal-terminal-consult-mode)
+     (cl-assert (eq portal-terminal--reader #'portal-terminal-consult--read))
+     (cl-assert (eq chosen 'consult) nil "Read with %S" chosen))))
+
+(ert-deftest portal-terminal-consult-picker-without-auto-enable-leaves-consult ()
+  (portal-terminal-consult-test--first-read
+   '((cl-assert (locate-library "consult"))
+     (setq portal-terminal-consult-auto-enable nil))
+   nil
+   '((cl-assert (not (featurep 'consult)))
+     (cl-assert (not (featurep 'portal-terminal-consult)))
+     (cl-assert (eq chosen 'completing-read) nil "Read with %S" chosen))))
+
+(ert-deftest portal-terminal-consult-picker-keeps-mode-turned-off ()
+  ;; Consult is loaded and the mode was turned off by hand: it stays off.
+  (portal-terminal-consult-test--first-read
+   '((require 'consult))
+   '((cl-assert portal-terminal-consult-mode)
+     (portal-terminal-consult-mode -1))
+   '((cl-assert (not portal-terminal-consult-mode))
+     (cl-assert (eq chosen 'completing-read) nil "Read with %S" chosen))))
+
 (ert-deftest portal-terminal-consult-buffer-narrows-to-terminals-once ()
   (portal-completion-test--environment
     (let* ((server (portal-completion-test--open "one/app" :title "npm run dev"))

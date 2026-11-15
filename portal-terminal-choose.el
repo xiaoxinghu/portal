@@ -12,6 +12,8 @@
 
 (declare-function portal-terminal-quick--editing-window "portal-terminal-quick" ())
 
+(defvar portal-terminal-consult-auto-enable) ; In `portal'.
+
 (defcustom portal-terminal-choose-quick nil
   "Whether terminal selection lists quick terminals too.
 A chosen quick terminal opens in its quick panel, as
@@ -30,7 +32,8 @@ ACTIONS are lists of (STRING . VALUE), in order: VALUE is a terminal
 buffer, or `new' or `named'.  It returns the chosen VALUE, and must
 require a match.  INITIAL is the initial input.  While it reads,
 `portal-terminal-choose-map' must be active.
-`portal-terminal-consult-mode' replaces it.")
+`portal-terminal-consult-mode' replaces it; the first picker loads
+Consult for that, through `portal-terminal--reader-function'.")
 
 (defun portal-terminal--candidates (buffers)
   "Return completion candidates for BUFFERS, as (STRING . BUFFER) pairs.
@@ -138,6 +141,21 @@ The input typed so far stays."
   (interactive)
   (throw 'portal-terminal--toggle (minibuffer-contents-no-properties)))
 
+(defun portal-terminal--reader-function ()
+  "Return the function that reads a terminal choice now.
+A config that loads Consult lazily may open a picker before anything has
+loaded Consult, and `portal-terminal-consult-mode' waits for Consult to
+load, so the first picker after startup would read without preview or
+narrowing.  When `portal-terminal-consult-auto-enable' is non-nil and
+Consult is installed but not loaded, load it: `portal' enables the mode
+when Consult loads, and that replaces `portal-terminal--reader'.  Once
+Consult is loaded, the mode is left as it is."
+  (when (and (bound-and-true-p portal-terminal-consult-auto-enable)
+             (not (featurep 'consult))
+             (locate-library "consult"))
+    (require 'consult))
+  portal-terminal--reader)
+
 (defun portal-terminal--read-choice (project directory scoped)
   "Read a terminal of PROJECT, or of every project unless SCOPED, or a New action.
 New terminals start at PROJECT's root, or DIRECTORY without a project.
@@ -149,7 +167,7 @@ Return the chosen buffer, or `new' or `named'."
                     (let ((buffers (portal-terminal-buffers (and scoped project)
                                                             portal-terminal-choose-quick))
                           (place (portal-terminal--place-name project directory)))
-                      (list (funcall portal-terminal--reader
+                      (list (funcall (portal-terminal--reader-function)
                                      (if scoped (format "Terminal in %s: " place) "Terminal: ")
                                      (portal-terminal--candidates (portal-terminal--recent buffers))
                                      (list (cons (format "New terminal in %s" place) 'new)
