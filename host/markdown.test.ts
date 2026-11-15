@@ -96,6 +96,27 @@ test("saved files render as sanitised HTML and are reread on each request", asyn
 	expect(updated).not.toContain("<strong>Bold</strong>");
 });
 
+// Portal sets --portal-view-opacity on a see-through preview's root; what
+// the page looks like at it is WebKit's to draw, and the graphical tests'.
+test("the page's background is opaque unless Portal sets the view's opacity", async () => {
+	const file = join(directory, "glass.md");
+	await writeFile(file, "# Glass\n");
+	const page = await (await get(preview(file))).text();
+	const rule = (selector: string) =>
+		page.match(
+			new RegExp(`\\n${RegExp.escape(selector)} \\{([^}]*)\\}`),
+		)?.[1] ?? "";
+	// The root's background alone reads it, with 1 when it is not set.
+	const root = rule(":root").replace(/\/\*[\s\S]*?\*\//g, "");
+	expect(root).toMatch(
+		/background: color-mix\(\s*in srgb,\s*light-dark\(#ffffff, #15191f\) calc\(var\(--portal-view-opacity, 1\) \* 100%\),\s*transparent\s*\);/,
+	);
+	expect(page.match(/var\(--portal-view-opacity/g)).toHaveLength(1);
+	// Code and the table's header keep their own solid background.
+	expect(rule("pre,\ncode")).toContain("background: var(--code);");
+	expect(rule("th")).toContain("background: var(--code);");
+});
+
 test("raw HTML such as inline SVG renders, without scripts or a refresh", async () => {
 	const file = join(directory, "raw.md");
 	await writeFile(

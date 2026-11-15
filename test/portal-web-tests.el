@@ -305,6 +305,39 @@
                 (should (= (length (portal-fake-native-targets)) 2)))))
         (delete-file file)))))
 
+(ert-deftest portal-web-preview-opacity-opens-previews-at-it-and-changes-them ()
+  (portal-web-test--environment
+    (let ((file (make-temp-file "portal-web-" nil ".md" "# Notes\n"))
+          (original portal-web-preview-opacity))
+      (unwind-protect
+          (cl-letf (((symbol-function 'portal-start-server) #'ignore)
+                    ((symbol-function 'portal-server-url) (lambda () nil)))
+            (setq portal-web-preview-opacity 1)
+            (portal-render-markdown file)
+            (let ((solid (portal-view-target)))
+              ;; A preview takes the option even at 1, so later ones reach it.
+              (should (equal (plist-get (plist-get (portal-web-test--state) :options) :opacity) 1))
+              (setq portal-fake-native-log nil)
+              (setopt portal-web-preview-opacity 0.85)
+              (should (equal (portal-fake-native-calls 'portal--web-opacity) '((0.85))))
+              (kill-buffer)
+              (should-not (member solid (portal-fake-native-targets))))
+            (portal-render-markdown file)
+            (should (equal (plist-get (plist-get (portal-web-test--state) :options) :opacity) 0.85))
+            ;; Other pages, Portal's own apps among them, never take it.
+            (portal-hello)
+            (should-not (plist-member (plist-get (portal-web-test--state) :options) :opacity))
+            (portal-open-url "https://example.com/")
+            (should-not (plist-member (plist-get (portal-web-test--state) :options) :opacity))
+            ;; An opacity out of range, or not a number, changes nothing.
+            (setq portal-fake-native-log nil)
+            (dolist (wrong '(-0.1 1.5 "0.5" nil))
+              (should-error (setq portal-web-preview-opacity wrong)))
+            (should (eql portal-web-preview-opacity 0.85))
+            (should-not (portal-fake-native-calls 'portal--web-opacity)))
+        (setq portal-web-preview-opacity original)
+        (delete-file file)))))
+
 (ert-deftest portal-web-about-passes-the-portal-and-emacs-versions ()
   (portal-web-test--environment
     (cl-letf (((symbol-function 'portal-start-server) #'ignore)
