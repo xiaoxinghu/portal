@@ -202,7 +202,7 @@ In a frame that is itself see-through, such as one with a frosted
 background, previews can be see-through too:
 
 ```elisp
-(setq portal-web-preview-opacity 0.85) ; from 0 to 1; the default, 1, is opaque
+(setq portal-web-preview-opacity 0.7) ; from 0 to 1; the default, 1, is opaque
 ```
 
 Below 1, a preview draws its page's background at that opacity, so the
@@ -216,8 +216,9 @@ and to the pages they go on to show. Printing is unchanged. The text Emacs
 keeps in a preview's buffer is hidden in the pane that has the view, as
 for [terminals](terminals.md).
 
-A page that matches the frame reads as glass: a light page over a dark
-frame reads as a pale panel instead, so let `portal-web-appearance` follow
+A page that matches the frame reads as glass, and the more so the lower
+the opacity: a dark page over a dark frosted frame barely changes at 0.85.
+A light page over a dark frame reads as a pale panel instead, so let `portal-web-appearance` follow
 the Emacs theme, or the system, with it. In an ordinary, opaque frame the
 preview shows Emacs's own background through itself, tinting it. So set
 the opacity where the frame becomes see-through, and back to 1 where it
@@ -228,7 +229,7 @@ stops, as for terminals. With the frost package, whose global
 (add-hook 'frost-mode-hook
           (lambda ()
             (setq portal-terminal-opacity (if frost-mode 0.85 1)
-                  portal-web-preview-opacity (if frost-mode 0.9 1))))
+                  portal-web-preview-opacity (if frost-mode 0.7 1))))
 ```
 
 Portal does not ask whether a frame is see-through: the setting is the
