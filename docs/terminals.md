@@ -241,12 +241,14 @@ selects by name, where terminals of its kind show.
 Loading `portal.el` and Consult, in either order, enables
 `portal-terminal-consult-mode` without configuration. `consult-buffer` accepts
 `t SPC` for Portal-only terminals; pickers use Consult with your completion UI.
-Portal neither loads nor requires Consult. Vertico, Orderless and Marginalia
-use ordinary completion.
+Portal never requires Consult. When a terminal picker opens before anything
+has loaded Consult, and Consult is installed, the picker loads it, so the first
+picker after startup already previews, even when your config loads Consult
+lazily. Vertico, Orderless and Marginalia use ordinary completion.
 
 Opt out with `portal-terminal-consult-auto-enable` set to nil before loading
-Portal and Consult, or disable active integration with
-`M-x portal-terminal-consult-mode`.
+Portal and Consult: pickers then never load Consult either. Or disable active
+integration with `M-x portal-terminal-consult-mode`; it stays off.
 
 Enable the optional Embark adapter and project picker binding in your config:
 
