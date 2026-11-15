@@ -65,8 +65,8 @@ split, or a new frame, since.")
   "The windows that showed this buffer when its view was last placed.")
 (defvar-local portal-view--veil nil
   "The overlay that hides the buffer's text in the pane that has its view.
-It covers the whole buffer, invisible only in `portal-view--window', and
-is deleted, kept for reuse, while the view is in no pane.")
+It covers the whole buffer, displayed as nothing in `portal-view--window'
+alone, and is deleted, kept for reuse, while the view is in no pane.")
 (defvar-local portal-view--closed-text nil
   "What this buffer says once its view has closed, or nil.
 It is non-nil exactly while the buffer's text is a placard, written by
@@ -352,7 +352,12 @@ pane showing the buffer.  With WINDOW nil, the text is hidden nowhere."
         ;; Text inserted at its end, or into the emptied buffer, is hidden too.
         (setq veil (make-overlay 1 1 nil nil t)
               portal-view--veil veil)
-        (overlay-put veil 'invisible t)
+        ;; Displayed as nothing, not `invisible': motion commands and the
+        ;; command loop read `invisible' without regard to the overlay's
+        ;; window, so it would stop point moving in the other panes.
+        ;; `current-column' reads `display' so too, and says 0 there, but
+        ;; a view's buffer is read-only: nothing is indented in it.
+        (overlay-put veil 'display "")
         (overlay-put veil 'portal-view-veil t))
       (unless (eq (overlay-get veil 'window) window)
         (overlay-put veil 'window window))

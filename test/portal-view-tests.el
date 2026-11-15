@@ -615,6 +615,13 @@ Return the view's target."
       ;; The view's pane shows none of the placard; the other pane shows it.
       (should (= (portal-view-test--text-width origin) 0))
       (should (> (portal-view-test--text-width other) 0))
+      ;; Point moves through the text there as through any text.
+      (with-selected-window other
+        (goto-char (point-min))
+        (call-interactively #'next-line)
+        (call-interactively #'forward-char)
+        (should (= (line-number-at-pos) 2))
+        (should (= (point) (1+ (line-beginning-position)))))
       ;; The text follows the view when it moves.
       (select-window other)
       (portal-view-focus)
