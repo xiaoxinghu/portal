@@ -707,6 +707,15 @@ LISP_FUNCTION(Fweb_appearance)
     return result;
 }
 
+LISP_FUNCTION(Fweb_opacity)
+{
+    portal_text error = {0};
+    double opacity;
+    return read_number(env, args[0], &opacity)
+        ? done(env, portal_web_views_opacity(opacity, &error), &error)
+        : NULL;
+}
+
 LISP_FUNCTION(Fweb_find)
 {
     portal_text target = {0}, text = {0}, error = {0};
@@ -954,6 +963,8 @@ static const struct export {
      "Show every web view's pages from HOST, or \"\" for pages without one, at PERCENT."},
     {"portal--web-appearance", 1, 1, Fweb_appearance, NULL,
      "Show every web view in APPEARANCE, \"light\" or \"dark\"; nil follows the system's."},
+    {"portal--web-opacity", 1, 1, Fweb_opacity, NULL,
+     "Show the pages' background at OPACITY, from 0 to 1, in every web view opened with one."},
     {"portal--terminal-theme", 1, 1, Fterminal_theme, NULL,
      "Apply named THEME to all terminals; nil restores system appearance defaults."},
     {"portal--terminal-opacity", 1, 1, Fterminal_opacity, NULL,

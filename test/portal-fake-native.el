@@ -379,6 +379,11 @@ module does."
 (defun portal--web-appearance (appearance)
   (portal-fake-native--call 'portal--web-appearance appearance)
   t)
+(defun portal--web-opacity (opacity)
+  "Show open previews at OPACITY: the call is logged."
+  (portal-fake-native--call 'portal--web-opacity opacity)
+  (unless (numberp opacity) (signal 'wrong-type-argument (list 'numberp opacity)))
+  t)
 
 (provide 'portal-native-module)
 (provide 'portal-fake-native)

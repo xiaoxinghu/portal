@@ -51,6 +51,11 @@
    its changes, unless Lisp forces light or dark, at open or later for every
    web view at once.  The core checks the name; the platform shows it.
 
+   Opacity.  A hosted view opened with an :opacity, a Markdown preview, shows
+   its pages' background at it, and takes each opacity Lisp sets later for
+   every such view at once; other views never do.  The core checks it is
+   from 0 to 1; the platform shows it.
+
    Zoom.  Lisp gives hosts a level, and every page from a host shows at its
    level, in every view, as a browser remembers zoom per site: the pages on
    screen when Lisp sets it, and each page a view commits, whatever loaded
@@ -106,6 +111,7 @@ struct message {
 
 struct portal_web_state {
     bool hosted;
+    bool see_through;            /* Whether it was created with an :opacity. */
     portal_text address;         /* The URL Emacs loaded last, or no data. */
     portal_text page;            /* The URL committed last, or no data. */
     uint64_t generation;         /* 1 + pages committed: the token of posts now. */
@@ -695,6 +701,8 @@ struct portal_web_state *portal_web_state_new(const portal_option *options, size
     for (size_t i = 0; i < count; i++)
         if (is(options[i].name, "hosted"))
             web->hosted = options[i].is_string || options[i].flag;
+        else if (is(options[i].name, "opacity"))
+            web->see_through = options[i].is_number;
     return web;
 }
 
@@ -732,12 +740,37 @@ static bool appearance(const portal_string *name, portal_appearance *appearance,
     return true;
 }
 
-bool portal_web_views_check(const portal_option *options, size_t count, portal_text *error)
+/* The last option NAME in OPTIONS, or null. */
+static const portal_option *last_option(const portal_option *options, size_t count,
+                                        const char *name)
 {
     const portal_option *found = NULL;
     for (size_t i = 0; i < count; i++)
-        if (is(options[i].name, "appearance"))
+        if (is(options[i].name, name))
             found = &options[i];
+    return found;
+}
+
+static bool opacity_valid(double opacity, portal_text *error)
+{
+    /* NaN fails both comparisons. */
+    return (opacity >= 0 && opacity <= 1)
+        || fail_with(error, "A page's opacity is a number from 0 to 1");
+}
+
+bool portal_web_views_check(const portal_option *options, size_t count, portal_text *error)
+{
+    const portal_option *opacity = last_option(options, count, "opacity");
+    if (opacity && !opacity->is_number && (opacity->is_string || opacity->flag))
+        return fail_with(error, "Option :opacity must be a number");
+    if (opacity && opacity->is_number) {
+        if (!opacity_valid(opacity->number, error))
+            return false;
+        const portal_option *hosted = last_option(options, count, "hosted");
+        if (!hosted || !(hosted->is_string || hosted->flag))
+            return fail_with(error, "Option :opacity is for a hosted page");
+    }
+    const portal_option *found = last_option(options, count, "appearance");
     if (!found || (!found->is_string && !found->flag))
         return true;
     if (!found->is_string)
@@ -762,6 +795,24 @@ bool portal_web_views_appearance(const portal_string *name, portal_text *error)
     struct appear context = {.error = error};
     return appearance(name, &context.appearance, error)
         && portal_views_each(PORTAL_WEB, appear, &context);
+}
+
+struct opacity {
+    double opacity;
+    portal_text *error;
+};
+
+static bool set_opacity(portal_view *native, struct portal_web_state *web, void *context)
+{
+    struct opacity *opacity = context;
+    return !web->see_through || portal_web_set_opacity(native, opacity->opacity, opacity->error);
+}
+
+bool portal_web_views_opacity(double opacity, portal_text *error)
+{
+    /* Check it before touching any view, even with none open. */
+    struct opacity context = {opacity, error};
+    return opacity_valid(opacity, error) && portal_views_each_web(set_opacity, &context);
 }
 
 struct rezoom {

@@ -341,6 +341,13 @@ public func portalWebSetAppearance(_ web: OpaquePointer, _ appearance: portal_ap
     return perform(error) { try session(web, as: WebSession.self).show(appearance) } != nil
 }
 
+@_cdecl("portal_web_set_opacity")
+public func portalWebSetOpacity(_ web: OpaquePointer, _ opacity: Double,
+                                _ error: UnsafeMutablePointer<portal_text>) -> Bool {
+    let web = native(web)
+    return perform(error) { try session(web, as: WebSession.self).setOpacity(opacity) } != nil
+}
+
 /// REQUEST is the `WindowRequest` that `Core.window` passed the core.
 @_cdecl("portal_web_create_window")
 public func portalWebCreateWindow(_ opener: OpaquePointer, _ target: portal_string,
