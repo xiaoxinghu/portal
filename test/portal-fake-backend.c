@@ -18,7 +18,8 @@
    A terminal describes the facts every platform's terminal reports, "ready",
    "title", "pwd", "program", "columns", "rows" and "exited", which is true
    once a test ends its process.  Its "text" is everything pasted into it, with a newline for
-   each Enter, and its "theme" the last one applied, false for the default.
+   each Enter, its "theme" the last one applied, false for the default, and
+   its "opacity" the last one set, or the :opacity it was created with.
    The engine's themes are those in `themes' below, listed out of order.
 
    A web view's primitives are described below, at portal_web_load.
@@ -601,6 +602,15 @@ bool portal_terminal_apply_theme(portal_view *terminal, const portal_string *nam
         set_string(terminal, "theme", name->data, name->length);
     else
         set_flag(terminal, "theme", false);
+    return true;
+}
+
+bool portal_terminal_set_opacity(portal_view *terminal, double opacity, portal_text *error)
+{
+    if (!working(terminal, error))
+        return false;
+    calls.opaque++;
+    set_real(terminal, "opacity", opacity);
     return true;
 }
 

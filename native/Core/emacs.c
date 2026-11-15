@@ -673,6 +673,15 @@ LISP_FUNCTION(Fterminal_theme)
     return result;
 }
 
+LISP_FUNCTION(Fterminal_opacity)
+{
+    portal_text error = {0};
+    double opacity;
+    return read_number(env, args[0], &opacity)
+        ? done(env, portal_terminals_opacity(opacity, &error), &error)
+        : NULL;
+}
+
 LISP_FUNCTION(Fterminal_text_size)
 {
     portal_text target = {0}, error = {0};
@@ -947,6 +956,8 @@ static const struct export {
      "Show every web view in APPEARANCE, \"light\" or \"dark\"; nil follows the system's."},
     {"portal--terminal-theme", 1, 1, Fterminal_theme, NULL,
      "Apply named THEME to all terminals; nil restores system appearance defaults."},
+    {"portal--terminal-opacity", 1, 1, Fterminal_opacity, NULL,
+     "Show every terminal's background at OPACITY, a number from 0 to 1."},
     {"portal--terminal-text-size", 2, 2, Fterminal_text_size, NULL,
      "Show TARGET's text at POINTS, a number, clamped to 6 to 72."},
     {"portal--terminal-themes", 0, 0, STRINGS_FUNCTION(terminal_themes, RESULT_JSON),
