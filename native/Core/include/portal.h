@@ -261,7 +261,9 @@ bool portal_web_print(portal_view *web, const portal_string *file, portal_text *
    :command; :theme, a name the platform lists, or false for the default;
    :points, the size of its text, a number, which the platform passes
    through portal_terminal_points, or false for PORTAL_TERMINAL_POINTS;
-   :quick, a flag; and :fed, a flag, below. The shell loads startup files
+   :opacity, that of its background, a number from 0 to 1, or false for 1,
+   as portal_terminal_set_opacity says; :quick, a flag; and :fed, a flag,
+   below. The shell loads startup files
    and resolves the program; no Lisp environment snapshot is passed to the
    platform.
 
@@ -313,6 +315,14 @@ bool portal_terminal_list_themes(portal_text **names, size_t *count, portal_text
    null NAME, to TERMINAL.  The default may follow the system's appearance. */
 bool portal_terminal_apply_theme(portal_view *terminal, const portal_string *name,
                                  portal_text *error);
+/* Show TERMINAL's background at OPACITY, from 0 to 1, which the core has
+   checked, from now on, whatever theme or text size it is given later: the
+   theme's background at that opacity, so that what is behind the view shows
+   through it, and its text, cursor, selection and the cells a program gives
+   a background of their own solid.  A fed terminal's pane, beside its grid,
+   is the theme's background at the same opacity, and the grid shows no seam
+   against it. */
+bool portal_terminal_set_opacity(portal_view *terminal, double opacity, portal_text *error);
 /* Show TERMINAL's text at POINTS, which may be fractional and which the
    core has clamped to PORTAL_TERMINAL_MIN_POINTS to
    PORTAL_TERMINAL_MAX_POINTS, from now on, whatever theme it is given

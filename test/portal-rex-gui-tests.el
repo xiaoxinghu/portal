@@ -305,6 +305,29 @@ and the buffer current."
       (portal-rex-gui-tests--none server "data.connect" 0.01)
       (kill-buffer "*rex-gui-elsewhere*"))))
 
+(defun portal-rex-gui-tests--opacities (target)
+  "The opacities TARGET's background is drawn at: Ghostty's and its pane's."
+  (let ((state (portal--inspect target)))
+    (mapcar (lambda (key) (/ (round (* 1000 (plist-get state key))) 1000.0))
+            '(:ghostty-opacity :pane-opacity))))
+
+(ert-deftest portal-rex-gui-a-see-through-block-draws-its-background-once ()
+  :tags '(:gui)
+  (let ((original portal-terminal-opacity))
+    (unwind-protect
+        (portal-fake-rex-with (server)
+          (setopt portal-terminal-opacity 0.85)
+          (portal-rex-gui-tests--showing server
+            ;; Below 1 its pane draws the background, at the opacity, and
+            ;; Ghostty's own is clear: drawn by both, the grid is a darker box.
+            (should (equal (portal-rex-gui-tests--opacities target) '(0.0 0.85)))
+            ;; At 1 both draw it, as before there was an opacity.
+            (setopt portal-terminal-opacity 1)
+            (should (equal (portal-rex-gui-tests--opacities target) '(1.0 1.0)))
+            (setopt portal-terminal-opacity 0.5)
+            (should (equal (portal-rex-gui-tests--opacities target) '(0.0 0.5)))))
+      (setopt portal-terminal-opacity original))))
+
 (ert-deftest portal-rex-gui-types-in-order-and-answers-no-query ()
   :tags '(:gui)
   (portal-fake-rex-with (server)

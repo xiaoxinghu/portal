@@ -14,6 +14,7 @@
 (require 'portal-project)
 
 (declare-function portal--terminal-theme "portal-terminal" (theme))
+(declare-function portal--terminal-opacity "portal-terminal" (opacity))
 (declare-function portal--terminal-text-size "portal-terminal" (target points))
 (declare-function portal--terminal-themes "portal-terminal" ())
 (declare-function portal--inspect "portal-view" (target))
@@ -72,6 +73,28 @@ the name is validated when the native module is available."
   :type '(choice (const :tag "System appearance" nil) string)
   :group 'portal-terminal)
 (add-variable-watcher 'portal-terminal-theme #'portal-terminal--theme-changed)
+
+(defun portal-terminal--opacity-changed (_symbol value operation _where)
+  "Validate opacity VALUE and apply it to running terminals on OPERATION."
+  (when (eq operation 'set)
+    (unless (and (numberp value) (<= 0 value 1))
+      (error "Terminal opacity must be a number from 0 to 1"))
+    (when (fboundp 'portal--terminal-opacity)
+      (portal--terminal-opacity value))))
+
+(defcustom portal-terminal-opacity 1
+  "Opacity of the background of all Portal terminals, from 0 to 1.
+Below 1, the theme's background is drawn at that opacity, so what is
+behind the terminal shows through it; its text, cursor and selection
+stay solid, as do cells a program gives a background of its own, such
+as a status line, colored output or a full-screen program's screen.
+Emacs's text is hidden under the terminal.  This is meant for a frame
+that is itself see-through, such as a frosted one: in an ordinary frame,
+the terminal shows Emacs's background through its own, tinting it.
+Changes with `setq' or Customize apply to running and future terminals."
+  :type '(number :tag "Opacity, 0 to 1")
+  :group 'portal-terminal)
+(add-variable-watcher 'portal-terminal-opacity #'portal-terminal--opacity-changed)
 
 (defun portal-terminal-themes ()
   "Return the available terminal theme names from the bundled catalog."
@@ -386,6 +409,7 @@ QUICK-ROOT, or to the project of `default-directory', where it starts."
                                                :command command
                                                :argv argv
                                                :theme portal-terminal-theme
+                                               :opacity portal-terminal-opacity
                                                :points portal-terminal--points
                                                :quick (and quick-root t))))
             (add-hook 'window-state-change-functions #'portal-terminal--resize-shown 90)

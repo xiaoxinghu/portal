@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* The core's terminal rules, native/Core/terminals.c, with the fake
    platform: option checks before creation, the theme catalog and applying a
-   theme to every terminal, a text size to one, paste and Enter, reading
+   theme to every terminal, an opacity to every terminal, a text size to one, paste and Enter, reading
    text, what a terminal describes, and the records that announce its changes.  The fake counts the
    primitives the core calls, and any call naming a destroyed view or a view
    of the wrong kind.  Records go to a real pipe, which the tests read as
@@ -9,6 +9,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <fcntl.h>
+#include <math.h>
 #include <unistd.h>
 
 #include "channel.h"
@@ -101,6 +102,17 @@ static void test_options_are_checked_before_creation(void)
         {{directory, number_option("points", 14), string_option("points", "14")},
          3,
          "Option :points must be a number"},
+        {{directory, string_option("opacity", "0.5")}, 2, "Option :opacity must be a number"},
+        {{directory, flag_option("opacity", true)}, 2, "Option :opacity must be a number"},
+        {{directory, number_option("opacity", 1.01)}, 2,
+         "A terminal's opacity is a number from 0 to 1"},
+        {{directory, number_option("opacity", -0.01)}, 2,
+         "A terminal's opacity is a number from 0 to 1"},
+        {{directory, number_option("opacity", NAN)}, 2,
+         "A terminal's opacity is a number from 0 to 1"},
+        {{directory, number_option("opacity", 0.5), number_option("opacity", 2)},
+         3,
+         "A terminal's opacity is a number from 0 to 1"},
     };
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
         portal_text error = {0};
@@ -140,6 +152,21 @@ static void test_options_are_checked_before_creation(void)
     const portal_option unsized[] = {directory, flag_option("points", false)};
     target = open_terminal(unsized, 2, &error);
     CHECK(target && shows(target, "\"points\":false", NULL));
+    close_view(target);
+
+    /* An opacity passes as given, both ends included, and nil means 1. */
+    const portal_option opaque[] = {directory, number_option("opacity", 0),
+                                    number_option("opacity", 0.85)};
+    target = open_terminal(opaque, 3, &error);
+    CHECK(target && shows(target, "\"opacity\":0.85", NULL));
+    close_view(target);
+    const portal_option ends[] = {directory, number_option("opacity", 1)};
+    target = open_terminal(ends, 2, &error);
+    CHECK(target && shows(target, "\"opacity\":1", NULL));
+    close_view(target);
+    const portal_option unset[] = {directory, flag_option("opacity", false)};
+    target = open_terminal(unset, 2, &error);
+    CHECK(target && shows(target, "\"opacity\":false", NULL));
     close_view(target);
 
     const portal_option argv[] = {directory, string_option("argv", "[\"/bin/ls\",\"-l\"]")};
@@ -240,6 +267,76 @@ static void test_a_theme_reaches_every_terminal(void)
     CHECK(shows(first, "\"theme\":\"Beta\"", NULL));
     close_view(first);
     close_view(third);
+    close_view(web);
+    CHECK(!portal_fake_calls().misused);
+}
+
+static void test_an_opacity_reaches_every_terminal(void)
+{
+    portal_text error = {0};
+    /* It is checked even with no terminal open. */
+    struct portal_fake_calls before = portal_fake_calls();
+    CHECK(!portal_terminals_opacity(1.5, &error));
+    CHECK(says(&error, "A terminal's opacity is a number from 0 to 1"));
+    CHECK(portal_terminals_opacity(0.5, &error));
+    CHECK(same_calls(portal_fake_calls(), before));
+
+    char *web = open_view("web", &error, NULL);
+    const portal_option fed[] = {flag_option("fed", true)};
+    char *first = open_in("/"), *second = open_terminal(fed, 1, &error), *third = open_in("/");
+    CHECK(second != NULL);
+    before = portal_fake_calls();
+    CHECK(portal_terminals_opacity(0.85, &error));
+    CHECK(portal_fake_calls().opaque == before.opaque + 3);
+    CHECK(shows(first, "\"opacity\":0.85", NULL));
+    CHECK(shows(second, "\"opacity\":0.85", NULL));
+    CHECK(shows(third, "\"opacity\":0.85", NULL));
+    char *state = inspect(web);
+    CHECK(state && !strstr(state, "\"opacity\""));
+    free(state);
+
+    /* One out of range, or not a number, touches no terminal. */
+    const double refused[] = {-0.5, 1.000001, NAN, INFINITY};
+    for (size_t i = 0; i < sizeof refused / sizeof *refused; i++) {
+        before = portal_fake_calls();
+        CHECK(!portal_terminals_opacity(refused[i], &error));
+        CHECK(says(&error, "A terminal's opacity is a number from 0 to 1"));
+        CHECK(same_calls(portal_fake_calls(), before));
+    }
+    CHECK(shows(second, "\"opacity\":0.85", NULL));
+
+    /* Both ends are opacities. */
+    CHECK(portal_terminals_opacity(0, &error));
+    CHECK(shows(third, "\"opacity\":0", NULL));
+    CHECK(portal_terminals_opacity(1, &error));
+    CHECK(shows(first, "\"opacity\":1", NULL));
+
+    /* A rejecting terminal stops it there, as a theme does. */
+    const portal_option broken[] = {string_option("directory", "/"),
+                                    string_option("broken", "Metal is gone")};
+    char *fourth = open_terminal(broken, 2, &error), *fifth = open_in("/");
+    before = portal_fake_calls();
+    CHECK(!portal_terminals_opacity(0.25, &error));
+    CHECK(says(&error, "Metal is gone"));
+    CHECK(portal_fake_calls().opaque == before.opaque + 3);
+    CHECK(shows(third, "\"opacity\":0.25", NULL));
+    state = inspect(fifth);
+    CHECK(state && !strstr(state, "\"opacity\""));
+    free(state);
+
+    /* A refusing platform changes nothing. */
+    portal_fake_refuse(true);
+    before = portal_fake_calls();
+    CHECK(!portal_terminals_opacity(0.5, &error));
+    CHECK(says(&error, "The fake refuses to run view primitives"));
+    portal_fake_refuse(false);
+    CHECK(same_calls(portal_fake_calls(), before));
+    CHECK(shows(first, "\"opacity\":0.25", NULL));
+    close_view(first);
+    close_view(second);
+    close_view(third);
+    close_view(fourth);
+    close_view(fifth);
     close_view(web);
     CHECK(!portal_fake_calls().misused);
 }
@@ -448,6 +545,7 @@ int main(void)
     test_the_theme_catalog_is_sorted();
     test_a_theme_reaches_every_terminal();
     test_a_rejected_theme_stops_at_that_terminal();
+    test_an_opacity_reaches_every_terminal();
     test_points_are_clamped();
     test_a_text_size_reaches_one_terminal();
     test_paste_then_enter();
