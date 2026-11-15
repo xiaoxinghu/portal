@@ -419,6 +419,27 @@ Return the view's target."
           (should (equal portal-terminal-theme "Dracula")))
       (setq portal-terminal-theme original))))
 
+(ert-deftest portal-view-terminal-opacity-reaches-old-and-new-terminals ()
+  (let ((original portal-terminal-opacity))
+    (unwind-protect
+        (portal-view-test--environment
+          (portal-terminal)
+          ;; A change reaches the running terminals at once.
+          (setq portal-terminal-opacity 0.85)
+          (should (equal (portal-fake-native-calls 'portal--terminal-opacity) '((0.85))))
+          ;; It is a number from 0 to 1, and a refused one changes nothing.
+          (dolist (value '(1.5 -0.1 "0.5" nil 0.0e+NaN))
+            (should-error (setq portal-terminal-opacity value))
+            (should (equal portal-terminal-opacity 0.85)))
+          (setopt portal-terminal-opacity 0)
+          (should (equal (portal-fake-native-calls 'portal--terminal-opacity) '((0.85) (0))))
+          ;; A new terminal opens at it.
+          (portal-terminal-new)
+          (should (equal (plist-get (plist-get (portal--inspect (portal-view-target)) :options)
+                                    :opacity)
+                         0)))
+      (setq portal-terminal-opacity original))))
+
 ;; Batch Emacs's frames are text terminals, where the `default' face has a
 ;; nominal height of 1, but its attribute can still be set per frame.  Making
 ;; or selecting a frame on another terminal sets it back to 1 in every frame,
@@ -577,6 +598,64 @@ Return the view's target."
     (portal-view-open 'terminal nil)
     (portal-view-close)
     (should (equal (buffer-string) "own text"))))
+
+(defun portal-view-test--text-width (window)
+  "The width of the text WINDOW shows of its buffer, in columns."
+  (car (window-text-pixel-size window)))
+
+(ert-deftest portal-view-text-is-hidden-in-the-views-pane-alone ()
+  (portal-view-test--environment
+    (portal-terminal)
+    (let* ((buffer (current-buffer))
+           (origin (selected-window))
+           (other (split-window-right)))
+      (set-window-buffer other buffer)
+      (portal-view-sync)
+      (should (eq portal-view--window origin))
+      ;; The view's pane shows none of the placard; the other pane shows it.
+      (should (= (portal-view-test--text-width origin) 0))
+      (should (> (portal-view-test--text-width other) 0))
+      ;; The text follows the view when it moves.
+      (select-window other)
+      (portal-view-focus)
+      (should (eq portal-view--window other))
+      (should (> (portal-view-test--text-width origin) 0))
+      (should (= (portal-view-test--text-width other) 0))
+      ;; Text the buffer gets later is hidden there too.
+      (let ((inhibit-read-only t))
+        (goto-char (point-max))
+        (insert "more text, at the end\n")
+        (goto-char (point-min))
+        (insert "more text, at the start\n"))
+      (should (= (portal-view-test--text-width other) 0))
+      (portal-view-placard "terminal" "This terminal has ended.")
+      (should (= (portal-view-test--text-width other) 0))
+      (should (> (portal-view-test--text-width origin) 0))
+      ;; Hidden in no pane, the text is hidden nowhere: shown again, it is
+      ;; hidden in its new pane alone.
+      (delete-window other)
+      (switch-to-buffer "*scratch*")
+      (portal-view-sync)
+      (should-not portal-view--window)
+      (with-current-buffer buffer (should-not (overlay-buffer portal-view--veil)))
+      (let ((pane (split-window-right)))
+        (set-window-buffer pane buffer)
+        (portal-view-sync)
+        (should (eq (buffer-local-value 'portal-view--window buffer) pane))
+        (should (= (portal-view-test--text-width pane) 0))
+        ;; Switched into the selected pane, the view takes it, and the
+        ;; pane it left shows the text.
+        (set-window-buffer (selected-window) buffer)
+        (portal-view-sync)
+        (should (eq (buffer-local-value 'portal-view--window buffer) (selected-window)))
+        (should (= (portal-view-test--text-width (selected-window)) 0))
+        (should (> (portal-view-test--text-width pane) 0))
+        ;; Once the view closes, its pane shows the text that says so.
+        (with-current-buffer buffer (portal-view-close))
+        (should (> (portal-view-test--text-width (selected-window)) 0))
+        (should-not (cl-some (lambda (overlay) (overlay-get overlay 'portal-view-veil))
+                             (with-current-buffer buffer
+                               (overlays-in (point-min) (point-max)))))))))
 
 ;;; Records
 

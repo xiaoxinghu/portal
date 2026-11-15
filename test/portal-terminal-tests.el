@@ -158,6 +158,45 @@
                                 '("f7f7f7" "212121")))))))
       (setq portal-terminal-theme original))))
 
+(defun portal-terminal-test--opacity-p (target opacity)
+  "Whether Ghostty draws TARGET's own background at OPACITY."
+  (let ((shown (plist-get (portal-terminal-test--state target) :ghostty-opacity)))
+    (and (numberp shown) (< (abs (- shown opacity)) 0.001))))
+
+(ert-deftest portal-terminal-opacity-reaches-ghostty-and-hides-the-text ()
+  :tags '(:gui)
+  (skip-unless (eq window-system 'ns))
+  (let ((original portal-terminal-opacity))
+    (unwind-protect
+        (portal-terminal-test--session
+          (let ((first (portal-view-target)))
+            ;; At 1, the default, Ghostty draws its background as ever.
+            (should (portal-terminal-test--opacity-p first 1))
+            ;; A running terminal takes a change, and keeps it through a
+            ;; theme; Ghostty draws its own colors, so they are its to test.
+            (setopt portal-terminal-opacity 0.85)
+            (should (portal-terminal-test--opacity-p first 0.85))
+            (let ((theme portal-terminal-theme))
+              (unwind-protect (setopt portal-terminal-theme "Dracula")
+                (setopt portal-terminal-theme theme)))
+            (should (portal-terminal-test--opacity-p first 0.85))
+            ;; A new terminal opens at it.
+            (portal-terminal-new)
+            (let ((buffer (current-buffer))
+                  (pane (selected-window))
+                  (other (split-window-right)))
+              (should (portal-terminal-test--opacity-p (portal-view-target) 0.85))
+              ;; Its placard is drawn in the other pane showing its buffer,
+              ;; and nothing of it in the pane that has the view.
+              (set-window-buffer other buffer)
+              (redisplay t)
+              (should (eq (buffer-local-value 'portal-view--window buffer) pane))
+              (should (= (car (window-text-pixel-size pane)) 0))
+              (should (> (car (window-text-pixel-size other)) 0)))
+            (setopt portal-terminal-opacity 1)
+            (should (portal-terminal-test--opacity-p first 1))))
+      (setopt portal-terminal-opacity original))))
+
 (defun portal-terminal-test--points-p (target points)
   "Whether TARGET's terminal shows its text at POINTS, to a hundredth."
   (let ((shown (plist-get (portal-terminal-test--state target) :points)))
