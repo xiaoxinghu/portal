@@ -197,9 +197,10 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     /// The background opacity of the configuration Ghostty last took: its
     /// last `background-opacity` line, or 1, Ghostty's default, without one.
     var configuredOpacity: Double {
-        let lines = controller?.renderedConfig.split(separator: "\n") ?? []
-        let value = lines.last { $0.hasPrefix("background-opacity") }?
-            .split(separator: "=", maxSplits: 1).last?.trimmingCharacters(in: .whitespaces)
+        let entries = (controller?.renderedConfig.split(separator: "\n") ?? []).map {
+            $0.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+        }
+        let value = entries.last { $0.count == 2 && $0[0] == "background-opacity" }?[1]
         return value.flatMap(Double.init) ?? 1
     }
 
