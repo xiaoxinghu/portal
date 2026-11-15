@@ -198,6 +198,42 @@ title-bar appearance with `ns-appearance`. To fix preview appearance, set
 This affects every web view, including Excalidraw;
 open previews change immediately without reloading.
 
+In a frame that is itself see-through, such as one with a frosted
+background, previews can be see-through too:
+
+```elisp
+(setq portal-web-preview-opacity 0.85) ; from 0 to 1; the default, 1, is opaque
+```
+
+Below 1, a preview draws its page's background at that opacity, so the
+frame shows through it. Its text, code blocks, the header row of a table,
+images and inline SVG stay solid, as do find's highlight and a selection;
+a quote and a table's other cells have no background of their own, so they
+are see-through like the page. It applies to Markdown previews alone:
+other pages, Excalidraw and Portal's other hosted pages included, keep
+their background. Changes apply to open previews without reloading them,
+and to the pages they go on to show. Printing is unchanged. The text Emacs
+keeps in a preview's buffer is hidden in the pane that has the view, as
+for [terminals](terminals.md).
+
+A page that matches the frame reads as glass: a light page over a dark
+frame reads as a pale panel instead, so let `portal-web-appearance` follow
+the Emacs theme, or the system, with it. In an ordinary, opaque frame the
+preview shows Emacs's own background through itself, tinting it. So set
+the opacity where the frame becomes see-through, and back to 1 where it
+stops, as for terminals. With the frost package, whose global
+`frost-mode` makes the frame frosted:
+
+```elisp
+(add-hook 'frost-mode-hook
+          (lambda ()
+            (setq portal-terminal-opacity (if frost-mode 0.85 1)
+                  portal-web-preview-opacity (if frost-mode 0.9 1))))
+```
+
+Portal does not ask whether a frame is see-through: the setting is the
+whole of it.
+
 Previews support headings, lists, fenced code, tables, strikethrough, task lists,
 heading anchors and images. Local images, such as `![diagram](img/arch.png)`,
 resolve like links below; HTTP(S) and `data:` images also work. An image
