@@ -449,6 +449,16 @@ class Releases(unittest.TestCase):
         self.assertNotIn("a feature in Lisp", notes)
         self.assertIn("offers a rebuild of several minutes", notes)
 
+    def test_a_file_moved_out_of_the_native_inputs_costs_a_rebuild(self):
+        self.first_release()
+        (self.dev / "scripts").mkdir()
+        git(self.dev, "mv", "native/core.c", "scripts/core.c")
+        self.commit("portal/move: the core moves out of native/")
+        git(self.dev, "push", "-q", "origin", "main")
+        self.release()
+        self.assertIn("offers a rebuild of several minutes",
+                      self.gh()["releases"]["v0.3.0"]["notes"])
+
     def test_main_having_moved_ends_in_a_merge(self):
         self.write("later.el", "later\n")
         later = self.commit("portal/later: merged while Checks ran")

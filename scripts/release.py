@@ -777,7 +777,8 @@ class Release:
         commit = view["headSha"]
         first = previous is None
         changed = [] if first else self.repo.out(
-            "diff", "--name-only", previous, commit).splitlines()
+            # Both sides of a move: one out of the native inputs changes them too.
+            "diff", "--name-only", "--no-renames", previous, commit).splitlines()
         subjects = [] if first else self.subjects(previous, base)
         outside = {"appkit": self.options.appkit_passed, "keys": self.options.keys_passed}
         lines, self.missing = evidence(view, job_log, logs)
