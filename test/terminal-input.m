@@ -166,7 +166,10 @@ static emacs_value webEval(emacs_env *env, ptrdiff_t nargs, emacs_value *args, v
         if ([view isKindOfClass:WKWebView.class] && !view.isHiddenOrHasHiddenAncestor) {
             [(WKWebView *)view callAsyncJavaScript:script arguments:@{} inFrame:nil
                 inContentWorld:WKContentWorld.pageWorld completionHandler:^(id value, NSError *error) {
-                    NSDictionary *result = error ? @{ @"error": error.localizedDescription }
+                    // What the script threw, which the error's own description
+                    // ("A JavaScript exception occurred") leaves out.
+                    NSString *thrown = error.userInfo[@"WKJavaScriptExceptionMessage"];
+                    NSDictionary *result = error ? @{ @"error": thrown ?: error.localizedDescription }
                         : @{ @"value": value ?: NSNull.null };
                     NSData *json = [NSJSONSerialization dataWithJSONObject:result options:NSJSONWritingFragmentsAllowed error:nil];
                     webResult = [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
