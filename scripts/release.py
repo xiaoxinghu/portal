@@ -240,13 +240,17 @@ SWIFT_SUMMARY = re.compile(r"Test run with (\d+) tests? (?:in \d+ suites? )?"
                            r"(passed|failed)(?:.*with (\d+) issues?)?")
 SWIFT_SKIPPED = re.compile(r'Test "(.+?)" skipped(?:: "(.*)")?')
 XCTEST_SUMMARY = re.compile(r"Executed (\d+) tests?, with (\d+) failures?")
-PACKAGE_PASSED = re.compile(r"^(\d+) checks passed$")
+# The count the package suite and the C core's test programs end with.
+CHECKS_PASSED = re.compile(r"^(\d+) checks passed$")
+# A step whose command runs tests must give a count.
+TEST_COMMAND = re.compile(r"\bctest\b|\bunittest\b|\btest/[\w.-]+\.sh\b")
 
 
 def suite_counts(lines):
     """What LINES, one suite's output, say it ran: (counts or None, [(skipped test,
     reason)]).  Reads ERT, CTest, Python's unittest, Bun, Swift Testing, XCTest
-    and the package suite's own count; None when none of them is there."""
+    and the count of checks the package suite and the C core's programs print;
+    None when none of them is there."""
     lines = [ANSI.sub("", line) for line in lines]
     skipped, found = [], None
     ert = [ERT_SUMMARY.match(line) for line in lines]
@@ -310,7 +314,7 @@ def suite_counts(lines):
         if match and not found:
             total, failed = int(match.group(1)), int(match.group(2))
             found = counts(total - failed, failed, total=total)
-    package = [int(match.group(1)) for match in map(PACKAGE_PASSED.match, lines) if match]
+    package = [int(match.group(1)) for match in map(CHECKS_PASSED.match, lines) if match]
     if package:
         failed = sum(1 for line in lines if line.startswith("FAIL "))
         found = counts(sum(package), failed, unit="checks")
@@ -349,9 +353,21 @@ ENVIRONMENT_EXTRAS = (re.compile(r"^GNU Emacs \d"), re.compile(r"^ of \d{4}-\d\d
                       re.compile(r"^resolve-bun: using Bun "))
 
 
+def command_of(section):
+    """A step's command as the runner echoes it, without its comments."""
+    header = section[:1]
+    for index, line in enumerate(section):
+        if line.startswith("##[endgroup]"):
+            header = section[:index]
+            break
+    lines = [line.removeprefix("##[group]Run ") for line in header]
+    return [line for line in lines if not line.lstrip().startswith("#")]
+
+
 def evidence(run, job_log, logs_dir):
     """The notes' Evidence section, read from RUN (gh's JSON of the run), its
-    JOB_LOG and the files of its logs artifact in LOGS_DIR."""
+    JOB_LOG and the files of its logs artifact in LOGS_DIR, and what it lacks:
+    ([line], [what is missing]).  A release needs nothing missing."""
     job = run["jobs"][0]
     sections = step_logs(job["steps"], job_log)
     out = []
@@ -365,7 +381,7 @@ def evidence(run, job_log, logs_dir):
         raise Refusal(f"run {run['url']} restored cached downloads: it is no evidence "
                       "for a release")
     out.append(f"Commit `{run['headSha']}`, Checks run {run['url']}, without cached downloads.")
-    environment = [line for line in output_of(record) if line.strip()]
+    environment = [line.rstrip() for line in output_of(record) if line.strip()]
     extras = [line for lines in sections.values() if lines is not record
               for line in output_of(lines)]
     build_log = Path(logs_dir) / "build.log"
@@ -378,7 +394,7 @@ def evidence(run, job_log, logs_dir):
             environment.append(line)
     out += ["", "### Environment", "", "```", *environment, "```"]
 
-    rows, skipped = [], []
+    rows, skipped, missing = [], [], []
     for step in job["steps"]:
         name = step["name"]
         if name in ("Set up job", "Complete job") or name.startswith("Post "):
@@ -387,6 +403,9 @@ def evidence(run, job_log, logs_dir):
                   "cancelled": "cancelled"}.get(step.get("conclusion"), step.get("conclusion"))
         section = sections.get(step["number"])
         found, skips = suite_counts(output_of(section)) if section else (None, [])
+        if section and not found and any(TEST_COMMAND.search(line)
+                                         for line in command_of(section)):
+            missing.append(f"the step {name} runs tests and gives no count")
         rows.append(f"| {name} | {result} | {found} |" if found else f"| {name} | {result} | |")
         skipped += [(test, reason, name) for test, reason in skips]
     out += ["", "### Steps", "",
@@ -399,12 +418,13 @@ def evidence(run, job_log, logs_dir):
         out += ["", "<details><summary>CTest suites</summary>", "",
                 "| Suite | Result | Counts |", "| --- | --- | --- |"]
         for name, result, found, skips in suites:
-            out.append(f"| {name} | {result} | {found or 'one program, no count'} |")
+            out.append(f"| {name} | {result} | {found or 'no count'} |")
+            if not found:
+                missing.append(f"the CTest suite {name} gives no count")
             skipped += [(test, reason, f"CTest {name}") for test, reason in skips]
         out += ["", "</details>"]
     else:
-        out += ["", "CTest's own log, `ctest.log`, is not among the run's logs: the tests "
-                "skipped inside its suites cannot be named."]
+        missing.append("CTest's own log, ctest.log, is not among the run's logs")
 
     out += ["", "### Skipped tests", ""]
     if skipped:
@@ -412,7 +432,10 @@ def evidence(run, job_log, logs_dir):
                 for test, reason, where in skipped]
     else:
         out.append("None.")
-    return out
+    if missing:
+        out += ["", "**The evidence is incomplete**, so this cannot be released: "
+                + "; ".join(missing) + "."]
+    return out, missing
 
 
 def compose_notes(version, subjects, first, changed_paths, evidence_lines, outside):
@@ -724,8 +747,8 @@ class Release:
             "diff", "--name-only", previous, commit).splitlines()
         subjects = [] if first else self.subjects(previous, base)
         outside = {"appkit": self.options.appkit_passed, "keys": self.options.keys_passed}
-        text = compose_notes(version, subjects, first, changed,
-                             evidence(view, job_log, logs), outside)
+        lines, self.missing = evidence(view, job_log, logs)
+        text = compose_notes(version, subjects, first, changed, lines, outside)
         notes = self.work / "notes.md"
         notes.write_text(text)
         asset = self.work / f"portal-{version}-checks-logs.zip"
@@ -793,11 +816,17 @@ class Release:
         if view.get("conclusion") != "success":
             self.red(view, version)
         notes, asset = self.notes(view, version, base, previous)
+        incomplete = "; ".join(self.missing)
         if self.options.dry_run:
             print(notes.read_text(), end="")
             self.delete_candidate(version)
             say(f"dry run: nothing published; release/v{version} deleted")
+            if incomplete:
+                say(f"a release of this commit would stop: {incomplete}")
             return
+        if incomplete:
+            raise Refusal(f"the evidence is incomplete: {incomplete}. Nothing is tagged or "
+                          f"moved; release/v{version} stays for reading.")
         self.publish(commit, version, notes, asset)
         self.delete_candidate(version)
 

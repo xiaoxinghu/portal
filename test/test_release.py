@@ -41,7 +41,9 @@ HEADER = textwrap.dedent("""\
     """)
 
 # gh, as far as the release command uses it: runs come from the state file
-# GH_STUB names, their jobs and logs from the fixtures.
+# GH_STUB names, their jobs and logs from the fixtures.  The fixture is a real
+# run that failed at Whitespace and Views; the stub decides a run's outcome,
+# so a green run has every step green and a red one fails at CTest.
 GH_STUB = textwrap.dedent("""\
     import json, os, shutil, subprocess, sys
     path = os.environ["GH_STUB"]
@@ -94,11 +96,11 @@ GH_STUB = textwrap.dedent("""\
         found = [r for r in state["runs"] if r["databaseId"] == int(args[2])][0]
         with open(os.path.join(fixtures, "run.json")) as f:
             jobs = json.load(f)["jobs"]
-        if found["conclusion"] == "failure":
-            jobs[0]["conclusion"] = "failure"
-            for step in jobs[0]["steps"]:
-                if step["name"] == "CTest":
-                    step["conclusion"] = "failure"
+        red = found["conclusion"] == "failure"
+        jobs[0]["conclusion"] = found["conclusion"]
+        for step in jobs[0]["steps"]:
+            if step["conclusion"] == "failure" or step["name"] == "CTest":
+                step["conclusion"] = "failure" if red and step["name"] == "CTest" else "success"
         if found["status"] != "completed":
             jobs[0]["steps"][8]["status"] = "in_progress"
         finish(0, dict(found, jobs=jobs))
@@ -187,8 +189,10 @@ class Notes(unittest.TestCase):
         self.run_view = json.loads((FIXTURES / "run.json").read_text())
         self.job_log = (FIXTURES / "job.log").read_text()
 
-    def evidence(self):
-        return "\n".join(release.evidence(self.run_view, self.job_log, FIXTURES / "logs"))
+    def evidence(self, logs=FIXTURES / "logs"):
+        lines, missing = release.evidence(self.run_view, self.job_log, logs)
+        self.missing = missing
+        return "\n".join(lines)
 
     def test_subjects(self):
         titles = {"12": "A title"}.get
@@ -215,10 +219,15 @@ class Notes(unittest.TestCase):
 
     def test_every_step_with_its_counts(self):
         text = self.evidence()
+        self.assertEqual(self.missing, [])
         steps = {line.split(" | ")[0][2:]: line.split(" | ")[1:]
                  for line in text.splitlines() if line.startswith("| ")}
         self.assertEqual(steps["CTest"], ["passed", "34 suites: 34 passed |"])
-        self.assertEqual(steps["Python"], ["passed", "51 tests: 51 passed |"])
+        self.assertEqual(steps["Python"], ["passed", "80 tests: 80 passed |"])
+        self.assertEqual(steps["Views (graphical)"], ["failed", "87 tests: 86 passed, 1 failed |"])
+        self.assertEqual(steps["Package first use (graphical)"],
+                         ["passed", "15 checks: 15 passed |"])
+        self.assertEqual(steps["Restore Swift packages"], ["not run", "|"])
         self.assertEqual(steps["Input (graphical)"],
                          ["passed", "17 tests: 13 passed, 4 skipped |"])
         self.assertEqual(steps["Launcher (graphical)"],
@@ -228,7 +237,8 @@ class Notes(unittest.TestCase):
         self.assertEqual(steps["input"], ["passed", "21 tests: 19 passed, 2 skipped |"])
         self.assertEqual(steps["libghostty-spm"], ["passed", "31 tests: 31 passed |"])
         self.assertEqual(steps["app-host"], ["passed", "55 tests: 55 passed |"])
-        self.assertEqual(steps["channel"], ["passed", "one program, no count |"])
+        self.assertEqual(steps["channel"], ["passed", "134 checks: 134 passed |"])
+        self.assertEqual(steps["package"], ["passed", "6 tests: 6 passed |"])
 
     def test_every_skipped_test_by_name(self):
         text = self.evidence()
@@ -238,7 +248,10 @@ class Notes(unittest.TestCase):
                 ("portal-input-gui-web-fullscreen-page-closes-with-its-buffer",
                  "Input (graphical)"),
                 ("portal-input-chords-use-evil-state-keymaps", "CTest input")):
-            self.assertIn(f"- `{name}`, in {where}", text)
+            self.assertIn(f"- `{name}`, in {where}: ", text)
+        self.assertIn("in Input (graphical): \"WebKit refuses fullscreen here", text)
+        self.assertIn("in CTest input: ((skip-unless (locate-library \"evil\"))", text)
+        self.assertNotIn("no reason given", text)
 
     def test_the_environment_and_the_commit(self):
         text = self.evidence()
@@ -249,6 +262,18 @@ class Notes(unittest.TestCase):
             self.assertIn(line, text)
         self.assertRegex(text, r"\nGNU Emacs 31\.1 ")
         self.assertRegex(text, r"\nresolve-bun: using Bun 1\.3\.14 ")
+
+    def test_what_gives_no_count_is_named(self):
+        with tempfile.TemporaryDirectory() as logs:
+            shutil.copy(FIXTURES / "logs" / "build.log", logs)
+            self.job_log = "\n".join(line for line in self.job_log.splitlines()
+                                     if not line.endswith(" checks passed"))
+            text = self.evidence(Path(logs))
+        self.assertEqual(self.missing, [
+            "the step Package first use (graphical) runs tests and gives no count",
+            "CTest's own log, ctest.log, is not among the run's logs"])
+        self.assertIn("**The evidence is incomplete**, so this cannot be released", text)
+        self.assertEqual(text.count("gives no count"), 1)
 
     def test_a_cached_run_is_no_evidence(self):
         self.job_log = self.job_log.replace("USE_CACHE: false", "USE_CACHE: true")
@@ -499,6 +524,21 @@ class Releases(unittest.TestCase):
         self.assertIn("- Physical-key delivery, by hand: passed", result.stdout)
         self.assertEqual(self.refs(), refs)
         self.assertEqual(len(self.gh()["dispatches"]), 1)
+        self.assertEqual(self.gh()["releases"], {})
+
+    def test_incomplete_evidence_publishes_nothing(self):
+        fixtures = self.root / "fixtures"
+        shutil.copytree(FIXTURES, fixtures)
+        (fixtures / "logs" / "ctest.log").unlink()
+        self.set_state(fixtures=str(fixtures))
+        refs = self.refs()
+        dry = self.release("--dry-run")
+        self.assertIn("**The evidence is incomplete**", dry.stdout)
+        self.assertIn("a release of this commit would stop: CTest's own log", dry.stderr)
+        result = self.release(check=1)
+        self.assertIn("the evidence is incomplete: CTest's own log", result.stderr)
+        self.assertEqual([line for line in self.refs().splitlines()
+                          if "refs/heads/release/" not in line], refs.splitlines())
         self.assertEqual(self.gh()["releases"], {})
 
     def test_a_failed_base_run_on_main_stops_unless_told_to_go_on(self):
