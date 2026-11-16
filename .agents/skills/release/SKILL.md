@@ -23,7 +23,8 @@ they did not:
   The checkout you were started in may hold merges GitHub does not have.
 - The release commit changes the `Version:` line of `portal.el` and nothing else.
 - `stable` only fast-forwards. Every push is a plain push: tags, `stable` and `main` are
-  never forced, deleted or moved back.
+  never forced, deleted or moved back. `release/vX.Y.Z` is the one branch you delete, and
+  no user is ever on it.
 - Publish only from a green, uncached Checks run of the release commit itself, with
   evidence complete, and only after the owner approves the notes.
 - When a step goes red or a check refuses, stop and report: what, the run's URL, and that
@@ -44,8 +45,9 @@ they did not:
    before anything is pushed. Done when every refusal is checked.
 3. **Release commit.** On the base, set the `Version:` line and commit it alone as
    `release: Portal X.Y.Z`. Check `git diff --numstat HEAD^ HEAD` is `1 1 portal.el` and
-   `git blame -L '/^;; Version:/,+1' HEAD -- portal.el` names HEAD. Push it as
-   `release/vX.Y.Z`, replacing what an earlier attempt left there.
+   `git blame -L '/^;; Version:/,+1' HEAD -- portal.el` names HEAD. Delete the
+   `release/vX.Y.Z` an earlier attempt left on GitHub, if any, then push the commit as
+   `release/vX.Y.Z`.
 4. **Checks.** `gh workflow run checks.yml --ref release/vX.Y.Z -f cache=false`, find the run
    by its head commit in `gh run list --branch release/vX.Y.Z`, and wait with
    `gh run watch RUN --exit-status` (about 15 minutes). Red: name the failed steps, leave the
