@@ -859,26 +859,23 @@ console is in frame CONSOLE, the slide window in FRAME."
   "A script returning the shades of the slide image SELECTOR finds, once
 it is drawn: at its bottom right, the drawing's background, and at its top
 left, where `portal-excalidraw-gui--picture' is, each \"dark\", \"light\"
-or the colour between.  While WebKit cannot draw the image or read it
-back, as while the page replaces it, the script returns what WebKit threw,
-alone: a caller that waits for shades waits on, and says why if it gives up."
+or the colour between."
+  ;; willReadFrequently keeps the canvas in software.  It is only ever read,
+  ;; and from the default canvas WebKit throws InvalidStateError on GitHub's
+  ;; runners, macOS 27.0.1, for either window's image, every time.
   (format "const slide = document.querySelector(%S);
            if (!slide?.complete || !slide.naturalWidth) return null;
            const canvas = document.createElement('canvas');
            [canvas.width, canvas.height] = [slide.naturalWidth, slide.naturalHeight];
-           const context = canvas.getContext('2d');
+           const context = canvas.getContext('2d', { willReadFrequently: true });
+           context.drawImage(slide, 0, 0);
            const shade = (x, y) => {
              const [r, g, b] = context.getImageData(
                Math.floor(x * canvas.width), Math.floor(y * canvas.height), 1, 1).data;
              const light = (r + g + b) / 3;
              return light < 64 ? 'dark' : light > 192 ? 'light' : `${r},${g},${b}`;
            };
-           try {
-             context.drawImage(slide, 0, 0);
-             return [shade(0.75, 0.75), shade(0.1, 0.15)];
-           } catch (error) {
-             return [String(error)];
-           }"
+           return [shade(0.75, 0.75), shade(0.1, 0.15)];"
           selector))
 
 (defun portal-excalidraw-gui--shades (selector)
