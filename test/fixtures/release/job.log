@@ -1,0 +1,346 @@
+2026-11-14T04:24:24.7171520Z ##[group]Runner Image Provisioner
+2026-11-14T04:24:24.7172040Z Hosted Compute Agent
+2026-11-14T04:24:24.7172430Z Version: 20261103.629
+2026-11-14T04:24:24.7172850Z Commit: 15dbd9ccb5dbf34fae002b6ed1a2670f52df37bc
+2026-11-14T04:24:24.7173330Z Build Date: 2026-11-03T17:26:59Z
+2026-11-14T04:24:24.7173760Z Worker ID: {d70abc8b-6527-44ce-9482-7fc1e8dda8ba}
+2026-11-14T04:24:24.7174230Z Region: westus
+2026-11-14T04:24:24.7174610Z Cloud: MacCloud
+2026-11-14T04:24:24.7174970Z ##[endgroup]
+2026-11-14T04:24:24.7175810Z ##[group]Operating System
+2026-11-14T04:24:24.7176200Z macOS
+2026-11-14T04:24:24.7176660Z 27.0.1
+2026-11-14T04:24:24.7176990Z 26A434
+2026-11-14T04:24:24.7177330Z ##[endgroup]
+2026-11-14T04:24:24.7177700Z ##[group]Runner Image
+2026-11-14T04:24:24.7178080Z Image: xcode-27-arm64
+2026-11-14T04:24:24.7178460Z Version: 20261104.0337.1
+2026-11-14T04:24:24.7179280Z Included Software: https://github.com/actions/runner-images/blob/xcode-27-arm64/20261104.0337/images/macos/xcode-27-arm64-Readme.md
+2026-11-14T04:24:24.7180330Z Image Release: https://github.com/actions/runner-images/releases/tag/xcode-27-arm64%2F20261104.0337
+2026-11-14T04:24:24.7181000Z ##[endgroup]
+2026-11-14T04:24:24.7181730Z ##[group]GITHUB_TOKEN Permissions
+2026-11-14T04:24:24.7182710Z Contents: read
+2026-11-14T04:24:24.7183080Z Metadata: read
+2026-11-14T04:24:24.7183450Z ##[endgroup]
+2026-11-14T04:24:25.8634500Z ##[group]Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+2026-11-14T04:24:25.8635170Z with:
+2026-11-14T04:24:25.8635530Z   persist-credentials: false
+2026-11-14T04:24:25.8635920Z   repository: xiaoxinghu/portal
+2026-11-14T04:24:25.8638560Z   token: ***
+2026-11-14T04:24:25.8638870Z   ssh-strict: true
+2026-11-14T04:24:25.8639190Z   ssh-user: git
+2026-11-14T04:24:25.8639600Z   clean: true
+2026-11-14T04:24:25.8639920Z   sparse-checkout-cone-mode: true
+2026-11-14T04:24:25.8640290Z   fetch-depth: 1
+2026-11-14T04:24:25.8640610Z   fetch-tags: false
+2026-11-14T04:24:25.8641090Z   show-progress: true
+2026-11-14T04:24:25.8641450Z   lfs: false
+2026-11-14T04:24:25.8641750Z   submodules: false
+2026-11-14T04:24:25.8642070Z   set-safe-directory: true
+2026-11-14T04:24:25.8642430Z   allow-unsafe-pr-checkout: false
+2026-11-14T04:24:25.8642920Z env:
+2026-11-14T04:24:25.8645390Z   USE_CACHE: false
+2026-11-14T04:24:25.8646050Z ##[endgroup]
+2026-11-14T04:24:26.3009280Z ##[group]Getting Git version info
+2026-11-14T04:24:26.3010000Z Working directory is '/Users/runner/work/portal/portal'
+2026-11-14T04:24:26.3010900Z [command]/opt/homebrew/bin/git version
+2026-11-14T04:24:26.3522190Z git version 2.56.0
+2026-11-14T04:24:26.3532880Z ##[endgroup]
+2026-11-14T04:24:26.3654820Z ##[group]Determining repository object format
+2026-11-14T04:24:26.3655650Z ##[endgroup]
+2026-11-14T04:24:26.3656270Z ##[group]Initializing the repository
+2026-11-14T04:24:26.3659230Z [command]/opt/homebrew/bin/git init /Users/runner/work/portal/portal
+2026-11-14T04:24:26.3895520Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-11-14T04:24:26.3897100Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-11-14T04:24:26.3899210Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-11-14T04:24:26.3901340Z hint: call:
+2026-11-14T04:24:26.3905040Z hint:
+2026-11-14T04:24:26.3905920Z hint: 	git config --global init.defaultBranch <name>
+2026-11-14T04:24:26.3906500Z hint:
+2026-11-14T04:24:26.3906990Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-11-14T04:24:26.3907860Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-11-14T04:24:26.3908640Z hint:
+2026-11-14T04:24:26.3909050Z hint: 	git branch -m <name>
+2026-11-14T04:24:26.3909540Z hint:
+2026-11-14T04:24:26.3910060Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-11-14T04:24:26.3910950Z Initialized empty Git repository in /Users/runner/work/portal/portal/.git/
+2026-11-14T04:24:26.3912750Z [command]/opt/homebrew/bin/git remote add origin https://github.com/xiaoxinghu/portal
+2026-11-14T04:24:26.3989820Z ##[endgroup]
+2026-11-14T04:24:26.3990600Z ##[group]Disabling automatic garbage collection
+2026-11-14T04:24:26.3992330Z [command]/opt/homebrew/bin/git config --local gc.auto 0
+2026-11-14T04:24:26.4070110Z ##[endgroup]
+2026-11-14T04:24:26.4071070Z ##[group]Setting up auth
+2026-11-14T04:24:26.4071790Z Removing SSH command configuration
+2026-11-14T04:24:26.4074100Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-14T04:24:26.4145290Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-14T04:24:26.5751240Z Removing HTTP extra header
+2026-11-14T04:24:26.5851630Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-14T04:24:26.7044000Z Removing includeIf entries pointing to credentials config files
+2026-11-14T04:24:26.7045630Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-14T04:24:26.7047890Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-14T04:24:26.7781960Z [command]/opt/homebrew/bin/git config --file /Users/runner/work/_temp/git-credentials-0272d183-9281-471e-9767-d7293df1dcbb.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-11-14T04:24:26.7850780Z [command]/opt/homebrew/bin/git config --local includeIf.gitdir:/Users/runner/work/portal/portal/.git.path /Users/runner/work/_temp/git-credentials-0272d183-9281-471e-9767-d7293df1dcbb.config
+2026-11-14T04:24:26.7968600Z [command]/opt/homebrew/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-0272d183-9281-471e-9767-d7293df1dcbb.config
+2026-11-14T04:24:26.8027410Z [command]/opt/homebrew/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-0272d183-9281-471e-9767-d7293df1dcbb.config
+2026-11-14T04:24:26.8082380Z ##[endgroup]
+2026-11-14T04:24:26.8083330Z ##[group]Fetching the repository
+2026-11-14T04:24:26.8086700Z [command]/opt/homebrew/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +78f9c6f7950d28c79ee7ba88cb51c3621e543d0a:refs/remotes/origin/main
+2026-11-14T04:24:27.4965230Z From https://github.com/xiaoxinghu/portal
+2026-11-14T04:24:27.4966610Z  * [new ref]         78f9c6f7950d28c79ee7ba88cb51c3621e543d0a -> origin/main
+2026-11-14T04:24:27.4972610Z [command]/opt/homebrew/bin/git branch --list --remote origin/main
+2026-11-14T04:24:27.5050030Z   origin/main
+2026-11-14T04:24:27.5056400Z [command]/opt/homebrew/bin/git rev-parse refs/remotes/origin/main
+2026-11-14T04:24:27.5118610Z 78f9c6f7950d28c79ee7ba88cb51c3621e543d0a
+2026-11-14T04:24:27.5122870Z ##[endgroup]
+2026-11-14T04:24:27.5124120Z ##[group]Determining the checkout info
+2026-11-14T04:24:27.5127480Z ##[endgroup]
+2026-11-14T04:24:27.5304030Z ##[group]Checking out the ref
+2026-11-14T04:24:27.5321880Z [command]/opt/homebrew/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2026-11-14T04:24:27.5958960Z Switched to a new branch 'main'
+2026-11-14T04:24:27.5966370Z branch 'main' set up to track 'origin/main'.
+2026-11-14T04:24:27.5969340Z ##[endgroup]
+2026-11-14T04:24:27.6130830Z ##[group]Removing auth
+2026-11-14T04:24:27.6132140Z Removing SSH command configuration
+2026-11-14T04:24:27.6134180Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-14T04:24:27.6200960Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-14T04:24:27.7082370Z Removing HTTP extra header
+2026-11-14T04:24:27.7084580Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-14T04:24:27.8403910Z Removing includeIf entries pointing to credentials config files
+2026-11-14T04:24:27.8407560Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-14T04:24:27.8466450Z includeif.gitdir:/Users/runner/work/portal/portal/.git.path
+2026-11-14T04:24:27.8469370Z includeif.gitdir:/Users/runner/work/portal/portal/.git/worktrees/*.path
+2026-11-14T04:24:27.8471060Z includeif.gitdir:/github/workspace/.git.path
+2026-11-14T04:24:27.8472390Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-11-14T04:24:27.8475710Z [command]/opt/homebrew/bin/git config --local --get-all includeif.gitdir:/Users/runner/work/portal/portal/.git.path
+2026-11-14T04:24:27.8536730Z /Users/runner/work/_temp/git-credentials-0272d183-9281-471e-9767-d7293df1dcbb.config
+2026-11-14T04:24:27.8624420Z [command]/opt/homebrew/bin/git config --local --get-all includeif.gitdir:/Users/runner/work/portal/portal/.git/worktrees/*.path
+2026-11-14T04:24:27.8684230Z /Users/runner/work/_temp/git-credentials-0272d183-9281-471e-9767-d7293df1dcbb.config
+2026-11-14T04:24:27.8757860Z [command]/opt/homebrew/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-11-14T04:24:27.8818240Z /github/runner_temp/git-credentials-0272d183-9281-471e-9767-d7293df1dcbb.config
+2026-11-14T04:24:27.8823800Z [command]/opt/homebrew/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-0272d183\-9281\-471e\-9767\-d7293df1dcbb\.config
+2026-11-14T04:24:27.8888890Z [command]/opt/homebrew/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-11-14T04:24:27.8949020Z /github/runner_temp/git-credentials-0272d183-9281-471e-9767-d7293df1dcbb.config
+2026-11-14T04:24:27.9026210Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-14T04:24:27.9856860Z Removing credentials config '/Users/runner/work/_temp/git-credentials-0272d183-9281-471e-9767-d7293df1dcbb.config'
+2026-11-14T04:24:27.9860960Z ##[endgroup]
+2026-11-14T04:24:28.0063470Z ##[group]Run # Fixed places, so that test/package-gui.sh's own build, with its
+2026-11-14T04:24:28.0065120Z [36;1m# Fixed places, so that test/package-gui.sh's own build, with its[0m
+2026-11-14T04:24:28.0066680Z [36;1m# isolated HOME, reuses the Bun and host packages this build fetched.[0m
+2026-11-14T04:24:28.0067900Z [36;1m{[0m
+2026-11-14T04:24:28.0068690Z [36;1m  echo "PORTAL_TEST_LOGS=$RUNNER_TEMP/logs"[0m
+2026-11-14T04:24:28.0069770Z [36;1m  echo "PORTAL_TOOLS_DIR=$RUNNER_TEMP/portal-tools"[0m
+2026-11-14T04:24:28.0071060Z [36;1m  echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/bun-cache"[0m
+2026-11-14T04:24:28.0072130Z [36;1m} >>"$GITHUB_ENV"[0m
+2026-11-14T04:24:28.0072960Z [36;1mmkdir -p "$RUNNER_TEMP/logs"[0m
+2026-11-14T04:24:28.0074000Z [36;1mecho "image=$ImageOS-$ImageVersion" >>"$GITHUB_OUTPUT"[0m
+2026-11-14T04:24:28.0075330Z [36;1mecho "brew-cache=$(brew --cache)" >>"$GITHUB_OUTPUT"[0m
+2026-11-14T04:24:28.0076540Z [36;1mecho "Runner image $ImageOS $ImageVersion"[0m
+2026-11-14T04:24:28.0077400Z [36;1msw_vers[0m
+2026-11-14T04:24:28.0078120Z [36;1muname -m[0m
+2026-11-14T04:24:28.0079100Z [36;1mxcodebuild -version[0m
+2026-11-14T04:24:28.0079940Z [36;1mswift --version[0m
+2026-11-14T04:24:28.0080890Z [36;1mcmake --version | head -1[0m
+2026-11-14T04:24:28.0081700Z [36;1mecho "Ninja $(ninja --version)"[0m
+2026-11-14T04:24:28.0082580Z [36;1mbrew --version[0m
+2026-11-14T04:24:28.0084660Z [36;1m# system_profiler lists no displays in the runner's VM; ask AppKit.[0m
+2026-11-14T04:24:28.0085980Z [36;1mosascript -l JavaScript -e 'ObjC.import("AppKit");[0m
+2026-11-14T04:24:28.0087200Z [36;1m  const s = $.NSScreen.mainScreen, f = s.frame, v = s.visibleFrame;[0m
+2026-11-14T04:24:28.0088980Z [36;1m  `Screen ${f.size.width}x${f.size.height}, visible ${v.size.width}x${v.size.height}, scale ${s.backingScaleFactor}`' || :[0m
+2026-11-14T04:24:28.0151940Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T04:24:28.0153070Z env:
+2026-11-14T04:24:28.0159620Z   USE_CACHE: false
+2026-11-14T04:24:28.0161040Z ##[endgroup]
+2026-11-14T04:24:28.0895970Z Runner image macos27 20261104.0337.1
+2026-11-14T04:24:28.1034630Z ProductName:		macOS
+2026-11-14T04:24:28.1043230Z ProductVersion:		27.0.1
+2026-11-14T04:24:28.1083700Z BuildVersion:		26A434
+2026-11-14T04:24:28.1089720Z arm64
+2026-11-14T04:24:28.2469620Z Xcode 27.1
+2026-11-14T04:24:28.2479950Z Build version 27A9275
+2026-11-14T04:24:31.3959340Z Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)
+2026-11-14T04:24:31.3959760Z Target: arm64-apple-macosx27.0.0
+2026-11-14T04:24:31.4482860Z cmake version 4.4.5
+2026-11-14T04:24:31.4534290Z Ninja 1.13.2
+2026-11-14T04:24:31.5478950Z Homebrew 7.0.12
+2026-11-14T04:24:31.6986950Z Screen 1024x768, visible 1024x674, scale 1
+2026-11-14T04:24:31.7018390Z swift-driver version: 1.168.6 
+2026-11-14T04:24:31.7135830Z ##[group]Run actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+2026-11-14T04:24:31.7136180Z with:
+2026-11-14T04:24:31.7136390Z   path: /Users/runner/Library/Caches/Homebrew/downloads
+2026-11-14T04:24:31.7136750Z   key: brew-macos27-20261104.0337.1-2d6afb2ec4869b8dc3098541696d0d9d362cc8f0
+2026-11-14T04:24:31.7137090Z   enableCrossOsArchive: false
+2026-11-14T04:24:31.7137290Z   fail-on-cache-miss: false
+2026-11-14T04:24:31.7137480Z   lookup-only: false
+2026-11-14T04:24:31.7137640Z env:
+2026-11-14T04:24:31.7139140Z   USE_CACHE: false
+2026-11-14T04:24:31.7140430Z ##[endgroup]
+2026-11-14T04:24:38.6163920Z ##[group]Run brew tap d12frosted/emacs-plus
+2026-11-14T04:24:38.6164520Z [36;1mbrew tap d12frosted/emacs-plus[0m
+2026-11-14T04:24:38.6164880Z [36;1mbrew trust d12frosted/emacs-plus[0m
+2026-11-14T04:24:38.6165570Z [36;1mgit -C "$(brew --repository d12frosted/emacs-plus)" checkout -q "$EMACS_PLUS_TAP_COMMIT"[0m
+2026-11-14T04:24:38.6166310Z [36;1mbrew install --cask emacs-plus-app[0m
+2026-11-14T04:24:38.6166780Z [36;1m# Gatekeeper would hold the first graphical launch of a downloaded app.[0m
+2026-11-14T04:24:38.6167550Z [36;1mxattr -dr com.apple.quarantine /Applications/Emacs.app[0m
+2026-11-14T04:24:38.6168640Z [36;1m# CLI launches miss the app's native compiler environment.[0m
+2026-11-14T04:24:38.6169310Z [36;1mecho "LIBRARY_PATH=$(/usr/libexec/PlistBuddy -c Print:LSEnvironment:LIBRARY_PATH \[0m
+2026-11-14T04:24:38.6170030Z [36;1m    /Applications/Emacs.app/Contents/Info.plist)" >>"$GITHUB_ENV"[0m
+2026-11-14T04:24:38.6170760Z [36;1m"$EMACS" --batch -Q --eval '(princ (format "%s %s %s\n" (emacs-version)[0m
+2026-11-14T04:24:38.6171300Z [36;1m    emacs-repository-version (native-comp-available-p)))'[0m
+2026-11-14T04:24:38.6217590Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T04:24:38.6218010Z env:
+2026-11-14T04:24:38.6220720Z   USE_CACHE: false
+2026-11-14T04:24:38.6222900Z ##[endgroup]
+2026-11-14T04:25:18.4188830Z GNU Emacs 31.1 (build 1, aarch64-apple-darwin25.6.0, NS appkit-2685.70 Version 26.6.2 (Build 25G83))
+2026-11-14T04:25:18.4190190Z  of 2026-09-27 a360712c9d272d950d8d8255ef74570f7e90b7d9 t
+2026-11-14T04:25:18.8337170Z ##[group]Run actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+2026-11-14T04:25:18.8337730Z with:
+2026-11-14T04:25:18.8338020Z   path: ~/Library/Caches/org.swift.swiftpm
+2026-11-14T04:25:18.8338550Z   key: swiftpm-macos27-20261104.0337.1-804ce36c448e561157889b89586c8ea4e9b6cea11dd95ec00cada1c9280e86cd
+2026-11-14T04:25:18.8339140Z   enableCrossOsArchive: false
+2026-11-14T04:25:18.8339410Z   fail-on-cache-miss: false
+2026-11-14T04:25:18.8339700Z   lookup-only: false
+2026-11-14T04:25:18.8339960Z env:
+2026-11-14T04:25:18.8341850Z   USE_CACHE: false
+2026-11-14T04:25:18.8345510Z ##[endgroup]
+2026-11-14T04:25:22.6606770Z ##[group]Run actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+2026-11-14T04:25:22.6607180Z with:
+2026-11-14T04:25:22.6607510Z   path: /Users/runner/work/_temp/portal-tools
+/Users/runner/work/_temp/bun-cache
+build/elpa
+
+2026-11-14T04:25:22.6608070Z   key: build-downloads-8bf17d1064685ab3fae13ea968e1d527e99a4f9826c493ff244ae582d2c564f5
+2026-11-14T04:25:22.6608510Z   enableCrossOsArchive: false
+2026-11-14T04:25:22.6608750Z   fail-on-cache-miss: false
+2026-11-14T04:25:22.6608940Z   lookup-only: false
+2026-11-14T04:25:22.6609120Z env:
+2026-11-14T04:25:22.6610580Z   USE_CACHE: false
+2026-11-14T04:25:22.6612970Z ##[endgroup]
+2026-11-14T04:25:30.9136420Z ##[group]Run ./build.sh 2>&1 | tee "$PORTAL_TEST_LOGS/build.log"
+2026-11-14T04:25:30.9136870Z [36;1m./build.sh 2>&1 | tee "$PORTAL_TEST_LOGS/build.log"[0m
+2026-11-14T04:25:30.9137400Z [36;1m# The module must build against the header of the Emacs that loads it.[0m
+2026-11-14T04:25:30.9137850Z [36;1mheader=$(cat build/emacs-include.txt)[0m
+2026-11-14T04:25:30.9138380Z [36;1mown=$("$EMACS" --batch -Q --eval '(princ (expand-file-name "../include" data-directory))')[0m
+2026-11-14T04:25:30.9138930Z [36;1mecho "emacs-module.h from $header"[0m
+2026-11-14T04:25:30.9139330Z [36;1m[ "$(cd "$header" && pwd -P)" = "$(cd "$own" && pwd -P)" ] ||[0m
+2026-11-14T04:25:30.9139820Z [36;1m    { echo "::error::Built against $header, not $EMACS's $own"; exit 1; }[0m
+2026-11-14T04:25:30.9140270Z [36;1m# Host scripts call bun by name.[0m
+2026-11-14T04:25:30.9140690Z [36;1mdirname "$(sh tools/resolve-bun.sh)" >>"$GITHUB_PATH"[0m
+2026-11-14T04:25:30.9679100Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T04:25:30.9679400Z env:
+2026-11-14T04:25:30.9711690Z   USE_CACHE: false
+2026-11-14T04:25:30.9715620Z ##[endgroup]
+2026-11-14T04:25:31.3234920Z resolve-bun: using Bun 1.3.14 at /Users/runner/work/_temp/portal-tools/bun/1.3.14/darwin-aarch64/bun (Portal's cache)
+2026-11-14T04:27:28.9915050Z emacs-module.h from /Applications/Emacs.app/Contents/Resources/include
+2026-11-14T04:27:29.0613890Z resolve-bun: using Bun 1.3.14 at /Users/runner/work/_temp/portal-tools/bun/1.3.14/darwin-aarch64/bun (Portal's cache)
+2026-11-14T04:27:29.0989680Z ##[group]Run ctest --test-dir build -j"$(sysctl -n hw.ncpu)" --output-on-failure
+2026-11-14T04:27:29.0990200Z [36;1mctest --test-dir build -j"$(sysctl -n hw.ncpu)" --output-on-failure[0m
+2026-11-14T04:27:29.2218640Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T04:27:29.2218980Z env:
+2026-11-14T04:27:29.2221140Z   USE_CACHE: false
+2026-11-14T04:27:29.2224740Z ##[endgroup]
+2026-11-14T04:27:29.3234120Z Test project /Users/runner/work/portal/portal/build
+2026-11-14T04:28:51.8912070Z 100% tests passed out of 34
+2026-11-14T04:28:51.9054280Z ##[group]Run "$(sh tools/resolve-bun.sh)" run --cwd host check
+2026-11-14T04:28:51.9054850Z [36;1m"$(sh tools/resolve-bun.sh)" run --cwd host check[0m
+2026-11-14T04:28:51.9357050Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T04:28:51.9357440Z env:
+2026-11-14T04:28:51.9359980Z   USE_CACHE: false
+2026-11-14T04:28:51.9363050Z ##[endgroup]
+2026-11-14T04:28:52.2531650Z resolve-bun: using Bun 1.3.14 at /Users/runner/work/_temp/portal-tools/bun/1.3.14/darwin-aarch64/bun (found on PATH)
+2026-11-14T04:28:52.8026590Z ##[group]Run "$(sh tools/resolve-bun.sh)" run --cwd host typecheck
+2026-11-14T04:28:52.8027890Z [36;1m"$(sh tools/resolve-bun.sh)" run --cwd host typecheck[0m
+2026-11-14T04:28:52.8067500Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T04:28:52.8067920Z env:
+2026-11-14T04:28:52.8070020Z   USE_CACHE: false
+2026-11-14T04:28:52.8073560Z ##[endgroup]
+2026-11-14T04:28:52.8816010Z resolve-bun: using Bun 1.3.14 at /Users/runner/work/_temp/portal-tools/bun/1.3.14/darwin-aarch64/bun (found on PATH)
+2026-11-14T04:28:55.2483480Z ##[group]Run python3 -B -m unittest discover -s test -p 'test_*.py'
+2026-11-14T04:28:55.2483920Z [36;1mpython3 -B -m unittest discover -s test -p 'test_*.py'[0m
+2026-11-14T04:28:55.2524080Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T04:28:55.2524430Z env:
+2026-11-14T04:28:55.2526270Z   USE_CACHE: false
+2026-11-14T04:28:55.2528790Z ##[endgroup]
+2026-11-14T04:29:16.8542720Z ----------------------------------------------------------------------
+2026-11-14T04:29:16.8572980Z Ran 51 tests in 21.298s
+2026-11-14T04:29:16.8573320Z OK
+2026-11-14T04:29:21.9892980Z ##[group]Run git diff --check "$(git hash-object -t tree /dev/null)" HEAD
+2026-11-14T04:29:21.9893710Z [36;1mgit diff --check "$(git hash-object -t tree /dev/null)" HEAD[0m
+2026-11-14T04:29:22.0262660Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T04:29:22.0263120Z env:
+2026-11-14T04:29:22.0276680Z   USE_CACHE: false
+2026-11-14T04:29:22.0279620Z ##[endgroup]
+2026-11-14T04:29:22.1223680Z ##[group]Run export PORTAL_TEST_LOGS=$PORTAL_TEST_LOGS/views
+2026-11-14T04:29:22.1224220Z [36;1mexport PORTAL_TEST_LOGS=$PORTAL_TEST_LOGS/views[0m
+2026-11-14T04:29:22.1224570Z [36;1mmkdir -p "$PORTAL_TEST_LOGS"[0m
+2026-11-14T04:29:22.1224860Z [36;1msh test/views-gui.sh[0m
+2026-11-14T04:29:22.1272130Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T04:29:22.1272490Z env:
+2026-11-14T04:29:22.1275060Z   USE_CACHE: false
+2026-11-14T04:29:22.1277840Z ##[endgroup]
+2026-11-14T04:31:54.0128950Z Ran 78 tests, 78 results as expected, 0 unexpected (2026-11-14 04:31:54+0000, 147.038738 sec)
+2026-11-14T04:31:54.7887700Z ##[group]Run export PORTAL_TEST_LOGS=$PORTAL_TEST_LOGS/input
+2026-11-14T04:31:54.7888820Z [36;1mexport PORTAL_TEST_LOGS=$PORTAL_TEST_LOGS/input[0m
+2026-11-14T04:31:54.7889330Z [36;1mmkdir -p "$PORTAL_TEST_LOGS"[0m
+2026-11-14T04:31:54.7889660Z [36;1msh test/input-gui.sh[0m
+2026-11-14T04:31:54.8306980Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T04:31:54.8307370Z env:
+2026-11-14T04:31:54.8309600Z   USE_CACHE: false
+2026-11-14T04:31:54.8312880Z ##[endgroup]
+2026-11-14T04:33:12.9514450Z Ran 17 tests, 13 results as expected, 0 unexpected, 4 skipped (2026-11-14 04:33:12+0000, 73.804690 sec)
+2026-11-14T04:33:13.2185750Z   SKIPPED  portal-input-gui-web-fullscreen-keeps-the-keyboard-and-escape-leaves-it
+2026-11-14T04:33:13.2188430Z   SKIPPED  portal-input-gui-web-fullscreen-page-closes-with-its-buffer
+2026-11-14T04:33:13.2190140Z   SKIPPED  portal-input-gui-web-fullscreen-page-keeps-the-keyboard-in-another-frame
+2026-11-14T04:33:13.2191750Z   SKIPPED  portal-input-gui-web-fullscreen-returns-to-where-emacs-put-the-page
+2026-11-14T04:33:13.3225540Z ##[group]Run export PORTAL_TEST_LOGS=$PORTAL_TEST_LOGS/launcher
+2026-11-14T04:33:13.3226270Z [36;1mexport PORTAL_TEST_LOGS=$PORTAL_TEST_LOGS/launcher[0m
+2026-11-14T04:33:13.3226680Z [36;1mmkdir -p "$PORTAL_TEST_LOGS"[0m
+2026-11-14T04:33:13.3226980Z [36;1msh test/launcher-gui.sh[0m
+2026-11-14T04:33:13.3557620Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T04:33:13.3558040Z env:
+2026-11-14T04:33:13.3561920Z   USE_CACHE: false
+2026-11-14T04:33:13.3565270Z ##[endgroup]
+2026-11-14T04:35:08.8672670Z Ran 42 tests, 41 results as expected, 0 unexpected, 1 skipped (2026-11-14 04:35:08+0000, 110.074751 sec)
+2026-11-14T04:35:08.8673930Z   SKIPPED  portal-launcher-gui-minibuffer-panel-stays-on-its-display
+2026-11-14T04:35:08.9247130Z ##[group]Run sh test/terminal-shell-startup.sh
+2026-11-14T04:35:08.9248200Z [36;1msh test/terminal-shell-startup.sh[0m
+2026-11-14T04:35:08.9767650Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T04:35:08.9768830Z env:
+2026-11-14T04:35:08.9774910Z   USE_CACHE: false
+2026-11-14T04:35:08.9781830Z ##[endgroup]
+2026-11-14T04:35:13.1807950Z Ran 2 tests, 2 results as expected, 0 unexpected (2026-11-14 04:35:13+0000, 0.819228 sec)
+2026-11-14T04:35:13.2257390Z ##[group]Run sh test/package-gui.sh
+2026-11-14T04:35:13.2257930Z [36;1msh test/package-gui.sh[0m
+2026-11-14T04:35:13.2351890Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T04:35:13.2352390Z env:
+2026-11-14T04:35:13.2355520Z   USE_CACHE: false
+2026-11-14T04:35:13.2358790Z ##[endgroup]
+2026-11-14T04:35:16.2077830Z Graphical Emacs: setup
+2026-11-14T04:35:17.2710420Z ok   graphical Emacs: t
+2026-11-14T04:35:17.3184480Z ok   nothing is built yet: t
+2026-11-14T04:35:19.0620690Z ok   the command offered a build: "Portal's native module and app host are not built.  Build now?  The first build downloads its dependencies and takes several minutes "
+2026-11-14T04:35:19.0621930Z ok   one build started: (run open listen connect stop)
+2026-11-14T04:35:19.1024990Z ok   no second offer: t
+2026-11-14T04:37:36.5886620Z ok   the build finished: t
+2026-11-14T04:37:36.5890830Z ok   Portal reported ready: ("Portal is ready: retry your command" "Compilation finished" #("Portal's native module and app host are not built.  Build now?  The first build downloads its dependencies and takes several minutes (y or n) y" 134 135 (font-lock-face help-key-binding face help-key-binding) 139 140 (font-lock-face help-key-binding face help-key-binding)))
+2026-11-14T04:37:36.6219120Z ok   the build is complete: t
+2026-11-14T04:37:36.6220630Z ok   no native module loaded during setup: t
+2026-11-14T04:37:36.7499190Z Graphical Emacs: use
+2026-11-14T04:37:39.1130570Z ok   graphical Emacs: t
+2026-11-14T04:37:39.1813390Z ok   the build is ready: t
+2026-11-14T04:37:40.0944860Z ok   a terminal opened: t
+2026-11-14T04:37:40.0947440Z ok   the terminal is shown: t
+2026-11-14T04:37:40.2572990Z ok   a web view opened: t
+2026-11-14T04:37:42.2128720Z ok   the web view loaded Hello World from the app host: t (:id 2 :kind "web" :visible t :edges (10 2 570 478) :dark nil :focused nil :inspectable t :loading nil :title "Hello, world!" :url "http://127.0.0.1:49378/1b5b0f2aecf34a12bd1e7123fc35bebc/hello" :zoom 100)
+2026-11-14T04:37:42.6968390Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+2026-11-14T04:37:42.6968910Z with:
+2026-11-14T04:37:42.6969150Z   name: logs
+2026-11-14T04:37:42.6969480Z   path: /Users/runner/work/_temp/logs
+2026-11-14T04:37:42.6973180Z   retention-days: 14
+2026-11-14T04:37:42.6973570Z   if-no-files-found: warn
+2026-11-14T04:37:42.6973880Z   compression-level: 6
+2026-11-14T04:37:42.6976750Z   overwrite: false
+2026-11-14T04:37:42.6977080Z   include-hidden-files: false
+2026-11-14T04:37:42.6977430Z   archive: true
+2026-11-14T04:37:42.6980680Z env:
+2026-11-14T04:37:42.6988540Z   USE_CACHE: false
+2026-11-14T04:37:42.6995620Z ##[endgroup]
