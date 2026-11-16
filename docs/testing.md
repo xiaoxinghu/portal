@@ -486,6 +486,9 @@ loop runs only the plain installation and loading from a clone; the variants are
 `:expensive`.
 `test_resolve_bun.py` covers Bun selection with stand-in executables and
 archives. Neither builds native code nor downloads anything.
+`test_release.py` makes releases of a stand-in repository with the
+[release script](releasing.md#making-a-release), a bare repository standing in
+for GitHub and a script for `gh`.
 
 For first use in graphical Emacs (the offered build, then a terminal and a web
 view in a fresh Emacs), run:

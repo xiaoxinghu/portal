@@ -41,7 +41,9 @@ jobs:
       USE_CACHE: ${{ github.event_name != 'workflow_dispatch' || inputs.cache }}
       # Every ERT runner includes the tests tagged :expensive.
       PORTAL_TEST_EXPENSIVE: 1
-      # ERT says why each skipped test skipped, for the release notes.
+      # ERT says why each skipped test skipped, for a release's notes: those
+      # are written from the logs alone, so every step that counts tests or
+      # describes the machine writes its output there too.
       EMACS_TEST_VERBOSE: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -61,18 +63,22 @@ jobs:
           mkdir -p "$RUNNER_TEMP/logs"
           echo "image=$ImageOS-$ImageVersion" >>"$GITHUB_OUTPUT"
           echo "brew-cache=$(brew --cache)" >>"$GITHUB_OUTPUT"
-          echo "Runner image $ImageOS $ImageVersion"
-          sw_vers
-          uname -m
-          xcodebuild -version
-          swift --version
-          cmake --version | head -1
-          echo "Ninja $(ninja --version)"
-          brew --version
-          # system_profiler lists no displays in the runner's VM; ask AppKit.
-          osascript -l JavaScript -e 'ObjC.import("AppKit");
-            const s = $.NSScreen.mainScreen, f = s.frame, v = s.visibleFrame;
-            `Screen ${f.size.width}x${f.size.height}, visible ${v.size.width}x${v.size.height}, scale ${s.backingScaleFactor}`' || :
+          {
+            # Only a run with USE_CACHE=false is a release's evidence.
+            echo "USE_CACHE=$USE_CACHE"
+            echo "Runner image $ImageOS $ImageVersion"
+            sw_vers
+            uname -m
+            xcodebuild -version
+            swift --version
+            cmake --version | head -1
+            echo "Ninja $(ninja --version)"
+            brew --version
+            # system_profiler lists no displays in the runner's VM; ask AppKit.
+            osascript -l JavaScript -e 'ObjC.import("AppKit");
+              const s = $.NSScreen.mainScreen, f = s.frame, v = s.visibleFrame;
+              `Screen ${f.size.width}x${f.size.height}, visible ${v.size.width}x${v.size.height}, scale ${s.backingScaleFactor}`' || :
+          } 2>&1 | tee "$RUNNER_TEMP/logs/environment.log"
 
       # Restore and save separately: a combined cache step saves only when
       # the whole job succeeds, so failing checks would never fill the cache.
@@ -96,7 +102,8 @@ jobs:
           echo "LIBRARY_PATH=$(/usr/libexec/PlistBuddy -c Print:LSEnvironment:LIBRARY_PATH \
               /Applications/Emacs.app/Contents/Info.plist)" >>"$GITHUB_ENV"
           "$EMACS" --batch -Q --eval '(princ (format "%s %s %s\n" (emacs-version)
-              emacs-repository-version (native-comp-available-p)))'
+              emacs-repository-version (native-comp-available-p)))' |
+              tee -a "$PORTAL_TEST_LOGS/environment.log"
 
       - name: Save Homebrew downloads
         if: steps.brew-cache.outcome == 'success' && steps.brew-cache.outputs.cache-hit != 'true'
@@ -131,7 +138,7 @@ jobs:
           # The module must build against the header of the Emacs that loads it.
           header=$(cat build/emacs-include.txt)
           own=$("$EMACS" --batch -Q --eval '(princ (expand-file-name "../include" data-directory))')
-          echo "emacs-module.h from $header"
+          echo "emacs-module.h from $header" | tee -a "$PORTAL_TEST_LOGS/environment.log"
           [ "$(cd "$header" && pwd -P)" = "$(cd "$own" && pwd -P)" ] ||
               { echo "::error::Built against $header, not $EMACS's $own"; exit 1; }
           # Host scripts call bun by name.
@@ -158,7 +165,7 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           # The suites' own output, which the job log shows only for a failure,
-          # goes to the logs: release notes count and name skipped tests there.
+          # goes to the logs: a release's notes count and name skipped tests there.
           status=0
           ctest --test-dir build -j"$(sysctl -n hw.ncpu)" --output-on-failure || status=$?
           cp build/Testing/Temporary/LastTest.log "$PORTAL_TEST_LOGS/ctest.log" || :
@@ -175,42 +182,49 @@ jobs:
       - name: Python
         if: ${{ !cancelled() }}
         # Verbose, so that a skipped test is named with its reason.
-        run: python3 -B -m unittest discover -v -s test -p 'test_*.py'
+        run: python3 -B -m unittest discover -v -s test -p 'test_*.py' 2>&1 | tee "$PORTAL_TEST_LOGS/python.log"
 
       - name: Whitespace
         if: ${{ !cancelled() }}
         run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD
 
-      # Each suite logs to a directory of its own: the GUI runner starts its
-      # progress log afresh, and a later suite must not erase a failure's.
+      # Each suite logs to a directory of its own, its output in test.log as
+      # test/gui-all.sh keeps it: the GUI runner starts its progress log
+      # afresh, and a later suite must not erase a failure's.
       - name: Views (graphical)
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           export PORTAL_TEST_LOGS=$PORTAL_TEST_LOGS/views
           mkdir -p "$PORTAL_TEST_LOGS"
-          sh test/views-gui.sh
+          sh test/views-gui.sh 2>&1 | tee "$PORTAL_TEST_LOGS/test.log"
 
       - name: Input (graphical)
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           export PORTAL_TEST_LOGS=$PORTAL_TEST_LOGS/input
           mkdir -p "$PORTAL_TEST_LOGS"
-          sh test/input-gui.sh
+          sh test/input-gui.sh 2>&1 | tee "$PORTAL_TEST_LOGS/test.log"
 
       - name: Launcher (graphical)
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           export PORTAL_TEST_LOGS=$PORTAL_TEST_LOGS/launcher
           mkdir -p "$PORTAL_TEST_LOGS"
-          sh test/launcher-gui.sh
+          sh test/launcher-gui.sh 2>&1 | tee "$PORTAL_TEST_LOGS/test.log"
 
       - name: Terminal shell startup (graphical)
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: sh test/terminal-shell-startup.sh
+        run: |
+          export PORTAL_TEST_LOGS=$PORTAL_TEST_LOGS/terminal-shell-startup
+          mkdir -p "$PORTAL_TEST_LOGS"
+          sh test/terminal-shell-startup.sh 2>&1 | tee "$PORTAL_TEST_LOGS/test.log"
 
       - name: Package first use (graphical)
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: sh test/package-gui.sh
+        run: |
+          export PORTAL_TEST_LOGS=$PORTAL_TEST_LOGS/package
+          mkdir -p "$PORTAL_TEST_LOGS"
+          sh test/package-gui.sh 2>&1 | tee "$PORTAL_TEST_LOGS/test.log"
 
       - name: Keep logs
         if: ${{ !cancelled() }}
