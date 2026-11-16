@@ -137,7 +137,8 @@ notes() {
     # CTest's own log holds every suite's output, between "N/M Test: NAME" and
     # "Test Passed."; the other steps log to a file each.
     awk '/^[0-9]+\/[0-9]+ Test: / { suite = $3; counts = "" }
-         /^Ran [0-9]+ tests|^[0-9]+ checks passed/ { counts = counts "; " $0 }
+         /^Ran [0-9]+ tests|^[0-9]+ checks passed|Test run with [0-9]+ tests/ {
+             sub(/^[^A-Za-z0-9]+/, ""); counts = counts "; " $0 }
          /^Test Passed\./ { print "- CTest " suite ": passed" counts }' "$work/logs/ctest.log"
     for log in "$work"/logs/python.log "$work"/logs/*/test.log; do
         name=${log#"$work/logs/"}

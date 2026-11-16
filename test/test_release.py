@@ -26,8 +26,9 @@ esac
 LOGS = {
     "environment.log": "ProductVersion: 27.0.1\nUSE_CACHE=false\n",
     "build.log": "resolve-bun: using Bun 1.3.14 at /somewhere (downloaded)\n",
-    "ctest.log": "1/1 Test: input\nRan 21 tests, 19 results as expected, 0 unexpected, 2 skipped\n"
-    '  SKIPPED  portal-input-evil  ((skip-unless (locate-library "evil")))\nTest Passed.\n',
+    "ctest.log": "1/2 Test: input\nRan 21 tests, 19 results as expected, 0 unexpected, 2 skipped\n"
+    '  SKIPPED  portal-input-evil  ((skip-unless (locate-library "evil")))\nTest Passed.\n'
+    "2/2 Test: swift\n\u2714 Test run with 31 tests in 7 suites passed after 2 seconds.\nTest Passed.\n",
     "python.log": "test_a (test_x.X.test_a) ... skipped 'no network'\nRan 82 tests in 52.507s\n",
     "views/test.log": "Ran 78 tests, 78 results as expected, 0 unexpected\n",
 }
@@ -113,7 +114,8 @@ class ReleaseTests(unittest.TestCase):
         (self.stub / "runs").write_text("7\n")
         notes = self.release("notes", "0.2.0")
         for line in ("The first release.", "- CTest input: passed; Ran 21 tests",
-                     "- python: Ran 82 tests", "- views: Ran 78 tests", "| Build | success |",
+                     "- python: Ran 82 tests",
+                     "- CTest swift: passed; Test run with 31 tests in 7 suites", "- views: Ran 78 tests", "| Build | success |",
                      "- CTest input: portal-input-evil  ((skip-unless",
                      "- python: test_a (test_x.X.test_a) ... skipped 'no network'",
                      "Bun 1.3.14", "https://example/run/7"):
