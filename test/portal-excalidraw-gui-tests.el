@@ -8,24 +8,11 @@
 (declare-function portal-test-native-drag "test-terminal-input" (x1 y1 x2 y2))
 (declare-function portal-web-gui--run-until "portal-web-gui-tests" (type))
 
-(defvar portal-excalidraw-gui--stalled 0
-  "When the page last took over 5 s to answer a script, as a float time.")
-
 (defun portal-excalidraw-gui--js (script)
   "Run SCRIPT in the actual webview, returning its result.
-JavaScript's false and null are nil.  The answer may take 30 s: on
-GitHub's runners the page now and then stops for 15 s and then goes on as
-if nothing had happened.  An answer that slow is said in the log and
-noted for `portal-excalidraw-gui--until'."
+JavaScript's false and null are nil."
   (should (portal-test-web-eval script))
-  (let ((start (float-time)))
-    (while (and (not (portal-test-web-eval nil)) (< (- (float-time) start) 30))
-      (accept-process-output nil 0.02)
-      (redisplay t))
-    (when (> (- (float-time) start) 5)
-      (setq portal-excalidraw-gui--stalled (float-time))
-      (message "The page took %.1f s to answer a script" (- (float-time) start))))
-  (should (portal-test-web-eval nil))
+  (portal-terminal-test--wait (lambda () (portal-test-web-eval nil)))
   (let ((result (json-parse-string (portal-test-web-eval nil) :object-type 'plist
                                    :false-object nil :null-object nil)))
     (should-not (plist-get result :error))
@@ -509,13 +496,9 @@ The page sends it on its own; nothing here asks it to."
   "The Right arrow, as AppKit reports it.")
 
 (defun portal-excalidraw-gui--until (predicate)
-  "Service events until PREDICATE succeeds, for up to 10 s; return its value.
-The 10 s start again when the page stalled meanwhile, as
-`portal-excalidraw-gui--js' notes: the time it stood still is not time it
-had to get there."
-  (let ((start (float-time)) value)
-    (while (and (not (setq value (funcall predicate)))
-                (< (float-time) (+ (max start portal-excalidraw-gui--stalled) 10)))
+  "Service events until PREDICATE succeeds, for up to 10 s; return its value."
+  (let ((deadline (+ (float-time) 10)) value)
+    (while (and (not (setq value (funcall predicate))) (< (float-time) deadline))
       (accept-process-output nil 0.02)
       (redisplay t))
     value))
