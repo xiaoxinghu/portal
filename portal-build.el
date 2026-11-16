@@ -132,6 +132,8 @@ They are sorted, and exclude Lisp, hidden files and installed packages."
                             (mapcar (lambda (file) (file-relative-name file portal-build-root))
                                     (directory-files-recursively
                                      directory "\\`[^.]" nil descend)))))
+                   ;; Not scripts/: what is there, such as the release
+                   ;; command, never needs a rebuild.
                    '("host" "native" "tools")))
           #'string<)))
 
