@@ -5,7 +5,8 @@
 # WebKit loading, windows pages open, terminals, their coexistence, Markdown
 # previews, Excalidraw, Rex connections and the pointer over a view. SELECTOR,
 # an ERT regexp, narrows them. Terminal and integration tests run only here;
-# the launcher and the input suite have their own runners.
+# the launcher and the input suite have their own runners. Only the four
+# slide tests that skip themselves on GitHub's runners may skip.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$root/test/gui-desktop.sh"
@@ -24,4 +25,8 @@ exec sh "$root/test/gui-ert.sh" \
                    "^portal-\\(web\\|terminal\\|integration\\|markdown-gui\\|excalidraw-gui\\|rex-gui\\|pointer-gui\\)-"
                    (quote (not portal-terminal-start-uses-shell-startup))
                    (let ((focus (getenv "PORTAL_VIEWS_SELECTOR")))
-                     (if (equal focus "") t focus))))'
+                     (if (equal focus "") t focus)))
+             (quote (portal-excalidraw-gui-arrange-edits-reach-the-file
+                     portal-excalidraw-gui-arrange-shows-the-slides-and-edits-one
+                     portal-excalidraw-gui-presents-in-a-slide-window-and-stops
+                     portal-excalidraw-gui-slides-follow-the-appearance-and-the-switch)))'
