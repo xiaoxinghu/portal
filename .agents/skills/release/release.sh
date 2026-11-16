@@ -31,12 +31,16 @@ evidence() {
         die "Checks run $run restored cached downloads: it is no evidence"
 }
 
-# The hash of what the native build reads at commit $1, as portal-build.el
-# computes it: when it differs between two releases, upgrading rebuilds.
+# Set `hash` to the hash of what the native build reads at commit $1, as
+# portal-build.el computes it: when it differs between two releases, upgrading
+# rebuilds. No hash is a refusal: two that failed alike would read as no rebuild.
 identity() {
     git checkout -q --detach "$1"
-    "${EMACS:-emacs}" --batch -Q -l portal-build.el \
-        --eval '(princ (portal-build-source-identity))'
+    hash=$("${EMACS:-emacs}" --batch -Q -l portal-build.el \
+        --eval '(princ (portal-build-source-identity))') || hash=''
+    case $hash in
+        '' | *[!0-9a-f]*) die "no build identity at $1: put Emacs on PATH or in EMACS" ;;
+    esac
 }
 
 candidate() {
@@ -110,11 +114,16 @@ notes() {
     echo
     if [ -z "$previous" ]; then
         echo "Nothing to upgrade from: the first build is the native build."
-    elif [ "$(identity "$previous")" = "$(identity "$release")" ]; then
-        echo "Lisp only, no rebuild."
     else
-        echo "The first native command after upgrading offers a rebuild of several" \
-            "minutes; restart Emacs after it."
+        identity "$previous"
+        before=$hash
+        identity "$release"
+        if [ "$before" = "$hash" ]; then
+            echo "Lisp only, no rebuild."
+        else
+            echo "The first native command after upgrading offers a rebuild of several" \
+                "minutes; restart Emacs after it."
+        fi
     fi
     echo
     echo "## Evidence"

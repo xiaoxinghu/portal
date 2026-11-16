@@ -26,9 +26,10 @@ esac
 LOGS = {
     "environment.log": "ProductVersion: 27.0.1\nUSE_CACHE=false\n",
     "build.log": "resolve-bun: using Bun 1.3.14 at /somewhere (downloaded)\n",
-    "ctest.log": "1/2 Test: input\nRan 21 tests, 19 results as expected, 0 unexpected, 2 skipped\n"
+    "ctest.log": "1/3 Test: input\nRan 21 tests, 19 results as expected, 0 unexpected, 2 skipped\n"
     '  SKIPPED  portal-input-evil  ((skip-unless (locate-library "evil")))\nTest Passed.\n'
-    "2/2 Test: swift\n\u2714 Test run with 31 tests in 7 suites passed after 2 seconds.\nTest Passed.\n",
+    "2/3 Test: swift\n\u2714 Test run with 31 tests in 7 suites passed after 2 seconds.\nTest Passed.\n"
+    "3/3 Test: app-host\n 55 pass\n 0 fail\nRan 55 tests across 7 files. [803.00ms]\nTest Passed.\n",
     "python.log": "test_a (test_x.X.test_a) ... skipped 'no network'\nRan 82 tests in 52.507s\n",
     "views/test.log": "Ran 78 tests, 78 results as expected, 0 unexpected\n",
 }
@@ -70,9 +71,9 @@ class ReleaseTests(unittest.TestCase):
         self.git("push", "-q", "origin", "HEAD:main")
         return self.git("rev-parse", "HEAD")
 
-    def release(self, *arguments, ok=True):
+    def release(self, *arguments, ok=True, **environment):
         result = subprocess.run(["sh", str(RELEASE), *map(str, arguments)], cwd=self.root,
-                                env=self.env, capture_output=True, text=True)
+                                env={**self.env, **environment}, capture_output=True, text=True)
         self.assertEqual(result.returncode == 0, ok, result.stdout + result.stderr)
         self.git("fetch", "-q", "--prune", "--tags", "origin")
         return result.stdout + result.stderr
@@ -115,7 +116,8 @@ class ReleaseTests(unittest.TestCase):
         notes = self.release("notes", "0.2.0")
         for line in ("The first release.", "- CTest input: passed; Ran 21 tests",
                      "- python: Ran 82 tests",
-                     "- CTest swift: passed; Test run with 31 tests in 7 suites", "- views: Ran 78 tests", "| Build | success |",
+                     "- CTest swift: passed; Test run with 31 tests in 7 suites",
+                     "- CTest app-host: passed; Ran 55 tests across 7 files.", "- views: Ran 78 tests", "| Build | success |",
                      "- CTest input: portal-input-evil  ((skip-unless",
                      "- python: test_a (test_x.X.test_a) ... skipped 'no network'",
                      "Bun 1.3.14", "https://example/run/7"):
@@ -139,6 +141,9 @@ class ReleaseTests(unittest.TestCase):
         self.release("candidate", "patch", base)
         (self.dev / "later.el").write_text(";; later\n")
         later = self.commit("portal/third: after the base")
+        # Without Emacs the upgrade's cost is unknown, which is not "no rebuild".
+        self.assertIn("no build identity",
+                      self.release("notes", "0.2.1", ok=False, EMACS=self.root / "no-emacs"))
         notes = self.release("notes", "0.2.1")
         self.assertIn("- the native part changed", notes)
         self.assertNotIn("after the base", notes)
