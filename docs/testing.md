@@ -298,8 +298,16 @@ coexistence, Markdown previews and Excalidraw) in one fresh Emacs:
 sh test/views-gui.sh
 ```
 
-Pass an ERT selector regexp to run part of its tier. It fails on any skip. The
-[platform matrix](platforms.md) uses it as the view acceptance check.
+Pass an ERT selector regexp to run part of its tier. It fails on any skip but
+one kind: on GitHub's runners four Excalidraw slide tests skip themselves,
+`portal-excalidraw-gui-arrange-edits-reach-the-file`,
+`-arrange-shows-the-slides-and-edits-one`,
+`-presents-in-a-slide-window-and-stops` and
+`-slides-follow-the-appearance-and-the-switch`. WebKit's GPU process hangs
+there now and then while a page draws slide images, and the page with it for
+15 s, which fails whichever of them is waiting; `portal-excalidraw-gui--skip-on-github`
+in their file says what is known. Everywhere else they run, and the
+[platform matrix](platforms.md) uses the suite as the view acceptance check.
 
 ## Input graphical checks
 
