@@ -159,6 +159,66 @@ Lisp is not among them: changing only Lisp needs no native rebuild."
         (insert-file-contents file)
         (lm-header "version")))))
 
+(defun portal-build--git (&rest arguments)
+  "Run git with ARGUMENTS in `portal-build-root'; return (STATUS . OUTPUT).
+OUTPUT is standard output, trimmed.  Return nil when `portal-build-root'
+is not itself a Git checkout, as for a supplied build, or Git is missing."
+  (when (file-exists-p (expand-file-name ".git" portal-build-root))
+    (with-temp-buffer
+      (let ((default-directory portal-build-root))
+        (when-let* ((status (ignore-errors
+                              (apply #'call-process "git" nil '(t nil) nil arguments))))
+          (cons status (string-trim (buffer-string))))))))
+
+(defun portal-build--detached-p ()
+  "Return non-nil when Portal's Git checkout has no branch checked out.
+`package-vc-upgrade' pulls, which Git refuses on such a checkout."
+  (eql 1 (car (portal-build--git "symbolic-ref" "-q" "HEAD"))))
+
+(defun portal-build--detached-advice ()
+  "Return a sentence to add to a build's message when the checkout cannot upgrade.
+It is empty unless `portal-build--detached-p'; otherwise it starts with the
+period that ends the message before it."
+  (if (portal-build--detached-p)
+      (format-message ".  This Portal is not on a branch, so `package-vc-upgrade' \
+cannot upgrade it: run `git fetch' and `git switch stable' in %s"
+                      (abbreviate-file-name portal-build-root))
+    ""))
+
+;;;###autoload
+(defun portal-version (&optional show)
+  "Return which Portal this is, and show it in the echo area when SHOW.
+That is the version in portal.el's header and, in a Git checkout, how far
+past the last release tag it is and the branch, such as
+\"Portal 0.2.0 (stable)\" or \"Portal 0.2.0, 41 commits on, 077a551 (main)\".
+Interactively, SHOW is t."
+  (interactive (list t))
+  (let* ((version (or (portal-build-version) "unknown"))
+         (branch (portal-build--git "symbolic-ref" "--short" "-q" "HEAD"))
+         (describe (portal-build--git "describe" "--tags" "--long" "--match" "v[0-9]*"))
+         (place
+          (cond ((null branch) nil)
+                ((and (eql 0 (car describe))
+                      (string-match "\\`\\(.+\\)-\\([0-9]+\\)-g\\([0-9a-f]+\\)\\'" (cdr describe)))
+                 (let ((tag (match-string 1 (cdr describe)))
+                       (count (string-to-number (match-string 2 (cdr describe))))
+                       (commit (match-string 3 (cdr describe))))
+                   (cond ((and (zerop count) (equal tag (concat "v" version))) nil)
+                         ((zerop count) (format "at %s" tag))
+                         (t (format "%d commit%s on%s, %s" count (if (= count 1) "" "s")
+                                    (if (equal tag (concat "v" version)) "" (concat " " tag))
+                                    commit)))))
+                (t (cdr (portal-build--git "rev-parse" "--short" "HEAD")))))
+         (text (concat "Portal " version
+                       (and place (concat ", " place))
+                       (pcase (car branch)
+                         ('nil "")
+                         (0 (format " (%s)" (cdr branch)))
+                         (_ " (not on a branch)")))))
+    (when show
+      (message "%s" text))
+    text))
+
 (defun portal-build--read (name)
   "Return the plist that NAME in the build directory holds, or nil."
   (let ((file (portal-build-file name)))
@@ -275,14 +335,16 @@ the new one."
     (with-current-buffer buffer
       (write-region nil nil (portal-build-file "portal-build.log") nil 'silent)))
   (let ((problem (and (string-prefix-p "finished" status) (portal-build-problem))))
-    (cond ((not (string-prefix-p "finished" status))
-           (message "Portal's build failed: see %s" (buffer-name buffer)))
-          ((eq problem 'restart)
-           (message "Portal is built: restart Emacs to load its new native module"))
-          (problem
-           (message "Portal's build finished, but %s"
-                    (downcase (portal-build--describe problem))))
-          (t (message "Portal is ready: retry your command")))))
+    (if (not (string-prefix-p "finished" status))
+        (message "Portal's build failed: see %s" (buffer-name buffer))
+      (message "%s%s"
+               (cond ((eq problem 'restart)
+                      "Portal is built: restart Emacs to load its new native module")
+                     (problem
+                      (concat "Portal's build finished, but "
+                              (downcase (portal-build--describe problem))))
+                     (t "Portal is ready: retry your command"))
+               (portal-build--detached-advice)))))
 
 (defun portal-build-ensure ()
   "Signal a `user-error' unless Portal's build can be loaded now.

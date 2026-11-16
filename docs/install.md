@@ -40,7 +40,7 @@ Emacs can install Portal straight from its Git repository:
 <!-- example: use-package-vc -->
 ```elisp
 (use-package portal
-  :vc (:url "https://github.com/xiaoxinghu/portal" :rev :newest))
+  :vc (:url "https://github.com/xiaoxinghu/portal" :rev "stable"))
 ```
 
 Installing compiles Portal's Lisp only. The first native command, such as
@@ -48,7 +48,55 @@ Installing compiles Portal's Lisp only. The first native command, such as
 shows the build in `*portal-build*`. When it finishes, run the command again.
 To prepare Portal ahead of time, run `M-x portal-build` yourself.
 
-`:rev :newest` follows the newest commit. Portal has no releases yet.
+### Which revision
+
+`:rev "stable"` installs the latest release and upgrades to each next one.
+The branch `stable` moves only when Portal makes a release; development
+happens on `main`. What else `:rev` can say, and what each does when you
+upgrade:
+
+| Specification | Installs | `package-vc-upgrade` |
+| --- | --- | --- |
+| `:rev "stable"` | the latest release | moves to the next release |
+| `:rev :newest` | the newest commit on `main` | moves to the newest commit on `main` |
+| `:rev "v0.2.0"` | that release | stays there |
+| no `:rev` | the latest release | cannot upgrade it |
+
+- **Following development**: `:rev :newest` gives every change as it merges,
+  before any release, with the native rebuilds that come with them.
+- **Pinning a version**: `:rev "v0.2.0"`, or any tag on the
+  [releases page](https://github.com/xiaoxinghu/portal/releases), stays at
+  that release; upgrading does nothing. To move to another version, run
+  `git fetch --tags` and `git switch --detach v0.3.0` in the directory that
+  `M-: portal-build-root` prints, then `M-x package-vc-rebuild RET portal` and
+  restart Emacs. Or delete the package and install it again: use-package reads
+  `:vc` only when Portal is not installed, so editing `:rev` later changes
+  nothing.
+- **Keep the `:rev`.** With
+  `:vc (:url "https://github.com/xiaoxinghu/portal")` and no `:rev`,
+  use-package installs the latest release as a commit, not on a branch, and
+  `package-vc-upgrade` then fails without saying so: it leaves the error in a
+  `*vc-git*` buffer. Portal's build tells you when its checkout is in that
+  state. `:branch "stable"` without `:rev "stable"` does the same.
+
+### Moving an install to stable
+
+An install made with `:rev :newest`, or before Portal had releases, is on
+`main` and stays there. To move it to releases, in the directory that
+`M-: portal-build-root` prints, run
+
+```sh
+git fetch
+git switch stable
+```
+
+then `M-x package-vc-rebuild RET portal`, which recompiles the Lisp, and
+restart Emacs. The same commands move a checkout that is not on a branch.
+`main` is ahead of the latest release, so this goes back to it; when the two
+differ in native sources, the first native command offers to rebuild.
+
+`M-x portal-version` says which Portal this is: its version, how many commits
+it is past the release, and its branch, such as `Portal 0.2.0 (stable)`.
 
 ## First build and first run
 
@@ -100,11 +148,14 @@ links back to the cloned repository, where it builds and keeps its native part.
 With straight.el:
 
 ```elisp
-(straight-use-package '(portal :host github :repo "xiaoxinghu/portal"))
+(straight-use-package
+ '(portal :host github :repo "xiaoxinghu/portal" :branch "stable"))
 ```
 
 The equivalent Elpaca recipe, `(elpaca (portal :host github :repo
-"xiaoxinghu/portal"))`, follows the same layout but has not been tested.
+"xiaoxinghu/portal" :branch "stable"))`, follows the same layout but has not
+been tested. Both follow the branch they name: `stable` for releases, as with
+package-vc, or `main` without `:branch`.
 
 ## Building when the package installs
 
@@ -120,7 +171,7 @@ package-vc:
 
 (use-package portal
   :vc (:url "https://github.com/xiaoxinghu/portal"
-       :rev :newest
+       :rev "stable"
        :shell-command "./build.sh --prune"))
 ```
 
@@ -133,8 +184,11 @@ repository. Do not build from `:init` or `:config`: they run on every startup.
 
 Upgrade Portal the way you installed it: `M-x package-vc-upgrade RET portal`,
 `git pull` in a clone, or `M-x straight-pull-package RET portal`. Then restart
-Emacs. When the upgrade changed the native sources, the first native command
-offers to rebuild, as on first use; Lisp-only changes need no rebuild.
+Emacs. On `stable`, an upgrade is the next release, and the release's notes on
+the [releases page](https://github.com/xiaoxinghu/portal/releases) say whether
+it needs a native rebuild. When the upgrade changed the native sources, the
+first native command offers to rebuild, as on first use; Lisp-only changes need
+no rebuild.
 
 To rebuild at any time, run `M-x portal-build`. Emacs cannot unload a module,
 so after rebuilding a module that this Emacs has already loaded, restart Emacs
@@ -277,6 +331,11 @@ host did not start or stopped. `*portal-server*` holds its diagnostics; press
 **The launcher refuses this Emacs.** It accepts only one Emacs build; see
 [launcher setup](launcher.md#set-up-safely).
 
+**"This Portal is not on a branch, so `package-vc-upgrade` cannot upgrade
+it".** The checkout was installed without `:rev "stable"`, or at a tag.
+`package-vc-upgrade` will not move it. If you did not pin it on purpose, move
+it to `stable` as in [moving an install to stable](#moving-an-install-to-stable).
+
 Still stuck? [Open an issue](https://github.com/xiaoxinghu/portal/issues) with
-your Emacs version and revision, macOS version, Portal commit and the log,
-removing credentials and private content.
+your Emacs version and revision, macOS version, what `M-x portal-version`
+says and the log, removing credentials and private content.

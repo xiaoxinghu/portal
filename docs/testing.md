@@ -474,10 +474,13 @@ the tier, with `portal-real-rex-cli` for what another client does.
 
 The `package` CTest suite installs a copy of the checkout through
 [the installation guide](install.md)'s use-package examples in empty home
-directories, with and without Consult and Embark. It fails on any compilation
+directories, with and without Consult and Embark. The copy is a Git repository
+whose branch `stable`, which the examples name, is at the copied commit, and
+the installation must be on that branch. It fails on any compilation
 error or warning, even when package-vc reports success; a copy with a planted
 compilation error proves that. It also upgrades an older copy with
-`package-vc-upgrade` from an Emacs that has loaded it, and installs a copy whose
+`package-vc-upgrade` from an Emacs that has loaded it, to the commit a release
+moved `stable` to and not past it, and installs a copy whose
 build fails as it installs, which package-vc only warns about. The default
 loop runs only the plain installation and loading from a clone; the variants are
 `:expensive`.
