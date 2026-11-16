@@ -293,3 +293,5 @@ the suites side by side, in about a third of the time; the
 - Keep user instructions in `docs/`, contributor commands here and detailed
   test procedures in [Testing Portal](docs/testing.md). Link from the README
   rather than expanding it into a manual again.
+- Never edit the `Version:` line of `portal.el`: a release changes it, made by
+  `scripts/release.py` as [Releasing Portal](docs/releasing.md) describes.
