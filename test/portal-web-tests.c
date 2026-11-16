@@ -1389,5 +1389,6 @@ int main(void)
         return 1;
     }
     puts("Web views' rules and the bridge passed");
+    printf("%d checks passed\n", checks);
     return 0;
 }
