@@ -533,6 +533,16 @@ class GitHub:
                                    if result.returncode == 0 else None)
         return self.titles[number]
 
+    def has_logs(self, run_id):
+        """Whether the run's logs artifact can still be downloaded: the
+        workflow keeps it 14 days."""
+        result = self.gh("api", f"repos/{self.slug}/actions/runs/{run_id}/artifacts",
+                         check=False)
+        if result.returncode:
+            return False
+        return any(artifact.get("name") == "logs" and not artifact.get("expired")
+                   for artifact in json.loads(result.stdout).get("artifacts", []))
+
     def has_release(self, tag):
         return self.gh("release", "view", tag, "--json", "tagName", check=False).returncode == 0
 
@@ -686,8 +696,9 @@ class Release:
         github, branch = self.github, f"release/v{version}"
         runs = [r for r in github.runs("--branch", branch, "--event", "workflow_dispatch")
                 if r["headSha"] == commit]
+        # A run still going is waited for; a green one is taken while its logs last.
         going = [r for r in runs if r.get("status") != "completed"
-                 or r.get("conclusion") == "success"]
+                 or (r.get("conclusion") == "success" and github.has_logs(r["databaseId"]))]
         if going:
             found = max(going, key=lambda r: r["databaseId"])
             say(f"continuing with Checks run {found['url']}, started by an earlier run")
@@ -762,6 +773,8 @@ class Release:
     def publish(self, commit, version, notes, asset):
         repo, tag = self.repo, f"v{version}"
         repo.git("tag", "-a", tag, "-m", f"Portal {version}", commit)
+        # From here an interruption may leave the tag on GitHub: main() asks.
+        self.pushing = (tag, commit)
         stable = repo.commit_of("origin/stable")
         for attempt in range(1, PUSH_TRIES + 1):
             repo.fetch()
@@ -798,6 +811,14 @@ class Release:
         self.github.gh("release", "create", tag, "--verify-tag", "--title", f"Portal {version}",
                        "--notes-file", str(notes), str(asset))
         say(f"released https://github.com/{GITHUB}/releases/tag/{tag}")
+
+    def tag_on_github(self):
+        """The tag being pushed, if GitHub has it at the release commit."""
+        if not self.pushing:
+            return None
+        tag, commit = self.pushing
+        listed = self.repo.git("ls-remote", "origin", f"refs/tags/{tag}^{{}}", check=False)
+        return tag if listed.returncode == 0 and listed.stdout.startswith(commit) else None
 
     def delete_candidate(self, version):
         self.repo.git("push", "-q", "origin", "--delete", f"release/v{version}", check=False)
@@ -861,14 +882,17 @@ def main(argv=None):
     options = parse(sys.argv[1:] if argv is None else argv)
     work = tempfile.mkdtemp(prefix="portal-release-")
     release = Release(options, work)
-    release.published = None
+    release.published = release.pushing = None
     keep = False
     try:
         release.main()
         return 0
     except (Refusal, KeyboardInterrupt) as stop:
         say(str(stop) if isinstance(stop, Refusal) else "interrupted")
-        tag = release.published
+        try:
+            tag = release.published or release.tag_on_github()
+        except (Refusal, KeyboardInterrupt):
+            tag = release.pushing[0] if release.pushing else None
         if tag:
             # Pushed but not released: what finishes it, with what this run made.
             keep = True

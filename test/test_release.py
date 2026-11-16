@@ -107,6 +107,9 @@ GH_STUB = textwrap.dedent("""\
     if args[:2] == ["run", "download"]:
         shutil.copytree(os.path.join(fixtures, "logs"), option("-D"))
         finish(0)
+    if args[0] == "api" and args[-1].endswith("/artifacts"):
+        expired = int(args[-1].split("/")[-2]) in state.get("expired", [])
+        finish(0, {"artifacts": [{"name": "logs", "expired": expired}]})
     if args[0] == "api":
         with open(os.path.join(fixtures, "job.log")) as f:
             finish(0, f.read())
@@ -553,6 +556,24 @@ class Releases(unittest.TestCase):
         self.assertIsNotNone(self.on_github("refs/tags/v0.2.0"))
 
     def test_a_second_run_after_an_interruption(self):
+        self.interrupted_run()
+        candidate = self.on_github("refs/heads/release/v0.2.0")
+        self.assertIsNotNone(candidate)
+        self.assertIsNone(self.on_github("refs/tags/v0.2.0"))
+        # The run finished meanwhile; the next run takes it and the candidate up.
+        result = self.release()
+        self.assertIn("continuing with release/v0.2.0", result.stderr)
+        self.assertEqual(self.on_github("refs/tags/v0.2.0^{commit}"), candidate)
+        self.assertEqual(len(self.gh()["dispatches"]), 1)
+        # A third run publishes nothing again.
+        refs = self.refs()
+        self.assertIn("already tagged", self.release("0.2.0", check=1).stderr)
+        self.assertIn("nothing to release", self.release(check=1).stderr)
+        self.assertEqual(self.refs(), refs)
+        self.assertEqual(list(self.gh()["releases"]), ["v0.2.0"])
+
+    def interrupted_run(self):
+        """Start a release, stop it while Checks run, and let the run go green."""
         self.set_state(hold=True)
         self.env["PORTAL_RELEASE_POLL"] = "0.2"
         process = subprocess.Popen([sys.executable, str(SCRIPT)], env=self.env,
@@ -564,25 +585,41 @@ class Releases(unittest.TestCase):
         process.send_signal(signal.SIGINT)
         _, err = process.communicate(timeout=30)
         self.assertEqual(process.returncode, 130, err)
-        candidate = self.on_github("refs/heads/release/v0.2.0")
-        self.assertIsNotNone(candidate)
-        self.assertIsNone(self.on_github("refs/tags/v0.2.0"))
-        # The run finishes meanwhile; the next run takes it and the candidate up.
         state = self.gh()
         for run in state["runs"]:
             run.update(status="completed", conclusion="success")
         self.set_state(runs=state["runs"], hold=False)
         self.env["PORTAL_RELEASE_POLL"] = "0"
+        return state["runs"][-1]["databaseId"]
+
+    def test_a_green_run_whose_logs_expired_is_run_again(self):
+        run = self.interrupted_run()
+        self.set_state(expired=[run])
         result = self.release()
-        self.assertIn("continuing with release/v0.2.0", result.stderr)
-        self.assertEqual(self.on_github("refs/tags/v0.2.0^{commit}"), candidate)
-        self.assertEqual(len(self.gh()["dispatches"]), 1)
-        # A third run publishes nothing again.
-        refs = self.refs()
-        self.assertIn("already tagged", self.release("0.2.0", check=1).stderr)
-        self.assertIn("nothing to release", self.release(check=1).stderr)
-        self.assertEqual(self.refs(), refs)
-        self.assertEqual(list(self.gh()["releases"]), ["v0.2.0"])
+        self.assertIn("started Checks", result.stderr)
+        self.assertEqual(len(self.gh()["dispatches"]), 2)
+        self.assertIsNotNone(self.on_github("refs/tags/v0.2.0"))
+
+    def test_an_interrupted_publish_keeps_what_finishes_it(self):
+        pid = self.root / "pid"
+        hook = self.bare / "hooks" / "post-receive"
+        hook.write_text(hook.read_text() + textwrap.dedent(f"""\
+            if [ -s "{pid}" ] && git rev-parse -q --verify refs/heads/stable >/dev/null; then
+                kill -INT "$(cat "{pid}")"; rm "{pid}"; sleep 2
+            fi
+            """))
+        process = subprocess.Popen([sys.executable, str(SCRIPT)], env=self.env,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        pid.write_text(str(process.pid))
+        _, err = process.communicate(timeout=120)
+        self.assertEqual(process.returncode, 130, err)
+        self.assertIsNotNone(self.on_github("refs/tags/v0.2.0"))
+        self.assertIn("v0.2.0 is pushed", err)
+        self.assertIn("gh release create v0.2.0 --verify-tag", err)
+        work = Path(err.split(" keeps the notes and logs")[0].split()[-1])
+        self.addCleanup(shutil.rmtree, work, True)
+        self.assertIn("## What is new", (work / "notes.md").read_text())
+        self.assertEqual(self.gh()["releases"], {})
 
     def test_a_tag_without_its_github_release_stops_the_next(self):
         self.first_release()
