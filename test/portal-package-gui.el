@@ -5,7 +5,8 @@
 ;; PORTAL_PACKAGE_GUI_PHASE chooses the check:
 ;;   setup  M-x portal-terminal offers to build; answering y builds once.
 ;;   use    A fresh Emacs opens a terminal and the Hello World web view.
-;; Results go to standard error; Emacs exits with 0 only when all hold.
+;; Results go to standard error, ending with how many checks passed; Emacs
+;; exits with 0 only when all hold.
 
 (require 'cl-lib)
 (require 'package)
@@ -15,6 +16,9 @@
 (declare-function portal-view-buffers "portal-view" (&optional kind))
 (declare-function portal-view-target "portal-view" (&optional window))
 (declare-function portal--inspect "portal-view" (target))
+
+(defvar portal-package-gui--passed 0
+  "How many checks have held in this phase.")
 
 (defun portal-package-gui--log (format &rest arguments)
   "Report FORMAT with ARGUMENTS on standard error."
@@ -32,6 +36,7 @@ STATE, if given, is reported too, to explain a failure."
                                  (buffer-substring (max (point-min) (- (point-max) 6000))
                                                    (point-max)))))
     (kill-emacs 1))
+  (cl-incf portal-package-gui--passed)
   value)
 
 (defun portal-package-gui--wait (predicate seconds)
@@ -101,6 +106,8 @@ STATE, if given, is reported too, to explain a failure."
         ("setup" (portal-package-gui--setup))
         ("use" (portal-package-gui--use))
         (phase (portal-package-gui--check "a known phase" (not phase))))
+      ;; The count the release notes read.
+      (portal-package-gui--log "%d checks passed" portal-package-gui--passed)
       (kill-emacs 0))
   (error (portal-package-gui--log "FAIL %S" err)
          (kill-emacs 1)))
