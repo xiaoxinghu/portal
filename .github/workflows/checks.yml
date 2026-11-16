@@ -41,6 +41,8 @@ jobs:
       USE_CACHE: ${{ github.event_name != 'workflow_dispatch' || inputs.cache }}
       # Every ERT runner includes the tests tagged :expensive.
       PORTAL_TEST_EXPENSIVE: 1
+      # ERT says why each skipped test skipped, for the release notes.
+      EMACS_TEST_VERBOSE: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -154,7 +156,13 @@ jobs:
 
       - name: CTest
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: ctest --test-dir build -j"$(sysctl -n hw.ncpu)" --output-on-failure
+        run: |
+          # The suites' own output, which the job log shows only for a failure,
+          # goes to the logs: release notes count and name skipped tests there.
+          status=0
+          ctest --test-dir build -j"$(sysctl -n hw.ncpu)" --output-on-failure || status=$?
+          cp build/Testing/Temporary/LastTest.log "$PORTAL_TEST_LOGS/ctest.log" || :
+          exit "$status"
 
       - name: Biome
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -166,7 +174,8 @@ jobs:
 
       - name: Python
         if: ${{ !cancelled() }}
-        run: python3 -B -m unittest discover -s test -p 'test_*.py'
+        # Verbose, so that a skipped test is named with its reason.
+        run: python3 -B -m unittest discover -v -s test -p 'test_*.py'
 
       - name: Whitespace
         if: ${{ !cancelled() }}

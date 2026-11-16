@@ -217,5 +217,6 @@ int main(void)
         return 1;
     }
     puts("Status panel passed");
+    printf("%d checks passed\n", checks);
     return 0;
 }

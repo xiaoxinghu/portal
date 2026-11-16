@@ -15,11 +15,14 @@
 #include "views.h"
 
 static int failures;
+/* How many checks ran: each program ends by printing it. */
+static int checks;
 
 #define CHECK(condition) check((condition), #condition, __FILE__, __LINE__)
 
 static inline void check(bool passed, const char *condition, const char *file, int line)
 {
+    checks++;
     if (!passed) {
         fprintf(stderr, "%s:%d: FAIL: %s\n", file, line, condition);
         failures++;
