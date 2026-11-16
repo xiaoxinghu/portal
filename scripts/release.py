@@ -364,6 +364,18 @@ def command_of(section):
     return [line for line in lines if not line.lstrip().startswith("#")]
 
 
+USE_CACHE = re.compile(r"^\s+USE_CACHE: (\S+)$")
+
+
+def uncached(job_log):
+    """Whether the job ran without cached downloads: the workflow's USE_CACHE,
+    in the environment the runner echoes for each step, is false throughout."""
+    values = {match.group(1) for match in
+              map(USE_CACHE.match, (STAMP.sub("", line) for line in job_log.splitlines()))
+              if match}
+    return values == {"false"}
+
+
 def evidence(run, job_log, logs_dir):
     """The notes' Evidence section, read from RUN (gh's JSON of the run), its
     JOB_LOG and the files of its logs artifact in LOGS_DIR, and what it lacks:
@@ -375,9 +387,7 @@ def evidence(run, job_log, logs_dir):
                    if step["name"] == "Record the environment"), None)
     if record is None:
         raise Refusal("the run's log has no \"Record the environment\" step")
-    cached = [line.split(":", 1)[1].strip() for line in record
-              if line.strip().startswith("USE_CACHE:")]
-    if cached != ["false"]:
+    if not uncached("\n".join(record)):
         raise Refusal(f"run {run['url']} restored cached downloads: it is no evidence "
                       "for a release")
     out.append(f"Commit `{run['headSha']}`, Checks run {run['url']}, without cached downloads.")
@@ -558,6 +568,7 @@ class Release:
         self.github = GitHub(GITHUB)
         self.remote = os.environ.get("PORTAL_RELEASE_REMOTE") or f"https://github.com/{GITHUB}.git"
         self.poll = float(os.environ.get("PORTAL_RELEASE_POLL", "30"))
+        self.job_logs = {}
 
     # 1. A clean clone and the base.
     def clone(self):
@@ -693,6 +704,8 @@ class Release:
 
     # 5. Checks, uncached.
     def checks(self, commit, version):
+        """The finished Checks run of COMMIT: an earlier run's, when it ran without
+        cached downloads and its logs last, else a new uncached run's."""
         github, branch = self.github, f"release/v{version}"
         runs = [r for r in github.runs("--branch", branch, "--event", "workflow_dispatch")
                 if r["headSha"] == commit]
@@ -702,22 +715,33 @@ class Release:
         if going:
             found = max(going, key=lambda r: r["databaseId"])
             say(f"continuing with Checks run {found['url']}, started by an earlier run")
-        else:
-            before = {r["databaseId"] for r in runs}
-            github.gh("workflow", "run", WORKFLOW, "--ref", branch, "-f", "cache=false")
-            say(f"started Checks on {branch}, without cached downloads")
-            found, deadline = None, time.monotonic() + 300
-            while not found:
-                runs = [r for r in github.runs("--branch", branch, "--event",
-                                               "workflow_dispatch")
-                        if r["headSha"] == commit and r["databaseId"] not in before]
-                if runs:
-                    found = max(runs, key=lambda r: r["databaseId"])
-                elif time.monotonic() > deadline:
-                    raise Refusal(f"no Checks run appeared for {commit[:12]} on {branch}")
-                else:
-                    time.sleep(min(self.poll, 5))
+            view = self.wait(found["databaseId"])
+            if view.get("conclusion") != "success" or uncached(self.job_log(view)):
+                return view
+            say(f"Checks run {view['url']} restored cached downloads; running Checks again")
+        before = {r["databaseId"] for r in runs}
+        github.gh("workflow", "run", WORKFLOW, "--ref", branch, "-f", "cache=false")
+        say(f"started Checks on {branch}, without cached downloads")
+        found, deadline = None, time.monotonic() + 300
+        while not found:
+            runs = [r for r in github.runs("--branch", branch, "--event", "workflow_dispatch")
+                    if r["headSha"] == commit and r["databaseId"] not in before]
+            if runs:
+                found = max(runs, key=lambda r: r["databaseId"])
+            elif time.monotonic() > deadline:
+                raise Refusal(f"no Checks run appeared for {commit[:12]} on {branch}")
+            else:
+                time.sleep(min(self.poll, 5))
         return self.wait(found["databaseId"])
+
+    def job_log(self, view):
+        """The run's job log, the runner's timestamps and all."""
+        job = view["jobs"][0]["databaseId"]
+        if job not in self.job_logs:
+            self.job_logs[job] = self.github.gh(
+                "api", "--allow-escape-sequences",
+                f"repos/{GITHUB}/actions/jobs/{job}/logs").stdout
+        return self.job_logs[job]
 
     def wait(self, run_id):
         started, last = time.monotonic(), None
@@ -748,9 +772,7 @@ class Release:
     def notes(self, view, version, base, previous):
         github, logs = self.github, self.work / "logs"
         github.gh("run", "download", str(view["databaseId"]), "-n", "logs", "-D", str(logs))
-        job = view["jobs"][0]
-        job_log = github.gh("api", "--allow-escape-sequences",
-                           f"repos/{GITHUB}/actions/jobs/{job['databaseId']}/logs").stdout
+        job_log = self.job_log(view)
         (logs / "job.log").write_text(job_log)
         commit = view["headSha"]
         first = previous is None

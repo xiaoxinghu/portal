@@ -97,6 +97,8 @@ GH_STUB = textwrap.dedent("""\
         with open(os.path.join(fixtures, "run.json")) as f:
             jobs = json.load(f)["jobs"]
         red = found["conclusion"] == "failure"
+        # One job a run, named by the run's number, so that its log can tell runs apart.
+        jobs[0]["databaseId"] = found["databaseId"]
         jobs[0]["conclusion"] = found["conclusion"]
         for step in jobs[0]["steps"]:
             if step["conclusion"] == "failure" or step["name"] == "CTest":
@@ -111,8 +113,11 @@ GH_STUB = textwrap.dedent("""\
         expired = int(args[-1].split("/")[-2]) in state.get("expired", [])
         finish(0, {"artifacts": [{"name": "logs", "expired": expired}]})
     if args[0] == "api":
+        number = int(args[-1].split("/")[-2])
+        cached = [r for r in state["runs"] if r["databaseId"] == number and r.get("cached")]
         with open(os.path.join(fixtures, "job.log")) as f:
-            finish(0, f.read())
+            log = f.read()
+        finish(0, log.replace("USE_CACHE: false", "USE_CACHE: true") if cached else log)
     if args[:2] == ["pr", "view"]:
         title = state["pulls"].get(args[2])
         finish(0 if title else 1, {"title": title} if title else None)
@@ -279,7 +284,9 @@ class Notes(unittest.TestCase):
         self.assertEqual(text.count("gives no count"), 1)
 
     def test_a_cached_run_is_no_evidence(self):
+        self.assertTrue(release.uncached(self.job_log))
         self.job_log = self.job_log.replace("USE_CACHE: false", "USE_CACHE: true")
+        self.assertFalse(release.uncached(self.job_log))
         with self.assertRaisesRegex(release.Refusal, "restored cached downloads"):
             self.evidence()
 
@@ -597,6 +604,17 @@ class Releases(unittest.TestCase):
         self.set_state(expired=[run])
         result = self.release()
         self.assertIn("started Checks", result.stderr)
+        self.assertEqual(len(self.gh()["dispatches"]), 2)
+        self.assertIsNotNone(self.on_github("refs/tags/v0.2.0"))
+
+    def test_a_green_run_with_cached_downloads_is_run_again(self):
+        run = self.interrupted_run()
+        state = self.gh()
+        for each in state["runs"]:
+            each["cached"] = each["databaseId"] == run
+        self.set_state(runs=state["runs"])
+        result = self.release()
+        self.assertIn("restored cached downloads; running Checks again", result.stderr)
         self.assertEqual(len(self.gh()["dispatches"]), 2)
         self.assertIsNotNone(self.on_github("refs/tags/v0.2.0"))
 
