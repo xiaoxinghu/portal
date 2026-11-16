@@ -391,5 +391,6 @@ int main(void)
         return 1;
     }
     puts("The view registry passed");
+    printf("%d checks passed\n", checks);
     return 0;
 }

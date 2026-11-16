@@ -163,7 +163,7 @@
 2026-11-14T04:24:31.4534290Z Ninja 1.13.2
 2026-11-14T04:24:31.5478950Z Homebrew 7.0.12
 2026-11-14T04:24:31.6986950Z Screen 1024x768, visible 1024x674, scale 1
-2026-11-14T04:24:31.7018390Z swift-driver version: 1.168.6 
+2026-11-14T04:24:31.7018390Z swift-driver version: 1.168.6
 2026-11-14T04:24:31.7135830Z ##[group]Run actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
 2026-11-14T04:24:31.7136180Z with:
 2026-11-14T04:24:31.7136390Z   path: /Users/runner/Library/Caches/Homebrew/downloads

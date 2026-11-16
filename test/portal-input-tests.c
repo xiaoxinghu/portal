@@ -22,12 +22,15 @@
 #include "views.h"
 
 static int failures;
+/* How many checks ran: the program ends by printing it. */
+static int checks;
 static int records = -1; /* The pipe's read end. */
 
 #define CHECK(condition) check((condition), #condition, __LINE__)
 
 static void check(bool passed, const char *condition, int line)
 {
+    checks++;
     if (!passed) {
         fprintf(stderr, "%s:%d: FAIL: %s\n", __FILE__, line, condition);
         failures++;
@@ -922,5 +925,6 @@ int main(void)
         return 1;
     }
     puts("Input handoff passed");
+    printf("%d checks passed\n", checks);
     return 0;
 }
