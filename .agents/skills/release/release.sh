@@ -14,6 +14,8 @@
 set -eu
 
 die() { echo "release: $*" >&2; exit 1; }
+# The steps of Checks, besides CTest, whose logs must count their tests.
+suites="python views input launcher terminal-shell-startup package"
 largest() { sort -t. -k1,1n -k2,2n -k3,3n | tail -1; }
 
 # Set `release` to the release commit of version $1, `run` to its green Checks
@@ -144,16 +146,20 @@ notes() {
     echo "Counts, as each suite printed them:"
     echo
     # CTest's own log holds every suite's output, between "N/M Test: NAME" and
-    # "Test Passed."; the other steps log to a file each.
+    # "Test Passed."; the other steps log to a file each. A suite with no
+    # count stops the notes: the evidence must be whole.
     awk '/^[0-9]+\/[0-9]+ Test: / { suite = $3; counts = "" }
          /^Ran [0-9]+ tests|^[0-9]+ checks passed|Test run with [0-9]+ tests/ {
              sub(/^[^A-Za-z0-9]+/, ""); counts = counts "; " $0 }
-         /^Test Passed\./ { print "- CTest " suite ": passed" counts }' "$work/logs/ctest.log"
-    for log in "$work"/logs/python.log "$work"/logs/*/test.log; do
-        name=${log#"$work/logs/"}
-        name=${name%.log}
-        name=${name%/test}
-        sed -n "s/^Ran [0-9]* tests.*/- $name: &/p; s/^[0-9]* checks passed.*/- $name: &/p" "$log"
+         /^Test Passed\./ { suites++; print "- CTest " suite ": passed" counts
+             if (counts == "") { print "release: no count for the CTest suite " suite >"/dev/stderr"; bad = 1 } }
+         END { exit bad || !suites }' "$work/logs/ctest.log" ||
+        die "ctest.log does not count every suite's tests"
+    for name in $suites; do
+        counts=$(sed -n "s/^Ran [0-9]* tests.*/- $name: &/p; s/^[0-9]* checks passed.*/- $name: &/p" \
+            "$work/logs/$name.log" "$work/logs/$name/test.log" 2>/dev/null || :)
+        [ -n "$counts" ] || die "the run's logs do not count $name's tests"
+        echo "$counts"
     done
     echo
     echo "Skipped tests, each with its reason:"
@@ -203,4 +209,10 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 git clone -q "${PORTAL_RELEASE_REMOTE:-https://github.com/xiaoxinghu/portal}" "$work/portal"
 cd "$work/portal"
-"$command" "$@"
+if [ "$command" = notes ]; then
+    # All or nothing: a draft cut short by missing evidence is not the notes.
+    notes "$@" >"$work/notes.md"
+    cat "$work/notes.md"
+else
+    "$command" "$@"
+fi

@@ -32,6 +32,10 @@ LOGS = {
     "3/3 Test: app-host\n 55 pass\n 0 fail\nRan 55 tests across 7 files. [803.00ms]\nTest Passed.\n",
     "python.log": "test_a (test_x.X.test_a) ... skipped 'no network'\nRan 82 tests in 52.507s\n",
     "views/test.log": "Ran 78 tests, 78 results as expected, 0 unexpected\n",
+    "input/test.log": "Ran 17 tests, 13 results as expected, 0 unexpected, 4 skipped\n",
+    "launcher/test.log": "Ran 42 tests, 41 results as expected, 0 unexpected, 1 skipped\n",
+    "terminal-shell-startup/test.log": "Ran 2 tests, 2 results as expected, 0 unexpected\n",
+    "package/test.log": "9 checks passed\n6 checks passed\n",
 }
 
 
@@ -115,7 +119,7 @@ class ReleaseTests(unittest.TestCase):
         (self.stub / "runs").write_text("7\n")
         notes = self.release("notes", "0.2.0")
         for line in ("The first release.", "- CTest input: passed; Ran 21 tests",
-                     "- python: Ran 82 tests",
+                     "- python: Ran 82 tests", "- package: 6 checks passed",
                      "- CTest swift: passed; Test run with 31 tests in 7 suites",
                      "- CTest app-host: passed; Ran 55 tests across 7 files.", "- views: Ran 78 tests", "| Build | success |",
                      "- CTest input: portal-input-evil  ((skip-unless",
@@ -123,6 +127,15 @@ class ReleaseTests(unittest.TestCase):
                      "Bun 1.3.14", "https://example/run/7"):
             self.assertIn(line, notes)
         (self.root / "notes.md").write_text(notes)
+        # Evidence with a suite's count missing is no notes at all.
+        logs = self.stub / "logs"
+        (logs / "package" / "test.log").write_text("package-gui: could not start\n")
+        self.assertEqual(self.release("notes", "0.2.0", ok=False),
+                         "release: the run's logs do not count package's tests\n")
+        (logs / "package" / "test.log").write_text(LOGS["package/test.log"])
+        (logs / "ctest.log").write_text(LOGS["ctest.log"] + "4/4 Test: quiet\nTest Passed.\n")
+        self.assertIn("no count for the CTest suite quiet", self.release("notes", "0.2.0", ok=False))
+        (logs / "ctest.log").write_text(LOGS["ctest.log"])
         (self.stub / "logs" / "environment.log").write_text("USE_CACHE=true\n")
         self.assertIn("no evidence", self.release("notes", "0.2.0", ok=False))
         self.assertIn("no evidence", self.release("publish", "0.2.0", "notes.md", ok=False))
