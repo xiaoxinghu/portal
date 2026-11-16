@@ -83,8 +83,9 @@ if (window.opener) window.opener.postMessage('hello', '*');
               ;; A popup's page has its opener, which hears from it.
               (let ((popup (portal-web-gui--open "Popup")))
                 (portal-test--wait-for-page "Popup with opener")
-                (should (equal (plist-get (portal--inspect opener-target) :title)
-                               "Opener heard hello"))
+                ;; The message, and then the title it sets, arrive after
+                ;; the popup's own page has loaded.
+                (portal-test--wait-for-page "Opener heard hello" opener-target)
                 (portal-web-gui--close popup))))
         (portal-test-native-target-frame nil)
         (setq unread-command-events nil)

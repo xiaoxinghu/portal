@@ -860,11 +860,14 @@ console is in frame CONSOLE, the slide window in FRAME."
 it is drawn: at its bottom right, the drawing's background, and at its top
 left, where `portal-excalidraw-gui--picture' is, each \"dark\", \"light\"
 or the colour between."
+  ;; willReadFrequently keeps the canvas in software.  It is only ever read,
+  ;; and from the default canvas WebKit throws InvalidStateError on GitHub's
+  ;; runners, macOS 27.0.1, for either window's image, every time.
   (format "const slide = document.querySelector(%S);
            if (!slide?.complete || !slide.naturalWidth) return null;
            const canvas = document.createElement('canvas');
            [canvas.width, canvas.height] = [slide.naturalWidth, slide.naturalHeight];
-           const context = canvas.getContext('2d');
+           const context = canvas.getContext('2d', { willReadFrequently: true });
            context.drawImage(slide, 0, 0);
            const shade = (x, y) => {
              const [r, g, b] = context.getImageData(
