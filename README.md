@@ -57,8 +57,12 @@ To install Portal, add it to your Emacs configuration:
 
 ```elisp
 (use-package portal
-  :vc (:url "https://github.com/xiaoxinghu/portal" :rev :newest))
+  :vc (:url "https://github.com/xiaoxinghu/portal" :rev "stable"))
 ```
+
+`:rev "stable"` installs the latest release, and `M-x package-vc-upgrade`
+moves to the next one. Keep the `:rev`: without it the install cannot be
+upgraded. To follow every change on `main` instead, write `:rev :newest`.
 
 Then run `M-x portal-hello`. Portal offers to build its native part and shows
 the build in `*portal-build*`. When Emacs says "Portal is ready: retry your
@@ -102,8 +106,9 @@ adds agent-specific working instructions.
 
 For help or reproducible bug reports, use the repository's
 [GitHub issues](https://github.com/xiaoxinghu/portal/issues). Include the Emacs
-version/revision, macOS version, Portal commit and relevant diagnostics (for app
-host failures, `*portal-server*`), removing credentials or private content.
+version/revision, macOS version, what `M-x portal-version` says and relevant
+diagnostics (for app host failures, `*portal-server*`), removing credentials or
+private content.
 Implementation files are licensed under [GPL-3.0-or-later](LICENSE). Builds
 include third-party components under their own licenses; see
 [Licenses and third-party notices](docs/licenses.md).

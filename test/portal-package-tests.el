@@ -53,14 +53,21 @@ Ignored files, such as build outputs, stay behind."
                             "-c" "user.email=tests@example.invalid"
                             "commit" "-q" "--no-gpg-sign" "-m" message))
 
+(defun portal-package-test--release (source)
+  "Move the branch stable in SOURCE to its main, as a release does."
+  (portal-package-test--git source "branch" "-f" "stable" "main"))
+
 (defun portal-package-test--source (root &optional change)
   "Copy this checkout's files into a new Git repository in ROOT; return it.
-CHANGE, if non-nil, is called with the copy's directory before the commit."
+CHANGE, if non-nil, is called with the copy's directory before the commit.
+The repository is on main, and its branch stable, which docs/install.md's
+examples install from, is at the same commit, as after a release."
   (let ((source (expand-file-name "portal source/" root)))
     (portal-package-test--copy source)
     (when change (funcall change source))
-    (portal-package-test--git source "init" "-q")
+    (portal-package-test--git source "init" "-q" "-b" "main")
     (portal-package-test--commit source "Source")
+    (portal-package-test--release source)
     source))
 
 (defun portal-package-test--append (source file text)
@@ -132,6 +139,9 @@ Return the package directory."
     (should-not (directory-files-recursively (expand-file-name "test" package) "\\.elc\\'"))
     (should (file-exists-p (expand-file-name "native/Package.swift" package)))
     (should (file-exists-p (expand-file-name "tools/resolve-bun.sh" package)))
+    ;; On the release branch, so that `package-vc-upgrade' moves it.
+    (should (equal (portal-package-test--git package "symbolic-ref" "--short" "HEAD")
+                   "stable\n"))
     ;; Installing started no build.
     (should-not (file-exists-p (expand-file-name "build" package)))
     package))
@@ -221,6 +231,11 @@ The source is a copy of this checkout in ROOT.  Return the package directory."
         (should-not (portal-package-test--read-result output)))
       (portal-package-test--copy source)
       (portal-package-test--commit source "Newer")
+      ;; The upgrade follows stable, which a release moves, and not main.
+      (portal-package-test--release source)
+      (portal-package-test--append source "portal.el"
+                                   "\n(defvar portal-package-test-unreleased t)\n")
+      (portal-package-test--commit source "Unreleased")
       ;; Upgrade from an Emacs that uses the older Portal, as M-x
       ;; package-vc-upgrade would.  The pull is asynchronous.
       (pcase-let ((`(,status . ,output)
@@ -235,16 +250,17 @@ The source is a copy of this checkout in ROOT.  Return the package directory."
         (should-not (portal-package-test--compile-problems output))
         (should-not (string-match-p "^Failed to" output)))
       (should (equal (portal-package-test--git package "rev-parse" "HEAD")
-                     (portal-package-test--git source "rev-parse" "HEAD")))
+                     (portal-package-test--git source "rev-parse" "stable")))
       ;; A fresh Emacs runs the newer Lisp and asks for a native rebuild.
       (pcase-let ((`(,status . ,output)
                    (portal-package-test--emacs
                     home "(package-initialize)"
                     '(progn (require 'portal)
                             (prin1 (list (boundp 'portal-package-test-old)
+                                         (boundp 'portal-package-test-unreleased)
                                          (portal-build-problem)))))))
         (should (zerop status))
-        (should (equal (portal-package-test--read-result output) '(nil stale)))))))
+        (should (equal (portal-package-test--read-result output) '(nil nil stale)))))))
 
 (ert-deftest portal-package-check-fails-on-compile-errors ()
   :tags '(:expensive)

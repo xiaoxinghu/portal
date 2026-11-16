@@ -288,6 +288,87 @@ echo \"TOOLS=$PORTAL_TOOLS_DIR\"\nmkdir -p build\n")
       (let ((portal-build--loaded "an older build"))
         (should (string-match-p "restart Emacs" (portal-build-test--run)))))))
 
+;; The checkouts below are made with Git: `portal-build-root' is one.
+(defun portal-build-test--git (&rest arguments)
+  "Run git with ARGUMENTS in `portal-build-root'; return its output, or fail."
+  (with-temp-buffer
+    (unless (zerop (apply #'call-process "git" nil t nil "-C" portal-build-root
+                          "-c" "user.name=Portal tests" "-c" "user.email=tests@example.invalid"
+                          arguments))
+      (error "git %s failed: %s" (string-join arguments " ") (buffer-string)))
+    (string-trim (buffer-string))))
+
+(defun portal-build-test--commit (message)
+  "Commit every file in `portal-build-root' with MESSAGE."
+  (portal-build-test--git "add" "-A")
+  (portal-build-test--git "commit" "-q" "--no-gpg-sign" "--allow-empty" "-m" message))
+
+(ert-deftest portal-build-says-once-when-the-checkout-cannot-upgrade ()
+  (portal-build-test--with-root
+    (let ((exec-path (portal-build-test--tools))
+          (advice (format-message
+                   "not on a branch, so `package-vc-upgrade' cannot upgrade it")))
+      (portal-build-test--write "build.sh" "exit 0\n")
+      (portal-build-test--complete)
+      ;; A directory without Git, as for a supplied or copied Portal.
+      (should (equal (portal-build-test--run) "Portal is ready: retry your command"))
+      ;; A checkout on a branch, as `:rev "stable"' or `:rev :newest' leaves.
+      (portal-build-test--git "init" "-q" "-b" "stable")
+      (portal-build-test--commit "Release")
+      (should (equal (portal-build-test--run) "Portal is ready: retry your command"))
+      ;; A detached checkout, as a bare `:vc' or a tag leaves: once a build.
+      (portal-build-test--git "checkout" "-q" "--detach")
+      (let ((messages (portal-build-test--run)))
+        (should (string-search advice messages))
+        (should-not (string-search advice messages
+                                   (1+ (string-search advice messages))))
+        (should (string-prefix-p "Portal is ready: retry your command.  This Portal" messages))
+        (should (string-search (format-message "`git switch stable' in %s"
+                                               (abbreviate-file-name portal-build-root))
+                               messages)))
+      (let ((portal-build--loaded "an older build"))
+        (should (string-search advice (portal-build-test--run))))
+      ;; Not when Portal starts and finds its build ready, and not when a build fails.
+      (cl-letf (((symbol-function 'message) (lambda (&rest _) (ert-fail "Messaged"))))
+        (portal-build-ensure))
+      (portal-build-test--write "build.sh" "exit 3\n")
+      (let ((messages (portal-build-test--run)))
+        (should (string-match-p "build failed" messages))
+        (should-not (string-search advice messages))))))
+
+(ert-deftest portal-version-names-the-release-and-the-branch ()
+  (portal-build-test--with-root
+    (should (equal (portal-version) "Portal 1.0"))
+    (portal-build-test--git "init" "-q" "-b" "main")
+    (portal-build-test--commit "First")
+    ;; No release tag yet.
+    (should (equal (portal-version)
+                   (format "Portal 1.0, %s (main)"
+                           (portal-build-test--git "rev-parse" "--short" "HEAD"))))
+    (portal-build-test--git "tag" "-a" "-m" "Release" "v1.0")
+    (portal-build-test--git "branch" "stable")
+    (should (equal (portal-version) "Portal 1.0 (main)"))
+    (portal-build-test--commit "Second")
+    (should (equal (portal-version)
+                   (format "Portal 1.0, 1 commit on, %s (main)"
+                           (portal-build-test--git "rev-parse" "--short" "HEAD"))))
+    (portal-build-test--commit "Third")
+    (should (string-match-p "\\`Portal 1\\.0, 2 commits on, [0-9a-f]+ (main)\\'" (portal-version)))
+    (portal-build-test--git "switch" "-q" "stable")
+    (should (equal (portal-version) "Portal 1.0 (stable)"))
+    (portal-build-test--git "checkout" "-q" "--detach" "main")
+    (should (string-match-p "\\`Portal 1\\.0, 2 commits on, [0-9a-f]+ (not on a branch)\\'"
+                            (portal-version)))
+    ;; A header that does not match the tag names the tag.
+    (portal-build-test--write "portal.el" ";; Version: 1.1\n")
+    (should (string-match-p "\\`Portal 1\\.1, 2 commits on v1\\.0, " (portal-version)))
+    ;; Shown when typed.
+    (let (shown)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format &rest arguments) (setq shown (apply #'format format arguments)))))
+        (call-interactively #'portal-version))
+      (should (string-prefix-p "Portal 1.1" shown)))))
+
 (ert-deftest portal-build-starts-one-build-at-a-time ()
   (portal-build-test--with-root
     (let ((exec-path (portal-build-test--tools)))

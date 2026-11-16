@@ -1,9 +1,10 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Installs this copy of Portal through docs/install.md's use-package-vc example
-# into an empty HOME, then checks first use in graphical Emacs: the first
-# native command offers one build, and a fresh Emacs then opens a terminal and
-# a web view.  The installation and its build are deleted afterwards.
+# Installs this copy of Portal through docs/install.md's use-package-vc example,
+# from the branch stable of a Git copy of it, into an empty HOME, then checks
+# first use in graphical Emacs: the first native command offers one build, and
+# a fresh Emacs then opens a terminal and a web view.  The installation and its
+# build are deleted afterwards.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 # In the VM, the runner's build comes before the package's own.
