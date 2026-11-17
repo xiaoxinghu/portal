@@ -2,9 +2,10 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;; Pickers over ordinary Emacs completion.  Each candidate is one string that
-;; holds a terminal's label, project, directory and title, so any of them
-;; matches, and resolves to the buffer, whatever its name.  The optional
-;; `portal-terminal-consult' adapter reads the same choices with Consult.
+;; holds a terminal's label, the status of a Rex block's program, and its
+;; project, directory and title, so any of them matches, and resolves to the
+;; buffer, whatever its name.  The optional `portal-terminal-consult' adapter
+;; reads the same choices with Consult.
 
 (require 'cl-lib)
 (require 'portal-project)
@@ -35,21 +36,115 @@ require a match.  INITIAL is the initial input.  While it reads,
 `portal-terminal-consult-mode' replaces it; the first picker loads
 Consult for that, through `portal-terminal--reader-function'.")
 
+;;; What a Rex block's program is doing
+
+(defface portal-terminal-status-blocked '((t :inherit warning))
+  "Face of the status of a terminal whose program is blocked on you."
+  :group 'portal-terminal)
+
+(defface portal-terminal-status-error '((t :inherit error))
+  "Face of the status of a terminal whose program failed."
+  :group 'portal-terminal)
+
+(defface portal-terminal-status-done '((t :inherit success))
+  "Face of the status of a terminal whose program is done, not yet seen."
+  :group 'portal-terminal)
+
+(defface portal-terminal-status-working '((t :inherit shadow))
+  "Face of the status of a terminal whose program is working."
+  :group 'portal-terminal)
+
+(defcustom portal-terminal-status-marks
+  '((blocked . "●") (error . "✗") (done . "✓") (working . "◌"))
+  "The mark before each status word in the terminal pickers, by state.
+The states are those of `:status' in `portal-terminal-metadata'.  Change
+them for a font without these characters; a state left out has no mark."
+  :type '(alist :key-type (choice (const blocked) (const error) (const done) (const working))
+                :value-type string)
+  :group 'portal-terminal)
+
+(defcustom portal-terminal-status-message-width 60
+  "The most columns a program's message takes in a terminal picker.
+A longer message is cut short, ending in `truncate-string-ellipsis'."
+  :type 'natnum
+  :group 'portal-terminal)
+
+(defvar portal-terminal--listed-statuses (make-hash-table :test #'eq :weakness 'key)
+  "The status each terminal buffer had when it was last made a candidate.
+Its annotation tells the same story as its candidate while the list is
+open, however the program's status has changed since.")
+
+(defun portal-terminal--waiting-p (buffer)
+  "Return non-nil if terminal BUFFER's program waits for you."
+  (plist-get (plist-get (portal-terminal-metadata buffer) :status) :waiting))
+
+(defun portal-terminal--status-word (status)
+  "Return the word that names STATUS: why it is blocked, or its state."
+  (pcase (plist-get status :state)
+    ('blocked (or (plist-get status :kind) "blocked"))
+    ('error "failed")
+    (state (symbol-name state))))
+
+(defun portal-terminal--status-cells (statuses)
+  "Return the status column for STATUSES, one string each, or nil.
+Each is a mark and a word in the state's face, padded to the same width;
+a nil status gives spaces.  Without any status there is no column."
+  (when (delq nil (copy-sequence statuses))
+    (let* ((cells (mapcar (lambda (status)
+                            (and status
+                                 (let ((mark (alist-get (plist-get status :state)
+                                                        portal-terminal-status-marks))
+                                       (word (truncate-string-to-width
+                                              (portal-terminal--status-word status) 12)))
+                                   (propertize (if mark (concat mark " " word) word)
+                                               'face (intern (format "portal-terminal-status-%s"
+                                                                     (plist-get status :state)))))))
+                          statuses))
+           (width (apply #'max (mapcar #'string-width (delq nil (copy-sequence cells))))))
+      (mapcar (lambda (cell)
+                (concat "  " (or cell "")
+                        (make-string (- width (if cell (string-width cell) 0)) ?\s)))
+              cells))))
+
+(defun portal-terminal--ago (time)
+  "Return how long ago TIME, as `float-time' gives it, was, in a few words."
+  (let ((minutes (floor (- (float-time) time) 60)))
+    (cond ((< minutes 1) "just now")
+          ((< minutes 60) (format "%d min ago" minutes))
+          ((< minutes (* 24 60)) (format "%d h ago" (/ minutes 60)))
+          (t (format "%d d ago" (/ minutes (* 24 60)))))))
+
+(defun portal-terminal--status-said (status)
+  "Return what STATUS has to say beside a candidate, or nil.
+That is the program's message, cut to `portal-terminal-status-message-width',
+or, for a block that waits without one, how long ago it reported."
+  (let ((message (plist-get status :message)))
+    (cond (message (truncate-string-to-width message portal-terminal-status-message-width
+                                             nil nil t))
+          ((plist-get status :waiting) (portal-terminal--ago (plist-get status :time))))))
+
 (defun portal-terminal--candidates (buffers)
   "Return completion candidates for BUFFERS, as (STRING . BUFFER) pairs.
-Each string holds the terminal's name, project, directory and title, so
+Each string holds the terminal's name, the status of a Rex block's
+program in a column of its own, and its project, directory and title, so
 that completion matches any of them, and is unique because its name is.
-The string also carries its buffer as its `portal-terminal' property."
+The column is there when one of BUFFERS has a status: blank for the
+others.  The string also carries its buffer as its `portal-terminal'
+property."
   (let* ((data (mapcar #'portal-terminal-metadata buffers))
+         (statuses (mapcar (lambda (entry) (plist-get entry :status)) data))
+         (cells (portal-terminal--status-cells statuses))
          (projects (portal-terminal--project-names
                     (delq nil (mapcar (lambda (entry) (plist-get entry :project)) data))))
          (width (apply #'max 0 (mapcar #'string-width (mapcar #'buffer-name buffers)))))
     (cl-mapcar
-     (lambda (buffer entry)
+     (lambda (buffer entry status)
        (let ((project (alist-get (plist-get entry :project) projects nil nil #'equal))
              (title (plist-get entry :title)))
+         (puthash buffer status portal-terminal--listed-statuses)
          (cons (propertize
                 (concat (truncate-string-to-width (buffer-name buffer) width nil ?\s)
+                        (pop cells)
                         (propertize
                          (string-join
                           (delq nil (list "" (or project "-")
@@ -61,32 +156,44 @@ The string also carries its buffer as its `portal-terminal' property."
                          'face 'completions-annotations))
                 'portal-terminal buffer)
                buffer)))
-     buffers data)))
+     buffers data statuses)))
 
 (defun portal-terminal--annotation (buffer)
   "Return the facts about terminal BUFFER that its candidate leaves out, or nil.
-They are the program in its foreground, by its file name, and whether it
-is quick or has exited."
-  (when-let* ((entry (and (bufferp buffer) (portal-terminal-metadata buffer)))
-              (facts (delq nil (list (and (plist-get entry :program)
-                                          (file-name-nondirectory (plist-get entry :program)))
-                                     (and (plist-get entry :quick) "quick")
-                                     (and (plist-get entry :exited) "exited")))))
-    (propertize (concat "  " (string-join facts " ")) 'face 'completions-annotations)))
+They are what its program said, as its candidate's status was made, or
+how long ago a block that waits reported; then the program in its
+foreground, by its file name, and whether it is quick or has exited."
+  (when-let* ((entry (and (bufferp buffer) (portal-terminal-metadata buffer))))
+    (let ((said (portal-terminal--status-said
+                 (gethash buffer portal-terminal--listed-statuses (plist-get entry :status))))
+          (facts (delq nil (list (and (plist-get entry :program)
+                                      (file-name-nondirectory (plist-get entry :program)))
+                                 (and (plist-get entry :quick) "quick")
+                                 (and (plist-get entry :exited) "exited")))))
+      (when (or said facts)
+        (propertize (concat (and said (concat "  " said))
+                            (and facts (concat "  " (string-join facts " "))))
+                    'face 'completions-annotations)))))
 
 ;; Match any part of a candidate, as Emacs does for buffer names, so context
 ;; after the name is searchable without extra packages.  Users' overrides win.
 (add-to-list 'completion-category-defaults '(portal-terminal (styles basic substring)))
 
 (defun portal-terminal--recent (buffers)
-  "Return BUFFERS, most recently selected first and the current buffer last.
-Emacs's buffer list records a buffer when a window showing it is selected,
-unless the caller asks it not to, as previews do."
+  "Return BUFFERS in the order to offer them, the current buffer last.
+Rex blocks that wait for you come first, the one that has waited longest
+at the top, then the rest, most recently selected first.  Emacs's buffer
+list records a buffer when a window showing it is selected, unless the
+caller asks it not to, as previews do."
   (let* ((order (buffer-list))
-         (sorted (sort buffers :key (lambda (buffer) (cl-position buffer order)))))
-    (if (memq (current-buffer) sorted)
-        (append (remq (current-buffer) sorted) (list (current-buffer)))
-      sorted)))
+         (others (sort (remq (current-buffer) buffers)
+                       :key (lambda (buffer) (cl-position buffer order))))
+         (waiting (sort (seq-filter #'portal-terminal--waiting-p others)
+                        :key (lambda (buffer)
+                               (plist-get (plist-get (portal-terminal-metadata buffer) :status)
+                                          :time)))))
+    (append waiting (seq-remove (lambda (buffer) (memq buffer waiting)) others)
+            (and (memq (current-buffer) buffers) (list (current-buffer))))))
 
 (defun portal-terminal--context ()
   "Return (PROJECT . DIRECTORY) for choosing terminals from the current buffer.
@@ -110,8 +217,9 @@ Dired buffer selected last, and PROJECT is its project, or nil."
 (defun portal-terminal--completing-read (prompt terminals actions initial)
   "Read one of TERMINALS or ACTIONS with `completing-read'.
 See `portal-terminal--reader' for PROMPT, TERMINALS, ACTIONS and INITIAL.
-Candidates keep their order, in two groups, and exited or quick
-terminals are annotated.  The default is the first terminal."
+Candidates keep their order, in two groups, and are annotated with
+what a Rex block's program said and whether a terminal is quick or has
+exited.  The default is the first terminal."
   (let* ((entries (append terminals actions))
          (table (lambda (string predicate action)
                   (if (eq action 'metadata)
@@ -227,8 +335,10 @@ applies to the editing window behind it; cancelling returns to the panel."
 ;;;###autoload
 (defun portal-terminal-choose ()
   "Choose a terminal with completion and select it.
-Type any part of a terminal's name, project, directory or title; the most
-recently selected terminals come first.  The New group starts a terminal
+Type any part of a terminal's name, project, directory or title, or the
+status of a Rex block's program, such as \"question\" or \"working\".
+Rex blocks that wait for you come first, longest waiting at the top, then
+the most recently selected terminals.  The New group starts a terminal
 in the current project, or asks for its name first.
 \\<portal-terminal-choose-map>\\[portal-terminal-choose-toggle-scope] lists \
 only the current project's terminals, and back."

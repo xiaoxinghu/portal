@@ -216,9 +216,33 @@ candidate is annotated with the program in its foreground, by file name, and
 with whether it is quick or has exited. [Rex blocks'](rex.md#portals-terminal-commands)
 buffers are listed with the rest.
 
-Recently selected terminals come first; the current one comes last. `RET` on
-empty input takes the first. Order is fixed at opening; previews do not count
-as selections. `portal-terminal-next`, `-previous` and `-select-index` retain
+When a [Rex block's program says what it is doing](rex.md#what-a-blocks-program-is-doing),
+as Claude Code does, its candidate shows it in a column after the name: a mark
+and a word, the same width in every row. A blocked program shows why, such as
+`question`, `permission` or `auth`, or `blocked`; then `failed`, `done` and
+`working`. Other terminals have a blank column, so the rest of the line stays
+aligned; with no status in the list there is no column, and the list looks as
+it always has. The program's message follows in the annotation, cut to
+`portal-terminal-status-message-width` columns, or, for a block that waits
+without one, how long ago it reported:
+
+```
+*rex: work/claude*     ● question  portal  ~/portal  Clean up the task now?
+*rex: work/ken*        ✓ done      ken     ~/ken     12 min ago  zsh
+*rex: work/claude<2>*  ◌ working   portal  ~/portal  Reading slides.ts
+*terminal: portal*                 portal  ~/portal  zsh
+```
+
+The words are part of the candidate, so typing `question` or `working`
+keeps those blocks. The faces `portal-terminal-status-blocked`, `-error`,
+`-done` and `-working` inherit `warning`, `error`, `success` and `shadow`;
+`portal-terminal-status-marks` sets the marks, for a font without them.
+
+Blocks that [wait for you](rex.md#what-a-blocks-program-is-doing), blocked
+or finished and not yet seen, come first, the one that has waited longest at
+the top. Recently selected terminals follow; the current one comes last,
+waiting or not. `RET` on empty input takes the first. Order, columns and
+messages are fixed at opening; previews do not count as selections. `portal-terminal-next`, `-previous` and `-select-index` retain
 creation order.
 
 The New group starts terminals at the project root, or current directory
@@ -263,10 +287,14 @@ Enable the optional Embark adapter and project picker binding in your config:
 ```
 
 `portal-terminal-consult-mode` adds Consult preview and narrowing to pickers:
-`t` for terminals, `n` for New. `consult-buffer` and `consult-project-buffer` add
-a Terminal group, hidden until narrowing with `t` (`t SPC`, or
-`consult-narrow-key` then `t`). It contains all terminals or those assigned to
-Consult's project; the default list still shows each once as a buffer.
+`t` for terminals, `w` for the blocks that wait for you, `n` for New.
+`consult-buffer` and `consult-project-buffer` add a Terminal group, hidden until
+narrowing with `t` (`t SPC`, or `consult-narrow-key` then `t`). It contains all
+terminals or those assigned to Consult's project; the default list still shows
+each once as a buffer. `consult-buffer` adds a Waiting group too, hidden until
+narrowing with `w`: the Rex blocks that wait for you, longest waiting first,
+so "who needs me" is `w SPC`. In a picker, `w` keeps those of the terminals
+it lists.
 
 `M-.` previews the terminal at point in the originating window, or the editing
 window behind a quick panel. The live view moves there, even across frames,
@@ -280,9 +308,13 @@ not previewed. To preview on movement or change narrowing keys:
                    :preview-key '(:debounce 0.3 any) :narrow ?T)
 ```
 
+The Waiting group is `portal-terminal-consult-waiting-source`, customized the
+same way.
+
 `consult-buffer`'s Buffer group previews terminals like other buffers, using
-`consult-preview-key`. Marginalia replaces Portal's exited/quick notes with
-buffer mode/directory annotations.
+`consult-preview-key`. Marginalia replaces Portal's annotations in Consult's
+groups, the program's message among them, with buffer mode/directory
+annotations; the status column is part of the candidate and stays.
 
 `portal-terminal-embark-mode` keeps terminal candidates as buffers: Embark buffer
 actions work; `E` exports to Ibuffer. Live-terminal targets in any prompt,
@@ -328,7 +360,8 @@ Embark's `embark--targets`—are confined to `portal-terminal-consult.el` and
 
 `ctest --test-dir build -R terminal-choose` checks pickers using Emacs completion
 and the fake native module: recent-use order, creation-order cycling, assigned
-projects, `M-a`, New, quick panels, closed terminals and kill confirmation.
+projects, `M-a`, New, quick panels, closed terminals and kill confirmation, and
+the status column, its order and its filtering.
 `-R 'terminal-(consult|embark)'` checks adapters against the releases above,
 downloaded to `build/elpa` and hash-verified by CMake. A keyboard macro types into
 a real minibuffer, exercising Consult narrowing/preview/lookup and Embark targets,

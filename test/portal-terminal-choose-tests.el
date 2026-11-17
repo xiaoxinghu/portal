@@ -253,6 +253,117 @@ and returns what `completing-read' would."
         (should (plist-get (portal--inspect (portal-view-target)) :focused))
         (should (equal (portal-terminal--annotation quick) "  quick"))))))
 
+(defun portal-choose-test--report (buffer state &rest status)
+  "Give terminal BUFFER the STATE a Rex block's program reports, with STATUS.
+STATUS holds the other keys of `:status' in `portal-terminal-metadata'.
+It waits unless it is `working'; it arrived now unless `:time' says."
+  (with-current-buffer buffer
+    (setq portal-terminal--status
+          (append (list :state state)
+                  status
+                  (list :time (float-time) :waiting (not (eq state 'working)))))))
+
+(defun portal-choose-test--offered (command)
+  "Run COMMAND and return what its picker offered, choosing nothing.
+That is (TERMINALS COLLECTION): TERMINALS as (STRING . BUFFER), in order."
+  (let (offered)
+    (portal-choose-test--answering
+        (lambda (_prompt terminals &rest _)
+          (setq offered terminals)
+          (error "Cancelled"))
+      (should-error (funcall command)))
+    offered))
+
+(ert-deftest portal-terminal-choose-shows-what-agents-do ()
+  (portal-choose-test--environment
+    (let* ((file (current-buffer))
+           (plain (portal-choose-test--open "one/app"))
+           (working (portal-choose-test--open "one/app"))
+           (asking (portal-choose-test--open "one/app"))
+           (done (portal-choose-test--open "two/app"))
+           (failed (portal-choose-test--open "two/app"))
+           (long (make-string 200 ?x))
+           (width (apply #'max (mapcar (lambda (buffer) (string-width (buffer-name buffer)))
+                                       (list plain working asking done failed))))
+           ;; Where the project, directory and title begin.
+           (context (lambda (string)
+                      (string-match (rx "  " (or "one" "two") "/app  ") string width))))
+      (portal-fake-native-report (buffer-local-value 'portal-view--target done) :program "zsh")
+      ;; With no status anywhere, the list has no column for one.
+      (switch-to-buffer file)
+      (let ((offered (portal-choose-test--offered #'portal-terminal-choose)))
+        (dolist (entry offered)
+          (should (= (funcall context (car entry)) width))))
+      ;; Three agents: one working, one asking two minutes ago, one finished
+      ;; twelve minutes ago and not looked at; and one that failed.
+      (portal-choose-test--report working 'working :message "Reading slides.ts")
+      (portal-choose-test--report asking 'blocked :kind "question"
+                                  :message "Clean up the task now?" :time (- (float-time) 120))
+      (portal-choose-test--report done 'done :time (- (float-time) 720))
+      (portal-choose-test--report failed 'error :message long :time (- (float-time) 30))
+      (switch-to-buffer plain)
+      (switch-to-buffer working)
+      (switch-to-buffer file)
+      (let* ((offered (portal-choose-test--offered #'portal-terminal-choose))
+             (strings (mapcar #'car offered))
+             (cell (lambda (buffer)
+                     (let ((string (car (rassq buffer offered))))
+                       (substring-no-properties string width (funcall context string))))))
+        ;; Those that wait first, longest waiting at the top; then the rest,
+        ;; most recently selected first.
+        (should (equal (mapcar #'cdr offered) (list done asking failed working plain)))
+        ;; Each marked in a column of one width after the name; a plain
+        ;; terminal's is blank, and its context in line with the rest.
+        (should (equal (mapcar cell (list asking done working failed plain))
+                       '("  ● question" "  ✓ done    " "  ◌ working "
+                         "  ✗ failed  " "            ")))
+        (let ((string (car (rassq asking offered))))
+          (should (eq (get-text-property (string-search "●" string) 'face string)
+                      'portal-terminal-status-blocked)))
+        (should (eq (get-text-property (string-search "✓" (car (rassq done offered))) 'face
+                                       (car (rassq done offered)))
+                    'portal-terminal-status-done))
+        (should (eq (face-attribute 'portal-terminal-status-done :inherit) 'success))
+        ;; The message beside it, cut short; how long ago, for a waiting
+        ;; block without one; then the program, as before.
+        (should (equal (portal-terminal--annotation asking) "  Clean up the task now?"))
+        (should (equal (portal-terminal--annotation working) "  Reading slides.ts"))
+        (should (equal (portal-terminal--annotation done) "  12 min ago  zsh"))
+        (should (= (string-width (portal-terminal--annotation failed))
+                   (+ 2 portal-terminal-status-message-width)))
+        (should-not (portal-terminal--annotation plain))
+        ;; Typing a status word keeps those it names.
+        (let* ((completion-styles '(basic))
+               (table (lambda (string predicate action)
+                        (if (eq action 'metadata)
+                            '(metadata (category . portal-terminal))
+                          (complete-with-action action strings string predicate))))
+               (matches (lambda (input)
+                          (let ((found (completion-all-completions input table nil
+                                                                   (length input))))
+                            (when (consp found) (setcdr (last found) nil))
+                            (mapcar (lambda (string) (cdr (assoc string offered))) found)))))
+          (should (equal (funcall matches "question") (list asking)))
+          (should (equal (funcall matches "working") (list working))))
+        ;; The list stays as it was opened: the annotation too.
+        (portal-choose-test--report asking 'working :message "Cleaning up")
+        (should (equal (portal-terminal--annotation asking) "  Clean up the task now?")))
+      ;; The current terminal comes last, waiting or not.
+      (switch-to-buffer done)
+      (should (equal (mapcar #'cdr (portal-choose-test--offered #'portal-terminal-choose))
+                     (list failed working plain asking done)))
+      ;; The marks are the user's to change; a blocked block without a kind
+      ;; says so.
+      (portal-choose-test--report asking 'blocked)
+      (let* ((portal-terminal-status-marks '((blocked . "!")))
+             (offered (portal-choose-test--offered #'portal-terminal-choose)))
+        (should (equal (mapcar (lambda (buffer)
+                                 (let ((string (car (rassq buffer offered))))
+                                   (substring-no-properties string width
+                                                            (funcall context string))))
+                               (list asking failed plain))
+                       '("  ! blocked" "  failed   " "           ")))))))
+
 (ert-deftest portal-terminal-select-reads-live-terminals-only ()
   (portal-choose-test--environment
     (let* ((file (current-buffer))
