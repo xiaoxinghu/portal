@@ -68,6 +68,13 @@ Events of one connection arrive in the order the server sent them, their
 `:seq' rising by one, and every function sees one event before any sees
 the next.  An event of one session is wrapped again, as a
 \"session_event\" whose payload names the session and holds the event.
+
+The events are those of the server, of its clients and of every session
+and every block on it, shown or not: a block's terminal reports its
+title, its size and what its program says it is doing as they change,
+so with programs busy in several blocks there is an event every few
+seconds, and a block being resized sends one per resize.  A function
+here must be cheap.
 The functions run from a process filter, or inside a `portal-rex-call'
 that was waiting when the event arrived, in both cases with quitting
 inhibited, so they must never prompt.  One that calls `portal-rex-call'
@@ -116,6 +123,14 @@ not back: the loss is known before it is handled, behind earlier events.")
         :documentation "While the connection comes back after a loss, the blocks it had
 then, as (BLOCK-ID . NAME): those that are gone once the buffers match
 the server again are named in one message.")
+  (statuses (make-hash-table :test #'equal)
+            :documentation "Each block's status records, by block ID, as (SEQ . RECORDS).
+RECORDS are (ID RECORD TIME), the root's first: the record as the server
+gave it, and when Emacs heard of it.  SEQ is that of the server's answer
+they were last taken from, or nil: an event no later is in them.")
+  (status-asked nil
+                :documentation "The IDs of the blocks asked for their status since attaching,
+or t once the server has said it has no such method.")
   (reason nil :documentation "Why it ended, once it has, when anything said."))
 
 (defvar portal-rex--connections nil
@@ -716,6 +731,8 @@ the block needs, and has no view."
           (portal-rex--describe-block)
           (puthash block-id buffer (portal-rex-connection-blocks connection))
           (setq ready t))
+    ;; What its program said before it had a buffer.
+    (portal-rex--update-status connection block-id)
       (unless ready
         (let ((portal-rex--killing t)) (kill-buffer buffer))))
     ;; A window that showed the placeholder shows the block's screen now.
@@ -750,6 +767,7 @@ The block has gone, or the connection has: nothing asks, whatever is on
 `kill-buffer-query-functions', and nothing is said to the server."
   (let ((buffer (gethash block-id (portal-rex-connection-blocks connection))))
     (remhash block-id (portal-rex-connection-blocks connection))
+    (remhash block-id (portal-rex-connection-statuses connection))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (let ((portal-rex--killing t)
@@ -816,6 +834,7 @@ was killed by hand."
              ((not (equal label (buffer-local-value 'portal-rex--block-label buffer)))
               (portal-rex--rename-buffer buffer label)))))
         (portal-rex--untangle-names connection session-id)
+        (portal-rex--ask-statuses connection session-id)
         ;; A placeholder whose block was not listed waits for nothing.
         (portal-rex--give-up connection (lambda (record)
                                           (equal (alist-get 'session record) session-id)))))
@@ -870,6 +889,8 @@ An event of a session that the connection does not know is left alone:
                       (portal-rex-buffers connection session-id))))
              ((or "block_created" "session_view_changed")
               (portal-rex--list-blocks connection session-id))
+             ("block_event"
+              (portal-rex--status-event connection changed (plist-get event :seq)))
              ("block_closed"
               (when-let* ((block-id (plist-get changed :block_id)))
                 (portal-rex--kill-buffer connection block-id)
@@ -1242,6 +1263,9 @@ not again until it has left."
   (dolist (buffer (portal-view-buffers 'terminal))
     (with-current-buffer buffer
       (when portal-rex-block-connection
+        ;; What its program finished is seen now.
+        (when (portal-rex--in-use-p)
+          (portal-rex--update-status portal-rex-block-connection portal-rex-block-id))
         ;; A view that has opened but shows no block yet takes nothing:
         ;; it is taken once it shows one, as `portal-rex--show' looks again.
         (setq portal-rex--in-use
@@ -1275,6 +1299,234 @@ not again until it has left."
     (remove-hook 'portal-view-moved-hook #'portal-rex--claim-used)
     (remove-function after-focus-change-function #'portal-rex--claim-used)))
 
+;;; What a block's program is doing
+
+;; A program in a block can say what it is doing (OSC 7501, Rex's Program
+;; Status Protocol): working, with a line of text, blocked on a question
+;; or a permission, done, or failed.  Claude Code does, unasked.  The
+;; server keeps the latest report as the block's record, and the
+;; program may keep child records beside its root one, as Claude Code
+;; does for each subagent and background shell.  Each block is asked for
+;; its records once it has a buffer, and again after a loss, as nothing
+;; is replayed; its events keep them current from then on, for every
+;; block, shown or not.  The server drops a record that has gone stale
+;; itself: Portal applies no rule of its own.  `done' stays until the
+;; program reports again, so whether it has been seen is Emacs's to say.
+
+(defvar portal-rex-status-functions nil
+  "Abnormal hook run whenever what a Rex block's program is doing changes.
+Each function is called with the block's buffer, its old status and its
+new one, each a plist as `portal-terminal-metadata' gives as `:status',
+or nil.  It runs when a finished block's report becomes seen too, as its
+status becomes nil.  Changes arrive in the order they happened, and
+every function sees one before any sees the next, wherever they came
+from: one that calls `portal-rex-call' gets its answer, and the changes
+meanwhile run once it has returned.  The functions run with quitting
+inhibited, as those of `portal-rex-event-functions' do, so they must
+never prompt.")
+
+(defvar portal-rex--status-changes nil
+  "The status changes not yet given to `portal-rex-status-functions', oldest first.
+Each is (BUFFER OLD NEW).")
+
+(defvar portal-rex--announcing nil
+  "Non-nil while `portal-rex-status-functions' runs for a change.")
+
+(defvar-local portal-rex--used-at 0
+  "When this block's buffer was last in the pane in use, as `float-time' gives it.
+A report of `done' or `error' that arrived after it is unseen.")
+(put 'portal-rex--used-at 'permanent-local t)
+
+(defconst portal-rex--states '(("blocked" . blocked) ("error" . error) ("done" . done)
+                               ("working" . working))
+  "The states of a record that make a status, most urgent first.")
+
+(defun portal-rex--plain (text)
+  "Return TEXT as plain text to show, or nil if there is none.
+A program wrote it: control characters become spaces, and the marks that
+override or isolate the direction of text are taken out."
+  (when (stringp text)
+    (let ((plain (string-trim
+                  (replace-regexp-in-string
+                   (rx (any (#x61c . #x61c) (#x200e . #x200f) (#x202a . #x202e)
+                            (#x2066 . #x2069)))
+                   ""
+                   (replace-regexp-in-string (rx (any (0 . 31) (127 . 159))) " " text t t)
+                   t t))))
+      (and (not (string-empty-p plain)) plain))))
+
+(defun portal-rex--record-id (record)
+  "Return RECORD's ID, \"\" for the root."
+  (let ((id (plist-get record :id)))
+    (if (stringp id) id "")))
+
+(defun portal-rex--same-report (old new)
+  "Return non-nil if the records OLD and NEW are the same report.
+A record heard of again, as after a loss, keeps when it arrived."
+  (let ((stamp (plist-get new :updated_at)))
+    (if (stringp stamp)
+        (and (equal stamp (plist-get old :updated_at))
+             (equal (plist-get old :state) (plist-get new :state)))
+      (equal old new))))
+
+(defun portal-rex--keep-record (records id record &optional before)
+  "Return RECORDS with RECORD as the record ID, the root's first.
+A record that is the same report as the one of ID in BEFORE, by default
+RECORDS, keeps the time that one arrived."
+  (let* ((old (assoc id records))
+         (known (assoc id (or before records)))
+         (time (if (and known (portal-rex--same-report (nth 1 known) record))
+                   (nth 2 known)
+                 (float-time)))
+         (new (list id record time)))
+    (cond
+     (old (cl-substitute new old records :test #'eq))
+     ((string-empty-p id) (cons new records))
+     (t (append records (list new))))))
+
+(defun portal-rex--drop-records (records ids)
+  "Return RECORDS without those of IDS and their children.
+A child's ID is its parent's, a slash and more; every record is the root's."
+  (cl-remove-if (lambda (entry)
+                  (seq-some (lambda (id)
+                              (or (string-empty-p id)
+                                  (equal (car entry) id)
+                                  (string-prefix-p (concat id "/") (car entry))))
+                            ids))
+                records))
+
+(defun portal-rex--status-event (connection fields seq)
+  "Take what a block's event, with FIELDS, says of its program's status.
+The event came on CONNECTION with SEQ.  Any other event is ignored.  One
+that the server's last answer for the block already held is too."
+  (let* ((name (plist-get fields :name))
+         (block-id (plist-get fields :block_id))
+         (payload (plist-get fields :payload))
+         (statuses (portal-rex-connection-statuses connection))
+         (entry (and (stringp block-id) (gethash block-id statuses))))
+    (when (and (member name '("program_status_changed" "program_status_removed"))
+               (equal (plist-get fields :creator_name) "com.superlogical.terminal")
+               (stringp block-id) (consp payload)
+               (not (and entry (car entry) (integerp seq) (<= seq (car entry)))))
+      (unless entry
+        (setq entry (list nil))
+        (puthash block-id entry statuses))
+      (if (equal name "program_status_changed")
+          (let ((record (plist-get payload :record))
+                (id (plist-get payload :id)))
+            (when (consp record)
+              (setcdr entry (portal-rex--keep-record (cdr entry)
+                                                     (if (stringp id) id
+                                                       (portal-rex--record-id record))
+                                                     record))))
+        (let ((ids (plist-get payload :ids)))
+          (when (vectorp ids)
+            (setcdr entry (portal-rex--drop-records (cdr entry)
+                                                    (seq-filter #'stringp ids))))))
+      (portal-rex--update-status connection block-id))))
+
+(defun portal-rex--ask-statuses (connection session-id)
+  "Ask CONNECTION's server for the status of SESSION-ID's blocks not asked yet.
+Only the blocks with buffers are asked, once since attaching.  Nothing
+waits for the answers."
+  (let ((asked (portal-rex-connection-status-asked connection)))
+    (unless (or (eq asked t) (not (portal-rex-live-p connection)))
+      (dolist (buffer (portal-rex-buffers connection session-id))
+        (let ((block-id (buffer-local-value 'portal-rex-block-id buffer)))
+          (unless (member block-id asked)
+            (push block-id asked)
+            (portal-rex--request
+             connection "com.superlogical.terminal.program_status"
+             (list :session_id session-id :block_id block-id :args nil)
+             (lambda (response) (portal-rex--status-answer connection block-id response))))))
+      (setf (portal-rex-connection-status-asked connection) asked))))
+
+(defun portal-rex--status-answer (connection block-id response)
+  "Take the records of the block BLOCK-ID that RESPONSE gives, on CONNECTION.
+A server without the method leaves every block without a status, saying
+nothing, and is not asked again until Emacs attaches again.  Any other
+failure leaves this block's records as they were."
+  (let ((failure (plist-get response :error))
+        (records (plist-get (plist-get response :payload) :records)))
+    (cond
+     ((equal (plist-get failure :code) "method_not_found")
+      (setf (portal-rex-connection-status-asked connection) t))
+     (failure)
+     ((portal-rex-block-buffer connection block-id)
+      (let* ((statuses (portal-rex-connection-statuses connection))
+             (old (cdr (gethash block-id statuses)))
+             (kept nil))
+        (seq-doseq (record (if (vectorp records) records []))
+          (when (consp record)
+            (setq kept (portal-rex--keep-record kept (portal-rex--record-id record) record
+                                                old))))
+        (puthash block-id (cons (plist-get response :seq) kept) statuses)
+        (portal-rex--update-status connection block-id))))))
+
+(defun portal-rex--status (records used-at)
+  "Return the status that RECORDS make, for a buffer last used at USED-AT.
+That is the most urgent record's: `blocked', `error', `done' or
+`working', with its kind, message, app and time; a `done' or `error'
+that arrived by USED-AT counts as nothing, and so do `idle' and any
+other state.  Nil without one."
+  (let (best rank)
+    (pcase-dolist (`(,_id ,record ,time) records)
+      (let* ((state (cdr (assoc (plist-get record :state) portal-rex--states)))
+             (place (and state (cl-position state portal-rex--states :key #'cdr))))
+        (when (and place (or (null rank) (< place rank))
+                   (not (and (memq state '(done error)) (<= time used-at))))
+          (setq best (list state record time) rank place))))
+    (when best
+      (pcase-let ((`(,state ,record ,time) best))
+        (list :state state
+              :kind (portal-rex--plain (plist-get record :kind))
+              :message (portal-rex--plain (plist-get record :msg))
+              :app (portal-rex--plain (plist-get record :app))
+              :time time
+              :waiting (not (eq state 'working)))))))
+
+(defun portal-rex--update-status (connection block-id)
+  "Give the buffer of CONNECTION's block BLOCK-ID the status its records make.
+A buffer in the pane in use has seen what it reports.  When the status
+changes, `portal-rex-status-functions' runs."
+  (when-let* ((buffer (portal-rex-block-buffer connection block-id)))
+    (with-current-buffer buffer
+      (when (portal-rex--in-use-p)
+        (setq portal-rex--used-at (float-time)))
+      (let ((old portal-terminal--status)
+            (new (portal-rex--status
+                  (cdr (gethash block-id (portal-rex-connection-statuses connection)))
+                  portal-rex--used-at)))
+        (unless (equal old new)
+          (setq portal-terminal--status new)
+          (portal-rex--announce buffer old new))))))
+
+(defun portal-rex--announce (buffer old new)
+  "Run `portal-rex-status-functions' for BUFFER's change from OLD to NEW, in turn.
+A change made while the functions run for another, as when one of them
+waits for the server, runs once they have all seen that one."
+  (setq portal-rex--status-changes
+        (nconc portal-rex--status-changes (list (list buffer old new))))
+  (portal-rex--announce-waiting))
+
+(defun portal-rex--announce-waiting ()
+  "Run `portal-rex-status-functions' for each change waiting, oldest first.
+Unless they are running already: then they get to these after."
+  (unless portal-rex--announcing
+    (let ((portal-rex--announcing t)
+          (inhibit-quit t)
+          finished)
+      (unwind-protect
+          (progn
+            (while-let ((change (pop portal-rex--status-changes)))
+              (when (buffer-live-p (car change))
+                (apply #'portal-rex--run #'run-hook-with-args 'portal-rex-status-functions
+                       change)))
+            (setq finished t))
+        ;; Left another way, as from the debugger: the rest run soon.
+        (unless finished
+          (run-at-time 0 nil #'portal-rex--announce-waiting))))))
+
 ;;; Connecting
 
 (defun portal-rex--attached (connection response)
@@ -1295,10 +1547,15 @@ Each session is asked for its blocks, which makes their buffers."
       (setf (portal-rex-connection-held connection) nil
             (portal-rex-connection-sessions connection) (if (vectorp sessions) sessions [])
             (portal-rex-connection-state connection) 'ready
+            ;; Nothing is replayed after a loss, and a new attachment counts
+            ;; its events from 1: each block is asked again.
+            (portal-rex-connection-status-asked connection) nil
             (portal-rex-connection-inbox connection)
             (nconc (cl-delete-if-not (lambda (event) (> (or (plist-get event :seq) 0) seq))
                                      held)
                    (portal-rex-connection-inbox connection)))
+      (maphash (lambda (_block-id entry) (setcar entry nil))
+               (portal-rex-connection-statuses connection))
       ;; Back after a loss: the blocks of sessions that went, as on a
       ;; server that restarted, go too.
       (dolist (buffer (portal-rex-buffers connection))
@@ -1318,7 +1575,9 @@ Each session is asked for its blocks, which makes their buffers."
   "Ask CONNECTION's server, which has welcomed it, for every session's events.
 The answer, to `portal-rex--attached', makes the connection ready."
   (setf (portal-rex-connection-state connection) 'attaching)
-  (portal-rex--request connection "session.attach_all" '(:event_scope "session")
+  ;; Every block's events, shown or not, for what its program says it is
+  ;; doing.  Attaching to each session instead would join it as a client.
+  (portal-rex--request connection "session.attach_all" '(:event_scope "all")
                        (lambda (response) (portal-rex--attached connection response))))
 
 (defun portal-rex--disconnect-all ()

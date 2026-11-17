@@ -87,7 +87,7 @@ Connections that BODY leaves are closed, and none may remain."
         (should (stringp (plist-get (plist-get hello :client) :version))))
       (should (equal (portal-fake-rex-request server "session.attach_all")
                      '(:type "request" :id "1" :method "session.attach_all"
-                       :payload (:event_scope "session"))))
+                       :payload (:event_scope "all"))))
       (should (portal-rex-live-p connection))
       (should (equal (portal-rex-connections) (list connection)))
       (should (equal (plist-get (portal-rex-connection-welcome connection) :api_revision) 12))
@@ -510,6 +510,7 @@ arrives as C-g does, by `quit-flag', the first time NATIVE is called."
       ;; The server may never have seen that one: it was closed as it dialed.
       (should-not portal-rex--connections)
       (let ((connection (portal-rex-connect socket)))
+        (portal-rex-tests--settle connection)
         (portal-fake-rex-command server :silent "session.view")
         (should (eq (portal-rex-tests--quitting
                      'portal--rex-request
@@ -753,10 +754,13 @@ arrives as C-g does, by `quit-flag', the first time NATIVE is called."
                                       :event (list :type type :payload fields)))))
 
 (defun portal-rex-tests--settle (connection)
-  "Handle what CONNECTION's server has sent, and the lists of blocks that asks for."
+  "Handle what CONNECTION's server has sent, and the lists of blocks that asks for.
+The status asks those lists make are answered too: the server answers in
+order."
   (portal-rex-call connection "server.version")
   (portal-rex-tests--until connection
-                           (lambda () (null (portal-rex-connection-lists connection)))))
+                           (lambda () (null (portal-rex-connection-lists connection))))
+  (portal-rex-call connection "server.version"))
 
 (defun portal-rex-tests--names (&optional connection session)
   "Return the names of the blocks' buffers of CONNECTION and SESSION, sorted."
@@ -764,9 +768,10 @@ arrives as C-g does, by `quit-flag', the first time NATIVE is called."
                 (portal-rex-buffers connection (and session (concat "session:" session))))
         #'string<))
 
-(defun portal-rex-tests--asked (server connection)
+(defun portal-rex-tests--asked (server connection &optional statuses)
   "Return the methods that CONNECTION has asked the fake SERVER for, in order.
-Each is returned once: a later call returns those asked for since."
+Each is returned once: a later call returns those asked for since.  The
+blocks' status asks are left out, unless STATUSES."
   ;; Requests are answered in order, and reports written in order.
   (portal-rex-call connection "server.version")
   (portal-fake-rex-command server :fragment 0)
@@ -774,9 +779,12 @@ Each is returned once: a later call returns those asked for since."
                                     (portal-fake-rex-reports server))))
     (setf (portal-fake-rex-reports server)
           (cl-set-difference (portal-fake-rex-reports server) requests))
-    (remove "server.version"
-            (mapcar (lambda (report) (plist-get (plist-get report :request) :method))
-                    requests))))
+    (cl-remove-if (lambda (method)
+                    (or (equal method "server.version")
+                        (and (not statuses)
+                             (equal method "com.superlogical.terminal.program_status"))))
+                  (mapcar (lambda (report) (plist-get (plist-get report :request) :method))
+                          requests))))
 
 (defun portal-rex-tests--shell (pid &optional depth)
   "Return a process reply for a zsh block under login, its shell PID.
@@ -892,7 +900,7 @@ With no answer left, a question fails the test."
         (should-not portal-view--target)
         (should (equal (portal-terminal-metadata)
                        '(:name "*rex: fake/shell*" :project nil :directory nil :title nil
-                         :program nil :progress nil :exited nil :quick nil)))
+                         :program nil :progress nil :exited nil :quick nil :status nil)))
         (should (memq buffer (portal-terminal-buffers)))
         (should-not (memq buffer (portal-terminal-buffers default-directory)))
         (should-not (memq buffer (portal-view-buffers)))
@@ -953,7 +961,7 @@ With no answer left, a question fails the test."
             (should (equal (portal-terminal-metadata)
                            (list :name "*rex: fake/shell*" :project nil :directory directory
                                  :title "vim notes" :program "vim" :progress nil
-                                 :exited nil :quick nil)))
+                                 :exited nil :quick nil :status nil)))
             ;; A directory of this Mac becomes the buffer's, and the block's.
             (should (equal default-directory directory))
             (should (equal portal-rex-block-directory (directory-file-name directory)))
@@ -965,7 +973,7 @@ With no answer left, a question fails the test."
             (run-hooks 'portal-view-close-hook)
             (should (equal (portal-terminal-metadata)
                            (list :name "*rex: fake/shell*" :project nil :directory directory
-                                 :title nil :program nil :progress nil :exited nil :quick nil))))
+                                 :title nil :program nil :progress nil :exited nil :quick nil :status nil))))
         (delete-directory directory t)))))
 
 (ert-deftest portal-rex-buffers-follow-blocks ()
@@ -1211,10 +1219,12 @@ With no answer left, a question fails the test."
            (second (portal-rex-tests--connect right))
            (refuse (lambda () (not portal-rex-block-id)))
            (requests (lambda (server)
-                       (mapcar (lambda (report)
-                                 (plist-get (plist-get report :request) :method))
-                               (cl-remove-if-not (lambda (report) (plist-member report :request))
-                                                 (portal-fake-rex-reports server))))))
+                       (remove "com.superlogical.terminal.program_status"
+                               (mapcar (lambda (report)
+                                         (plist-get (plist-get report :request) :method))
+                                       (cl-remove-if-not
+                                        (lambda (report) (plist-member report :request))
+                                        (portal-fake-rex-reports server)))))))
       ;; Two servers may both have a block:1.
       (should (equal (portal-rex-tests--names first) '("*rex: left/one*" "*rex: left/two*")))
       (should (equal (portal-rex-tests--names second) '("*rex: right/one*")))
@@ -2658,6 +2668,325 @@ in its order, giving the frame TABS where its frameset would."
           (portal-rex--restore))
         (should-not portal-rex--connections)
         (should (string-prefix-p "No Rex server is running" (portal-rex-tests--said)))))))
+
+;;; What a block's program is doing
+
+(defun portal-rex-tests--report (server block id &rest record)
+  "Make the fake SERVER's BLOCK report RECORD as its record ID, \"\" for the root."
+  (portal-fake-rex-command server :block_event block :name "program_status_changed"
+                           :payload (list :id id :record record :reason "report")))
+
+(defun portal-rex-tests--clear (server block &rest ids)
+  "Make the fake SERVER's BLOCK drop its records IDS, as a program clearing them."
+  (portal-fake-rex-command server :block_event block :name "program_status_removed"
+                           :payload (list :ids (vconcat ids) :reason "clear")))
+
+(defun portal-rex-tests--status (buffer)
+  "Return BUFFER's status, as its metadata gives it, without its time.
+BUFFER is a buffer or its name."
+  (let ((status (plist-get (portal-terminal-metadata (get-buffer buffer)) :status)))
+    (cl-loop for (key value) on status by #'cddr
+             unless (eq key :time) append (list key value))))
+
+(defmacro portal-rex-tests--changes (connection &rest body)
+  "Run BODY, let CONNECTION handle what it brings, and return the status changes.
+Each is (BUFFER-NAME OLD-STATE NEW-STATE NEW-MESSAGE), oldest first, from
+`portal-rex-status-functions'."
+  (declare (indent 1))
+  `(let* (changes
+          (portal-rex-status-functions
+           (list (lambda (buffer old new)
+                   (push (list (buffer-name buffer) (plist-get old :state)
+                               (plist-get new :state) (plist-get new :message))
+                         changes)))))
+     ,@body
+     ;; The server answers after the events it sent before, handled in order.
+     (portal-rex-call ,connection "server.version")
+     (nreverse changes)))
+
+(ert-deftest portal-rex-status-comes-from-the-first-ask ()
+  ;; What the server kept before Emacs connected: an agent asking a
+  ;; question, with a background shell running, in one block, and nothing
+  ;; in the other.
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "claude")
+                              (portal-rex-tests--block "2" "shell"))
+    (portal-rex-tests--report server "block:1" "" :state "blocked" :kind "question"
+                              :app "claude-code" :msg "answer: Clean up?\e[31m\n now‮"
+                              :updated_at "2026-11-17T20:13:05+13:00")
+    (portal-rex-tests--report server "block:1" "b26" :state "working" :app "claude-code"
+                              :title "Pause ‮in the background"
+                              :updated_at "2026-11-17T20:13:06+13:00")
+    (let* ((before (float-time))
+           (connection (portal-rex-tests--connect server))
+           (claude (portal-rex-block-buffer connection "block:1"))
+           (shell (portal-rex-block-buffer connection "block:2")))
+      ;; Connecting does not wait for the answers.
+      (should (equal (plist-get (portal-fake-rex-request
+                                 server "com.superlogical.terminal.program_status")
+                                :payload)
+                     '(:session_id "session:a" :block_id "block:1" :args nil)))
+      (portal-rex-tests--until connection
+                               (lambda () (plist-get (portal-terminal-metadata claude) :status)))
+      ;; The most urgent record's, its text plain.
+      (should (equal (portal-rex-tests--status claude)
+                     '(:state blocked :kind "question" :message "answer: Clean up? [31m  now"
+                       :app "claude-code" :waiting t)))
+      (should (<= before (plist-get (plist-get (portal-terminal-metadata claude) :status) :time)
+                  (float-time)))
+      (should-not (plist-get (portal-terminal-metadata shell) :status))
+      ;; Each block once.
+      (should (equal (portal-rex-tests--asked server connection t)
+                     '("session.attach_all" "session.list_blocks"
+                       "com.superlogical.terminal.program_status")))
+      ;; A block made later is asked once it has a buffer.
+      (portal-rex-tests--report server "block:3" "" :state "done" :app "claude-code")
+      (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "claude")
+                                (portal-rex-tests--block "2" "shell")
+                                (portal-rex-tests--block "3" "later"))
+      (portal-rex-tests--session-event server "a" "block_created" :block_id "block:3")
+      (portal-rex-tests--settle connection)
+      (portal-rex-tests--until
+       connection (lambda () (portal-rex-tests--status "*rex: work/later*")))
+      (should (equal (portal-rex-tests--status "*rex: work/later*")
+                     '(:state done :kind nil :message nil :app "claude-code" :waiting t)))
+      (should (equal (portal-rex-tests--asked server connection t)
+                     '("session.list_blocks" "com.superlogical.terminal.program_status"))))))
+
+(ert-deftest portal-rex-status-follows-every-blocks-events ()
+  ;; A Claude Code turn, as the spike recorded one, in a block no window
+  ;; has shown: Emacs has joined no session, and hears it all the same.
+  (portal-rex-tests--with (server)
+    (let* ((connection (portal-rex-tests--connect server))
+           (buffer (portal-rex-block-buffer connection "block:fake-1"))
+           (name (buffer-name buffer))
+           (stamp 0)
+           (report (lambda (id &rest record)
+                     (apply #'portal-rex-tests--report server "block:fake-1" id
+                            :app "claude-code"
+                            :updated_at (format "2026-11-17T20:13:%02d+13:00" (cl-incf stamp))
+                            record)))
+           heard
+           (portal-rex-event-functions
+            (list (lambda (_connection event)
+                    (push (plist-get (plist-get (plist-get (plist-get event :payload) :payload)
+                                                :event)
+                                     :payload)
+                          heard)))))
+      (portal-rex-tests--settle connection)
+      (should-not (portal-rex-tests--status buffer))
+      (should (equal (portal-rex-tests--changes connection (funcall report "" :state "working"))
+                     `((,name nil working nil))))
+      (should (equal (portal-rex-tests--status buffer)
+                     '(:state working :kind nil :message nil :app "claude-code" :waiting nil)))
+      ;; The hook's functions see the event too.
+      (should (equal (plist-get (car heard) :name) "program_status_changed"))
+      (should (equal (portal-rex-tests--changes connection
+                       (funcall report "" :state "working" :msg "Reading slides.ts"))
+                     `((,name working working "Reading slides.ts"))))
+      ;; A background shell's record changes nothing: the root works too.
+      (should-not (portal-rex-tests--changes connection
+                    (funcall report "b26dx2o1u" :state "working" :title "Pause for 30 seconds")))
+      (should (equal (portal-rex-tests--changes connection
+                       (funcall report "" :state "blocked" :kind "permission"
+                                :msg "approve Bash: date > now.txt"))
+                     `((,name working blocked "approve Bash: date > now.txt"))))
+      (should (equal (portal-rex-tests--status buffer)
+                     '(:state blocked :kind "permission" :message "approve Bash: date > now.txt"
+                       :app "claude-code" :waiting t)))
+      (should-not (portal-rex-tests--changes connection
+                    (portal-rex-tests--clear server "block:fake-1" "b26dx2o1u")))
+      (should (equal (portal-rex-tests--changes connection (funcall report "" :state "done"))
+                     `((,name blocked done nil))))
+      (should (plist-get (plist-get (portal-terminal-metadata buffer) :status) :waiting))
+      ;; Interrupted, or a permission refused: the user was there.
+      (should (equal (portal-rex-tests--changes connection (funcall report "" :state "idle"))
+                     `((,name done nil nil))))
+      (should-not (portal-rex-tests--status buffer))
+      (should (equal (portal-rex-tests--changes connection
+                       (funcall report "" :state "error" :msg "There's an issue with the model"))
+                     `((,name nil error "There's an issue with the model"))))
+      (should (equal (portal-rex-tests--changes connection
+                       (portal-rex-tests--clear server "block:fake-1" ""))
+                     `((,name error nil nil))))
+      ;; The block's other events, and those of a block Emacs has no
+      ;; buffer for, change no status.
+      (should-not (portal-rex-tests--changes connection
+                    (portal-fake-rex-command server :block_event "block:fake-1"
+                                             :name "title_changed" :payload '(:title "claude"))
+                    (portal-fake-rex-command server :block_event "block:fake-1"
+                                             :name "size_changed" :payload '(:columns 80 :rows 24))
+                    (portal-rex-tests--report server "block:none" "" :state "blocked")))
+      (should (equal (plist-get (car heard) :block_id) "block:none")))))
+
+(ert-deftest portal-rex-status-is-the-most-urgent-record ()
+  (portal-rex-tests--with (server)
+    (let* ((connection (portal-rex-tests--connect server))
+           (buffer (portal-rex-block-buffer connection "block:fake-1"))
+           (state (lambda () (plist-get (portal-rex-tests--status buffer) :state))))
+      (portal-rex-tests--report server "block:fake-1" "" :state "working" :msg "root")
+      (portal-rex-tests--report server "block:fake-1" "a" :state "done")
+      (portal-rex-tests--report server "block:fake-1" "a/b" :state "error" :msg "child failed")
+      (portal-rex-tests--report server "block:fake-1" "c" :state "blocked" :kind "auth" :msg "sign in")
+      (portal-rex-tests--settle connection)
+      (should (equal (portal-rex-tests--status buffer)
+                     '(:state blocked :kind "auth" :message "sign in" :app nil :waiting t)))
+      (portal-rex-tests--clear server "block:fake-1" "c")
+      (portal-rex-tests--settle connection)
+      (should (equal (plist-get (portal-rex-tests--status buffer) :message) "child failed"))
+      ;; A record takes its children with it.
+      (portal-rex-tests--clear server "block:fake-1" "a")
+      (portal-rex-tests--settle connection)
+      (should (equal (portal-rex-tests--status buffer)
+                     '(:state working :kind nil :message "root" :app nil :waiting nil)))
+      ;; Of two as urgent, the root's.
+      (portal-rex-tests--report server "block:fake-1" "d" :state "working" :msg "child")
+      (portal-rex-tests--settle connection)
+      (should (equal (plist-get (portal-rex-tests--status buffer) :message) "root"))
+      ;; A state no program should send counts for nothing.
+      (portal-rex-tests--report server "block:fake-1" "" :state "bogus")
+      (portal-rex-tests--clear server "block:fake-1" "d")
+      (portal-rex-tests--settle connection)
+      (should-not (funcall state))
+      ;; The server's answer is what it keeps: the same, asked again.
+      (portal-rex-tests--report server "block:fake-1" "e" :state "done")
+      (setf (portal-rex-connection-status-asked connection) nil)
+      (portal-rex--ask-statuses connection "session:fake-1")
+      (portal-rex-tests--settle connection)
+      (should (eq (funcall state) 'done)))))
+
+(ert-deftest portal-rex-status-functions-see-each-change-in-turn ()
+  ;; The first ask's answer changes the status outside any event, and its
+  ;; first hook function waits for the server meanwhile, as the event
+  ;; hook's may: the event that came after the answer is a change every
+  ;; function sees after that one.
+  (portal-rex-tests--with (server)
+    (portal-rex-tests--report server "block:fake-1" "" :state "blocked" :updated_at "1")
+    (portal-fake-rex-command
+     server :after "com.superlogical.terminal.program_status"
+     :then [(:block_event "block:fake-1" :name "program_status_changed"
+                          :payload (:id "" :record (:state "working" :updated_at "2")
+                                    :reason "report"))])
+    (let* (seen connection called
+           (portal-rex-status-functions
+            (list (lambda (_buffer old new)
+                    (push (list 'first (plist-get old :state) (plist-get new :state)) seen)
+                    (unless called
+                      (setq called t)
+                      (should (portal-rex-call connection "server.version"))))
+                  (lambda (_buffer old new)
+                    (push (list 'second (plist-get old :state) (plist-get new :state)) seen)))))
+      (setq connection (portal-rex-tests--connect server))
+      (portal-rex-tests--until connection (lambda () (= (length seen) 4)))
+      (should (equal (reverse seen)
+                     '((first nil blocked) (second nil blocked)
+                       (first blocked working) (second blocked working)))))))
+
+(ert-deftest portal-rex-a-finished-block-waits-until-its-buffer-is-used ()
+  ;; Batch Emacs shows no view: the pane in use is played here, and the
+  ;; graphical suites drive `portal-rex--claim-used' from real windows.
+  (portal-rex-tests--with (server)
+    (let* ((connection (portal-rex-tests--connect server))
+           (buffer (portal-rex-block-buffer connection "block:fake-1"))
+           (name (buffer-name buffer))
+           (stamp 0)
+           (report (lambda (&rest record)
+                     (apply #'portal-rex-tests--report server "block:fake-1" ""
+                            :updated_at (format "2026-11-17T20:13:%02d+13:00" (cl-incf stamp))
+                            record)))
+           (state (lambda () (plist-get (portal-rex-tests--status buffer) :state)))
+           in-use)
+      (cl-letf (((symbol-function 'portal-view-buffers) (lambda (&rest _) (list buffer)))
+                ((symbol-function 'portal-rex--in-use-p)
+                 (lambda () (and in-use (eq (current-buffer) buffer))))
+                ((symbol-function 'portal--rex-take) #'ignore))
+        (funcall report :state "working")
+        (portal-rex-tests--settle connection)
+        (should (equal (portal-rex-tests--changes connection (funcall report :state "done"))
+                       `((,name working done nil))))
+        ;; Looking elsewhere sees nothing.
+        (should-not (portal-rex-tests--changes connection (portal-rex--claim-used)))
+        (should (eq (funcall state) 'done))
+        ;; Using the buffer sees it, once.
+        (setq in-use t)
+        (should (equal (portal-rex-tests--changes connection (portal-rex--claim-used))
+                       `((,name done nil nil))))
+        (should-not (portal-rex-tests--changes connection (portal-rex--claim-used)))
+        ;; While it is in use, a finished turn is seen as it arrives.
+        (should (equal (portal-rex-tests--changes connection
+                         (funcall report :state "working")
+                         (funcall report :state "done"))
+                       `((,name nil working nil) (,name working nil nil))))
+        ;; A block that asks waits, seen or not.
+        (should (equal (portal-rex-tests--changes connection
+                         (funcall report :state "blocked" :kind "question" :msg "Clean up?"))
+                       `((,name nil blocked "Clean up?"))))
+        (should (plist-get (plist-get (portal-terminal-metadata buffer) :status) :waiting))
+        ;; A failure while it is not in use waits, as asked again after a
+        ;; loss, until the buffer is used; the same report asked again
+        ;; after that stays seen.
+        (setq in-use nil)
+        (funcall report :state "error" :msg "API error")
+        (dotimes (_ 2)
+          (portal-rex-tests--settle connection)
+          (should (eq (funcall state) 'error))
+          (setf (portal-rex-connection-status-asked connection) nil)
+          (portal-rex--ask-statuses connection "session:fake-1"))
+        (setq in-use t)
+        (portal-rex--claim-used)
+        (setq in-use nil)
+        (should-not (portal-rex-tests--changes connection
+                      (setf (portal-rex-connection-status-asked connection) nil)
+                      (portal-rex--ask-statuses connection "session:fake-1")))
+        (should-not (funcall state))))))
+
+(ert-deftest portal-rex-status-on-a-server-that-cannot-say ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")
+                                               (:session_id "session:b" :label "play")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api"))
+    (portal-rex-tests--blocks server "b" (portal-rex-tests--block "2" "shell"))
+    (portal-rex-tests--report server "block:1" "" :state "done")
+    (portal-rex-tests--report server "block:2" "" :state "done")
+    ;; One block's ask fails: the other has its status, and the first
+    ;; follows its events from then on.  Nothing is said.
+    (portal-fake-rex-command server :after "com.superlogical.terminal.program_status"
+                             :then [(:error "com.superlogical.terminal.program_status"
+                                            :code "internal" :message "busy" :status 500)])
+    (let* ((said nil)
+           (connection nil))
+      (setq said (portal-rex-tests--messages
+                   (setq connection (portal-rex-tests--connect server))
+                   (portal-rex-tests--settle connection)))
+      (should (equal said ""))
+      (should (equal (mapcar (lambda (buffer) (plist-get (portal-rex-tests--status buffer) :state))
+                             (list "*rex: work/api*" "*rex: play/shell*"))
+                     '(done nil)))
+      (portal-rex-tests--report server "block:2" "" :state "working")
+      (portal-rex-tests--settle connection)
+      (should (eq (plist-get (portal-rex-tests--status "*rex: play/shell*") :state) 'working))
+      (portal-rex-disconnect connection))
+    ;; A server without the method: no block has a status, nothing is
+    ;; said, and a block made later is not asked.
+    (portal-fake-rex-command server :error "com.superlogical.terminal.program_status"
+                             :code "method_not_found"
+                             :message "method not found: \"program_status\"" :status 404)
+    (let (connection)
+      (should (equal (portal-rex-tests--messages
+                       (setq connection (portal-rex-tests--connect server))
+                       (portal-rex-tests--settle connection))
+                     ""))
+      (should-not (cl-some (lambda (buffer) (plist-get (portal-terminal-metadata buffer) :status))
+                           (portal-rex-buffers connection)))
+      (should (member "com.superlogical.terminal.program_status"
+                      (portal-rex-tests--asked server connection t)))
+      (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "api")
+                                (portal-rex-tests--block "3" "later"))
+      (portal-rex-tests--session-event server "a" "block_created" :block_id "block:3")
+      (portal-rex-tests--settle connection)
+      (should (get-buffer "*rex: work/later*"))
+      (should (equal (portal-rex-tests--asked server connection t) '("session.list_blocks"))))))
 
 (provide 'portal-rex-tests)
 ;;; portal-rex-tests.el ends here

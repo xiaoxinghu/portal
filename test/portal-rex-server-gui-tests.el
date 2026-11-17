@@ -673,5 +673,64 @@ Its one block runs cat, without a login shell."
                           '(nil :false))))
         (mapc #'portal-rex-disconnect (portal-rex-connections))))))
 
+(ert-deftest portal-rex-server-gui-a-programs-status-reaches-its-buffer ()
+  :tags '(:gui)
+  ;; What only a real server shows: what a program reports with OSC 7501
+  ;; reaching the buffer of a block no window has shown, as its status,
+  ;; from the first ask and then from the events, once per change.
+  (portal-real-rex-with (server)
+    (let* ((session (plist-get (portal-real-rex-cli server "new" "status" "--shell" "none" "--json"
+                                                    "--" "/bin/sh")
+                               :session_id))
+           (block (plist-get (aref (plist-get (portal-rex-server-gui-tests--api
+                                               server "session.list_blocks" :session_id session)
+                                              :blocks)
+                                   0)
+                             :block_id))
+           (report (lambda (fields)
+                     (portal-rex-server-gui-tests--api
+                      server "com.superlogical.terminal.write" :session_id session :block_id block
+                      :args (list :data (format "printf '\\033]7501;%s\\033\\\\'\r" fields)))))
+           (records (lambda ()
+                      (plist-get (portal-rex-server-gui-tests--api
+                                  server "com.superlogical.terminal.program_status"
+                                  :session_id session :block_id block :args nil)
+                                 :records)))
+           changes
+           (portal-rex-status-functions
+            (list (lambda (_buffer old new)
+                    (push (list (plist-get old :state) (plist-get new :state)) changes))))
+           connection buffer
+           (status (lambda () (let ((status (plist-get (portal-terminal-metadata buffer) :status)))
+                                (list (plist-get status :state) (plist-get status :message)))))
+           (until (lambda (state message)
+                    (portal-rex-server-gui-tests--wait
+                     (lambda () (equal (funcall status) (list state message)))))))
+      (unwind-protect
+          (progn
+            ;; Before Emacs connects: a question.
+            (funcall report (format "state=blocked:kind=question:app=probe:msg=%s"
+                                    (base64-encode-string "Clean up?")))
+            (portal-rex-server-gui-tests--wait (lambda () (> (length (funcall records)) 0)))
+            (setq connection (portal-rex-connect (portal-real-rex-socket server))
+                  buffer (portal-rex-block-buffer connection block))
+            (funcall until 'blocked "Clean up?")
+            (let ((status (plist-get (portal-terminal-metadata buffer) :status)))
+              (should (equal (plist-get status :kind) "question"))
+              (should (equal (plist-get status :app) "probe"))
+              (should (plist-get status :waiting)))
+            (should-not (buffer-local-value 'portal-view--target buffer))
+            ;; Then its events.
+            (funcall report (format "state=working:app=probe:msg=%s" (base64-encode-string "Reading")))
+            (funcall until 'working "Reading")
+            (funcall report "state=done:app=probe")
+            (funcall until 'done nil)
+            (should (plist-get (plist-get (portal-terminal-metadata buffer) :status) :waiting))
+            (funcall report "state=clear")
+            (funcall until nil nil)
+            (should (equal (reverse changes)
+                           '((nil blocked) (blocked working) (working done) (done nil)))))
+        (mapc #'portal-rex-disconnect (portal-rex-connections))))))
+
 (provide 'portal-rex-server-gui-tests)
 ;;; portal-rex-server-gui-tests.el ends here

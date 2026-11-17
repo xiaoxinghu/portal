@@ -78,7 +78,7 @@ a folder, loose, in no project."
       (should (equal (portal-terminal-metadata first)
                      (list :name "*terminal: app*" :project one
                            :directory (portal-metadata-test--path "one/app/src/")
-                           :title nil :program nil :progress nil :exited nil :quick nil)))
+                           :title nil :program nil :progress nil :exited nil :quick nil :status nil)))
       (should (equal (portal-metadata-test--get other :project) two))
       (should-not (portal-metadata-test--get outside :project))
       (should (equal (buffer-local-value 'list-buffers-directory outside) loose))
@@ -310,7 +310,7 @@ The New entries, which carry no terminal, are left out."
         (should (equal (buffer-name) (format "*portal-quick:%s*" (abbreviate-file-name root))))
         (should (equal (portal-terminal-metadata)
                        (list :name (buffer-name) :project root :directory root
-                             :title nil :program nil :progress nil :exited nil :quick t)))
+                             :title nil :program nil :progress nil :exited nil :quick t :status nil)))
         (should-error (portal-terminal-set-project loose) :type 'user-error)
         ;; Its shell's reports update it, but never its project or name.
         (portal-metadata-test--report quick :pwd loose :title "zsh")
