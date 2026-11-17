@@ -726,8 +726,13 @@ the block needs, and has no view."
                 portal-terminal--closer #'portal-rex--close)
           (portal-rex--restorable)
           (when placeholder (portal-rex--keep-name))
+          ;; What its program is doing, then whether the server is lost.
           (setq mode-line-process
-                (append mode-line-process '((portal-rex--disconnected ":disconnected"))))
+                (append mode-line-process
+                        '((portal-terminal--status (:eval (portal-rex--state-mark)))
+                          (portal-rex--disconnected ":disconnected"))))
+          ;; A block that waited waits no more once its buffer is gone.
+          (add-hook 'kill-buffer-hook #'portal-rex--stop-waiting nil t)
           (portal-rex--describe-block)
           (puthash block-id buffer (portal-rex-connection-blocks connection))
           (setq ready t))
@@ -1499,6 +1504,7 @@ changes, `portal-rex-status-functions' runs."
                   portal-rex--used-at)))
         (unless (equal old new)
           (setq portal-terminal--status new)
+          (force-mode-line-update)
           (portal-rex--announce buffer old new))))))
 
 (defun portal-rex--announce (buffer old new)
@@ -1526,6 +1532,147 @@ Unless they are running already: then they get to these after."
         ;; Left another way, as from the debugger: the rest run soon.
         (unless finished
           (run-at-time 0 nil #'portal-rex--announce-waiting))))))
+
+;;; What the mode line says of it
+
+;; A block's own buffer names its program's state in `mode-line-process',
+;; as a terminal says :exited.  `portal-rex-status-mode' adds the standing
+;; answer to "does anything need me" to `global-mode-string', as
+;; `erc-track' does for channels: how many blocks wait, drawn afresh with
+;; each mode line and redrawn everywhere when a block starts or stops
+;; waiting.
+
+(defface portal-rex-waiting '((t :inherit warning))
+  "Face for what the mode line says of Rex blocks that wait for you."
+  :group 'portal-rex)
+
+(defconst portal-rex--state-names '((blocked . "blocked") (error . "failed") (done . "done")
+                                    (working . "working"))
+  "What the mode line calls each state of a block's status.")
+
+(defun portal-rex--state-mark ()
+  "The mode line's mark for what the current block's program is doing."
+  (when-let* ((status portal-terminal--status)
+              (name (cdr (assq (plist-get status :state) portal-rex--state-names))))
+    (let ((message (plist-get status :message))
+          (kind (plist-get status :kind)))
+      (propertize (concat ":" name)
+                  'face (and (plist-get status :waiting) 'portal-rex-waiting)
+                  'help-echo (concat (or (plist-get status :app) "Its program")
+                                     " is " name (and kind (format " (%s)" kind))
+                                     (and message (concat ": " message)))))))
+
+(defun portal-rex--looked-at ()
+  "Return the buffer of the window the user has selected.
+While Emacs draws a window's mode line, that window is selected, and the
+user's is `old-selected-window', as `mode-line-window-selected-p' takes
+it.  While the minibuffer is selected, it is the window it returns to."
+  (let ((window (if (mode-line-window-selected-p) (selected-window) (old-selected-window))))
+    (when (and (eq window (active-minibuffer-window)) (minibuffer-selected-window))
+      (setq window (minibuffer-selected-window)))
+    (and (window-live-p window) (window-buffer window))))
+
+(defun portal-rex-waiting-buffers ()
+  "Return the buffers of the Rex blocks that wait for you, longest waiting first.
+A block waits while its program is blocked, and once it is done or has
+failed until its buffer is used, as `portal-terminal-metadata' says with
+`:waiting' in its `:status'.  The block in the selected window is left
+out: you are looking at it."
+  (let ((looked-at (portal-rex--looked-at)))
+    (sort (cl-loop for buffer in (portal-rex-buffers)
+                   for status = (buffer-local-value 'portal-terminal--status buffer)
+                   when (and (plist-get status :waiting) (not (eq buffer looked-at)))
+                   collect buffer)
+          :key (lambda (buffer)
+                 (plist-get (buffer-local-value 'portal-terminal--status buffer) :time)))))
+
+(defvar portal-rex--waiting-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mode-line mouse-1] #'portal-rex--visit-waiting)
+    (define-key map [header-line mouse-1] #'portal-rex--visit-waiting)
+    (define-key map [tab-bar mouse-1] #'portal-rex--visit-waiting)
+    map)
+  "The keymap of the mode line's count of waiting blocks.")
+
+(defun portal-rex--visit-waiting (event)
+  "Go to the next block that waits, from a click EVENT on the mode line's count."
+  (interactive "e")
+  (ignore event)
+  (when (fboundp 'portal-rex-next-waiting)
+    (call-interactively 'portal-rex-next-waiting)))
+
+(defun portal-rex--waiting-mark ()
+  "The mode line's count of the Rex blocks that wait for you, or nil for none."
+  (when-let* ((waiting (portal-rex-waiting-buffers)))
+    (let ((visit (fboundp 'portal-rex-next-waiting)))
+      ;; A space after, as `erc-track' leaves one, before what follows.
+      (concat
+       (propertize
+       (format "Rex %d●" (length waiting))
+       'face 'portal-rex-waiting
+       'help-echo
+       (concat "Rex blocks waiting for you:\n"
+               (mapconcat (lambda (buffer)
+                            (let ((status (buffer-local-value 'portal-terminal--status buffer)))
+                              (concat (buffer-name buffer) "  "
+                                      (cdr (assq (plist-get status :state)
+                                                 portal-rex--state-names))
+                                      (when-let* ((message (plist-get status :message)))
+                                        (concat ": " message)))))
+                          waiting "\n")
+               (and visit "\nmouse-1: go to the one waiting longest"))
+       'mouse-face (and visit 'mode-line-highlight)
+       'local-map (and visit portal-rex--waiting-map))
+       " "))))
+
+(defvar portal-rex--waiting-mode-line '(:eval (portal-rex--waiting-mark))
+  "What `portal-rex-status-mode' adds to `global-mode-string'.")
+(put 'portal-rex--waiting-mode-line 'risky-local-variable t)
+
+(defun portal-rex--redraw-waiting (_buffer old new)
+  "Redraw every mode line when a block starts or stops waiting, from OLD to NEW.
+On `portal-rex-status-functions' while `portal-rex-status-mode' is on."
+  (unless (eq (and (plist-get old :waiting) t) (and (plist-get new :waiting) t))
+    (force-mode-line-update t)))
+
+;;;###autoload
+(define-minor-mode portal-rex-status-mode
+  "Say in the mode line how many Rex blocks wait for you.
+The count, as `Rex 2●', is part of `global-mode-string', which the
+default mode line, doom-modeline and `tab-bar-format-global' show; with
+none waiting, it says nothing.  A block waits while its program is
+blocked on a question or a permission, and once it is done or has
+failed until you use its buffer.  The block in the selected window is
+not counted.  Hovering the count names the blocks, and clicking it runs
+`portal-rex-next-waiting' where that command is defined.
+
+Each block's own buffer names its program's state in its mode line
+whether this mode is on or not."
+  :global t
+  :group 'portal-rex
+  (let ((others (remq 'portal-rex--waiting-mode-line
+                      (cond ((null global-mode-string) nil)
+                            ((and (consp global-mode-string)
+                                  (or (stringp (car global-mode-string))
+                                      (consp (car global-mode-string))))
+                             global-mode-string)
+                            (t (list "" global-mode-string))))))
+    (setq global-mode-string
+          (if portal-rex-status-mode
+              (append (or others '("")) '(portal-rex--waiting-mode-line))
+            (unless (equal others '("")) others))))
+  (if portal-rex-status-mode
+      (add-hook 'portal-rex-status-functions #'portal-rex--redraw-waiting)
+    (remove-hook 'portal-rex-status-functions #'portal-rex--redraw-waiting))
+  (force-mode-line-update t))
+
+(defun portal-rex--stop-waiting ()
+  "Redraw every mode line if this block's buffer, being killed, waited.
+On `kill-buffer-hook' in a block's buffer, while `portal-rex-status-mode'
+is on: the count loses it."
+  (when (and portal-rex-status-mode (plist-get portal-terminal--status :waiting))
+    (force-mode-line-update t)))
+(put 'portal-rex--stop-waiting 'permanent-local-hook t)
 
 ;;; Connecting
 

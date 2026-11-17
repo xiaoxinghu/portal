@@ -2988,5 +2988,195 @@ Each is (BUFFER-NAME OLD-STATE NEW-STATE NEW-MESSAGE), oldest first, from
       (should (get-buffer "*rex: work/later*"))
       (should (equal (portal-rex-tests--asked server connection t) '("session.list_blocks"))))))
 
+;;; What the mode line says of it
+
+(defmacro portal-rex-tests--status-mode (&rest body)
+  "Run BODY with `portal-rex-status-mode' on, and every mode line's redraws.
+They are in `redraws', newest first: t for every mode line, nil for the
+current buffer's.  The mode is off again after, and `global-mode-string'
+as it was."
+  (declare (indent 0))
+  `(let ((global-mode-string nil)
+         (portal-rex-status-functions nil)
+         (redraws nil))
+     (cl-letf (((symbol-function 'force-mode-line-update)
+                (lambda (&optional all) (push (and all t) redraws))))
+       (unwind-protect
+           (progn (portal-rex-status-mode) ,@body)
+         (portal-rex-status-mode -1)))))
+
+(defun portal-rex-tests--count ()
+  "Return what `global-mode-string' says of the blocks that wait.
+Batch Emacs draws no mode line, and `format-mode-line' gives nothing: the
+construct the mode adds is evaluated here as a mode line would."
+  (if (memq 'portal-rex--waiting-mode-line (ensure-list global-mode-string))
+      (or (eval (cadr portal-rex--waiting-mode-line) t) "")
+    ""))
+
+(defun portal-rex-tests--mark (buffer)
+  "Return what BUFFER's `mode-line-process' says of its program.
+That is its construct's, evaluated as a mode line would: it is there
+whether a mode is on or not, before `:disconnected'."
+  (with-current-buffer buffer
+    (should (equal (last mode-line-process 2)
+                   '((portal-terminal--status (:eval (portal-rex--state-mark)))
+                     (portal-rex--disconnected ":disconnected"))))
+    (or (and portal-terminal--status (portal-rex--state-mark)) "")))
+
+(ert-deftest portal-rex-status-mode-counts-the-blocks-that-wait ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "claude")
+                              (portal-rex-tests--block "2" "codex")
+                              (portal-rex-tests--block "3" "shell"))
+    (let* ((connection (portal-rex-tests--connect server))
+           (claude (portal-rex-block-buffer connection "block:1"))
+           (codex (portal-rex-block-buffer connection "block:2"))
+           (shell (portal-rex-block-buffer connection "block:3"))
+           (window-buffer (window-buffer (selected-window)))
+           (report (lambda (block &rest record)
+                     (apply #'portal-rex-tests--report server block "" record)
+                     (portal-rex-tests--settle connection))))
+      (portal-rex-tests--settle connection)
+      (unwind-protect
+          (portal-rex-tests--status-mode
+            ;; Nothing waits: nothing is said, and the mode line keeps
+            ;; what was there.
+            (should (equal global-mode-string '("" portal-rex--waiting-mode-line)))
+            (should (equal (portal-rex-tests--count) ""))
+            ;; A block at work does not wait.
+            (funcall report "block:3" :state "working" :msg "make")
+            (should (equal (portal-rex-tests--count) ""))
+            (setq redraws nil)
+            ;; An agent asks: every mode line is redrawn, once.
+            (funcall report "block:1" :state "blocked" :kind "question" :msg "Clean up?")
+            (should (equal (portal-rex-tests--count) "Rex 1● "))
+            (should (equal (delq nil redraws) '(t)))
+            (let ((shown (portal-rex-tests--count)))
+              (should (eq (get-text-property 0 'face shown) 'portal-rex-waiting))
+              (should (equal (get-text-property 0 'help-echo shown)
+                             (format "Rex blocks waiting for you:\n%s  blocked: Clean up?"
+                                     (buffer-name claude))))
+              ;; With no command to go to it, a click does nothing.
+              (should-not (get-text-property 0 'local-map shown)))
+            ;; Another finishes: two wait, the one that waited longest first.
+            (funcall report "block:2" :state "done")
+            (should (equal (portal-rex-tests--count) "Rex 2● "))
+            (cl-letf (((symbol-function 'portal-rex-next-waiting) #'ignore))
+              (let ((shown (portal-rex-tests--count)))
+                (should (equal (get-text-property 0 'help-echo shown)
+                               (format "Rex blocks waiting for you:\n%s  blocked: Clean up?\n%s  done\nmouse-1: go to the one waiting longest"
+                                       (buffer-name claude) (buffer-name codex))))
+                (should (eq (lookup-key (get-text-property 0 'local-map shown)
+                                        [mode-line mouse-1])
+                            #'portal-rex--visit-waiting))))
+            ;; A message that changes, or a block at work, redraws no
+            ;; other mode line: the count is the same.
+            (setq redraws nil)
+            (funcall report "block:1" :state "blocked" :kind "permission" :msg "approve Bash")
+            (funcall report "block:3" :state "working" :msg "make test")
+            (should-not (delq nil redraws))
+            ;; The block in the selected window is not counted: you are
+            ;; looking at it.
+            (set-window-buffer (selected-window) claude)
+            (should (equal (portal-rex-tests--count) "Rex 1● "))
+            (set-window-buffer (selected-window) shell)
+            (should (equal (portal-rex-tests--count) "Rex 2● "))
+            ;; Answered, it waits no more.
+            (setq redraws nil)
+            (funcall report "block:1" :state "working")
+            (should (equal (portal-rex-tests--count) "Rex 1● "))
+            (should (equal (delq nil redraws) '(t)))
+            ;; Used, a finished block is seen, and nothing waits.
+            (cl-letf (((symbol-function 'portal-view-buffers) (lambda (&rest _) (list codex)))
+                      ((symbol-function 'portal-rex--in-use-p)
+                       (lambda () (eq (current-buffer) codex)))
+                      ((symbol-function 'portal--rex-take) #'ignore))
+              (setq redraws nil)
+              (portal-rex--claim-used))
+            (should (equal (portal-rex-tests--count) ""))
+            (should (equal (delq nil redraws) '(t)))
+            ;; Off, the mode says nothing, whatever waits, and leaves the
+            ;; mode line as it found it.
+            (funcall report "block:2" :state "error" :msg "API error")
+            (should (equal (portal-rex-tests--count) "Rex 1● "))
+            (portal-rex-status-mode -1)
+            (should-not global-mode-string)
+            (should-not portal-rex-status-functions)
+            (should (equal (portal-rex-tests--count) ""))
+            (setq global-mode-string '("" "12:00"))
+            (portal-rex-status-mode)
+            (should (equal global-mode-string '("" "12:00" portal-rex--waiting-mode-line)))
+            (should (equal (portal-rex-tests--count) "Rex 1● "))
+            (portal-rex-status-mode -1)
+            (should (equal global-mode-string '("" "12:00")))
+            (setq global-mode-string 'display-time-string)
+            (portal-rex-status-mode)
+            (should (equal global-mode-string
+                           '("" display-time-string portal-rex--waiting-mode-line))))
+        (set-window-buffer (selected-window) window-buffer)))))
+
+(ert-deftest portal-rex-status-mode-loses-a-killed-block ()
+  (portal-rex-tests--with (server)
+    (let* ((connection (portal-rex-tests--connect server))
+           (buffer (portal-rex-block-buffer connection "block:fake-1")))
+      (portal-rex-tests--settle connection)
+      (portal-rex-tests--report server "block:fake-1" "" :state "blocked")
+      (portal-rex-tests--settle connection)
+      (portal-rex-tests--status-mode
+        (should (equal (portal-rex-tests--count) "Rex 1● "))
+        (setq redraws nil)
+        ;; As when its block closes.
+        (portal-rex--kill-buffer connection "block:fake-1")
+        (should-not (buffer-live-p buffer))
+        (should (equal redraws '(t)))
+        (should (equal (portal-rex-tests--count) ""))))))
+
+(ert-deftest portal-rex-block-mode-line-names-its-programs-state ()
+  (portal-rex-tests--with (server)
+    (let* ((connection (portal-rex-tests--connect server))
+           (buffer (portal-rex-block-buffer connection "block:fake-1"))
+           (stamp 0)
+           (report (lambda (&rest record)
+                     (apply #'portal-rex-tests--report server "block:fake-1" ""
+                            :app "claude-code"
+                            :updated_at (format "2026-11-17T20:13:%02d+13:00" (cl-incf stamp))
+                            record)
+                     (portal-rex-tests--settle connection))))
+      (portal-rex-tests--settle connection)
+      ;; No mode is needed: the mark is part of the buffer.
+      (should-not portal-rex-status-mode)
+      (should (equal (portal-rex-tests--mark buffer) ""))
+      (let (redraws)
+        (cl-letf (((symbol-function 'force-mode-line-update)
+                   (lambda (&optional all) (push (list (current-buffer) all) redraws))))
+          (funcall report :state "working" :msg "Reading slides.ts"))
+        ;; Its own mode line is redrawn.
+        (should (equal redraws `((,buffer nil)))))
+      (should (equal (portal-rex-tests--mark buffer) ":working"))
+      (let ((shown (portal-rex-tests--mark buffer)))
+        (should (equal (get-text-property 0 'help-echo shown)
+                       "claude-code is working: Reading slides.ts"))
+        (should-not (get-text-property 0 'face shown)))
+      (funcall report :state "blocked" :kind "permission" :msg "approve Bash: git push")
+      (should (equal (portal-rex-tests--mark buffer) ":blocked"))
+      (let ((shown (portal-rex-tests--mark buffer)))
+        (should (equal (get-text-property 0 'help-echo shown)
+                       "claude-code is blocked (permission): approve Bash: git push"))
+        (should (eq (get-text-property 0 'face shown) 'portal-rex-waiting)))
+      (funcall report :state "done")
+      (should (equal (portal-rex-tests--mark buffer) ":done"))
+      (funcall report :state "error" :msg "API error")
+      (should (equal (portal-rex-tests--mark buffer) ":failed"))
+      ;; Seen, an unseen failure shows no more.
+      (cl-letf (((symbol-function 'portal-view-buffers) (lambda (&rest _) (list buffer)))
+                ((symbol-function 'portal-rex--in-use-p)
+                 (lambda () (eq (current-buffer) buffer)))
+                ((symbol-function 'portal--rex-take) #'ignore))
+        (portal-rex--claim-used))
+      (should (equal (portal-rex-tests--mark buffer) ""))
+      (funcall report :state "idle")
+      (should (equal (portal-rex-tests--mark buffer) "")))))
+
 (provide 'portal-rex-tests)
 ;;; portal-rex-tests.el ends here

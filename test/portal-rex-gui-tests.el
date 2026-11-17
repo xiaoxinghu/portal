@@ -1075,5 +1075,62 @@ and the buffer current."
             (should (plist-get (plist-get (portal-terminal-metadata buffer) :status) :waiting)))
         (mapc #'portal-rex-disconnect (portal-rex-connections))))))
 
+(defvar portal-rex-gui-tests--drawn nil
+  "What each mode line drawn said of the blocks that wait, newest first.
+Each is (WINDOW . MARK).")
+
+(ert-deftest portal-rex-gui-every-mode-line-counts-the-blocks-that-wait ()
+  :tags '(:gui)
+  ;; Emacs selects each window in turn to draw its mode line: the block
+  ;; left out is the one in the window the user selected, in every window.
+  (portal-fake-rex-with (server)
+    (portal-fake-rex-command
+     server :blocks '(:session:fake-1
+                      [(:block_id "block:fake-1" :label "shell" :placement "placed")
+                       (:block_id "block:fake-2" :label "agent" :placement "placed")]))
+    (let ((global-mode-string nil)
+          (portal-rex-gui-tests--drawn nil))
+      (unwind-protect
+          (portal-rex-gui-tests--showing server
+            (portal-rex-status-mode)
+            (setq global-mode-string
+                  (append global-mode-string
+                          '((:eval (progn (push (cons (selected-window) (portal-rex--waiting-mark))
+                                                portal-rex-gui-tests--drawn)
+                                          "")))))
+            (let* ((block (selected-window))
+                   (other (split-window-below))
+                   (agent (get-buffer "*rex: fake/agent*"))
+                   (draw (lambda ()
+                           (setq portal-rex-gui-tests--drawn nil)
+                           (force-mode-line-update t)
+                           (redisplay t)
+                           (let ((said (delete-dups
+                                        (mapcar (lambda (entry)
+                                                  (substring-no-properties (or (cdr entry) "")))
+                                                portal-rex-gui-tests--drawn))))
+                             ;; Both windows drew a mode line, saying the same.
+                             (should (memq block (mapcar #'car portal-rex-gui-tests--drawn)))
+                             (should (memq other (mapcar #'car portal-rex-gui-tests--drawn)))
+                             (should (= (length said) 1))
+                             (car said)))))
+              (set-window-buffer other "*scratch*")
+              (portal-rex-gui-tests--event server "program_status_changed"
+                                           :id "" :record '(:state "blocked" :msg "Clean up?"))
+              (portal-fake-rex-command server :block_event "block:fake-2"
+                                       :name "program_status_changed"
+                                       :payload '(:id "" :record (:state "done")))
+              (portal-rex-gui-tests--wait
+               (lambda ()
+                 (and (plist-get (plist-get (portal-terminal-metadata (current-buffer)) :status)
+                                 :waiting)
+                      (plist-get (plist-get (portal-terminal-metadata agent) :status) :waiting))))
+              ;; The blocked block in the selected window is left out.
+              (should (equal (funcall draw) "Rex 1● "))
+              ;; Selected elsewhere, it counts.
+              (select-window other)
+              (should (equal (funcall draw) "Rex 2● "))))
+        (portal-rex-status-mode -1)))))
+
 (provide 'portal-rex-gui-tests)
 ;;; portal-rex-gui-tests.el ends here

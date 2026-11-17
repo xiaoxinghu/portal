@@ -523,6 +523,32 @@ was working or blocked and has exited, or was killed, has none. A done or
 failed report stays until the program reports again. A server without
 the method gives no block a status, and says nothing.
 
+### In the mode line
+
+A block's own buffer names its program's state in its mode line, after
+the mode name and before `:disconnected`, as a terminal says `:exited`:
+`:working`, `:blocked`, `:done` or `:failed`, the three that wait in the
+`portal-rex-waiting` face, which inherits `warning`. Hovering it shows the
+program's message. A done or failed block shows it until you use the
+buffer. This needs no mode.
+
+`portal-rex-status-mode`, a global minor mode that is off by default,
+says how many blocks wait for you, in every window's mode line:
+
+```elisp
+(portal-rex-status-mode 1)
+```
+
+It adds `Rex 2●` to `global-mode-string` while two blocks wait, and
+nothing while none does. The block in the selected window is not counted:
+you are looking at it. The default mode line shows `global-mode-string`,
+and so do doom-modeline and the tab bar's `tab-bar-format-global`; Portal
+changes none of them. Hovering the count names each waiting block, the
+one that has waited longest first, with its state and message. Every
+mode line is redrawn when a block starts or stops waiting, or a waiting
+block's buffer is killed, and at no other time: there is no timer.
+`(portal-rex-waiting-buffers)` returns the same blocks, as buffers.
+
 ## Portal's terminal commands
 
 A block's buffer is a terminal to Portal's own terminal commands, from the
