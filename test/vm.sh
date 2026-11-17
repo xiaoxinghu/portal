@@ -97,6 +97,23 @@ take_work_tree() {
     mv -- "$sources" "$work"
 }
 
+# Prune earlier runs with this checkout's test/vm-retention.sh, under the
+# desktop lock this run holds on descriptor 9. One summary line goes to the
+# output and the list to retention.log. A failure is only a warning: the
+# free-space check is what stops a run.
+prune_runs() {
+    local log=$run/retention.log status=0 summary
+    /bin/bash "$(dirname -- "${BASH_SOURCE[0]}")/vm-retention.sh" \
+        --runner "${run##*/}" </dev/null >"$log" 2>&1 || status=$?
+    summary=$(tail -n 1 -- "$log" 2>/dev/null) || :
+    if [[ $status == 0 ]]; then
+        echo "$summary; the list is in retention.log"
+    else
+        echo "Warning: pruning earlier runs failed ($status); the run goes on." \
+            "${summary:-It printed nothing}; the list is in retention.log" >&2
+    fi
+}
+
 guest() {
     run=$(cd -- "$1" && pwd -P); shift
     [[ $(dirname "$run") == "$HOME/portal-test-runs" && ${run##*/} == run.* ]]
@@ -110,6 +127,7 @@ guest() {
     [[ $(stat -f %Su /dev/console) == "$USER" ]] || {
         echo "Log in to the VM desktop as the SSH user first" >&2; exit 1;
     }
+    prune_runs
     [[ $(df -Pk "$run" | awk 'END {print $4}') -ge 5242880 ]] || {
         echo "The VM needs at least 5 GiB free for a fresh build" >&2; exit 1;
     }
@@ -139,14 +157,9 @@ guest() {
     exit "$status"
 }
 
-main() {
-    timeout=${PORTAL_TEST_TIMEOUT:-1200}
-    [[ $timeout =~ ^[1-9][0-9]*$ ]] || {
-        echo "PORTAL_TEST_TIMEOUT must be a positive number of seconds" >&2; exit 2;
-    }
-    if [[ ${1:-} == --guest ]]; then shift; guest "$@"; fi
-    if [[ ${1:-} == -- ]]; then shift; fi
-    if [[ $# == 0 ]]; then set -- sh test/launcher-daily-use.sh; fi
+# Set vm to the VM's SSH alias: PORTAL_TEST_VM, then this clone's
+# portal.testVm. test/vm-retention.sh resolves it here too.
+resolve_vm() {
     vm=${PORTAL_TEST_VM:-$(git -C "$(dirname -- "${BASH_SOURCE[0]}")" \
         config --local --get portal.testVm || :)}
     [[ -n $vm ]] || {
@@ -155,6 +168,17 @@ main() {
     [[ $vm != -* && ! $vm =~ [[:space:]] ]] || {
         echo "Use an SSH host alias or user@hostname" >&2; exit 2;
     }
+}
+
+main() {
+    timeout=${PORTAL_TEST_TIMEOUT:-1200}
+    [[ $timeout =~ ^[1-9][0-9]*$ ]] || {
+        echo "PORTAL_TEST_TIMEOUT must be a positive number of seconds" >&2; exit 2;
+    }
+    if [[ ${1:-} == --guest ]]; then shift; guest "$@"; fi
+    if [[ ${1:-} == -- ]]; then shift; fi
+    if [[ $# == 0 ]]; then set -- sh test/launcher-daily-use.sh; fi
+    resolve_vm
     cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
     ssh_vm=(ssh -T -o BatchMode=yes "$vm")
     run=$("${ssh_vm[@]}" 'umask 077; mkdir -p "$HOME/portal-test-runs" &&
