@@ -3070,6 +3070,38 @@ the server."
       (should-not (portal-rex-tests--echoed connection
                     (funcall report :state "done"))))))
 
+(ert-deftest portal-rex-echo-says-each-change-as-it-was ()
+  ;; A hook function ahead of the announcement waits for the server, and
+  ;; the block stops asking meanwhile: the question is still said.
+  (portal-rex-tests--with (server)
+    (portal-rex-tests--report server "block:fake-1" "" :state "blocked" :kind "question"
+                              :msg "Clean up?" :updated_at "1")
+    (portal-fake-rex-command
+     server :after "com.superlogical.terminal.program_status"
+     :then [(:block_event "block:fake-1" :name "program_status_changed"
+                          :payload (:id "" :record (:state "working" :updated_at "2")
+                                    :reason "report"))])
+    (let* ((portal-rex-status-announce t)
+           (portal-rex--echo-interval 0)
+           connection called seen
+           (portal-rex-status-functions
+            (list (lambda (_buffer _old new)
+                    (push (plist-get new :state) seen)
+                    (unless called
+                      (setq called t)
+                      (should (portal-rex-call connection "server.version"))))
+                  #'portal-rex-echo-status))
+           (said (seq-filter
+                  (lambda (line) (string-prefix-p "portal: " line))
+                  (split-string
+                   (portal-rex-tests--messages
+                     (setq connection (portal-rex-tests--connect server))
+                     (portal-rex-tests--until connection (lambda () (= (length seen) 2))))
+                   "\n" t))))
+      (should (equal said (list (format "portal: %s asks: Clean up?"
+                                        (buffer-name (portal-rex-block-buffer
+                                                      connection "block:fake-1")))))))))
+
 (ert-deftest portal-rex-echo-leaves-the-selected-block-alone ()
   (portal-rex-tests--announcing (server connection buffer name report)
     (save-window-excursion

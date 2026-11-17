@@ -1713,7 +1713,7 @@ announced again only when it waits for something else."
              (not (and (plist-get old :waiting)
                        (cl-every (lambda (key) (equal (plist-get old key) (plist-get new key)))
                                  '(:state :kind :message)))))
-    (portal-rex--echo buffer)))
+    (portal-rex--echo buffer new)))
 
 (add-hook 'portal-rex-status-functions #'portal-rex-echo-status)
 
@@ -1732,13 +1732,15 @@ announced again only when it waits for something else."
      (concat "portal: " (buffer-name buffer) " " what (and message (concat ": " message)))
      (max 1 (1- (frame-width))) nil nil "…")))
 
-(defun portal-rex--echo (buffer)
-  "Announce BUFFER's block now, later, or not at all.
-Not at all unless it still waits and is not in the selected window;
-later while the minibuffer is in use or the block was announced lately."
+(defun portal-rex--echo (buffer &optional status)
+  "Announce BUFFER's block, with STATUS, now, later, or not at all.
+STATUS is the status a change gave it, by default its status now.  Not
+at all unless STATUS waits and the block is not in the selected window;
+later while the minibuffer is in use or the block was announced lately,
+with the status it has then."
   (when (and portal-rex-status-announce (buffer-live-p buffer))
     (with-current-buffer buffer
-      (let ((status portal-terminal--status)
+      (let ((status (or status portal-terminal--status))
             (since (and portal-rex--echoed-at (- (float-time) portal-rex--echoed-at))))
         (cond
          ((not (plist-get status :waiting)))
