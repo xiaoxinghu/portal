@@ -36,6 +36,10 @@ never by the shell changing directory.")
 That is the shell at a prompt and the program while one runs.")
 (defvar-local portal-terminal--progress nil "The last OSC 9;4 progress state, or nil.")
 (defvar-local portal-terminal--exited nil "Whether its program has exited.")
+(defvar-local portal-terminal--status nil
+  "What its program says it is doing, as `:status' in `portal-terminal-metadata'.
+Only a Rex block's program can say: Rex keeps what it reports.")
+(put 'portal-terminal--status 'permanent-local t)
 
 (defvar-local portal-terminal--elsewhere nil
   "Non-nil in the buffer of a terminal whose program runs elsewhere.
@@ -248,13 +252,26 @@ buffer's `:name'; its `:project' root, or nil; its working `:directory',
 or nil until known; its `:title', as its program last set it, or nil; its
 `:program', the executable in the foreground of its terminal, the shell
 at a prompt, or nil; whether its program `:exited'; its `:progress'
-state, or nil; and whether it is a `:quick' terminal.  Only facts are
-reported: a live shell may be idle or busy, a title may name anything,
-and a program is noted within about a second of starting.
+state, or nil; whether it is a `:quick' terminal; and its `:status',
+what its program says it is doing, or nil.  Only facts are reported: a
+live shell may be idle or busy, a title may name anything, and a program
+is noted within about a second of starting.
 
 A terminal whose program runs elsewhere, a Rex block, has a buffer
-before its view first opens: until then, Portal knows only its name and
-project.  Its `:program' is the foreground process as Rex labels it."
+before its view first opens: until then, Portal knows only its name,
+project and status.  Its `:program' is the foreground process as Rex
+labels it.
+
+Only a Rex block has a `:status', from what its program reports to Rex,
+as Claude Code does: a plist of `:state', `blocked', `error', `done' or
+`working'; `:kind', why it is blocked, such as \"permission\" or
+\"question\", or nil; `:message', the program's one line, or nil;
+`:app', the program that reported, such as \"claude-code\", or nil;
+`:time', when Emacs heard of it, as `float-time' gives it; and
+`:waiting', non-nil when the block waits for you.  A block waits while it
+is blocked, and once it is done or has failed until you use its buffer:
+then its status is nil, as it is for a program that is idle or says
+nothing.  `portal-rex-status-functions' runs as it changes."
   (let ((buffer (or buffer (current-buffer))))
     ;; A buffer has a target exactly while it has a view, so this costs the
     ;; same however many views there are, unlike `portal-view-buffers'.
@@ -263,7 +280,8 @@ project.  Its `:program' is the foreground process as Rex labels it."
         (list :name (buffer-name) :project portal-terminal--project
               :directory portal-terminal--directory :title portal-terminal--title
               :program portal-terminal--program :progress portal-terminal--progress
-              :exited portal-terminal--exited :quick (and portal-terminal--quick-root t))))))
+              :exited portal-terminal--exited :quick (and portal-terminal--quick-root t)
+              :status portal-terminal--status)))))
 
 (defun portal-terminal--local-directory (path)
   "Return PATH as a directory name if a report of it can be trusted, else nil.

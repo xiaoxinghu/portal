@@ -18,7 +18,8 @@ was seen to, and as its documentation of data connections says:
   /api/data that asks for rex.data.terminal.v1.
 - Answers a client's hello with a welcome.
 - Answers server.version, session.list and session.attach_all, the last two
-  with its sessions; session.list_blocks with a session's blocks, or
+  with its sessions, remembering the event_scope a client attached with,
+  "session" or "all"; session.list_blocks with a session's blocks, or
   session_not_found for a session it does not have; and any other method
   with method_not_found, but those of showing a block, below.
 - Gives each response the seq of the last event it sent that client.
@@ -51,7 +52,9 @@ was seen to, and as its documentation of data connections says:
 - Answers a terminal's com.superlogical.terminal.title, .pwd, .process and
   .input_mode from what it knows of the block: no title, no directory, no
   process and cooked input until a terminal command or a block event says
-  otherwise.
+  otherwise.  Answers com.superlogical.terminal.program_status with the
+  block's status records, root first: none until a block event reports
+  one.
 - Closes a block on block.close, by its block_id or its window's
   window_id: block_closed, then window_closed and session_view_changed
   for a block that had a window, before its answer.
@@ -184,9 +187,14 @@ Commands, on standard input:
         name that client.inspect gives, if given.
     {"block_event": BLOCK, "name": NAME, "payload": {...}}
         Send the terminal event NAME of BLOCK, such as "title_changed", to
-        every client that attached to BLOCK's session with session.attach,
-        as a session_event wrapping a block_event; and take what it says
-        into what BLOCK's terminal methods answer.
+        every client that attached to BLOCK's session with session.attach
+        or attached to all with the event_scope "all", once each, as a
+        session_event wrapping a block_event; and take what it says into
+        what BLOCK's terminal methods answer.  "program_status_changed",
+        with "id" and "record", keeps the record, replacing the one with
+        that id ("" for the root); "program_status_removed" drops those
+        of its "ids" and their children ("a/b" is a child of "a", and
+        every record of the root's).
 """
 
 import base64
@@ -239,6 +247,7 @@ state = {
     "line": {},
     "kept": {},
     "refuse_hello": None,
+    "statuses": {},
 }
 
 
@@ -262,6 +271,7 @@ class Client:
         self.connection = connection
         self.number = number
         self.attached = False
+        self.scope = None  # The event_scope it attached to all with.
         self.seq = 0
         self.code = None
         self.closing = False
@@ -389,6 +399,7 @@ class Client:
             elif method == "session.attach_all":
                 if payload.get("event_scope") in ("session", "all"):
                     self.attached = True
+                    self.scope = payload["event_scope"]
                     response["payload"] = {"sessions": state["sessions"]}
                 else:
                     response["error"] = {
@@ -494,7 +505,7 @@ class Client:
                         with lock:
                             kept = state["kept"].pop(value.get("reconnect_token"), None)
                             if kept:
-                                self.name, self.joined, self.attached = kept
+                                self.name, self.joined, self.attached, self.scope = kept
                             self.token = "fake-token-%s" % os.urandom(8).hex()
                         self.send(
                             {
@@ -528,7 +539,8 @@ class Client:
                         stream.end()
                 # A control client that dropped is kept for its token.
                 if not self.data and self.code is None and self.token:
-                    state["kept"][self.token] = (self.name, self.joined, self.attached)
+                    state["kept"][self.token] = (self.name, self.joined, self.attached,
+                                                 self.scope)
                 # One that left for good gives up its blocks.
                 elif not self.data:
                     leave(identity(self))
@@ -795,6 +807,38 @@ def input_mode(client, payload):
     return problem or terminal(block)["input_mode"]
 
 
+def program_status(client, payload):
+    block, problem = find_block(payload)
+    if problem:
+        return problem
+    records = state["statuses"].get(block, [])
+    return {"records": [record for record in records if record.get("id", "") == ""]
+            + [record for record in records if record.get("id", "") != ""]}
+
+
+def keep_status(block, name, fields):
+    """Keep what the status event NAME of BLOCK, with FIELDS, says."""
+    records = state["statuses"].setdefault(block, [])
+    if name == "program_status_changed":
+        identifier = fields.get("id", "")
+        record = dict(fields.get("record") or {})
+        if identifier:
+            record["id"] = identifier
+        else:
+            record.pop("id", None)
+        place = next((i for i, known in enumerate(records)
+                      if known.get("id", "") == identifier), None)
+        if place is None:
+            records.append(record)
+        else:
+            records[place] = record
+    elif name == "program_status_removed":
+        for identifier in fields.get("ids") or []:
+            records[:] = [known for known in records
+                          if identifier and known.get("id", "") != identifier
+                          and not known.get("id", "").startswith(identifier + "/")]
+
+
 def session_of(block):
     for session, blocks in state["blocks"].items():
         if any(known.get("block_id") == block for known in blocks):
@@ -976,6 +1020,7 @@ SHOWING = {
     "com.superlogical.terminal.pwd": pwd,
     "com.superlogical.terminal.process": process,
     "com.superlogical.terminal.input_mode": input_mode,
+    "com.superlogical.terminal.program_status": program_status,
 }
 
 
@@ -1083,6 +1128,8 @@ def command(value):
                 known["process"] = dict(known["process"], foreground=fields.get("foreground"))
             elif name == "child_exited":
                 known["process"] = dict(known["process"], last_exit=fields)
+            elif name in ("program_status_changed", "program_status_removed"):
+                keep_status(block, name, fields)
             session = session_of(block)
             event = {"type": "session_event", "payload": {
                 "session_id": session,
@@ -1090,7 +1137,7 @@ def command(value):
                     "block_id": block, "creator_name": "com.superlogical.terminal",
                     "name": name, "payload": fields}}}}
             for client in everyone:
-                if session in client.joined:
+                if session in client.joined or (client.attached and client.scope == "all"):
                     client.seq += 1
                     client.send({"type": "event", "seq": client.seq, "payload": event})
         elif "end_stream" in value:
@@ -1125,6 +1172,7 @@ def command(value):
             state["grids"].clear()
             state["line"].clear()
             state["desired"].clear()
+            state["statuses"].clear()
             state["sessions"] = value["restart"].get("sessions", [])
             state["blocks"] = value["restart"].get("blocks", {})
         else:

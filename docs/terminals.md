@@ -175,7 +175,10 @@ Packages can use `(portal-terminal-buffers PROJECT QUICK)` to list terminals in
 creation order. PROJECT filters by assigned root, regardless of current shell
 directories; QUICK includes quick terminals. `(portal-terminal-metadata BUFFER)`
 returns `:name`, `:project`, `:directory`, `:title`, `:program`, `:progress`,
-`:exited` and `:quick`, cached from native change reports even while hidden.
+`:exited`, `:quick` and `:status`, cached from native change reports even
+while hidden. `:status` is what a [Rex block's](rex.md#what-a-blocks-program-is-doing)
+program says it is doing, such as an agent waiting for you, and nil for
+every other terminal.
 These are only facts: titles are program-set, not process names; `:program` is
 an executable path, the shell's at a prompt, or nil until one is known; live
 shells may be busy or idle.

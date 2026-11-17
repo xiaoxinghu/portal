@@ -86,7 +86,7 @@ meanwhile."
   "Check the calls that show the block BLOCK-ID of SESSION-ID, as the core makes them.
 The native module makes these calls itself, on CONNECTION, and reads
 their answers: attaching, claiming the block, asking its terminal's
-title, directory and processes, sizing it, a ticket for its stream, its
+title, directory, processes and status, sizing it, a ticket for its stream, its
 screen in VT form read in parts, typing and a focus event.  The block's
 program runs and has set no title; its screen in VT form, with its
 palette, is longer than 16 bytes."
@@ -114,6 +114,12 @@ palette, is longer than 16 bytes."
         (should (integerp (plist-get foreground :pid)))
         (should (stringp (or (plist-get foreground :script) (plist-get foreground :argv0)
                              (plist-get foreground :name))))))
+    ;; A program that has reported nothing has no status records.
+    (should (member (plist-get (portal-rex-call connection
+                                                "com.superlogical.terminal.program_status"
+                                                (append block '(:args nil)))
+                               :records)
+                    '(nil [] :null)))
     (should-not (portal-rex-call connection "com.superlogical.terminal.resize"
                                  (append block '(:args (:columns 81 :rows 25 :cell_width_px 8
                                                         :cell_height_px 16)))))

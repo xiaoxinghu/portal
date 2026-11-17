@@ -7,7 +7,8 @@ server runs your terminals' programs, so they outlive the applications that
 show them. Portal is becoming a client of that server. Today it can connect to
 one, give each of its blocks a buffer that follows the server and shows the
 block's screen, a terminal you type in with its title, directory and
-program, make, rename and destroy sessions, start new terminals in them, end
+program, know what the program in each block says it is doing, such as an
+agent waiting for you, make, rename and destroy sessions, start new terminals in them, end
 a block by killing its buffer, put blocks back in their windows after Emacs
 restarts, and call its methods and receive its events from Lisp; see
 [what is not built](#what-is-not-built).
@@ -21,6 +22,7 @@ themselves and need no Rex installed.
 - [Sessions and new terminals](#sessions-and-new-terminals)
 - [End a block](#end-a-block)
 - [A block's details](#a-blocks-details)
+- [What a block's program is doing](#what-a-blocks-program-is-doing)
 - [Portal's terminal commands](#portals-terminal-commands)
 - [Restore the arrangement](#restore-the-arrangement)
 - [Appearance](#appearance)
@@ -459,6 +461,65 @@ server's machine. Every server Portal connects to is on this Mac, so it is
 also the buffer's `default-directory`. Portal never makes a TRAMP
 directory of it.
 
+## What a block's program is doing
+
+A program in a block can tell Rex what it is doing: working, with a line
+of text; blocked on a question, a permission or a sign-in; done; or
+failed. Rex keeps the latest report, and Portal follows it for every
+block on the server, shown or not. Claude Code reports this by itself,
+with nothing to set up: it is working while a turn runs, its message
+naming the tool it is running; blocked while it asks you something;
+done when the turn ends; and failed when the API does. An interrupted
+turn, or a permission you refused, leaves it with nothing to say.
+
+`(plist-get (portal-terminal-metadata BUFFER) :status)` gives a block's
+status, or nil:
+
+| Key | Holds |
+| --- | --- |
+| `:state` | `blocked`, `error`, `done` or `working`. |
+| `:kind` | Why it is blocked, such as `"permission"`, `"question"` or `"auth"`, or nil. |
+| `:message` | The program's one line, such as `"approve Bash: git push"`, or nil. |
+| `:app` | The program that reported, such as `"claude-code"`, or nil. |
+| `:time` | When Emacs heard of the report, as `float-time` gives it. |
+| `:waiting` | Non-nil while the block waits for you. |
+
+A program may keep several reports at once, as Claude Code keeps one for
+each subagent and background shell beside its own: the status is the most
+urgent of them, blocked first, then failed, done and working. Their text
+is shown as plain text: control characters become spaces, and marks that
+reorder text are taken out.
+
+A block *waits* while it is blocked, and once it is done or has failed,
+until you use its buffer: until its terminal is in the selected window of
+the frame you are typing in. From then on that report is seen, and the
+status is nil, as it is for a program that is idle or says nothing. A
+report that arrives while you are using the buffer is seen at once. A
+block that is blocked waits until the program reports again, seen or not.
+Reports that were there when Emacs connected count as new.
+
+`portal-rex-status-functions` runs whenever a block's status changes,
+with its buffer, the old status and the new one, a report becoming seen
+included. Its functions run as those of
+[`portal-rex-event-functions`](#receive-events) do, and must not prompt:
+
+```elisp
+(add-hook 'portal-rex-status-functions
+          (lambda (buffer _old new)
+            (when (eq (plist-get new :state) 'blocked)
+              (message "%s asks: %s" (buffer-name buffer)
+                       (or (plist-get new :message) "")))))
+```
+
+Portal asks each block for its reports once it has a buffer, without
+waiting for the answers, and again when a lost connection comes back:
+the server replays nothing that was reported meanwhile. From then on the
+server's events keep them current, a moment after the program reports.
+The server forgets a report that has gone stale by itself: a program that
+was working or blocked and has exited, or was killed, has none. A done or
+failed report stays until the program reports again. A server without
+the method gives no block a status, and says nothing.
+
 ## Portal's terminal commands
 
 A block's buffer is a terminal to Portal's own terminal commands, from the
@@ -634,13 +695,16 @@ must not prompt.
 
 ## Receive events
 
-A connection receives the events of the server and of every session on it:
-sessions created, renamed and destroyed, blocks created and closed, windows
-changing. It asks for them with `session.attach_all` and the scope `session`,
-which leaves out what a block reports about its own terminal, such as its
-title. Once a window has shown one of a session's blocks, Emacs is
-attached to that session too, and its blocks' own events, such as
-`block_event` with `title_changed`, reach the hook as well.
+A connection receives the events of the server, of its clients and of
+every session and block on it: sessions created, renamed and destroyed,
+blocks created and closed, windows changing, and what each block reports
+about its own terminal, such as `block_event` with `title_changed`,
+`size_changed` and the status of its program, whether a window has shown
+the block or not. It asks for them with `session.attach_all` and the scope
+`all`, which joins no session as a client. With programs busy in several
+blocks that is an event every few seconds, and a block being resized, as
+by dragging a window in Rex's app, sends one per resize: a function on
+the hook must be cheap.
 [Rex's event reference](https://www.superlogical.com/rex/docs/reference/events)
 lists them.
 

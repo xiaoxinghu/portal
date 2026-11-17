@@ -1038,5 +1038,42 @@ and the buffer current."
           (redisplay t)))
       (kill-buffer "*rex-gui-elsewhere*"))))
 
+(ert-deftest portal-rex-gui-a-blocks-status-is-asked-again-after-a-loss ()
+  :tags '(:gui)
+  ;; Nothing is replayed after a loss: what a block's program reported
+  ;; meanwhile comes from asking the block again once Emacs is back, for
+  ;; a block no window has shown.
+  (portal-fake-rex-with (server)
+    (let* ((portal-rex-socket (portal-fake-rex-socket server))
+           (connection (portal-rex-connect))
+           (buffer (portal-rex-block-buffer connection "block:fake-1"))
+           (state (lambda ()
+                    (plist-get (plist-get (portal-terminal-metadata buffer) :status) :state)))
+           (report (lambda (state stamp)
+                     (portal-fake-rex-command
+                      server :block_event "block:fake-1" :name "program_status_changed"
+                      :payload (list :id "" :record (list :state state :updated_at stamp)
+                                     :reason "report"))))
+           changes
+           (portal-rex-status-functions
+            (list (lambda (_buffer old new)
+                    (push (list (plist-get old :state) (plist-get new :state)) changes))))
+           (inhibit-message t))
+      (unwind-protect
+          (progn
+            (funcall report "working" "1")
+            (portal-rex-gui-tests--wait (lambda () (eq (funcall state) 'working)))
+            (portal-fake-rex-command server :upgrade "refuse")
+            (portal-fake-rex-command server :drop_control t)
+            (portal-rex-gui-tests--wait (lambda () (not (portal-rex-live-p connection))))
+            ;; The turn ends while Emacs is away.
+            (funcall report "done" "2")
+            (should (eq (funcall state) 'working))
+            (portal-fake-rex-command server :upgrade "ok")
+            (portal-rex-gui-tests--wait (lambda () (eq (funcall state) 'done)) 10)
+            (should (equal (reverse changes) '((nil working) (working done))))
+            (should (plist-get (plist-get (portal-terminal-metadata buffer) :status) :waiting)))
+        (mapc #'portal-rex-disconnect (portal-rex-connections))))))
+
 (provide 'portal-rex-gui-tests)
 ;;; portal-rex-gui-tests.el ends here

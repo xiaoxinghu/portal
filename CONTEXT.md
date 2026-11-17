@@ -60,6 +60,14 @@ _Avoid_: remote terminal, Rex view (it is a terminal view like any other)
 The one Rex client whose size a block has, as the server decides; every other client draws the block at that size, from its pane's bottom-left. Emacs owns a block once the pane showing it is used, and keeps it until another client is used: the client last used sizes the block.
 _Avoid_: active client, controlling client, focus (which client has the keyboard)
 
+**Status**:
+What the program in a block says it is doing, as Rex keeps its reports: working, blocked on a question or a permission, done or failed. One value per block, the most urgent of its program's reports, for every block whether shown or not. Done and failed count only until the block's buffer is used after the report arrived: then they are seen.
+_Avoid_: state (the connection's), activity, progress (a terminal's OSC 9;4)
+
+**Waiting**:
+A block waits while its status is blocked, or done or failed and not yet seen: it needs you. The one test every surface that counts or lists such blocks uses.
+_Avoid_: idle (a shell at its prompt), pending, unread
+
 ## System-wide
 
 **Global shortcut**:

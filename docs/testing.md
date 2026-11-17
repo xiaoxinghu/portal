@@ -466,7 +466,8 @@ one, and after [moving the Rex pin](test-vm.md#move-the-rex-pin). With
 [portal-rex-parity.el](../test/portal-rex-parity.el) holds checks that run
 against both servers: the handshake, `server.version`, `session.list`,
 `session.list_blocks` with the buffers made of it, an unknown method, the
-calls the core makes to show a block, with the shapes of their answers, how
+calls the core makes to show a block, with the shapes of their answers,
+a block's status records when its program has reported none, how
 a block's size follows its owner as Emacs and a second client of the
 test's own claim and size it, and an idle block ended by killing its
 buffer, with the two replies that say it is idle, and a buffer finding its
