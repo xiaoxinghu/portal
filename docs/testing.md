@@ -166,8 +166,8 @@ subdirectories. Logs and `exit-status` files, at the top and one directory
 down, copy back to `.cache/vm/<run>/`. Command failure status reaches the
 caller.
 The next run replaces the work tree, so a failed run also keeps an APFS clone
-of it in its `repo/` for diagnosis; it takes space only once the work tree
-changes. Remove failed runs' directories when no longer needed.
+of it in its `repo/` for diagnosis; it takes space once the work tree
+changes, and [retention](#retention-of-runs) bounds how many there are.
 Keep at least 5 GiB free per fresh guest build. Leave host disk space for VM
 image growth.
 
@@ -194,6 +194,50 @@ Guest preparation (the runner works with any macOS VM reachable over SSH):
 
 Default: launcher daily-use acceptance check, not the full GUI suite.
 Pass other graphical Emacs or standalone AppKit checks as needed.
+
+### Retention of runs
+
+Each run, once it has the desktop and before the free-space check, prunes
+the finished runs in `~/portal-test-runs` with `test/vm-retention.sh`:
+
+- Among failed runs, the five newest by completion keep their `repo/`; older
+  ones lose it and keep their logs and `exit-status`. Every failure counts,
+  one whose `repo/` is gone and one that failed before its build too, so
+  five failed checks in a row leave no built tree.
+- A run goes entirely, snapshot and all, more than 30 days after it
+  completed.
+- A run's completion is when its top-level `exit-status` was written. A run
+  without one holding a single status from 0 to 255 is incomplete: still
+  syncing, waiting or running, or cut off. Retention keeps and lists it,
+  however old.
+- A pinned run stays whole until unpinned, and takes none of the five
+  places.
+
+The limits are fixed in the script. Pruning touches only `run.*`
+directories directly in `~/portal-test-runs`, never `work`, the lock or the
+current run, and follows no symbolic link. The run prints one summary line
+and lists each removal in its `retention.log`, which copies back with the
+other logs. A cleanup error is a warning there and the run goes on; only the
+free-space check stops a run. A checkout from before the script does not
+prune.
+
+To look, prune or pin from the host, with the VM the runner would use
+(`PORTAL_TEST_VM`, then `portal.testVm`):
+
+```sh
+bash test/vm-retention.sh preview
+bash test/vm-retention.sh prune
+bash test/vm-retention.sh pin run.XXXXXXXX
+bash test/vm-retention.sh unpin run.XXXXXXXX
+```
+
+The command pipes the script to the guest's `/bin/bash`; nothing is
+installed there. `preview` lists what `prune` would remove and changes
+nothing. `prune`, `pin` and `unpin` take the desktop lock, so they wait,
+saying so, while a test run holds it, and exit non-zero on a cleanup error.
+`RUN` is the name the runner prints. Snapshots are APFS clones that share
+blocks, so their apparent sizes do not add up to the space a prune frees in
+the guest, still less to what the host gets back.
 
 ### Managing the Tart guest
 
@@ -354,7 +398,7 @@ PORTAL_TEST_EXPENSIVE=1 sh test/views-gui.sh '^portal-integration-focus-'
 In the sample, read the main thread below the test's Lisp frames. A nested
 AppKit event loop there, such as `NSCorrectionPanel _interceptEvents`, waits
 for an event that the blocked test would have injected. Failed VM runs keep
-their `repo/`; delete it once you have the logs.
+their `repo/`; [pin the run](#retention-of-runs) to keep it past retention.
 
 On 2026-10-11, all 39 selected cases passed in each of two fresh Emacs
 processes, with none skipped. The guest ran macOS 27.0.1 (26A434) arm64, with
