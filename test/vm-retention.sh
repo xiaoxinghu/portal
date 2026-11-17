@@ -70,9 +70,11 @@ read_status() {
     [[ -f $file && ! -L $file ]] || return 2
     size=$(stat -f %z -- "$file") && [[ $size -le 4 ]] || return 2
     # The dot keeps the trailing newlines command substitution would strip:
-    # one may end the status, no more.
+    # one may end the status, no more. A byte the shell drops, such as NUL,
+    # leaves the text shorter than the file.
     text=$(cat -- "$file" && echo .) || return 2
     text=${text%.}
+    [[ ${#text} == "$size" ]] || return 2
     text=${text%$'\n'}
     [[ $text =~ ^(0|[1-9][0-9]?[0-9]?)$ ]] && [[ $text -le 255 ]] || return 2
     code=$text
