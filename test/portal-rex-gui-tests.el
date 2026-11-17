@@ -1132,5 +1132,33 @@ Each is (WINDOW . MARK).")
               (should (equal (funcall draw) "Rex 2● "))))
         (portal-rex-status-mode -1)))))
 
+(ert-deftest portal-rex-gui-the-echo-area-says-a-block-asks ()
+  :tags '(:gui)
+  ;; An agent asking in a block no window shows reaches an idle Emacs's
+  ;; echo area, and stays in *Messages*.
+  (portal-fake-rex-with (server)
+    (let* ((portal-rex-socket (portal-fake-rex-socket server))
+           (portal-rex-status-announce t)
+           (connection (portal-rex-connect))
+           (buffer (portal-rex-block-buffer connection "block:fake-1"))
+           (line (format "portal: %s asks: Clean up the task now?" (buffer-name buffer))))
+      (unwind-protect
+          (progn
+            (should-not (eq buffer (window-buffer (selected-window))))
+            (message nil)
+            (should (string-search
+                     line
+                     (portal-rex-gui-tests--messages
+                      (lambda ()
+                        (portal-fake-rex-command
+                         server :block_event "block:fake-1" :name "program_status_changed"
+                         :payload '(:id "" :record (:state "blocked" :kind "question"
+                                                    :msg "Clean up the task now?")
+                                    :reason "report"))
+                        (portal-rex-gui-tests--wait
+                         (lambda () (equal (current-message) line))))))))
+        (message nil)
+        (mapc #'portal-rex-disconnect (portal-rex-connections))))))
+
 (provide 'portal-rex-gui-tests)
 ;;; portal-rex-gui-tests.el ends here

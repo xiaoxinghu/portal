@@ -1674,6 +1674,111 @@ is on: the count loses it."
     (force-mode-line-update t)))
 (put 'portal-rex--stop-waiting 'permanent-local-hook t)
 
+;;; What the echo area says of it
+
+;; The echo area says when a block starts to wait: the moment it asks,
+;; finishes or fails.  The message is gone at the next key; `*Messages*'
+;; keeps it.  A message is never shown over the minibuffer, nor more
+;; often than once in a few seconds for a block: such a change is said
+;; later, as the block is then, if it still waits.
+
+(defcustom portal-rex-status-announce t
+  "Whether the echo area says when a Rex block starts to wait for you.
+A block waits when its program asks a question, needs a permission or
+a credential, finishes or fails.  Nothing is said for a block in the
+selected window, nor while the minibuffer is in use: that is said once
+it closes, if the block still waits.  A block is announced at most once
+every few seconds."
+  :type 'boolean)
+
+(defvar portal-rex--echo-interval 5
+  "The fewest seconds between two announcements of one block.")
+
+(defvar-local portal-rex--echoed-at nil
+  "When this block was last announced, as `float-time' gives it, or nil.")
+
+(defvar-local portal-rex--echo-timer nil
+  "The timer that announces this block once it may be announced again, or nil.")
+
+(defvar portal-rex--echo-after-minibuffer nil
+  "The blocks' buffers to announce once the minibuffer closes.")
+
+(defun portal-rex-echo-status (buffer old new)
+  "Say in the echo area that BUFFER's block has started to wait.
+On `portal-rex-status-functions', with BUFFER's OLD and NEW status, while
+`portal-rex-status-announce' is non-nil.  A block that waited already is
+announced again only when it waits for something else."
+  (when (and portal-rex-status-announce
+             (plist-get new :waiting)
+             (not (and (plist-get old :waiting)
+                       (cl-every (lambda (key) (equal (plist-get old key) (plist-get new key)))
+                                 '(:state :kind :message)))))
+    (portal-rex--echo buffer new)))
+
+(add-hook 'portal-rex-status-functions #'portal-rex-echo-status)
+
+(defun portal-rex--echo-text (buffer status)
+  "Return the line announcing STATUS, BUFFER's, as wide as the frame allows."
+  (let* ((message (plist-get status :message))
+         (what (pcase (plist-get status :state)
+                 ('done "is done")
+                 ('error "failed")
+                 (_ (pcase (plist-get status :kind)
+                      ("question" (if message "asks" "asks a question"))
+                      ("permission" "needs permission")
+                      ("auth" "needs a credential")
+                      (_ "is blocked"))))))
+    (truncate-string-to-width
+     (concat "portal: " (buffer-name buffer) " " what (and message (concat ": " message)))
+     (max 1 (1- (frame-width))) nil nil "…")))
+
+(defun portal-rex--echo (buffer &optional status)
+  "Announce BUFFER's block, with STATUS, now, later, or not at all.
+STATUS is the status a change gave it, by default its status now.  Not
+at all unless STATUS waits and the block is not in the selected window;
+later while the minibuffer is in use or the block was announced lately,
+with the status it has then."
+  (when (and portal-rex-status-announce (buffer-live-p buffer))
+    (with-current-buffer buffer
+      (let ((status (or status portal-terminal--status))
+            (since (and portal-rex--echoed-at (- (float-time) portal-rex--echoed-at))))
+        (cond
+         ((not (plist-get status :waiting)))
+         ((eq buffer (window-buffer (selected-window))))
+         ((active-minibuffer-window)
+          (unless portal-rex--echo-after-minibuffer
+            (add-hook 'minibuffer-exit-hook #'portal-rex--echo-minibuffer-closing))
+          (cl-pushnew buffer portal-rex--echo-after-minibuffer))
+         ((and since (< since portal-rex--echo-interval))
+          ;; What it is doing then is said, which replaces what is pending.
+          (unless (timerp portal-rex--echo-timer)
+            (setq portal-rex--echo-timer
+                  (run-at-time (- portal-rex--echo-interval since) nil
+                               #'portal-rex--echo-again buffer))))
+         (t
+          (setq portal-rex--echoed-at (float-time))
+          (message "%s" (portal-rex--echo-text buffer status))))))))
+
+(defun portal-rex--echo-again (buffer)
+  "Announce BUFFER's block, as its timer does once it may be announced again."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq portal-rex--echo-timer nil))
+    (portal-rex--echo buffer)))
+
+(defun portal-rex--echo-minibuffer-closing ()
+  "Announce the blocks held back by the minibuffer, once it has closed.
+On `minibuffer-exit-hook', which runs before it closes."
+  (remove-hook 'minibuffer-exit-hook #'portal-rex--echo-minibuffer-closing)
+  (run-at-time 0 nil #'portal-rex--echo-held))
+
+(defun portal-rex--echo-held ()
+  "Announce the blocks the minibuffer held back, oldest first.
+Those it still holds, as one closed of several, wait for the next to close."
+  (let ((buffers (reverse portal-rex--echo-after-minibuffer)))
+    (setq portal-rex--echo-after-minibuffer nil)
+    (mapc #'portal-rex--echo buffers)))
+
 ;;; Connecting
 
 (defun portal-rex--attached (connection response)
