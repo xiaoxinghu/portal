@@ -2856,6 +2856,40 @@ Each is (BUFFER-NAME OLD-STATE NEW-STATE NEW-MESSAGE), oldest first, from
       (portal-rex-tests--settle connection)
       (should (eq (funcall state) 'done)))))
 
+(ert-deftest portal-rex-status-orders-and-marks-the-picker ()
+  ;; One agent asks, one works and one has finished, not looked at; a
+  ;; shell says nothing.  The picker lists those that wait first, the one
+  ;; that has waited longest at the top, each marked, with its message.
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "asking")
+                              (portal-rex-tests--block "2" "working")
+                              (portal-rex-tests--block "3" "done")
+                              (portal-rex-tests--block "4" "shell"))
+    (let* ((connection (portal-rex-tests--connect server))
+           (buffers (mapcar (lambda (id) (portal-rex-block-buffer connection id))
+                            '("block:1" "block:2" "block:3" "block:4"))))
+      (portal-rex-tests--settle connection)
+      (portal-rex-tests--report server "block:3" "" :state "done" :app "claude-code")
+      (portal-rex-tests--settle connection)
+      (portal-rex-tests--report server "block:1" "" :state "blocked" :kind "question"
+                                :app "claude-code" :msg "Clean up the task now?")
+      (portal-rex-tests--report server "block:2" "" :state "working" :app "claude-code"
+                                :msg "Reading slides.ts")
+      (portal-rex-tests--settle connection)
+      (pcase-let* ((`(,asking ,working ,done ,shell) buffers)
+                   (offered (portal-terminal--candidates
+                             (portal-terminal--recent (portal-terminal-buffers)))))
+        (should (equal (seq-take (mapcar #'cdr offered) 2) (list done asking)))
+        (should (equal (sort (seq-drop (mapcar #'cdr offered) 2) :key #'buffer-name)
+                       (list shell working)))
+        (dolist (case `((,asking "● question") (,working "◌ working") (,done "✓ done")))
+          (should (string-search (cadr case) (car (rassq (car case) offered)))))
+        (should (equal (portal-terminal--annotation asking) "  Clean up the task now?"))
+        (should (equal (portal-terminal--annotation working) "  Reading slides.ts"))
+        (should (equal (portal-terminal--annotation done) "  just now"))
+        (should-not (portal-terminal--annotation shell))))))
+
 (ert-deftest portal-rex-status-functions-see-each-change-in-turn ()
   ;; The first ask's answer changes the status outside any event, and its
   ;; first hook function waits for the server meanwhile, as the event

@@ -147,6 +147,54 @@ result is in `chosen'."
       (should-not (memq 'portal-terminal-consult-source consult-buffer-sources))
       (should-not (memq 'portal-terminal-consult-project-source consult-project-buffer-sources)))))
 
+(ert-deftest portal-terminal-consult-waiting-narrows-to-blocks-that-wait ()
+  (portal-completion-test--environment
+    (let* ((report (lambda (buffer state ago &rest status)
+                     (with-current-buffer buffer
+                       (setq portal-terminal--status
+                             (append (list :state state :time (- (float-time) ago)
+                                           :waiting (not (eq state 'working)))
+                                     status)))
+                     buffer))
+           (plain (portal-completion-test--open "one/app"))
+           (working (funcall report (portal-completion-test--open "one/app") 'working 0
+                             :message "Reading slides.ts"))
+           (asking (funcall report (portal-completion-test--open "one/app") 'blocked 120
+                            :kind "question" :message "Clean up the task now?"))
+           (done (funcall report (portal-completion-test--open "two/app") 'done 720)))
+      (switch-to-buffer "consult-file.el")
+      ;; w narrows `consult-buffer' to the blocks that wait, longest first;
+      ;; unnarrowed, each terminal is listed once, as a buffer.
+      (pcase-let ((`(,all ,waiting)
+                   (portal-completion-test--type
+                    #'consult-buffer "<f11> w SPC <f11> RET"
+                    #'portal-completion-test--shown)))
+        (dolist (buffer (list plain working asking done))
+          (should (= (cl-count buffer all) 1)))
+        (should (equal waiting (list done asking))))
+      (should (eq (current-buffer) done))
+      ;; The pickers too, within the terminals they list, with the status
+      ;; words to type.
+      (switch-to-buffer "consult-file.el")
+      (should (equal (portal-completion-test--type
+                      #'portal-terminal-choose "<f11> w SPC <f11> DEL quest <f11> RET"
+                      #'portal-completion-test--shown)
+                     `((,done ,asking ,working ,plain new named)
+                       (,done ,asking)
+                       (,asking))))
+      (should (eq (current-buffer) asking))
+      (switch-to-buffer "consult-file.el")
+      (should (equal (portal-completion-test--type
+                      #'portal-terminal-choose-project "w SPC <f11> C-g"
+                      #'portal-completion-test--shown)
+                     `((,asking))))
+      ;; The adapter adds the source once and removes it.
+      (should (= (cl-count 'portal-terminal-consult-waiting-source consult-buffer-sources) 1))
+      (portal-terminal-consult-mode)
+      (should (= (cl-count 'portal-terminal-consult-waiting-source consult-buffer-sources) 1))
+      (portal-terminal-consult-mode -1)
+      (should-not (memq 'portal-terminal-consult-waiting-source consult-buffer-sources)))))
+
 (ert-deftest portal-terminal-consult-picker-reads-with-consult ()
   (portal-completion-test--environment
     (let* ((one (portal-completion-test--path "one/app/"))

@@ -549,6 +549,14 @@ mode line is redrawn when a block starts or stops waiting, or a waiting
 block's buffer is killed, and at no other time: there is no timer.
 `(portal-rex-waiting-buffers)` returns the same blocks, as buffers.
 
+### In the terminal pickers
+
+The [terminal pickers](terminals.md#choosing-terminals) show each block's
+status in a column after its name, with its message beside it, and list
+the blocks that wait first, the one that has waited longest at the top.
+With Consult, `w` narrows `consult-buffer` and the pickers to the blocks
+that wait.
+
 ## Portal's terminal commands
 
 A block's buffer is a terminal to Portal's own terminal commands, from the
