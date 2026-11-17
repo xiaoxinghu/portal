@@ -24,11 +24,13 @@
 
 (defmacro portal-rex-tests--with (servers &rest body)
   "Run BODY with each symbol in SERVERS bound to a new fake Rex server.
-Connections that BODY leaves are closed, and none may remain."
+Connections that BODY leaves are closed, and none may remain.  The echo
+area announces no block's status unless BODY says so."
   (declare (indent 1))
   `(portal-fake-rex-with ,servers
      (let ((portal-rex-timeout 2)
-           (portal-rex-event-functions nil))
+           (portal-rex-event-functions nil)
+           (portal-rex-status-announce nil))
        (should-not portal-rex--connections)
        (cl-letf (((symbol-function 'portal-view--load) #'ignore))
          (unwind-protect (progn ,@body)
@@ -2974,6 +2976,170 @@ Each is (BUFFER-NAME OLD-STATE NEW-STATE NEW-MESSAGE), oldest first, from
                       (setf (portal-rex-connection-status-asked connection) nil)
                       (portal-rex--ask-statuses connection "session:fake-1")))
         (should-not (funcall state))))))
+
+;;; Saying when a block starts to wait
+
+(defmacro portal-rex-tests--echoed (connection &rest body)
+  "Run BODY, let CONNECTION handle what it brings, and return the blocks announced.
+They are the lines `portal-rex-echo-status' added to *Messages*, oldest first."
+  (declare (indent 1))
+  `(seq-filter (lambda (line) (string-prefix-p "portal: " line))
+               (split-string (portal-rex-tests--messages
+                               ,@body
+                               (portal-rex-tests--settle ,connection))
+                             "\n" t)))
+
+(defmacro portal-rex-tests--announcing (bindings &rest body)
+  "Run BODY with a connection to a fake server and the echo area announcing.
+BINDINGS names the server, the connection, the block's buffer, its name
+and a function that makes the block report its root record."
+  (declare (indent 1))
+  (pcase-let ((`(,server ,connection ,buffer ,name ,report) bindings))
+    `(portal-rex-tests--with (,server)
+       (let* ((portal-rex-status-announce t)
+              (portal-rex--echo-interval 0)
+              (,connection (portal-rex-tests--connect ,server))
+              (,buffer (portal-rex-block-buffer ,connection "block:fake-1"))
+              (,name (buffer-name ,buffer))
+              (stamp 0)
+              (,report (lambda (&rest record)
+                         (apply #'portal-rex-tests--report ,server "block:fake-1" ""
+                                :app "claude-code"
+                                :updated_at (format "2026-11-17T20:13:%02d+13:00"
+                                                    (cl-incf stamp))
+                                record))))
+         (ignore ,name ,report)
+         (portal-rex-tests--settle ,connection)
+         ,@body))))
+
+(defun portal-rex-tests--wait-for-timers (seconds)
+  "Let Emacs run its timers for SECONDS.
+A connection's events wait meanwhile: Emacs handles them as it waits for
+the server."
+  (let ((end (+ (float-time) seconds)))
+    (while (< (float-time) end)
+      (accept-process-output nil 0.02))))
+
+(ert-deftest portal-rex-echo-says-when-a-block-starts-to-wait ()
+  (portal-rex-tests--announcing (server connection buffer name report)
+    (should-not (portal-rex-tests--echoed connection (funcall report :state "working")))
+    (should (equal (portal-rex-tests--echoed connection
+                     (funcall report :state "blocked" :kind "question"
+                              :msg "Clean up the task now?"))
+                   (list (format "portal: %s asks: Clean up the task now?" name))))
+    ;; Still asking the same: nothing new.
+    (should-not (portal-rex-tests--echoed connection
+                  (funcall report :state "blocked" :kind "question"
+                           :msg "Clean up the task now?")))
+    ;; Something else, straight after: said.
+    (should (equal (portal-rex-tests--echoed connection
+                     (funcall report :state "blocked" :kind "permission"
+                              :msg "approve Bash: git push"))
+                   (list (format "portal: %s needs permission: approve Bash: git push" name))))
+    (should (equal (portal-rex-tests--echoed connection
+                     (funcall report :state "working")
+                     (funcall report :state "blocked" :kind "auth")
+                     (funcall report :state "working")
+                     (funcall report :state "blocked" :kind "question")
+                     (funcall report :state "working")
+                     (funcall report :state "blocked")
+                     (funcall report :state "done"))
+                   (list (format "portal: %s needs a credential" name)
+                         (format "portal: %s asks a question" name)
+                         (format "portal: %s is blocked" name)
+                         (format "portal: %s is done" name))))
+    ;; Seen, then failed.
+    (should-not (portal-rex-tests--echoed connection
+                  (funcall report :state "idle")))
+    (should (equal (portal-rex-tests--echoed connection
+                     (funcall report :state "error" :msg "There's an issue with the model"))
+                   (list (format "portal: %s failed: There's an issue with the model" name))))
+    ;; A status going away says nothing.
+    (should-not (portal-rex-tests--echoed connection
+                  (portal-rex-tests--clear server "block:fake-1" "")))
+    ;; One line, as wide as the frame.
+    (let ((said (portal-rex-tests--echoed connection
+                  (funcall report :state "blocked" :kind "question"
+                           :msg (make-string 300 ?x)))))
+      (should (= (length said) 1))
+      (should (= (string-width (car said)) (1- (frame-width))))
+      (should (string-suffix-p "x…" (car said))))
+    ;; Turned off: nothing.
+    (funcall report :state "working")
+    (let ((portal-rex-status-announce nil))
+      (should-not (portal-rex-tests--echoed connection
+                    (funcall report :state "done"))))))
+
+(ert-deftest portal-rex-echo-leaves-the-selected-block-alone ()
+  (portal-rex-tests--announcing (server connection buffer name report)
+    (save-window-excursion
+      (set-window-buffer (selected-window) buffer)
+      (should-not (portal-rex-tests--echoed connection
+                    (funcall report :state "blocked" :kind "question" :msg "Clean up?"))))
+    ;; Not said later either: it was seen.
+    (should-not (portal-rex-tests--echoed connection
+                  (portal-rex-tests--wait-for-timers 0.1)))
+    (should (equal (portal-rex-tests--echoed connection
+                     (funcall report :state "working")
+                     (funcall report :state "done"))
+                   (list (format "portal: %s is done" name))))))
+
+(ert-deftest portal-rex-echo-waits-for-the-minibuffer ()
+  (portal-rex-tests--announcing (server connection buffer name report)
+    (let ((reading t))
+      (cl-letf (((symbol-function 'active-minibuffer-window)
+                 (lambda () (and reading (minibuffer-window)))))
+        ;; Typing is not interrupted: nothing is said while reading.
+        (should-not (portal-rex-tests--echoed connection
+                      (funcall report :state "blocked" :kind "question" :msg "Clean up?")
+                      (funcall report :state "working")
+                      (funcall report :state "blocked" :kind "permission" :msg "approve Bash")
+                      (portal-rex-tests--settle connection)))
+        ;; One minibuffer closes, inside another: still nothing.
+        (should-not (portal-rex-tests--echoed connection
+                      (run-hooks 'minibuffer-exit-hook)
+                      (portal-rex-tests--wait-for-timers 0.1)))
+        ;; The last closes: what the block waits for then is said, once.
+        (should (equal (portal-rex-tests--echoed connection
+                         (setq reading nil)
+                         (run-hooks 'minibuffer-exit-hook)
+                         (portal-rex-tests--wait-for-timers 0.1))
+                       (list (format "portal: %s needs permission: approve Bash" name))))
+        (should-not (memq #'portal-rex--echo-minibuffer-closing minibuffer-exit-hook))
+        ;; A block that stopped waiting meanwhile is not said.
+        (setq reading t)
+        (should-not (portal-rex-tests--echoed connection
+                      (funcall report :state "working")
+                      (funcall report :state "done")
+                      (funcall report :state "working")
+                      (portal-rex-tests--settle connection)
+                      (setq reading nil)
+                      (run-hooks 'minibuffer-exit-hook)
+                      (portal-rex-tests--wait-for-timers 0.1)))))))
+
+(ert-deftest portal-rex-echo-says-a-block-once-in-a-while ()
+  (portal-rex-tests--announcing (server connection buffer name report)
+    (let ((portal-rex--echo-interval 0.5))
+      ;; Two changes in the interval: the first now, the later one at its end.
+      (should (equal (portal-rex-tests--echoed connection
+                       (funcall report :state "blocked" :kind "question" :msg "Clean up?")
+                       (funcall report :state "blocked" :kind "permission" :msg "approve Bash")
+                       (funcall report :state "error" :msg "API error"))
+                     (list (format "portal: %s asks: Clean up?" name))))
+      (should (equal (portal-rex-tests--echoed connection
+                       (portal-rex-tests--wait-for-timers 0.7))
+                     (list (format "portal: %s failed: API error" name))))
+      ;; A change that stops waiting in the interval drops what was pending.
+      (should-not (portal-rex-tests--echoed connection
+                    (funcall report :state "working")
+                    (funcall report :state "done")
+                    (funcall report :state "working")
+                    (portal-rex-tests--settle connection)
+                    (portal-rex-tests--wait-for-timers 0.7)))
+      ;; After the interval, said at once.
+      (should (equal (portal-rex-tests--echoed connection
+                       (funcall report :state "done"))
+                     (list (format "portal: %s is done" name)))))))
 
 (ert-deftest portal-rex-status-on-a-server-that-cannot-say ()
   (portal-rex-tests--with (server)

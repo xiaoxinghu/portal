@@ -498,6 +498,26 @@ report that arrives while you are using the buffer is seen at once. A
 block that is blocked waits until the program reports again, seen or not.
 Reports that were there when Emacs connected count as new.
 
+The echo area says when a block starts to wait, naming its buffer, and
+`*Messages*` keeps the line:
+
+```
+portal: *rex: portal/claude* asks: Clean up the task now?
+portal: *rex: portal/claude* needs permission: approve Bash: git push
+portal: *rex: portal/claude* needs a credential
+portal: *rex: portal/claude* is done
+portal: *rex: portal/claude* failed: There's an issue with the selected model
+```
+
+It says nothing when a block starts working or stops waiting, nor for the
+block in the selected window. It never interrupts the minibuffer: what
+happens while you type there is said once it closes, if the block still
+waits. A block is said at most once in 5 seconds: a change sooner than
+that is said when they are up, as the block is then. The line is cut to the frame's
+width. Set `portal-rex-status-announce` to nil to keep the echo area
+quiet; `portal-rex-echo-status` is the function on
+`portal-rex-status-functions` that says it.
+
 `portal-rex-status-functions` runs whenever a block's status changes,
 with its buffer, the old status and the new one, a report becoming seen
 included. Changes come in the order they happened, and every function
@@ -508,10 +528,10 @@ prompt:
 
 ```elisp
 (add-hook 'portal-rex-status-functions
-          (lambda (buffer _old new)
-            (when (eq (plist-get new :state) 'blocked)
-              (message "%s asks: %s" (buffer-name buffer)
-                       (or (plist-get new :message) "")))))
+          (lambda (_buffer old new)
+            (when (and (eq (plist-get new :state) 'blocked)
+                       (not (eq (plist-get old :state) 'blocked)))
+              (ding t))))
 ```
 
 Portal asks each block for its reports once it has a buffer, without
