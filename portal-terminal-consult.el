@@ -4,9 +4,10 @@
 ;; Optional; portal.el enables `portal-terminal-consult-mode' when Consult loads.
 ;; The terminal pickers then read with Consult, which adds preview and
 ;; narrowing, and `consult-buffer' and `consult-project-buffer' gain a hidden
-;; group of terminals, and `consult-buffer' one of the Rex blocks that wait.  Tested with Consult 3.10.  The source helpers used
-;; here, such as `consult--multi' and `consult--buffer-preview', are Consult's
-;; internal API, so they stay in this file.
+;; group of terminals, and `consult-buffer' one of the Rex blocks that wait.
+;; Tested with Consult 3.10.  The source helpers used here, such as
+;; `consult--multi' and `consult--buffer-preview', are Consult's internal API,
+;; so they stay in this file.
 
 (require 'portal-terminal)
 

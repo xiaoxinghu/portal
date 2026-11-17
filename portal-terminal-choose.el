@@ -4,8 +4,8 @@
 ;; Pickers over ordinary Emacs completion.  Each candidate is one string that
 ;; holds a terminal's label, the status of a Rex block's program, and its
 ;; project, directory and title, so any of them matches, and resolves to the
-;; buffer, whatever its name.  The optional
-;; `portal-terminal-consult' adapter reads the same choices with Consult.
+;; buffer, whatever its name.  The optional `portal-terminal-consult' adapter
+;; reads the same choices with Consult.
 
 (require 'cl-lib)
 (require 'portal-project)
