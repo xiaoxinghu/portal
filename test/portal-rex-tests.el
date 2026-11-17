@@ -2856,6 +2856,33 @@ Each is (BUFFER-NAME OLD-STATE NEW-STATE NEW-MESSAGE), oldest first, from
       (portal-rex-tests--settle connection)
       (should (eq (funcall state) 'done)))))
 
+(ert-deftest portal-rex-status-functions-see-each-change-in-turn ()
+  ;; The first ask's answer changes the status outside any event, and its
+  ;; first hook function waits for the server meanwhile, as the event
+  ;; hook's may: the event that came after the answer is a change every
+  ;; function sees after that one.
+  (portal-rex-tests--with (server)
+    (portal-rex-tests--report server "block:fake-1" "" :state "blocked" :updated_at "1")
+    (portal-fake-rex-command
+     server :after "com.superlogical.terminal.program_status"
+     :then [(:block_event "block:fake-1" :name "program_status_changed"
+                          :payload (:id "" :record (:state "working" :updated_at "2")
+                                    :reason "report"))])
+    (let* (seen connection called
+           (portal-rex-status-functions
+            (list (lambda (_buffer old new)
+                    (push (list 'first (plist-get old :state) (plist-get new :state)) seen)
+                    (unless called
+                      (setq called t)
+                      (should (portal-rex-call connection "server.version"))))
+                  (lambda (_buffer old new)
+                    (push (list 'second (plist-get old :state) (plist-get new :state)) seen)))))
+      (setq connection (portal-rex-tests--connect server))
+      (portal-rex-tests--until connection (lambda () (= (length seen) 4)))
+      (should (equal (reverse seen)
+                     '((first nil blocked) (second nil blocked)
+                       (first blocked working) (second blocked working)))))))
+
 (ert-deftest portal-rex-a-finished-block-waits-until-its-buffer-is-used ()
   ;; Batch Emacs shows no view: the pane in use is played here, and the
   ;; graphical suites drive `portal-rex--claim-used' from real windows.

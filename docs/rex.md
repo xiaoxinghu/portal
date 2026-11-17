@@ -500,8 +500,11 @@ Reports that were there when Emacs connected count as new.
 
 `portal-rex-status-functions` runs whenever a block's status changes,
 with its buffer, the old status and the new one, a report becoming seen
-included. Its functions run as those of
-[`portal-rex-event-functions`](#receive-events) do, and must not prompt:
+included. Changes come in the order they happened, and every function
+sees one before any sees the next, even when one of them calls
+`portal-rex-call` and changes arrive while it waits. Its functions run as
+those of [`portal-rex-event-functions`](#receive-events) do, and must not
+prompt:
 
 ```elisp
 (add-hook 'portal-rex-status-functions

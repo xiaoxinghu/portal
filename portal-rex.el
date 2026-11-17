@@ -1318,9 +1318,19 @@ not again until it has left."
 Each function is called with the block's buffer, its old status and its
 new one, each a plist as `portal-terminal-metadata' gives as `:status',
 or nil.  It runs when a finished block's report becomes seen too, as its
-status becomes nil.  The functions run as those of
-`portal-rex-event-functions' do, with quitting inhibited, so they must
+status becomes nil.  Changes arrive in the order they happened, and
+every function sees one before any sees the next, wherever they came
+from: one that calls `portal-rex-call' gets its answer, and the changes
+meanwhile run once it has returned.  The functions run with quitting
+inhibited, as those of `portal-rex-event-functions' do, so they must
 never prompt.")
+
+(defvar portal-rex--status-changes nil
+  "The status changes not yet given to `portal-rex-status-functions', oldest first.
+Each is (BUFFER OLD NEW).")
+
+(defvar portal-rex--announcing nil
+  "Non-nil while `portal-rex-status-functions' runs for a change.")
 
 (defvar-local portal-rex--used-at 0
   "When this block's buffer was last in the pane in use, as `float-time' gives it.
@@ -1489,7 +1499,33 @@ changes, `portal-rex-status-functions' runs."
                   portal-rex--used-at)))
         (unless (equal old new)
           (setq portal-terminal--status new)
-          (portal-rex--run #'run-hook-with-args 'portal-rex-status-functions buffer old new))))))
+          (portal-rex--announce buffer old new))))))
+
+(defun portal-rex--announce (buffer old new)
+  "Run `portal-rex-status-functions' for BUFFER's change from OLD to NEW, in turn.
+A change made while the functions run for another, as when one of them
+waits for the server, runs once they have all seen that one."
+  (setq portal-rex--status-changes
+        (nconc portal-rex--status-changes (list (list buffer old new))))
+  (portal-rex--announce-waiting))
+
+(defun portal-rex--announce-waiting ()
+  "Run `portal-rex-status-functions' for each change waiting, oldest first.
+Unless they are running already: then they get to these after."
+  (unless portal-rex--announcing
+    (let ((portal-rex--announcing t)
+          (inhibit-quit t)
+          finished)
+      (unwind-protect
+          (progn
+            (while-let ((change (pop portal-rex--status-changes)))
+              (when (buffer-live-p (car change))
+                (apply #'portal-rex--run #'run-hook-with-args 'portal-rex-status-functions
+                       change)))
+            (setq finished t))
+        ;; Left another way, as from the debugger: the rest run soon.
+        (unless finished
+          (run-at-time 0 nil #'portal-rex--announce-waiting))))))
 
 ;;; Connecting
 
