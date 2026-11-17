@@ -180,6 +180,8 @@ test("runs without a valid exit-status stay and are reported, the current one no
 		"run.empty": "",
 		"run.high": "256\n",
 		"run.two": "1\n2\n",
+		"run.blank": "1\n\n",
+		"run.blanks": "1\n\n\n",
 		"run.word": "fail\n",
 		"run.zero": "00\n",
 		"run.long": `1${" ".repeat(100)}\n`,
@@ -206,7 +208,7 @@ test("runs without a valid exit-status stay and are reported, the current one no
 			`Incomplete ${name}: malformed exit-status, kept`,
 		);
 	expect(result.out).toContain("Incomplete run.missing: no exit-status, kept");
-	expect(result.out).toContain("9 incomplete runs");
+	expect(result.out).toContain("11 incomplete runs");
 
 	// Called by the runner, its own run goes unmentioned.
 	const fd = Bun.spawnSync(
@@ -222,7 +224,7 @@ test("runs without a valid exit-status stay and are reported, the current one no
 	expect(fd.exitCode).toBe(0);
 	const out = fd.stdout.toString();
 	expect(out).not.toContain("run.missing");
-	expect(out).toContain("8 incomplete runs");
+	expect(out).toContain("10 incomplete runs");
 });
 
 test("nothing outside the run directories is touched, nor followed", () => {

@@ -69,7 +69,11 @@ read_status() {
     [[ -e $file || -L $file ]] || return 1
     [[ -f $file && ! -L $file ]] || return 2
     size=$(stat -f %z -- "$file") && [[ $size -le 4 ]] || return 2
-    text=$(<"$file") || return 2
+    # The dot keeps the trailing newlines command substitution would strip:
+    # one may end the status, no more.
+    text=$(cat -- "$file" && echo .) || return 2
+    text=${text%.}
+    text=${text%$'\n'}
     [[ $text =~ ^(0|[1-9][0-9]?[0-9]?)$ ]] && [[ $text -le 255 ]] || return 2
     code=$text
 }
