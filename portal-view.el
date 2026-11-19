@@ -14,6 +14,7 @@
 (require 'cl-lib)
 (require 'portal-build)
 
+(declare-function pgtk-backend-display-class "pgtkfns.c" (&optional terminal))
 (declare-function portal--open "portal-view" (kind options))
 (declare-function portal--place "portal-view" (target edges title))
 (declare-function portal--hide "portal-view" (target))
@@ -79,14 +80,25 @@ Problems that need another Emacs build come before those a frame fixes."
    ((version< emacs-version "31.1")
     (format "Portal native views need Emacs 31.1 or newer; this is Emacs %s"
             emacs-version))
-   ((not (eq system-type 'darwin))
-    (format "Portal native views run only on macOS; this Emacs runs on %s" system-type))
+   ((not (memq system-type '(darwin gnu/linux)))
+    (format "Portal native views run only on macOS and Linux; this Emacs runs on %s"
+            system-type))
    ((not (fboundp 'module-load))
     "Portal native views need an Emacs built with dynamic modules (--with-modules)")
-   ((not (featurep 'ns))
-    "Portal native views need an Emacs built for the macOS graphical interface (--with-ns)")
-   ((not (eq window-system 'ns))
-    "Portal native views need a graphical Emacs frame; this frame is a text terminal")))
+   ((eq system-type 'darwin)
+    (cond
+     ((not (featurep 'ns))
+      "Portal native views need an Emacs built for the macOS graphical interface (--with-ns)")
+     ((not (eq window-system 'ns))
+      "Portal native views need a graphical Emacs frame; this frame is a text terminal")))
+   ((not (featurep 'pgtk))
+    "Portal native views need an Emacs built with pure GTK, for Wayland (--with-pgtk)")
+   ((not (eq window-system 'pgtk))
+    "Portal native views need a graphical Emacs frame; this frame is a text terminal")
+   ;; GDK can put a pgtk frame on X11 or in a browser, where no view could go.
+   ((not (equal (pgtk-backend-display-class) "GdkWaylandDisplay"))
+    (format "Portal native views need a frame on Wayland; this frame's display is a %s"
+            (pgtk-backend-display-class)))))
 
 (defun portal-view--load ()
   "Load the native module and connect its record pipe, before any native view."

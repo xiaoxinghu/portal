@@ -162,7 +162,7 @@ stand-in build.sh, Lisp and a node_modules directory.  No build is running."
               (delete-process portal-build--process)))
           ;; A build that cannot succeed is explained, not offered.
           (let ((exec-path nil) (portal-build--tool-directories nil))
-            (should (string-match-p "cmake, ninja, xcrun"
+            (should (string-match-p (string-join portal-build--tools ", ")
                                     (cadr (should-error (portal-build-ensure)
                                                         :type 'user-error))))))))))
 
@@ -184,13 +184,14 @@ stand-in build.sh, Lisp and a node_modules directory.  No build is running."
     (let ((portal-build--ready t) loaded)
       (cl-letf (((symbol-function 'module-load) (lambda (file) (push file loaded))))
         (portal-build-load-module))
-      (should (equal loaded (list (portal-build-file "portal.bundle/Contents/MacOS/portal.dylib"))))
+      (should (equal loaded (list (portal-build-file portal-build--module))))
+      (should (member portal-build--module portal-build--artifacts))
       (should (equal portal-build--loaded "the build")))))
 
 (defun portal-build-test--tools ()
   "Return an `exec-path' with stand-ins for the build's tools."
   (let ((bin (expand-file-name "bin/" portal-build-root)))
-    (dolist (tool '("cmake" "ninja" "xcrun"))
+    (dolist (tool portal-build--tools)
       (portal-build-test--write (concat "bin/" tool) "#!/bin/sh\n")
       (set-file-modes (expand-file-name tool bin) #o755))
     (list bin "/usr/bin" "/bin")))
@@ -263,9 +264,16 @@ echo \"TOOLS=$PORTAL_TOOLS_DIR\"\nmkdir -p build\n")
       (with-current-buffer "*portal-build*"
         (should (string-search "\nstarted\n" (buffer-string))))
       (should (equal exec-path '("/usr/bin" "/bin")))
-      (let ((portal-build--tool-directories nil))
-        (should (string-match-p "needs cmake, ninja: install CMake and Ninja"
-                                (cadr (should-error (portal-build) :type 'user-error))))))))
+      ;; Without them, the build names what `exec-path' lacks: on macOS CMake
+      ;; and Ninja, as xcrun is the system's.  A Linux distribution may have
+      ;; every tool in /usr/bin, and then nothing is missing.
+      (let* ((portal-build--tool-directories nil)
+             (missing (seq-remove #'executable-find portal-build--tools)))
+        (when (eq system-type 'darwin)
+          (should (equal missing '("cmake" "ninja"))))
+        (when missing
+          (should (string-match-p (format "needs %s: install CMake" (string-join missing ", "))
+                                  (cadr (should-error (portal-build) :type 'user-error)))))))))
 
 (ert-deftest portal-build-sh-searches-the-same-tool-directories ()
   ;; Outside the test macro, `portal-build-root' is this checkout.

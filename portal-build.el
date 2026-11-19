@@ -78,15 +78,25 @@ Emacs started from the Dock or Finder does not see the shell's PATH, so its
 Keep this list the same as build.sh's.")
 
 (defconst portal-build--artifacts
-  '("portal.bundle/Contents/Info.plist"
-    "portal.bundle/Contents/MacOS/portal.dylib"
-    "portal.bundle/Contents/Resources/GhosttyKit_GhosttyTerminal.bundle/Contents/Resources/terminfo/78/xterm-ghostty"
-    "portal.bundle/Contents/Resources/GhosttyKit_GhosttyTerminal.bundle/Contents/Resources/Ghostty/shell-integration"
-    "portal-host")
-  "Files of a complete build, relative to the build directory.")
+  (if (eq system-type 'darwin)
+      '("portal.bundle/Contents/Info.plist"
+        "portal.bundle/Contents/MacOS/portal.dylib"
+        "portal.bundle/Contents/Resources/GhosttyKit_GhosttyTerminal.bundle/Contents/Resources/terminfo/78/xterm-ghostty"
+        "portal.bundle/Contents/Resources/GhosttyKit_GhosttyTerminal.bundle/Contents/Resources/Ghostty/shell-integration"
+        "portal-host")
+    '("portal.so" "portal-host"))
+  "Files of a complete build, relative to the build directory.
+macOS builds a bundle that holds the module and Ghostty's resources;
+Linux builds the module alone.")
 
-(defconst portal-build--module "portal.bundle/Contents/MacOS/portal.dylib"
-  "The single native module used by all Portal features.")
+(defconst portal-build--module
+  (if (eq system-type 'darwin) "portal.bundle/Contents/MacOS/portal.dylib" "portal.so")
+  "The single native module used by all Portal features.
+It is relative to the build directory.")
+
+(defconst portal-build--tools
+  (if (eq system-type 'darwin) '("cmake" "ninja" "xcrun") '("cmake" "ninja" "cc" "pkg-config"))
+  "The programs a build needs before it can start, besides Emacs and Bun.")
 
 (defconst portal-build--record "portal-build.eld"
   "The file in which a successful build records its identity.")
@@ -271,16 +281,21 @@ They are `exec-path', which a build gets as PATH, then the
 which `portal-build' does not make" portal-build-directory))
           ((not (file-exists-p (expand-file-name "build.sh" portal-build-root)))
            (user-error "Portal's sources in %s lack build.sh" portal-build-root))
-          ((not (and (eq system-type 'darwin) module-file-suffix))
-           (user-error "Portal needs macOS Emacs with module support"))
+          ((not (and (memq system-type '(darwin gnu/linux)) module-file-suffix))
+           (user-error "Portal needs Emacs with module support, on macOS or Linux"))
           ((not (file-writable-p (if (file-exists-p build) build portal-build-root)))
            (user-error "Portal cannot build in %s: it is not writable.  \
 Build Portal elsewhere and set `portal-build-directory'" build)))
     (when-let* ((missing (let ((exec-path (portal-build--exec-path)))
-                           (seq-remove #'executable-find '("cmake" "ninja" "xcrun")))))
-      (user-error "Portal's build needs %s: install CMake and Ninja, for example \
-with `brew install cmake ninja', and Xcode.  If they are installed elsewhere, \
-add their directory to `exec-path'" (string-join missing ", ")))))
+                           (seq-remove #'executable-find portal-build--tools))))
+      (user-error "Portal's build needs %s: %s.  If they are installed elsewhere, \
+add their directory to `exec-path'"
+                  (string-join missing ", ")
+                  (if (eq system-type 'darwin)
+                      (format-message "install CMake and Ninja, for example \
+with `brew install cmake ninja', and Xcode")
+                    "install CMake, Ninja, a C compiler and pkg-config, with the \
+development files of GTK 3 and Wayland")))))
 
 (defun portal-build--environment ()
   "Return the process environment for a build that this Emacs will load."

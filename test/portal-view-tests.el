@@ -797,20 +797,37 @@ Return the view's target."
 
 (ert-deftest portal-view-unsupported-emacs-names-what-to-change ()
   ;; Each requirement names its own fix; a newer build is checked first.
-  (let ((emacs-version "31.1") (system-type 'darwin) (window-system 'ns))
-    (should-not (portal-view--unsupported))
-    (let ((emacs-version "30.2") (window-system nil))
-      (should (string-match-p "Emacs 31.1 or newer; this is Emacs 30.2"
-                              (portal-view--unsupported))))
-    (let ((system-type 'gnu/linux))
-      (should (string-match-p "only on macOS; this Emacs runs on gnu/linux"
-                              (portal-view--unsupported))))
-    (cl-letf (((symbol-function 'module-load) nil))
-      (should (string-match-p "--with-modules" (portal-view--unsupported))))
-    (dlet ((features (remq 'ns features)) (window-system nil))
-      (should (string-match-p "--with-ns" (portal-view--unsupported))))
-    (let ((window-system nil))
-      (should (string-match-p "graphical Emacs frame" (portal-view--unsupported))))))
+  (dlet ((features (cons 'ns (remq 'pgtk features))))
+    (let ((emacs-version "31.1") (system-type 'darwin) (window-system 'ns))
+      (should-not (portal-view--unsupported))
+      (let ((emacs-version "30.2") (window-system nil))
+        (should (string-match-p "Emacs 31.1 or newer; this is Emacs 30.2"
+                                (portal-view--unsupported))))
+      (let ((system-type 'windows-nt))
+        (should (string-match-p "only on macOS and Linux; this Emacs runs on windows-nt"
+                                (portal-view--unsupported))))
+      (cl-letf (((symbol-function 'module-load) nil))
+        (should (string-match-p "--with-modules" (portal-view--unsupported))))
+      (dlet ((features (remq 'ns features)) (window-system nil))
+        (should (string-match-p "--with-ns" (portal-view--unsupported))))
+      (let ((window-system nil))
+        (should (string-match-p "graphical Emacs frame" (portal-view--unsupported)))))))
+
+(ert-deftest portal-view-unsupported-on-linux-wants-pgtk-on-wayland ()
+  (let ((display "GdkWaylandDisplay"))
+    (cl-letf (((symbol-function 'pgtk-backend-display-class) (lambda (&rest _) display)))
+      (dlet ((features (cons 'pgtk (remq 'ns features))))
+        (let ((emacs-version "31.1") (system-type 'gnu/linux) (window-system 'pgtk))
+          (should-not (portal-view--unsupported))
+          ;; An X11 or Lucid build has no GTK frame to put a view in.
+          (dlet ((features (remq 'pgtk features)) (window-system 'x))
+            (should (string-match-p "--with-pgtk" (portal-view--unsupported))))
+          (let ((window-system nil))
+            (should (string-match-p "graphical Emacs frame" (portal-view--unsupported))))
+          ;; GDK_BACKEND=x11 puts a pgtk frame on X11.
+          (setq display "GdkX11Display")
+          (should (string-match-p "frame on Wayland; this frame's display is a GdkX11Display"
+                                  (portal-view--unsupported))))))))
 
 (provide 'portal-view-tests)
 ;;; portal-view-tests.el ends here
