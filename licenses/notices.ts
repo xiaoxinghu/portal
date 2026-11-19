@@ -22,8 +22,8 @@ type Component = {
 	source: string;
 	license: string;
 	shipped: string;
-	// Required when any condition holds: swift:IDENTITY@VERSION, bun@VERSION
-	// or npm:NAME@VERSION.
+	// Required when any condition holds: swift:IDENTITY@VERSION,
+	// ghostty@VERSION, bun@VERSION or npm:NAME@VERSION.
 	when: string[];
 	// Relative to licenses/texts, or swift:IDENTITY/PATH inside that Swift
 	// package's source: its SwiftPM checkout, or the patched copy for
@@ -168,8 +168,8 @@ export function inspect(build: string): {
 	};
 	// SwiftPM pins every Swift package but libghostty-spm, which the build
 	// patches: native/libghostty-spm.json pins that one. They are in the
-	// macOS module alone: Linux's portal.so holds Portal's own code, and
-	// loads GTK and Wayland from the system.
+	// macOS module alone: Linux's portal.so holds Portal's own code, loads
+	// GTK and Wayland from the system, and links Ghostty's library below.
 	const pins: {
 		identity: string;
 		state: { version?: string; revision: string };
@@ -185,6 +185,12 @@ export function inspect(build: string): {
 	}
 	for (const pin of pins)
 		ship(`swift:${pin.identity}`, pin.state.version ?? pin.state.revision);
+	// Linux's portal.so links Portal's own build of Ghostty, pinned by
+	// native/ghostty.json, and the build keeps Ghostty's resources beside it.
+	const ghostty: string | undefined = swift
+		? undefined
+		: JSON.parse(read(join(root, "native", "ghostty.json"))).version;
+	if (ghostty) ship("ghostty", ghostty);
 	const bun = bunVersion(build, problems);
 	if (bun) ship("bun", bun);
 	const packages = new Map<string, Package>();
@@ -230,6 +236,10 @@ export function inspect(build: string): {
 				`native/Package.resolved or native/libghostty-spm.json pins ${condition}, which no inventory component covers`,
 			);
 	}
+	if (ghostty && !covers(`ghostty@${ghostty}`))
+		problems.push(
+			`native/ghostty.json pins Ghostty ${ghostty}, which no inventory component covers`,
+		);
 	if (bun && !covers(`bun@${bun}`))
 		problems.push(
 			`portal-host embeds Bun ${bun}; add licenses/texts/bun/${bun}/LICENSE.md from https://github.com/oven-sh/bun/blob/bun-v${bun}/LICENSE.md and an inventory component for bun@${bun}`,
@@ -334,7 +344,7 @@ function index(notices: Notice[], bun?: string): string {
 		"",
 		"Generated from `licenses/inventory.json` and the build's own records; do",
 		"not edit. Portal is licensed under GPL-3.0-or-later; see [LICENSE](LICENSE).",
-		`The components below are part of \`${swift ? "portal.bundle" : "portal.so"}\` or \`portal-host\` and keep`,
+		`The components below are part of \`${swift ? "portal.bundle" : "portal.so"}\`${swift ? "" : ", `ghostty-linux`,"} or \`portal-host\` and keep`,
 		`their own licenses. portal-host embeds the Bun ${bun ?? "(unknown)"} runtime.`,
 		"",
 	];
