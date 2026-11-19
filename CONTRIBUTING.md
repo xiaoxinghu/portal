@@ -141,7 +141,8 @@ apply fails the build, naming it. It needs Git, ncurses' `tic` and the Zig that
 Ghostty's `build.zig.zon` names, 0.17 for this pin, as `zig` on `PATH` or in
 `ZIG`. Ghostty builds everything else from source and links it in; Zig
 downloads those sources on the first build, which takes three to four minutes
-on ten cores. Zig's cache, about 1 GB, is `build/ghostty-cache`. The outputs
+on ten cores. Zig's cache is `build/ghostty-cache`: about 1 GB after one build,
+more with each mode and each changed patch, and safe to delete. The outputs
 are in `build/ghostty-linux`:
 
 - `lib/libghostty.so`, the library under its soname, and `include/ghostty.h`,
