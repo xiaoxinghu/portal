@@ -3,8 +3,9 @@
 [Documentation index](README.md) · [Build and run](../README.md#build-and-run)
 
 Portal's single native module has C Emacs bindings and a C core over a Swift
-macOS backend; a Linux backend, in C, is begun. Navigate by boundaries, not
-separate feature libraries:
+macOS backend; a Linux backend, in C, has views and input and no terminal or
+page to show in them yet. Navigate by boundaries, not separate feature
+libraries:
 
 - [`portal-view.el`](../portal-view.el) owns Lisp-side view lifetime, placement and
   notifications; [ADR 0001](adr/0001-one-portal-view-per-buffer.md) and
@@ -18,11 +19,11 @@ separate feature libraries:
 - [`native/Backend.swift`](../native/Backend.swift) implements those primitives;
   [`native/Package.swift`](../native/Package.swift) defines the native library and
   pinned Ghostty dependency.
-- [`native/Linux/backend.c`](../native/Linux/backend.c) is the same interface
-  for an Emacs built with pgtk, on GTK 3 and Wayland, which CMake links with
-  the core into `portal.so`, with Portal's own build of Ghostty's library.
-  Its operations fail so far: the module builds and loads on Linux, starts
-  Ghostty, and has no views there
+- [`native/Linux`](../native/Linux) is the same interface for an Emacs built
+  with pgtk, on GTK 3 and Wayland, which CMake links with the core into
+  `portal.so`, with Portal's own build of Ghostty's library, which it
+  starts. [Views on Linux](#views-on-linux) says how a view gets into a
+  frame there; what it lacks, each operation says as it fails
   ([building on Linux](../CONTRIBUTING.md#building-on-linux)).
 - The [input bridge](terminal-input-bridge.md), [hosted-app bridge](editor-bridge.md)
   and [launcher panel](launcher-native-panel.md) explain their protocols and platform-specific hazards.
@@ -601,7 +602,9 @@ if it shows the buffer, then any other showing it
 ([ADR 0001](adr/0001-one-portal-view-per-buffer.md)). Without one, it hides the view. Cached
 geometry avoids seam calls when nothing moves. Each placement briefly renames
 the frame so Swift can find its native window; frame information is never cached.
-Cross-frame placement moves the view in one call.
+Cross-frame placement moves the view in one call. After placing or hiding a
+view in a pgtk frame, `portal-view.el` tells the module once Emacs has drawn
+(`portal--drawn`), which [a view on Linux](#views-on-linux) waits for.
 
 Swift's `NativeView` attaches both kinds, each implementing `PortalView`.
 Detached and new views occupy a never-shown offscreen window, keeping every view
@@ -622,3 +625,98 @@ The frame-title trick and geometry cache eliminate polling timers. Native code
 retains no Emacs values or environment pointers after module calls: C bindings
 copy arguments, and the backend sees only copies. Native navigation callbacks
 report to the core, never Lisp.
+
+## Views on Linux
+
+On Linux a view has two parts in its Emacs frame, which is a GTK 3 window on
+Wayland (`native/Linux/views.c`, `input.c`):
+
+- **Its pixels are a Wayland subsurface** of the window's surface, over the
+  pane, with a viewport that sizes it. It is the module's own surface, which
+  no toolkit draws: a view's content attaches buffers to it. Its input
+  region is empty, so the pointer goes through it.
+- **Its input is an invisible GTK widget**, a `GtkEventBox` with an
+  input-only window, in the `GtkFixed` that Emacs draws in, at the pane's
+  place. The pointer over the pane is the widget's, and the widget takes
+  GTK's keyboard focus while the view has the keyboard.
+
+`window-inside-pixel-edges` is the widget's rectangle in the `GtkFixed` as it
+is. The subsurface's position adds where the `GtkFixed` is in the window:
+GTK's menu bar and tool bar move it, and a tab bar, which Emacs draws
+itself, is inside it. The frame is found by its title, as on macOS:
+`gtk_window_list_toplevels` and the temporary title. A child frame has no
+window of its own on pgtk, so a view cannot be placed in one.
+
+**A change is a transaction on the window.** Emacs asks for a view's place
+from a hook that runs before it draws its own new layout; GTK paints
+whenever Emacs looks for input, in the middle of a redisplay too; and a
+view's content draws for a new size on a thread of its own. Left alone, each
+reaches the screen when it is ready, and the view is a frame ahead of the
+panes around it, or behind. So `portal_view_attach` and `portal_view_detach`
+only note what Emacs wants and freeze the window's updates
+(`gdk_window_freeze_updates`). `portal-view.el` tells the module when Emacs
+has drawn: `portal--drawn`, the primitive `portal_frames_drawn`, from a
+timer, since timers run once redisplay is done. The window thaws when each
+of its views that needs a frame for its new size has been presented one, or
+50 ms later, and never later than 150 ms after it froze. GTK then paints
+Emacs's new layout, and the view changes in that paint: its position is sent
+before GTK commits the window's surface, which is when the protocol applies
+it, and its own surface is committed just after, from the frame clock's
+`after-paint`, in the same write to the compositor. macOS needs none of
+this, and does nothing with the call.
+
+**A content draws on its own thread, and the view's lock says who commits.**
+A view's content, a test pattern today and a terminal's presenter later,
+makes `wl_buffer`s and shows them with `portal_linux_present`, from any
+thread, so its frames keep coming while Lisp is busy. The subsurface, its
+position and its end are the main thread's alone. The surface's own state,
+which a commit applies, is set only under the view's lock, and whoever
+holds the lock commits before letting go. Under it the content's thread only
+shows frames of the size the screen has; the main thread hides the view,
+cuts a frame to a pane that shrank, and commits the frame the content
+presented for a pane's new size or for a view about to be shown, which is
+held until the window thaws. Frame callbacks and the buffers' releases
+arrive on the view's own event queue, which the content's thread
+dispatches. `native/Linux/linux.h` has the contract a content is written
+to.
+
+**Keys go to a handler on the window first**, before `GtkWindow`'s own keys,
+such as F10 for the menu bar, and before the focused widget. There the core
+decides, as on macOS: the handler asks it about each press in a view that
+has the keyboard or holds a trigger. A key for the view goes to its
+`GtkIMContext`, which takes the keys that type and compose, and then to its
+content; a key for Emacs is left to GTK. Held events are copies, delivered
+again through `gtk_main_do_event` from the main loop, ahead of GDK's own
+events.
+
+**Emacs's frame stays focused while a view has the keyboard.** When the
+view's widget takes GTK's focus, Emacs's own widget loses it, and Emacs
+would report its frame unfocused, though its window has the keyboard still:
+`frame-focus-state` nil, `focus-out-hook` and `after-focus-change-function`
+run, each time a key is typed into a terminal. On macOS a frame is focused
+while its window is the key window, whatever in it has the keyboard, and
+Portal keeps Linux the same. Advice around `handle-focus-out`, in place
+while a view is open on pgtk, drops the event while a view of that frame
+has the keyboard of a window that has it. The window itself losing the
+keyboard must still reach Emacs, which hears of focus from its own widget
+alone, so the backend gives GTK's focus back to that widget just before
+the window loses the keyboard, and to the view's again when the window has
+it back. The view has its window's keyboard all along, as far as the core
+and the mode line say.
+
+**A view hides while a child frame is over its pane.** pgtk draws a child
+frame, such as a completion popup, in its parent's surface, which a
+subsurface covers. The backend watches the child frames in the `GtkFixed`
+and shows nothing of a view that one overlaps, until it has gone or moved;
+Emacs still has the view in its pane, and the description says `occluded`.
+
+**Lifetime.** A subsurface cannot change its parent, so a view placed in
+another frame gets a new surface there, and its widget moves; the content
+only ever presents buffers, which any surface takes. A detached view is
+parked: its surface shows nothing and its widget is out of the frame. A
+frame deleted with views in it forgets them, and they stay open. GTK
+destroys a window's surface when it hides the window, and the views' with
+it, which come back with the window's next. Ending a view goes in an order
+that keeps a queue from outliving what was made on it: the content stops
+its threads and destroys its buffers, the surface goes, the queue is
+round-tripped and destroyed, then the input method and the widget.

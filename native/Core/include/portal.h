@@ -10,7 +10,7 @@
    status.c where the status panel goes, rex.c the connections to Rex
    servers, and channel.c owns the pipe that carries records to Emacs.
    The platform implements the operations below: the production module links
-   the macOS backend, native/Backend.swift, or on Linux native/Linux/backend.c,
+   the macOS backend, native/Backend.swift, or on Linux the one in native/Linux,
    and the core's tests link test/portal-fake-backend.c.  Nothing here knows
    about Emacs values or a UI toolkit.
 

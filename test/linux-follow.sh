@@ -71,5 +71,6 @@ kill -INT "$recorder"
 wait "$recorder" 2>/dev/null || :
 recorder=
 kill -KILL "$emacs" 2>/dev/null || :
+wait "$emacs" 2>/dev/null || :
 emacs=
 python3 -B "$root/test/linux-recording.py" "$logs/follow.mkv"

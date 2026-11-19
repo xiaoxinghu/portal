@@ -1,8 +1,8 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Run via: sh test/gui-all.sh
-# Every graphical suite that CONTRIBUTING.md lists, each in its own fresh
-# Emacs, one after another, after one build. In the VM the runner builds once;
+# Every graphical suite that CONTRIBUTING.md lists for this system, each in
+# its own fresh Emacs, one after another, after one build. In the VM the runner builds once;
 # the suites, finding no Git metadata there, run on its desktop. A failing
 # suite does not stop the others. Each logs to a directory of its own in
 # PORTAL_TEST_LOGS, or build/gui-all, with its output in test.log and its
@@ -14,12 +14,20 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 # In the VM one stage runs every suite, package-gui.sh's own build included.
 : "${PORTAL_TEST_TIMEOUT:=3600}"
 export PORTAL_TEST_TIMEOUT
-. "$root/test/gui-desktop.sh"
+# The VM is a Mac: Linux's suites run here, on a desktop of their own.
+if [ "$(uname -s)" = Darwin ]; then . "$root/test/gui-desktop.sh"; fi
 logs=${PORTAL_TEST_LOGS:-$root/build/gui-all}
 summary= failed=0
-for suite in views:views-gui input:input-gui launcher:launcher-gui \
-    terminal-shell-startup:terminal-shell-startup rex-server:rex-server-gui \
-    package:package-gui; do
+if [ "$(uname -s)" = Darwin ]; then
+    suites="views:views-gui input:input-gui launcher:launcher-gui
+        terminal-shell-startup:terminal-shell-startup rex-server:rex-server-gui
+        package:package-gui"
+else
+    # Linux has the view machinery alone: its suite, and the recording of a
+    # view following its pane. Each makes a desktop of its own.
+    suites="linux:linux-gui linux-follow:linux-follow"
+fi
+for suite in $suites; do
     name=${suite%%:*} script=test/${suite#*:}.sh
     dir=$logs/$name
     mkdir -p "$dir"

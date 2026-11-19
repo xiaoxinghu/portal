@@ -29,11 +29,9 @@ For an SSH-only test account, set these in its `~/.zshenv` so non-interactive
 builds inherit them. Verify actual native compilation, not only
 `native-comp-available-p`, before saving a prepared VM.
 
-On Linux, where Portal has a module and no views, the checks are those
-[Contributing](../CONTRIBUTING.md#building-on-linux) lists. None is graphical:
-that the built module loads in a graphical Emacs, and what it finds there,
-was checked by hand when it was written, in `emacs -Q` 31.1 with a pgtk frame
-on Wayland.
+On Linux, where Portal has views and nothing to show in them yet, the checks
+are those [Contributing](../CONTRIBUTING.md#building-on-linux) lists, with
+[two graphical ones](#linux-graphical-checks) of their own.
 
 ## Writing tests
 
@@ -323,8 +321,9 @@ each in a fresh Emacs:
 PORTAL_TEST_EXPENSIVE=1 sh test/gui-all.sh
 ```
 
-In the VM, the runner builds once and the suites run one after another in the
-same run. A failing suite does not stop the others; the wrapper ends with each
+On Linux it runs [the two Linux checks](#linux-graphical-checks) instead, as
+`linux` and `linux-follow`, each on its own desktop. In the VM, the runner
+builds once and the suites run one after another in the same run. A failing suite does not stop the others; the wrapper ends with each
 suite's result and fails if any failed. The [real-server tier](#against-a-real-rex-server)
 is "not run" where no Rex Server is installed, and fails nothing. Each suite logs to a directory of its
 own in `PORTAL_TEST_LOGS`, or `build/gui-all` outside the runner: `views`,
@@ -416,6 +415,63 @@ physical-key delivery.
 
 The standalone focus check below also verifies live escape rebinding.
 Physical-key delivery on the affected macOS version still needs a manual check.
+
+## Linux graphical checks
+
+```sh
+sh test/linux-gui.sh
+sh test/linux-follow.sh
+```
+
+Both run after `./build.sh`, each on **a desktop of its own**:
+[linux-desktop.sh](../test/linux-desktop.sh) starts a second Hyprland inside
+your Wayland session, gives it one headless output, 2560 by 1600 device
+pixels at scale 2 and 60 Hz, and runs the check there. Its windows are on no
+screen of yours, and what it types and clicks goes to that Hyprland's own
+seat, never to the window you are working in, so you can keep working. The
+second Hyprland needs a window on your desktop to start; where your desktop
+is Hyprland too, that window goes to a special workspace out of sight, and
+it is closed within a moment either way. The scripts exit 77, "could not run
+here", without Hyprland 0.56 or newer and a Wayland session to start it in.
+It is the compositor the views were written against: no other has run them.
+
+`linux-gui.sh` runs [the suite](../test/portal-linux-gui-tests.el) in one
+fresh Emacs through `gui-ert.sh`, and then an Emacs that quits with a view
+open. Pass an ERT selector regexp to run part of it. It needs `grim`, which
+reads the output's pixels, and `wtype`, which types; it points and clicks
+with `build/linux/portal-test-pointer`, which the build makes from
+[linux-pointer.c](../test/linux-pointer.c). The views' content is the test
+pattern of `native/Linux/pattern.c`: a red edge one device pixel wide around
+a magenta fill, over a pane that is green underneath, so a view exactly over
+its pane shows a red corner at each of the pane's and no green anywhere.
+Keys, clicks and the pointer go through the compositor and GDK, as a
+person's do, and the tests read what the pattern says it was given.
+
+`linux-follow.sh` is the check that a view is never out of place.
+[A fresh Emacs](../test/portal-linux-follow.el) changes a view's pane, one
+command every 0.4 s: splits, a pane made larger, one pane again, its buffer
+switched away and back, a second frame, and another program's window that
+halves the first. `wf-recorder` records the output meanwhile, lossless at 60
+frames a second, and [linux-recording.py](../test/linux-recording.py) reads
+every frame, never more than one at a time: the view must be over all of
+its pane and nothing else, to the pixel along one column and one row. It
+prints each frame that is not, and exits 1 if there is one.
+`PORTAL_FOLLOW_ROUNDS` repeats the steps (default 3),
+`PORTAL_FOLLOW_STEPS` chooses them, and the argument `fill` uses a pattern
+of one pixel stretched over the pane. The recording stays in
+`PORTAL_TEST_LOGS`, or `build/linux-follow`. It needs `wf-recorder`,
+`ffmpeg` and Python 3.
+
+One kind of frame is counted apart, not as out of place: a window the
+compositor has just resized shows its last frame at the new size, stretched
+by the compositor and then cut or padded by GTK, until Emacs has drawn one
+of that size. Emacs's own pixels are not where it drew them then, and no
+view could be over its pane. The check tells such a frame by the fringes
+beside the echo area and says how many there were: one or two for each
+resize, on this compositor without its animations.
+
+Run both after changing `native/Linux` or `portal-view.el`, and say which
+machine and compositor ran them: a pass says what that compositor does.
 
 ## App host checks
 
