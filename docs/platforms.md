@@ -60,10 +60,15 @@ says what a build needs and which checks run.
 
 The view machinery was run on 2026-11-20 on one machine, with a test pattern
 for content: Arch Linux on aarch64 (an M1 Pro under Asahi), Hyprland 0.56.2,
-Arch's `emacs-wayland` 31.1, GTK 3.24.52, GCC 16.1, CMake 4.5, Zig 0.17.1 and
-Bun 1.3.14, Portal's pin, at scale 2. `sh test/linux-gui.sh` passed, 16 tests,
-and `sh test/linux-follow.sh` found no frame out of place in a recording of
-2,996. No other compositor, no other scale and no x64 machine has run it.
+The view machinery was run on 2026-11-20 on one machine, with a test pattern
+for content: Arch Linux on aarch64 (an M1 Pro under Asahi), Hyprland 0.56.2,
+Arch's `emacs-wayland` 31.1, GTK 3.24.52, GCC 16.1, CMake 4.5, Zig 0.17.1 and Bun
+1.3.14, Portal's pin, at scale 2. `sh test/linux-gui.sh` passed, 17 tests,
+and `sh test/linux-follow.sh` found no frame out of place in recordings of
+3,719 frames and, with the stretched pattern, 3,715. They ran on the
+[test desktop](testing.md#linux-graphical-checks), a headless output of a
+second Hyprland with no animations. No other compositor, no other scale, no
+screen a person looks at and no x64 machine has run it.
 
 ## Requirements
 
