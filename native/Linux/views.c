@@ -73,12 +73,19 @@
 static struct portal_view *views;    /* Every view there is. */
 static struct portal_frame *frames;  /* Every frame that has views. */
 
-bool portal_linux_view_alive(const struct portal_view *view)
+struct portal_view *portal_linux_view_find(uint64_t serial)
 {
-    for (const struct portal_view *other = views; other; other = other->all)
-        if (other == view)
-            return true;
-    return false;
+    for (struct portal_view *view = views; view; view = view->all)
+        if (view->serial == serial)
+            return view;
+    return NULL;
+}
+
+uint64_t *portal_linux_serial(uint64_t serial)
+{
+    uint64_t *copy = g_new(uint64_t, 1);
+    *copy = serial;
+    return copy;
 }
 
 /* How long a window stays frozen at most, in milliseconds: for Emacs to say
@@ -266,9 +273,9 @@ static void conceal(struct portal_view *view)
    only a paint shows it. */
 static gboolean kick(gpointer data)
 {
-    struct portal_view *view = data;
     /* The view may have ended since its thread asked. */
-    if (!portal_linux_view_alive(view) || !view->frame)
+    struct portal_view *view = portal_linux_view_find(*(uint64_t *) data);
+    if (!view || !view->frame)
         return G_SOURCE_REMOVE;
     if (view->frame->frozen)
         consider(view->frame);
@@ -317,7 +324,7 @@ enum portal_presented portal_linux_present(struct portal_view *view, struct wl_b
     /* A held frame waits for GTK to paint, which nothing else may ask for,
        and GTK may wait for it. */
     if (result == PORTAL_HELD)
-        g_idle_add_full(G_PRIORITY_DEFAULT, kick, view, NULL);
+        g_idle_add_full(G_PRIORITY_DEFAULT, kick, portal_linux_serial(view->serial), g_free);
     return result;
 }
 
@@ -728,6 +735,8 @@ bool portal_view_create(portal_kind kind, portal_string target, const portal_opt
     }
     memcpy(name, target.data, target.length);
     name[target.length] = '\0';
+    static uint64_t serials;
+    view->serial = ++serials;
     view->kind = kind;
     view->target = name;
     view->target_length = target.length;

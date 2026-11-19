@@ -596,15 +596,17 @@ bool portal_view_copy(portal_view *view, portal_text *error)
 static void pasted(GtkClipboard *clipboard, const gchar *text, gpointer data)
 {
     (void) clipboard;
-    struct portal_view *view = data;
     /* The clipboard's owner answers later, and the view may have ended. */
-    if (text && portal_linux_view_alive(view))
+    struct portal_view *view = portal_linux_view_find(*(uint64_t *) data);
+    g_free(data);
+    if (text && view)
         view->class->paste(view->content, text);
 }
 
 bool portal_view_paste(portal_view *view, portal_text *error)
 {
     (void) error;
-    gtk_clipboard_request_text(gtk_clipboard_get(GDK_SELECTION_CLIPBOARD), pasted, view);
+    gtk_clipboard_request_text(gtk_clipboard_get(GDK_SELECTION_CLIPBOARD), pasted,
+                               portal_linux_serial(view->serial));
     return true;
 }

@@ -111,6 +111,7 @@ struct portal_geometry {
    portal_view_destroy. */
 struct portal_view {
     struct portal_view *all; /* The next of every view there is (views.c). */
+    uint64_t serial;         /* Its own, never another view's: see portal_linux_view_find. */
     portal_kind kind;
     char *target; /* For records, NUL-terminated. */
     size_t target_length;
@@ -199,9 +200,13 @@ struct portal_frame {
 
 /* views.c, for input.c and pattern.c. */
 
-/* Whether VIEW is a view that exists: for work that finishes after a call
-   returns, which a view may not outlive. */
-bool portal_linux_view_alive(const struct portal_view *view);
+/* The view whose serial is SERIAL, or NULL once it has ended: for work that
+   finishes after a call returns, which a view may not outlive.  Such work
+   keeps the serial and never the view, whose address a later view may
+   have. */
+struct portal_view *portal_linux_view_find(uint64_t serial);
+/* SERIAL in memory of its own, for a callback's data, which g_free frees. */
+uint64_t *portal_linux_serial(uint64_t serial);
 /* Have GTK paint in VIEW's frame soon, which applies what waits. */
 void portal_linux_view_repaint(struct portal_view *view);
 

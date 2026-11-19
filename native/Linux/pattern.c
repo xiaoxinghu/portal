@@ -392,7 +392,7 @@ static void pattern_pointer(void *content, const GdkEvent *event)
 }
 
 struct answer {
-    struct portal_view *view;
+    uint64_t view; /* Its serial. */
     bool used;
 };
 
@@ -400,8 +400,9 @@ static gboolean answer(gpointer data)
 {
     struct answer *answer = data;
     /* The view may have ended before its app answered. */
-    if (portal_linux_view_alive(answer->view))
-        portal_linux_input_settle(answer->view, answer->used);
+    struct portal_view *view = portal_linux_view_find(answer->view);
+    if (view)
+        portal_linux_input_settle(view, answer->used);
     return G_SOURCE_REMOVE;
 }
 
@@ -411,7 +412,7 @@ static void pattern_offer(void *content, const GdkEventKey *event)
     char name[96];
     gunichar character = gdk_keyval_to_unicode(gdk_keyval_to_lower(event->keyval));
     struct answer *later = g_new(struct answer, 1);
-    later->view = pattern->view;
+    later->view = pattern->view->serial;
     later->used = character && pattern->uses && g_utf8_strchr(pattern->uses, -1, character);
     pattern->offered++;
     if (later->used) {
