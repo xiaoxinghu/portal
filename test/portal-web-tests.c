@@ -406,7 +406,7 @@ static void test_local_links_go_to_emacs(void)
     snprintf(escape, sizeof escape, "escape %%s %" PRId64 " 0\n", serial);
     CHECK(sent(web, escape)); /* The first bridge record still waits. */
     CHECK(portal_input_owner(text(web)) == PORTAL_OWNER_EMACS);
-    char expected[PIPE_BUF + 128];
+    char expected[sizeof url + 128];
     snprintf(expected, sizeof expected,
              "[{\"type\":\"follow\",\"url\":\"%s\"},{\"type\":\"follow\",\"url\":\"file:///tmp/other.md\"}]",
              url);

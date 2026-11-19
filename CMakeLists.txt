@@ -4,8 +4,12 @@ cmake_minimum_required(VERSION 3.29)
 # CMake orchestrates the native module, Bun host and integration tests.
 project(portal LANGUAGES C)
 
+if(NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    message(FATAL_ERROR "Portal requires macOS with AppKit and WebKit, or Linux with GTK 3 and Wayland")
+endif()
 if(NOT APPLE)
-    message(FATAL_ERROR "Portal requires macOS with AppKit and WebKit")
+    # For clangd: SourceKit-LSP reads native/Package.swift on macOS instead.
+    set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 endif()
 
 include(CTest)
@@ -98,10 +102,14 @@ if(BUILD_TESTING)
             -l "${CMAKE_SOURCE_DIR}/test/portal-build-tests.el"
             ${ert_batch})
     set_tests_properties(build PROPERTIES TIMEOUT 60)
-    add_test(NAME vm-runner COMMAND "${BUN}" test "${CMAKE_SOURCE_DIR}/test/vm.test.ts")
-    set_tests_properties(vm-runner PROPERTIES TIMEOUT 30 ENVIRONMENT "EMACS=${EMACS}")
-    add_test(NAME vm-retention COMMAND "${BUN}" test "${CMAKE_SOURCE_DIR}/test/vm-retention.test.ts")
-    set_tests_properties(vm-retention PROPERTIES TIMEOUT 30)
+    # The runner of graphical checks in a macOS VM is written for macOS on
+    # both ends: lockf, chflags, APFS clones.
+    if(APPLE)
+        add_test(NAME vm-runner COMMAND "${BUN}" test "${CMAKE_SOURCE_DIR}/test/vm.test.ts")
+        set_tests_properties(vm-runner PROPERTIES TIMEOUT 30 ENVIRONMENT "EMACS=${EMACS}")
+        add_test(NAME vm-retention COMMAND "${BUN}" test "${CMAKE_SOURCE_DIR}/test/vm-retention.test.ts")
+        set_tests_properties(vm-retention PROPERTIES TIMEOUT 30)
+    endif()
     add_test(NAME gui-runner COMMAND "${BUN}" test "${CMAKE_SOURCE_DIR}/test/gui-ert.test.ts")
     set_tests_properties(gui-runner PROPERTIES TIMEOUT 30)
     add_test(NAME gui-verdict
@@ -211,64 +219,112 @@ if(BUILD_TESTING)
             ${ert_batch})
     set_tests_properties(terminal-bindings PROPERTIES TIMEOUT 30)
     # The Rex client on the built module, whose sockets need no window, against
-    # test/fake-rex-server.py on sockets of its own.
-    add_test(NAME rex
-        COMMAND "${CMAKE_COMMAND}" -E env "PORTAL_TEST_BUILD=${CMAKE_BINARY_DIR}"
-            ${test_emacs} -L "${CMAKE_SOURCE_DIR}"
-            -l "${CMAKE_SOURCE_DIR}/test/portal-rex-tests.el"
-            ${ert_batch})
-    set_tests_properties(rex PROPERTIES TIMEOUT 60)
+    # test/fake-rex-server.py on sockets of its own. The Linux backend has no
+    # sockets yet.
+    if(APPLE)
+        add_test(NAME rex
+            COMMAND "${CMAKE_COMMAND}" -E env "PORTAL_TEST_BUILD=${CMAKE_BINARY_DIR}"
+                ${test_emacs} -L "${CMAKE_SOURCE_DIR}"
+                -l "${CMAKE_SOURCE_DIR}/test/portal-rex-tests.el"
+                ${ert_batch})
+        set_tests_properties(rex PROPERTIES TIMEOUT 60)
+    endif()
     add_test(NAME excalidraw
         COMMAND ${test_emacs} -L "${CMAKE_SOURCE_DIR}"
             -l "${CMAKE_SOURCE_DIR}/test/portal-excalidraw-tests.el"
             ${ert_batch})
     set_tests_properties(excalidraw PROPERTIES TIMEOUT 30)
 endif()
-# SwiftPM builds the one native module: the C bindings and the Swift backend.
-# Keep the bundle intact: Ghostty locates terminfo and shell integration here.
-file(WRITE "${CMAKE_BINARY_DIR}/emacs-include.txt" "${EMACS_INCLUDE}\n")
-set(native_package "${CMAKE_SOURCE_DIR}/native")
-# The Swift package builds libghostty-spm from build/libghostty-spm: its source at
-# the release native/libghostty-spm.json pins, with native/patches/libghostty-spm
-# applied. Configure again, and so make that copy again, when any of them changes.
-set(ghostty_pin "${native_package}/libghostty-spm.json")
-set(ghostty_patches "${native_package}/patches/libghostty-spm")
-set(ghostty_source "${CMAKE_BINARY_DIR}/libghostty-spm")
-file(GLOB ghostty_patch_files CONFIGURE_DEPENDS "${ghostty_patches}/*.patch")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${ghostty_pin}" "${CMAKE_SOURCE_DIR}/tools/patch-libghostty-spm.sh" ${ghostty_patch_files})
-execute_process(
-    COMMAND sh "${CMAKE_SOURCE_DIR}/tools/patch-libghostty-spm.sh"
-        "${ghostty_pin}" "${ghostty_patches}" "${ghostty_source}"
-    COMMAND_ERROR_IS_FATAL ANY)
-set(native_scratch "${CMAKE_BINARY_DIR}/swift")
-set(native_bundle "${CMAKE_BINARY_DIR}/portal.bundle/Contents")
-execute_process(
-    COMMAND "${CMAKE_COMMAND}" -E env "EMACS_INCLUDE=${EMACS_INCLUDE}"
-        "PORTAL_LIBGHOSTTY_SPM=${ghostty_source}"
-        xcrun swift build --package-path "${native_package}"
-        --scratch-path "${native_scratch}" -c release --show-bin-path
-    OUTPUT_VARIABLE native_bin OUTPUT_STRIP_TRAILING_WHITESPACE
-    COMMAND_ERROR_IS_FATAL ANY)
-add_custom_target(portal ALL
-    COMMAND "${CMAKE_COMMAND}" -E env "EMACS_INCLUDE=${EMACS_INCLUDE}"
-        "PORTAL_LIBGHOSTTY_SPM=${ghostty_source}"
-        xcrun swift build --package-path "${native_package}"
-        --scratch-path "${native_scratch}" -c release --product portal
-        --force-resolved-versions
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${native_bundle}/MacOS" "${native_bundle}/Resources"
-    COMMAND "${CMAKE_COMMAND}" -E copy "${native_package}/Info.plist" "${native_bundle}/Info.plist"
-    COMMAND "${CMAKE_COMMAND}" -E copy_directory
-        "${native_bin}/GhosttyKit_GhosttyTerminal.bundle"
-        "${native_bundle}/Resources/GhosttyKit_GhosttyTerminal.bundle"
+if(APPLE)
+    # SwiftPM builds the one native module: the C bindings and the Swift backend.
+    # Keep the bundle intact: Ghostty locates terminfo and shell integration here.
+    file(WRITE "${CMAKE_BINARY_DIR}/emacs-include.txt" "${EMACS_INCLUDE}\n")
+    set(native_package "${CMAKE_SOURCE_DIR}/native")
+    # The Swift package builds libghostty-spm from build/libghostty-spm: its source at
+    # the release native/libghostty-spm.json pins, with native/patches/libghostty-spm
+    # applied. Configure again, and so make that copy again, when any of them changes.
+    set(ghostty_pin "${native_package}/libghostty-spm.json")
+    set(ghostty_patches "${native_package}/patches/libghostty-spm")
+    set(ghostty_source "${CMAKE_BINARY_DIR}/libghostty-spm")
+    file(GLOB ghostty_patch_files CONFIGURE_DEPENDS "${ghostty_patches}/*.patch")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${ghostty_pin}" "${CMAKE_SOURCE_DIR}/tools/patch-libghostty-spm.sh" ${ghostty_patch_files})
+    execute_process(
+        COMMAND sh "${CMAKE_SOURCE_DIR}/tools/patch-libghostty-spm.sh"
+            "${ghostty_pin}" "${ghostty_patches}" "${ghostty_source}"
+        COMMAND_ERROR_IS_FATAL ANY)
+    set(native_scratch "${CMAKE_BINARY_DIR}/swift")
+    set(native_bundle "${CMAKE_BINARY_DIR}/portal.bundle/Contents")
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" -E env "EMACS_INCLUDE=${EMACS_INCLUDE}"
+            "PORTAL_LIBGHOSTTY_SPM=${ghostty_source}"
+            xcrun swift build --package-path "${native_package}"
+            --scratch-path "${native_scratch}" -c release --show-bin-path
+        OUTPUT_VARIABLE native_bin OUTPUT_STRIP_TRAILING_WHITESPACE
+        COMMAND_ERROR_IS_FATAL ANY)
+    add_custom_target(portal ALL
+        COMMAND "${CMAKE_COMMAND}" -E env "EMACS_INCLUDE=${EMACS_INCLUDE}"
+            "PORTAL_LIBGHOSTTY_SPM=${ghostty_source}"
+            xcrun swift build --package-path "${native_package}"
+            --scratch-path "${native_scratch}" -c release --product portal
+            --force-resolved-versions
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${native_bundle}/MacOS" "${native_bundle}/Resources"
+        COMMAND "${CMAKE_COMMAND}" -E copy "${native_package}/Info.plist" "${native_bundle}/Info.plist"
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory
+            "${native_bin}/GhosttyKit_GhosttyTerminal.bundle"
+            "${native_bundle}/Resources/GhosttyKit_GhosttyTerminal.bundle"
+        # Publish atomically: never overwrite a library already mapped by Emacs.
+        COMMAND "${CMAKE_COMMAND}" -E copy
+            "${native_bin}/libportal.dylib" "${native_bundle}/MacOS/.portal.dylib"
+        COMMAND "${CMAKE_COMMAND}" -E rename
+            "${native_bundle}/MacOS/.portal.dylib" "${native_bundle}/MacOS/portal.dylib"
+        BYPRODUCTS "${native_bundle}/MacOS/portal.dylib"
+        COMMENT "Building the Portal native module"
+        VERBATIM)
+else()
+    # Linux: this project compiles the one native module itself, the C bindings
+    # and core with the GTK3 backend, into portal.so. No Swift and, until the
+    # terminal is written, no Ghostty.
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(portal_platform REQUIRED IMPORTED_TARGET gtk+-3.0 wayland-client)
+    find_package(Threads REQUIRED)
+    add_library(portal-module MODULE native/Core/emacs.c ${PORTAL_CORE_SOURCES}
+        native/Linux/backend.c)
+    target_include_directories(portal-module PRIVATE
+        native/Core/include native/Core "${EMACS_INCLUDE}")
+    target_link_libraries(portal-module PRIVATE PkgConfig::portal_platform Threads::Threads)
+    target_compile_options(portal-module PRIVATE -Wall -Wextra -Werror)
+    # A primitive of portal.h that the backend lacks fails the link here, not a
+    # call in Emacs later; and only Emacs's entry points leave the module.
+    set(module_exports "${CMAKE_SOURCE_DIR}/native/Linux/portal.map")
+    target_link_options(portal-module PRIVATE
+        -Wl,--no-undefined "-Wl,--version-script=${module_exports}")
+    set_target_properties(portal-module PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+        PREFIX "" OUTPUT_NAME portal LINK_DEPENDS "${module_exports}"
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/linux")
     # Publish atomically: never overwrite a library already mapped by Emacs.
-    COMMAND "${CMAKE_COMMAND}" -E copy
-        "${native_bin}/libportal.dylib" "${native_bundle}/MacOS/.portal.dylib"
-    COMMAND "${CMAKE_COMMAND}" -E rename
-        "${native_bundle}/MacOS/.portal.dylib" "${native_bundle}/MacOS/portal.dylib"
-    BYPRODUCTS "${native_bundle}/MacOS/portal.dylib"
-    COMMENT "Building the Portal native module"
-    VERBATIM)
+    add_custom_command(
+        OUTPUT "${CMAKE_BINARY_DIR}/portal.so"
+        COMMAND "${CMAKE_COMMAND}" -E copy
+            "$<TARGET_FILE:portal-module>" "${CMAKE_BINARY_DIR}/.portal.so"
+        COMMAND "${CMAKE_COMMAND}" -E rename
+            "${CMAKE_BINARY_DIR}/.portal.so" "${CMAKE_BINARY_DIR}/portal.so"
+        DEPENDS portal-module
+        COMMENT "Publishing the Portal native module"
+        VERBATIM)
+    add_custom_target(portal ALL DEPENDS "${CMAKE_BINARY_DIR}/portal.so")
+    if(BUILD_TESTING)
+        # The built module in batch Emacs: what it answers with no view, and
+        # what it says of each part the backend lacks.
+        add_test(NAME linux-module
+            COMMAND "${CMAKE_COMMAND}" -E env "PORTAL_TEST_BUILD=${CMAKE_BINARY_DIR}"
+                ${test_emacs} --module-assertions
+                -l "${CMAKE_SOURCE_DIR}/test/portal-linux-module-tests.el"
+                ${ert_batch})
+        set_tests_properties(linux-module PROPERTIES TIMEOUT 30)
+    endif()
+endif()
 
 # Portal's license and the notices for what both outputs contain, derived from
 # the Swift pins, the host's Bun and the bundler records. See docs/licenses.md.
@@ -278,13 +334,15 @@ add_custom_target(portal-licenses ALL
     VERBATIM)
 add_dependencies(portal-licenses portal portal-ui-host)
 if(BUILD_TESTING)
-    # Portal's patches to libghostty-spm, tested by the package's own tests on
-    # real Ghostty surfaces: those the patches add and the in-memory session's.
-    add_test(NAME libghostty-spm
-        COMMAND xcrun swift test --package-path "${ghostty_source}"
-            --scratch-path "${CMAKE_BINARY_DIR}/libghostty-spm-tests"
-            --filter "InMemoryTerminalSession")
-    set_tests_properties(libghostty-spm PROPERTIES TIMEOUT 600 COST 100)
+    if(APPLE)
+        # Portal's patches to libghostty-spm, tested by the package's own tests on
+        # real Ghostty surfaces: those the patches add and the in-memory session's.
+        add_test(NAME libghostty-spm
+            COMMAND xcrun swift test --package-path "${ghostty_source}"
+                --scratch-path "${CMAKE_BINARY_DIR}/libghostty-spm-tests"
+                --filter "InMemoryTerminalSession")
+        set_tests_properties(libghostty-spm PROPERTIES TIMEOUT 600 COST 100)
+    endif()
     add_test(NAME licenses
         COMMAND "${CMAKE_COMMAND}" -E env "PORTAL_BUILD=${CMAKE_BINARY_DIR}"
             "${BUN}" test "${CMAKE_SOURCE_DIR}/test/licenses.test.ts")
@@ -299,6 +357,9 @@ add_custom_target(portal-build-start
     VERBATIM)
 add_dependencies(portal portal-build-start)
 add_dependencies(portal-ui-host portal-build-start)
+if(TARGET portal-module)
+    add_dependencies(portal-module portal-build-start)
+endif()
 # Check the module and host together, then record the build unless its sources
 # changed meanwhile. The new module loads only in this disposable batch Emacs,
 # never in one that uses Portal.

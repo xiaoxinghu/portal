@@ -34,11 +34,12 @@ let package = Package(
         // same sources into the fake-backend tests.
         .target(name: "PortalCore", path: "Core", exclude: ["CMakeLists.txt", "scripts"],
                 cSettings: [.unsafeFlags(["-I", emacsInclude, "-Wall", "-Wextra", "-Werror"])]),
-        // The macOS backend; all Swift features share one target.
+        // The macOS backend; all Swift features share one target. Linux/ holds the
+        // C backend that CMake builds there instead.
         .target(name: "Portal", dependencies: [
             "PortalCore", .product(name: "GhosttyTerminal", package: "libghostty-spm"),
             .product(name: "GhosttyTheme", package: "libghostty-spm")
-        ], path: ".", exclude: ["Core", "Info.plist"],
+        ], path: ".", exclude: ["Core", "Linux", "Info.plist"],
            sources: ["Backend.swift", "CoreCalls.swift", "NativeHost.swift", "NativeInput.swift",
                      "Views.swift", "WebView.swift", "Terminal.swift", "Launcher.swift",
                      "Hotkeys.swift", "KeyPost.swift",

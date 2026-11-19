@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -47,21 +48,51 @@ ssize_t (*portal_channel_write)(int, const void *, size_t) = write;
    Emacs only reads the other end.  Nothing here changes how the process
    handles signals. */
 
+/* A write after Emacs closes its end must fail with EPIPE instead of raising
+   SIGPIPE, whose default action would kill Emacs. */
 #ifdef F_SETNOSIGPIPE
+/* macOS: the descriptor itself says so. */
 static bool ignore_sigpipe(int fd)
 {
     return fcntl(fd, F_SETNOSIGPIPE, 1) != -1;
 }
+
+static ssize_t write_quietly(int fd, const void *bytes, size_t length)
+{
+    return portal_channel_write(fd, bytes, length);
+}
 #else
-/* A future concern: without a per-descriptor setting, as on Linux, writes
-   must block SIGPIPE in the writing thread and consume the one a closed
-   reader raises there (pthread_sigmask, sigpending, sigtimedwait). */
-#error "Portal needs F_SETNOSIGPIPE to write to Emacs's pipe without SIGPIPE"
+/* Without a per-descriptor setting, as on Linux, each write blocks SIGPIPE in
+   the writing thread and takes the one a closed reader raised, which is that
+   thread's own, before the thread's mask is as it was.  One pending before
+   the write was someone else's and stays. */
+static bool ignore_sigpipe(int fd)
+{
+    (void) fd;
+    return true;
+}
+
+static ssize_t write_quietly(int fd, const void *bytes, size_t length)
+{
+    sigset_t sigpipe, mask, pending;
+    sigemptyset(&sigpipe);
+    sigaddset(&sigpipe, SIGPIPE);
+    pthread_sigmask(SIG_BLOCK, &sigpipe, &mask);
+    bool was_pending = !sigpending(&pending) && sigismember(&pending, SIGPIPE);
+    ssize_t written = portal_channel_write(fd, bytes, length);
+    int error = errno;
+    if (written < 0 && error == EPIPE && !was_pending)
+        while (sigtimedwait(&sigpipe, NULL, &(struct timespec) {0}) < 0 && errno == EINTR)
+            continue;
+    pthread_sigmask(SIG_SETMASK, &mask, NULL);
+    errno = error;
+    return written;
+}
 #endif
 
 /* Make FD safe to own: writes never block, child processes do not inherit
-   it, and a write after Emacs closes its end fails with EPIPE instead of
-   raising SIGPIPE, whose default action would kill Emacs. */
+   it, and, where the descriptor can say so, a write after Emacs closes its
+   end raises no SIGPIPE. */
 static bool prepare(int fd)
 {
     int status = fcntl(fd, F_GETFL), flags = fcntl(fd, F_GETFD);
@@ -78,8 +109,8 @@ static int write_first(void)
 {
     const struct record *record = channel.first;
     while (channel.sent < record->length) {
-        ssize_t written = portal_channel_write(channel.fd, record->line + channel.sent,
-                                               record->length - channel.sent);
+        ssize_t written = write_quietly(channel.fd, record->line + channel.sent,
+                                        record->length - channel.sent);
         if (written > 0)
             channel.sent += (size_t) written;
         else if (written == 0 || errno == EAGAIN || errno == EWOULDBLOCK)

@@ -16,7 +16,8 @@ separate claims.
 | GNU Emacs 31.1 NS | any | Intel | Unverified | Unverified |
 | x86_64 Emacs under Rosetta | any | Apple Silicon | Unsupported | Unsupported |
 | GNU Emacs 30 or earlier | any | any | Unsupported: refused | Unsupported: refused |
-| Text frames, terminal-only or non-NS builds, other systems | — | — | Unsupported: refused | Unsupported: refused |
+| GNU Emacs 31.1 pgtk on Linux, Wayland | — | any | Unsupported: no views yet, see [Linux](#linux) | Unsupported: refused |
+| Text frames, terminal-only builds, non-NS builds on macOS, other systems | — | — | Unsupported: refused | Unsupported: refused |
 
 Revision `a360712c9d272d950d8d8255ef74570f7e90b7d9` is the `emacs-31.1` release
 tag. "Refused" means Portal stops with a message naming the requirement before
@@ -42,9 +43,25 @@ with native subroutine trampolines enabled. Builds whose
 the launcher's native review in [its design notes](launcher-native-panel.md),
 not only passing checks; see [launcher safety](launcher.md#set-up-safely).
 
+## Linux
+
+Portal does not work on Linux yet. Its native module builds there and loads
+into an Emacs 31.1 built with pgtk, and Portal's Lisp lets a pgtk frame on
+Wayland through to it, but the module has no views: opening a terminal or a
+page fails with "Portal has no native views on Linux yet". Other frames are
+refused before any native code loads, with the reason: an Emacs built
+without pgtk, a text terminal, or a pgtk frame that GDK put on X11.
+[Building on Linux](../CONTRIBUTING.md#building-on-linux) says what a build
+needs and which checks run.
+
+That much was run on 2026-11-19 on one machine: Arch Linux on aarch64 (an M1
+Pro under Asahi), Hyprland 0.56.2, Arch's `emacs-wayland` 31.1, GTK 3.24.52,
+GCC 16.1, CMake 4.5 and Bun 1.3.14, Portal's pin. No x64 machine has built
+it.
+
 ## Requirements
 
-Building Portal needs:
+Building Portal on macOS needs:
 
 - the Emacs that will load the module, and its `emacs-module.h`;
 - Xcode with Swift 6.2 or newer and Clang. The Ghostty wrapper's

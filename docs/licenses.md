@@ -69,6 +69,11 @@ compiles in js-yaml; Excalidraw compiles in fonteditor-core, with Google's woff2
 and Brotli as WebAssembly, and harfbuzzjs with HarfBuzz; Cytoscape contains
 Thenable.
 
+A Linux build's module, `build/portal.so`, contains Portal's C core and C
+backend and nothing of another project: it loads GTK 3 and `wayland-client`
+from the system. So `build/licenses` there has the host's notices and none of
+the Swift packages' or Ghostty's, until the module links Ghostty.
+
 Both outputs link only macOS system frameworks and libraries, including the Swift
 runtime and libc++, which Portal does not redistribute. A search of Portal's own
 sources for license and copyright markers found no copied third-party code.

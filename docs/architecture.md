@@ -3,7 +3,8 @@
 [Documentation index](README.md) · [Build and run](../README.md#build-and-run)
 
 Portal's single native module has C Emacs bindings and a C core over a Swift
-macOS backend. Navigate by boundaries, not separate feature libraries:
+macOS backend; a Linux backend, in C, is begun. Navigate by boundaries, not
+separate feature libraries:
 
 - [`portal-view.el`](../portal-view.el) owns Lisp-side view lifetime, placement and
   notifications; [ADR 0001](adr/0001-one-portal-view-per-buffer.md) and
@@ -17,6 +18,11 @@ macOS backend. Navigate by boundaries, not separate feature libraries:
 - [`native/Backend.swift`](../native/Backend.swift) implements those primitives;
   [`native/Package.swift`](../native/Package.swift) defines the native library and
   pinned Ghostty dependency.
+- [`native/Linux/backend.c`](../native/Linux/backend.c) is the same interface
+  for an Emacs built with pgtk, on GTK 3 and Wayland, which CMake links with
+  the core into `portal.so`. Its operations fail so far: the module builds and
+  loads on Linux, and has no views there
+  ([building on Linux](../CONTRIBUTING.md#building-on-linux)).
 - The [input bridge](terminal-input-bridge.md), [hosted-app bridge](editor-bridge.md)
   and [launcher panel](launcher-native-panel.md) explain their protocols and platform-specific hazards.
 - [`portal-rex.el`](../portal-rex.el) is Emacs's end of a connection to a Rex

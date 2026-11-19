@@ -31,12 +31,20 @@
 (defvar portal-input--origin nil)
 (defvar portal-input--serial nil)
 
+(defconst portal-input--default-escape-key
+  (if (eq system-type 'darwin) "s-." "C-<escape>")
+  "The return-to-Emacs key until the user sets one.
+Command-period on macOS.  Elsewhere Super is the desktop's modifier, which
+a compositor such as Hyprland takes before Emacs sees a key, so the default
+there is Control-Escape, which neither a terminal's programs nor web pages
+are sent.")
+
 (defvar portal-input-mode-map
   (let ((map (make-sparse-keymap)))
     (keymap-set map "RET" #'portal-input-focus)
     ;; A click reaches Emacs only on a pane without the view: its placard.
     (keymap-set map "<mouse-1>" #'portal-input-focus)
-    (keymap-set map "s-." #'portal-input-unfocus)
+    (keymap-set map portal-input--default-escape-key #'portal-input-unfocus)
     map)
   "Keys of a Portal view's buffer while Emacs has the keyboard.")
 
@@ -78,7 +86,7 @@ reads it: a character and a sum of `portal-input--modifiers' values."
                               when (memq mod mods) sum bit)))
       (portal-input--chord value))))
 
-(defvar portal-input--escape-installed "s-."
+(defvar portal-input--escape-installed portal-input--default-escape-key
   "Escape key currently installed in the wrapper keymap.")
 
 (defun portal-input--check-module ()
@@ -98,14 +106,17 @@ reads it: a character and a sum of `portal-input--modifiers' values."
     (keymap-set portal-input-mode-map value #'portal-input-unfocus)
     (setq portal-input--escape-installed value)))
 
-(defcustom portal-input-escape-key "s-."
+(defcustom portal-input-escape-key portal-input--default-escape-key
   "Key that returns from any native view to Emacs and stays there.
 This key is reserved before the embedded app or terminal sees it, even
 while a command handoff is pending.  RET enters the view again.
+The default is \"s-.\" on macOS and \"C-<escape>\" on Linux, where the
+desktop keeps Super for itself.
 Use one modified printable ASCII key or <escape>, with Control, Meta
 or Super: for example \"s-.\", \"C-s-g\" or \"C-<escape>\".
 Use resulting punctuation, such as \"s-!\", not \"s-S-1\".
-System-wide macOS shortcuts still take precedence.  Changes apply live."
+The system's and the desktop's own shortcuts still take precedence.
+Changes apply live."
   :type 'string :group 'portal-input
   :set (lambda (symbol value)
          (portal-input--configure-escape value)

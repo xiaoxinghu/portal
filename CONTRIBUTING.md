@@ -26,7 +26,8 @@ cmake --preset dev
 cmake --build --preset dev
 ```
 
-CMake locates Emacs, builds the Bun host, and invokes the native Swift package.
+On macOS, CMake locates Emacs, builds the Bun host, and invokes the native Swift package;
+[on Linux](#building-on-linux) it compiles a C module instead.
 `native/Package.swift` links two targets into one module: `PortalCore`,
 the portable C core, and `Portal`, the Swift backend containing the host, web, terminal and input code. There are no separate feature libraries
 or plugin builds. Ghostty comes through its Swift wrapper, libghostty-spm, which
@@ -122,9 +123,46 @@ library, update the release and Ghostty versions in the terminal guide, and
 run the checks. Run it again after fixing a patch or regaining the network:
 with the pin already moved, it checks the patches and resolves again.
 
+### Building on Linux
+
+Portal has no native views on Linux yet, but its module builds and loads
+there. `./build.sh` makes `build/portal.so` in place of `build/portal.bundle`,
+with `build/portal-host` and `build/licenses` as on macOS. CMake compiles the
+module itself: the C bindings and core with
+[`native/Linux/backend.c`](native/Linux/backend.c), the backend for an Emacs
+built with pgtk, linked against GTK 3 and `wayland-client`. No Swift is
+involved, and no Ghostty: [the next section](#ghostty-on-linux) builds that
+library, which the module does not link yet. The backend's operations fail,
+each saying what Linux lacks, so the module answers only what the core
+answers by itself; the file's first comment lists what is real and what each
+missing piece waits for. The link fails when the backend lacks a primitive of
+`portal.h`, and `native/Linux/portal.map` keeps every symbol but Emacs's two
+entry points inside the library.
+
+A build needs:
+
+- Emacs 31.1 built with pgtk and modules, and its `emacs-module.h`;
+- GCC 15 or newer, or a Clang with C23's `#embed`, which the core uses, as
+  `cc`; CMake 3.29 or newer, Ninja and `pkg-config`;
+- the development files of GTK 3 and `wayland-client`, as pkg-config's
+  `gtk+-3.0` and `wayland-client`;
+- Bun, chosen [as on macOS](#build-outputs-and-distribution): the pinned
+  release has glibc builds for aarch64 and x64. Only one build runs per
+  checkout at a time there too, with `flock` for the lock.
+
+Configuration writes `build/compile_commands.json` for clangd.
+
+[The checks](#checks) that run on Linux are CTest, the host checks, the Python
+tests and `git diff --check`, with `nproc` for the number of jobs. CTest
+leaves out the suites of the macOS module, `rex` and `libghostty-spm`, and of
+the macOS VM runner, and adds `linux-module`, which loads the built module in
+batch Emacs. The Python tests skip those of Swift helpers and of the macOS
+Ghostty wrapper. There are no graphical checks on Linux yet: those stay on
+macOS.
+
 ### Ghostty on Linux
 
-Portal's module does not build on Linux yet. Its terminal there will draw with
+Portal's module does not link Ghostty on Linux yet. Its terminal there will draw with
 Ghostty's own embedding library, which no release ships for Linux, so Portal
 builds it from source with Zig and its own patches: Ghostty's library has no
 Linux platform to embed. `native/ghostty.json` pins the release: the version
@@ -236,7 +274,8 @@ does not hot-reload that library.
 ## Build outputs and distribution
 
 The single build command produces `build/portal.bundle`,
-`build/portal-host` and `build/licenses`. The bundle contains the one native Emacs module at
+`build/portal-host` and `build/licenses`; a [Linux build](#building-on-linux)
+has `build/portal.so` for the bundle. The bundle contains the one native Emacs module at
 `Contents/MacOS/portal.dylib` and Ghostty's resources. CMake recompiles the host when its TypeScript entry point
 or HTML changes. Both binaries are built for the current Mac's CPU
 architecture and macOS 13 or later; see [supported platforms](docs/platforms.md)
@@ -255,7 +294,8 @@ builds without tests and then deletes everything else in `build/` except
 `./build.sh` chooses Bun with `tools/resolve-bun.sh`: the `BUN` environment
 variable, then a compatible `bun` on `PATH`, then Portal's pinned Bun cached in
 `build/tools/` (or `PORTAL_TOOLS_DIR`), downloaded and verified when missing.
-`PORTAL_BUN_DOWNLOAD=0` disables the download. A `-DBUN=/absolute/path/to/bun`
+`PORTAL_BUN_DOWNLOAD=0` disables the download. The manifest pins the release's
+builds for macOS and for Linux with glibc. A `-DBUN=/absolute/path/to/bun`
 argument is an explicit choice, like `BUN`. Plain `cmake` records the `bun` found on `PATH`
 and searches again if that file disappears; run `cmake --fresh --preset dev`
 to rediscover every tool. Update the pinned version, its asset URLs and
@@ -342,7 +382,7 @@ launcher changes, also run the relevant [standalone checks](docs/testing.md#stan
 Physical-key and manual checks are opt-in; report any not run.
 
 For a focused change to the C core, the [standalone core build](docs/testing.md#c-core-checks)
-avoids Swift, Bun and Ghostty. CMake's registered tests are the source of truth
+avoids Swift, Bun and Ghostty, on macOS and on Linux. CMake's registered tests are the source of truth
 for the batch suite; use `ctest --test-dir build -N` to list them. `-j` runs
 the suites side by side, in about a third of the time; the
 [test-writing rules](docs/testing.md#writing-tests) say what that asks of a suite.

@@ -4,7 +4,7 @@ import { afterEach, expect, test } from "bun:test";
 import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { check } from "../licenses/notices";
+import { check, swift } from "../licenses/notices";
 
 const build = process.env.PORTAL_BUILD ?? join(import.meta.dir, "..", "build");
 let copy: string | undefined;
@@ -25,12 +25,19 @@ test("the build stages every required notice", () => {
 	expect(check(build)).toEqual([]);
 });
 
-test.each([
-	"LICENSE",
+// The Swift packages' notices are the macOS module's.
+const ofSwift = [
 	"libghostty-spm/LICENSE",
 	"bash-preexec/LICENSE-bash-preexec.md",
 	"ghostty/LICENSE",
-	"fonts/xiaolai/OFL.txt",
+];
+// One in every build, for the tests that damage a notice.
+const everywhere = "fonts/xiaolai/OFL.txt";
+
+test.each([
+	"LICENSE",
+	...(swift ? ofSwift : []),
+	everywhere,
 	"npm/react@19.2.4/LICENSE",
 	"README.md",
 ])("a missing %s fails the check", async (path) => {
@@ -54,9 +61,9 @@ test("the staged Bun license matches the Bun inside portal-host", async () => {
 
 test("an edited notice fails the check", async () => {
 	const directory = await staged();
-	await writeFile(join(directory, "ghostty", "LICENSE"), "edited\n");
+	await writeFile(join(directory, everywhere), "edited\n");
 	expect(check(build, directory)).toContain(
-		"staged notice ghostty/LICENSE is out of date",
+		`staged notice ${everywhere} is out of date`,
 	);
 });
 

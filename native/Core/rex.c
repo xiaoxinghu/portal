@@ -15,6 +15,11 @@
    its first paint and its typing never cross Emacs.  The order of that work, and what each step guards
    against, is in rex.h; the protocol is the server's own documentation
    ("Data Connections" in the server's /llms.txt). */
+/* For gethostname and clock_gettime, which glibc keeps from strict C11; and
+   macOS goes on showing everything, as it did before either was asked for. */
+#define _POSIX_C_SOURCE 200809L
+#define _DARWIN_C_SOURCE
+
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>

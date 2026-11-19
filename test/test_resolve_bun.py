@@ -11,6 +11,7 @@ import hashlib
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -19,7 +20,10 @@ import zipfile
 ROOT = Path(__file__).resolve().parent.parent
 RESOLVER = ROOT / "tools" / "resolve-bun.sh"
 PINNED = "1.3.14"
-PLATFORMS = ("darwin-aarch64", "darwin-x64", "darwin-x64-baseline")
+PLATFORMS = ("darwin-aarch64", "darwin-x64", "darwin-x64-baseline",
+             "linux-aarch64", "linux-x64", "linux-x64-baseline")
+# The program that holds a file lock while a command runs: macOS's, or Linux's.
+LOCK = ["lockf", "-k"] if sys.platform == "darwin" else ["flock"]
 
 
 def fake_bun(path, version=PINNED, compatible=True):
@@ -213,7 +217,7 @@ class BuildLockTests(unittest.TestCase):
             shutil.copy(ROOT / "build.sh", checkout / "build.sh")
             (checkout / "build").mkdir()
             holder = subprocess.Popen(
-                ["lockf", "-k", str(checkout / "build" / ".build.lock"), "sleep", "30"])
+                [*LOCK, str(checkout / "build" / ".build.lock"), "sleep", "30"])
             try:
                 time.sleep(0.5)
                 started = time.monotonic()

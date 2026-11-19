@@ -4,12 +4,18 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 cd "$here"
 
-# One build of these outputs at a time: a second one stops at once.
+# One build of these outputs at a time: a second one stops at once, with
+# status 75.  macOS has lockf, which exits so; Linux has flock, which is told to.
 if [ -z "${PORTAL_BUILD_LOCKED:-}" ]; then
     mkdir -p build
     status=0
-    PORTAL_BUILD_LOCKED=1 lockf -k -t 0 build/.build.lock /bin/sh "$here/build.sh" "$@" ||
-        status=$?
+    if [ "$(uname -s)" = Darwin ]; then
+        PORTAL_BUILD_LOCKED=1 lockf -k -t 0 build/.build.lock /bin/sh "$here/build.sh" "$@" ||
+            status=$?
+    else
+        PORTAL_BUILD_LOCKED=1 flock -n -E 75 build/.build.lock /bin/sh "$here/build.sh" "$@" ||
+            status=$?
+    fi
     if [ "$status" -eq 75 ]; then
         echo "build.sh: another Portal build is running in $here" >&2
     fi
@@ -47,10 +53,12 @@ cmake --preset dev "$@"
 cmake --build --preset dev
 if [ -n "$prune" ]; then
     # Keep the outputs, the build record and log, the lock and the Bun cache.
-    find build -mindepth 1 -maxdepth 1 ! -name portal.bundle ! -name portal-host \
+    find build -mindepth 1 -maxdepth 1 ! -name portal.bundle ! -name portal.so \
+        ! -name portal-host \
         ! -name licenses ! -name portal-build.eld ! -name portal-build.log \
         ! -name .build.lock ! -name tools -exec rm -rf {} +
     rm -rf host/node_modules host/.generated
     echo "Removed the intermediate files: the next build starts afresh"
 fi
-echo "Built build/portal.bundle, build/portal-host and build/licenses"
+if [ "$(uname -s)" = Darwin ]; then module=portal.bundle; else module=portal.so; fi
+echo "Built build/$module, build/portal-host and build/licenses"

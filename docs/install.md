@@ -288,8 +288,8 @@ once to finish its setup, and select it with
 `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`.
 `xcrun swift --version` must report Swift 6.2 or newer.
 
-**"Portal native views need…" or "Portal needs macOS Emacs with module
-support".** This Emacs cannot run Portal: it is older than 31.1, not built
+**"Portal native views need…" or "Portal needs Emacs with module support,
+on macOS or Linux".** This Emacs cannot run Portal: it is older than 31.1, not built
 for macOS's graphical interface with modules, or the selected frame is a text
 terminal. On Apple Silicon, an Intel Emacs under Rosetta cannot load the
 build either; `M-: system-configuration` names the CPU. See
