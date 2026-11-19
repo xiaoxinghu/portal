@@ -23,19 +23,22 @@ if [ "$(uname -s)" = Darwin ]; then
         terminal-shell-startup:terminal-shell-startup rex-server:rex-server-gui
         package:package-gui"
 else
-    # Linux has the view machinery alone: its suite, and the recording of a
-    # view following its pane. Each makes a desktop of its own.
-    suites="linux:linux-gui linux-follow:linux-follow"
+    # Linux has the views and terminals: its suite, and the recordings of a
+    # view, and of a terminal under output, following its pane. Each makes a
+    # desktop of its own. A script's argument follows a plus.
+    suites="linux:linux-gui linux-follow:linux-follow linux-follow-terminal:linux-follow+terminal"
 fi
 for suite in $suites; do
-    name=${suite%%:*} script=test/${suite#*:}.sh
+    run=${suite#*:}
+    name=${suite%%:*} script=test/${run%%+*}.sh argument=
+    case $run in *+*) argument=${run#*+} ;; esac
     dir=$logs/$name
     mkdir -p "$dir"
     rm -f "$dir/exit-status"
-    echo "== $name: sh $script"
+    echo "== $name: sh $script${argument:+ $argument}"
     started=$(date +%s)
     { status=0
-      PORTAL_TEST_LOGS=$dir sh "$root/$script" 2>&1 || status=$?
+      PORTAL_TEST_LOGS=$dir sh "$root/$script" ${argument:+"$argument"} 2>&1 || status=$?
       echo "$status" >"$dir/exit-status"; } | tee "$dir/test.log"
     status=$(cat "$dir/exit-status")
     if [ "$status" = 0 ]; then result=passed

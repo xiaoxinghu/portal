@@ -29,9 +29,9 @@ For an SSH-only test account, set these in its `~/.zshenv` so non-interactive
 builds inherit them. Verify actual native compilation, not only
 `native-comp-available-p`, before saving a prepared VM.
 
-On Linux, where Portal has views and nothing to show in them yet, the checks
-are those [Contributing](../CONTRIBUTING.md#building-on-linux) lists, with
-[two graphical ones](#linux-graphical-checks) of their own.
+On Linux, where Portal has views and terminals and no web views yet, the
+checks are those [Contributing](../CONTRIBUTING.md#building-on-linux) lists,
+with [two graphical ones](#linux-graphical-checks) of their own.
 
 ## Writing tests
 
@@ -322,7 +322,8 @@ PORTAL_TEST_EXPENSIVE=1 sh test/gui-all.sh
 ```
 
 On Linux it runs [the two Linux checks](#linux-graphical-checks) instead, as
-`linux` and `linux-follow`, each on its own desktop. In the VM, the runner
+`linux`, `linux-follow` and `linux-follow-terminal`, the follow check with a
+terminal, each on its own desktop. In the VM, the runner
 builds once and the suites run one after another in the same run. A failing suite does not stop the others; the wrapper ends with each
 suite's result and fails if any failed. The [real-server tier](#against-a-real-rex-server)
 is "not run" where no Rex Server is installed, and fails nothing. Each suite logs to a directory of its
@@ -421,6 +422,7 @@ Physical-key delivery on the affected macOS version still needs a manual check.
 ```sh
 sh test/linux-gui.sh
 sh test/linux-follow.sh
+sh test/linux-follow.sh terminal
 ```
 
 Both run after `./build.sh`, each on **a desktop of its own**:
@@ -435,17 +437,31 @@ it is closed within a moment either way. The scripts exit 77, "could not run
 here", without Hyprland 0.56 or newer and a Wayland session to start it in.
 It is the compositor the views were written against: no other has run them.
 
-`linux-gui.sh` runs [the suite](../test/portal-linux-gui-tests.el) in one
-fresh Emacs through `gui-ert.sh`, and then an Emacs that quits with a view
-open. Pass an ERT selector regexp to run part of it. It needs `grim`, which
-reads the output's pixels, and `wtype`, which types; it points and clicks
-with `build/linux/portal-test-pointer`, which the build makes from
+`linux-gui.sh` runs [the views' suite](../test/portal-linux-gui-tests.el)
+and [the terminals'](../test/portal-linux-terminal-tests.el) in one fresh
+Emacs through `gui-ert.sh`, and then Emacs quitting with a view open, a
+test pattern and then a terminal printing as fast as it can. Pass an ERT
+selector regexp to run part of it. It needs `grim`, which reads the
+output's pixels, `wtype`, which types, and `wf-recorder` with `ffmpeg` and
+Python 3 for a recording; it points and clicks with
+`build/linux/portal-test-pointer`, which the build makes from
 [linux-pointer.c](../test/linux-pointer.c). The views' content is the test
 pattern of `native/Linux/pattern.c`: a red edge one device pixel wide around
 a magenta fill, over a pane that is green underneath, so a view exactly over
 its pane shows a red corner at each of the pane's and no green anywhere.
 Keys, clicks and the pointer go through the compositor and GDK, as a
 person's do, and the tests read what the pattern says it was given.
+
+The terminals' tests run your own login shell in a terminal with the theme
+Great Pumpkin, whose background is a flat orange: typed into, following its
+pane, running on while hidden, drawing while Lisp is busy, where they print
+how many frames a second Ghostty made, the presenter committed and the
+compositor showed, and two terminals side by side with one closed while the
+other prints 256 MB. That one is recorded, and
+[linux-torn.py](../test/linux-torn.py) reads the recording: the output
+keeps every cell red, then blue, so a frame with both is one drawn into
+while it was shown. It also counts the DMABUFs Emacs has open, which must
+be none once both terminals are closed.
 
 `linux-follow.sh` is the check that a view is never out of place.
 [A fresh Emacs](../test/portal-linux-follow.el) changes a view's pane, one
@@ -457,8 +473,10 @@ every frame, never more than one at a time: the view must be over all of
 its pane and nothing else, to the pixel along one column and one row. It
 prints each frame that is not, and exits 1 if there is one.
 `PORTAL_FOLLOW_ROUNDS` repeats the steps (default 3),
-`PORTAL_FOLLOW_STEPS` chooses them, and the argument `fill` uses a pattern
-of one pixel stretched over the pane. The recording stays in
+`PORTAL_FOLLOW_STEPS` chooses them, the argument `fill` uses a pattern
+of one pixel stretched over the pane, and the argument `terminal` a terminal
+whose shell prints blank lines all the while, so that its renderer makes
+frames as the pane changes, each its theme's flat orange. The recording stays in
 `PORTAL_TEST_LOGS`, or `build/linux-follow`. It needs `wf-recorder`,
 `ffmpeg` and Python 3.
 
@@ -470,7 +488,8 @@ view could be over its pane. The check tells such a frame by the fringes
 beside the echo area and says how many there were: one or two for each
 resize, on this compositor without its animations.
 
-Run both after changing `native/Linux` or `portal-view.el`, and say which
+Run both after changing `native/Linux` or `portal-view.el`, the follow check
+with `terminal` too after changing a terminal's presenter, and say which
 machine and compositor ran them: a pass says what that compositor does.
 
 ## App host checks

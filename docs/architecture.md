@@ -3,8 +3,8 @@
 [Documentation index](README.md) · [Build and run](../README.md#build-and-run)
 
 Portal's single native module has C Emacs bindings and a C core over a Swift
-macOS backend; a Linux backend, in C, has views and input and no terminal or
-page to show in them yet. Navigate by boundaries, not separate feature
+macOS backend; a Linux backend, in C, has views, input and terminals with a
+local shell, and no page yet. Navigate by boundaries, not separate feature
 libraries:
 
 - [`portal-view.el`](../portal-view.el) owns Lisp-side view lifetime, placement and
@@ -23,7 +23,8 @@ libraries:
   with pgtk, on GTK 3 and Wayland, which CMake links with the core into
   `portal.so`, with Portal's own build of Ghostty's library, which it
   starts. [Views on Linux](#views-on-linux) says how a view gets into a
-  frame there; what it lacks, each operation says as it fails
+  frame there, and [terminals on Linux](#terminals-on-linux) how Ghostty's
+  frames reach it; what it lacks, each operation says as it fails
   ([building on Linux](../CONTRIBUTING.md#building-on-linux)).
 - The [input bridge](terminal-input-bridge.md), [hosted-app bridge](editor-bridge.md)
   and [launcher panel](launcher-native-panel.md) explain their protocols and platform-specific hazards.
@@ -718,5 +719,66 @@ frame deleted with views in it forgets them, and they stay open. GTK
 destroys a window's surface when it hides the window, and the views' with
 it, which come back with the window's next. Ending a view goes in an order
 that keeps a queue from outliving what was made on it: the content stops
-its threads and destroys its buffers, the surface goes, the queue is
-round-tripped and destroyed, then the input method and the widget.
+drawing, the surface goes, so that nothing the content frees next is on
+the screen, the content destroys its buffers, the queue is round-tripped
+and destroyed, then the input method and the widget.
+
+## Terminals on Linux
+
+A terminal on Linux is a view whose content is a Ghostty surface running a
+local shell (`native/Linux/terminal.c`), drawn by Portal's own build of
+Ghostty's library and shown by a presenter of Portal's
+(`native/Linux/presenter.c`). macOS needs no presenter: Ghostty's Metal
+layer puts its frames on the screen itself.
+
+**Ghostty draws on threads of its own.** Each surface's renderer draws into
+a texture, exports it as a DMABUF and announces the frame on its render
+thread, through a callback given with the surface; the IO thread runs the
+shell. Ghostty's app is ticked on Emacs's main thread from GLib's main loop,
+whenever Ghostty asks, whether or not any terminal is shown: that tick is
+where its titles, directories, exits and clipboard requests reach Portal.
+
+**One presenter thread shows every terminal's frames.** It reads the
+display on a Wayland queue of its own and dispatches each terminal view's
+queue, so the views' frame callbacks and the buffers' releases are heard
+there. When a view's last frame has reached the screen, at its frame
+callback, the presenter takes the latest frame Ghostty has and presents it
+to the view: it commits as often as the compositor shows, not once for each
+frame the renderer makes, which is many times more under output. A buffer
+is imported once for each of the renderer's textures and kept, and a frame
+is kept until the compositor releases its buffer: the renderer does not
+draw into a texture whose frame is held, so no frame on the screen is drawn
+into. A compositor that refuses the first DMABUF makes every terminal draw
+into memory, which the presenter copies into `wl_shm` buffers. Frames keep
+coming while Lisp is busy, since neither thread waits for Emacs's.
+
+**Locks.** The presenter's lock keeps its list of terminals, and what it
+does for one, apart from the main thread adding and removing one. A
+terminal's own lock keeps its Ghostty surface from being freed while
+another thread calls into it: the presenter, which takes frames, and a
+thread of GLib's pool, which shows and hides the surface. Ghostty takes the
+terminal's lock to show a surface, which its IO thread holds most of the
+time under a flood of output, so that call never runs on Emacs's main
+thread. The view's lock, which says who commits, comes after both.
+
+**Keys** reach the terminal after the core has decided, as any view's do,
+with the text the input method committed for the key, as Ghostty's own GTK
+view sends them: the key code is the one the US layout gives the key's
+keyval, where the keyval is one Portal knows, so that a chord means the
+same on any Latin layout and from a virtual keyboard.
+
+**Configuration.** No file of an installed Ghostty is read, as on macOS.
+Each terminal's configuration is made from its theme, opacity and text size
+and applied again at each change. Without a theme it is Alabaster or
+Afterglow as the desktop is light or dark, which the XDG desktop portal
+says; Portal chooses, since a configuration whose theme depends on the
+scheme is rebuilt by Ghostty from its lines, without the command the
+surface was made with. Ghostty's own key bindings are cleared but for its
+Copy and Paste, Control-Shift-C and Control-Shift-V.
+
+**Closing a terminal** goes: its clipboard requests denied; the presenter
+forgets it and nothing calls into the surface; the surface freed, which
+ends the shell, after which Ghostty announces no frame; the view's surface
+destroyed; the buffers destroyed and the frames they showed freed, which
+Ghostty allows after its surface is gone; the view's queue round-tripped
+and destroyed.

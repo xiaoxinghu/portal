@@ -477,3 +477,27 @@ latency parity during GC or long-running Lisp is not guaranteed.
 bounds, focus and title for the selected terminal. `(portal--terminal-text TARGET)`
 selects and returns all native scrollback text, leaving selection active.
 Neither is normally polled. Restart Emacs after rebuilding a loaded module.
+
+## On Linux
+
+In an Emacs built with pgtk, on Wayland, a terminal is the same Ghostty,
+built by Portal from source with its own patches
+([Ghostty on Linux](../CONTRIBUTING.md#ghostty-on-linux)), and drawn on a
+surface of its own over the pane ([how](architecture.md#terminals-on-linux)).
+What differs from macOS:
+
+- **Keys.** The escape back to Emacs is Control-Escape
+  (`portal-input-escape-key`). Ghostty's own copy and paste are
+  Control-Shift-C and Control-Shift-V; its other Linux key bindings are
+  off, so Alt and Control chords reach the shell. Super chords go to Emacs,
+  as Command chords do on macOS.
+- **Themes** are the catalog of the Ghostty Portal builds, with the same
+  names. Without `portal-terminal-theme`, a terminal is Alabaster or
+  Afterglow as the desktop prefers light or dark, which the XDG desktop
+  portal says, and changes with it.
+- **The clipboard** is the desktop's, and selecting text copies it to the
+  primary selection. A paste that Ghostty would ask about, such as text with
+  a newline in it, goes ahead: you asked for it. A program asking to read
+  the clipboard is refused, since there is nobody to ask.
+- **Rex blocks** do not open: their fed terminals need patches Portal's
+  Linux build does not apply yet.

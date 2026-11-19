@@ -16,7 +16,7 @@ separate claims.
 | GNU Emacs 31.1 NS | any | Intel | Unverified | Unverified |
 | x86_64 Emacs under Rosetta | any | Apple Silicon | Unsupported | Unsupported |
 | GNU Emacs 30 or earlier | any | any | Unsupported: refused | Unsupported: refused |
-| GNU Emacs 31.1 pgtk on Linux, Wayland | — | any | Unsupported: no terminal or page yet, see [Linux](#linux) | Unsupported: refused |
+| GNU Emacs 31.1 pgtk on Linux, Wayland | — | any | Terminals unverified, run on one machine; no web views yet. See [Linux](#linux) | Unsupported: refused |
 | Text frames, terminal-only builds, non-NS builds on macOS, other systems | — | — | Unsupported: refused | Unsupported: refused |
 
 Revision `a360712c9d272d950d8d8255ef74570f7e90b7d9` is the `emacs-31.1` release
@@ -45,18 +45,16 @@ not only passing checks; see [launcher safety](launcher.md#set-up-safely).
 
 ## Linux
 
-Portal does not work on Linux yet. Its native module builds there and loads
-into an Emacs 31.1 built with pgtk, and it can put a view in a pane of a
-frame on Wayland and give it the keyboard and the pointer, but it has
-nothing to show in one: opening a terminal fails with "Portal has no
-terminals on Linux yet", and a page with "Portal has no web views on Linux
-yet". Other frames are refused before any native code loads, with the
-reason: an Emacs built without pgtk, a text terminal, or a pgtk frame that
-GDK put on X11. The module links
-[Portal's own build of Ghostty](../CONTRIBUTING.md#ghostty-on-linux)'s
-library, with its resources beside it, and starts it, though nothing draws
-with it yet. [Building on Linux](../CONTRIBUTING.md#building-on-linux)
-says what a build needs and which checks run.
+On Linux Portal has terminals and no web views yet. Its native module
+builds there and loads into an Emacs 31.1 built with pgtk, and a terminal
+runs your login shell in a pane of a frame on Wayland, drawn by
+[Portal's own build of Ghostty](../CONTRIBUTING.md#ghostty-on-linux).
+Opening a page fails with "Portal has no web views on Linux yet", and a Rex
+block, a fed terminal, with "Portal has no fed terminals on Linux yet".
+Other frames are refused before any native code loads, with the reason: an
+Emacs built without pgtk, a text terminal, or a pgtk frame that GDK put on
+X11. [Building on Linux](../CONTRIBUTING.md#building-on-linux) says what a
+build needs and which checks run.
 
 The view machinery was run on 2026-11-20 on one machine, with a test pattern
 for content: Arch Linux on aarch64 (an M1 Pro under Asahi), Hyprland 0.56.2,
@@ -67,6 +65,14 @@ and `sh test/linux-follow.sh` found no frame out of place in recordings of
 [test desktop](testing.md#linux-graphical-checks), a headless output of a
 second Hyprland with no animations. No other compositor, no other scale, no
 screen a person looks at and no x64 machine has run it.
+
+Terminals were run on 2026-11-20 on the same machine and test desktop, with
+Mesa's `asahi` driver: `sh test/linux-gui.sh` passed, 23 tests, among them a
+shell typed into, two terminals with one closed beside a flood of output
+with no torn frame, and Emacs quitting with a terminal printing; and
+`sh test/linux-follow.sh terminal` found no frame out of place in a
+recording of 1,198 frames of a terminal under output. No other GPU driver
+has drawn one.
 
 ## Requirements
 
