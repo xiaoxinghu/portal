@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Xiaoxing Hu <hi@xiaoxing.dev>
 Date: Thu, 19 Nov 2026 20:32:39 +1300
-Subject: [PATCH 2/3] build: install the resources with the Linux library
+Subject: [PATCH 2/4] build: install the resources with the Linux library
 
 A host of the library needs what the app does at run time: the shell
 integration, the themes and the terminfo database, found through

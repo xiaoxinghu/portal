@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxing Hu <hi@xiaoxing.dev>
+Date: Thu, 19 Nov 2026 23:33:19 +1300
+Subject: [PATCH 4/4] build: export only the C API from the Linux library
+
+The shared library exported every symbol of the libraries linked into it
+statically: FreeType, HarfBuzz, fontconfig, libxml2, libpng, zlib, Dear
+ImGui, libc++ and the rest, 12,935 symbols in all.  Loaded into a process
+that has the system's copies of some of them already, as a GTK application
+has, the library's own calls to those symbols bind to the host's copies:
+in Emacs, 1,047 of them went to the system's libxml2, FreeType, libpng,
+HarfBuzz, fontconfig, zlib and libstdc++, while the rest stayed inside,
+two versions of each library mixed in one call path.
+
+A version script keeps everything but the ghostty_ functions local, so
+the library calls its own copies and exports its API alone.
+---
+ src/build/GhosttyLib.zig |  8 ++++++++
+ src/build/libghostty.map | 11 +++++++++++
+ 2 files changed, 19 insertions(+)
+ create mode 100644 src/build/libghostty.map
+
+diff --git a/src/build/GhosttyLib.zig b/src/build/GhosttyLib.zig
+index e340b5921..f88b9054a 100644
+--- a/src/build/GhosttyLib.zig
++++ b/src/build/GhosttyLib.zig
+@@ -110,6 +110,14 @@ pub fn initShared(
+     });
+     _ = try deps.add(lib);
+ 
++    // Export the C API alone. Otherwise the libraries linked in statically
++    // export their symbols too, and in a host that has loaded the system's
++    // copies of them, such as a GTK application, the library's calls to its
++    // own copies bind to the host's instead, another version of each.
++    if (deps.config.target.result.os.tag == .linux) {
++        lib.version_script = b.path("src/build/libghostty.map");
++    }
++
+     // On Windows with MSVC, building a DLL requires the full CRT library
+     // chain. linkLibC() (called via deps.add) provides msvcrt.lib, but
+     // that references symbols in vcruntime.lib and ucrt.lib. Zig's library
+diff --git a/src/build/libghostty.map b/src/build/libghostty.map
+new file mode 100644
+index 000000000..d58a9cbd8
+--- /dev/null
++++ b/src/build/libghostty.map
+@@ -0,0 +1,11 @@
++/* What the shared library exports on Linux: the C API of include/ghostty.h,
++ * whose functions all start with ghostty_.  Everything else stays inside the
++ * library, so that its own copies of FreeType, HarfBuzz, fontconfig, libxml2,
++ * libpng, zlib and the rest are the ones it calls, even in a process that has
++ * loaded the system's copies first, as a host such as a GTK application has. */
++{
++    global:
++        ghostty_*;
++    local:
++        *;
++};

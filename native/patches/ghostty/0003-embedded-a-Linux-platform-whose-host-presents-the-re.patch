@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Xiaoxing Hu <hi@xiaoxing.dev>
 Date: Thu, 19 Nov 2026 20:33:00 +1300
-Subject: [PATCH 3/3] embedded: a Linux platform whose host presents the
+Subject: [PATCH 3/4] embedded: a Linux platform whose host presents the
  renderer's frames
 
 GHOSTTY_PLATFORM_LINUX is a surface with no view to draw into: the OpenGL
