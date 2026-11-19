@@ -2,12 +2,12 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;; Loads the module a Linux build made, build/portal.so: the real bindings and
-;; core, linked with native/Linux/backend.c and Ghostty's library.
+;; core, linked with the backend of native/Linux and Ghostty's library.
 ;; PORTAL_TEST_BUILD names the build directory; run with --module-assertions.
-;; The backend has no views yet, so these tests say what the module does
-;; without them, and that each missing piece fails with a message of its own.
-;; Batch Emacs opens no display: what the module finds in a graphical Emacs, a
-;; test there must say.
+;; Batch Emacs opens no display, so no view can be made here: these tests say
+;; what the module does without one, and that each piece Linux lacks fails
+;; with a message of its own.  The views themselves are checked in a
+;; graphical Emacs, by test/linux-gui.sh.
 
 (require 'ert)
 (require 'subr-x)
@@ -51,6 +51,8 @@
   (should-not (portal--inspect "terminal:1"))
   (should (equal (portal-linux-module-tests--error #'portal--hide "web:1")
                  "No Portal view web:1"))
+  ;; No frame has a view whose change waits for Emacs to draw.
+  (should (portal--drawn))
   ;; A theme for every open terminal, of which there are none.
   (should (portal--terminal-theme nil))
   ;; A hidden status panel hides again.
@@ -78,12 +80,16 @@
     (should (equal (getenv "GHOSTTY_RESOURCES_DIR") portal-linux-module-tests--resources))))
 
 (ert-deftest portal-linux-module-says-what-linux-lacks ()
-  ;; Batch Emacs has opened no display, which the backend asks GDK.
-  (should (equal (portal-linux-module-tests--error #'portal--open "web" nil)
-                 "Portal's native views need a graphical Emacs frame; \
-this Emacs has opened no display"))
+  ;; Batch Emacs has opened no display, which the backend asks GDK, before
+  ;; it says which kind of view it lacks or makes a test pattern.
+  (dolist (options '(nil (:test-pattern t)))
+    (should (equal (portal-linux-module-tests--error #'portal--open "web" options)
+                   "Portal's native views need a graphical Emacs frame; \
+this Emacs has opened no display")))
   (should (equal (portal-linux-module-tests--error #'portal--terminal-themes)
-                 "Portal has no native views on Linux yet"))
+                 "Portal has no terminals on Linux yet"))
+  (should (equal (portal-linux-module-tests--error #'portal--web-load "web:1" "about:blank")
+                 "No Portal view web:1"))
   (should (equal (portal-linux-module-tests--error #'portal--launcher-inspect)
                  "Portal's launcher needs the macOS build of Emacs"))
   (should (equal (portal-linux-module-tests--error #'portal--key-post "Control-A")

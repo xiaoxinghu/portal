@@ -17,7 +17,7 @@
 
 (defconst portal-module-tests--exports
   '((portal--open 2 . 2) (portal--place 3 . 3) (portal--hide 1 . 1) (portal--close 1 . 1)
-    (portal--inspect 1 . 1) (portal--channel 1 . 1)
+    (portal--inspect 1 . 1) (portal--drawn 0 . 0) (portal--channel 1 . 1)
     (portal--web-load 2 . 2) (portal--web-send 2 . 2) (portal--web-receive 1 . 1)
     (portal--web-appearance 1 . 1) (portal--web-opacity 1 . 1) (portal--web-go 2 . 2) (portal--web-download-directory 1 . 1)
     (portal--web-find 4 . 4) (portal--web-zoom 2 . 2) (portal--web-print 1 . 2)
@@ -238,6 +238,8 @@
       (should-not (plist-get state :visible))
       (should-not (plist-get state :edges))
       (should (equal (plist-get state :size) '(100 200))))
+    ;; Emacs says it has drawn its frames, whatever was placed.
+    (should (eq (portal--drawn) t))
     ;; A failed placement leaves the view where it was.
     (should (equal (should-error (portal--place target [0 0 1 1] "deleted frame"))
                    '(error "Cannot find the requested native Emacs frame")))

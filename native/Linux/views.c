@@ -551,11 +551,12 @@ static void after_paint(GdkFrameClock *clock, gpointer data)
 {
     (void) clock;
     struct portal_frame *frame = data;
-    if (frame->frozen)
-        return;
-    /* A child frame's first frame is in this paint. */
+    /* A child frame's first frame is in this paint.  One that went may
+       freeze the window here, for the view it was over. */
     watch_children(frame);
     cover(frame);
+    if (frame->frozen)
+        return;
     /* A paint that drew nothing of Emacs's widget sent no position: late,
        then, for this commit of the window's surface. */
     position(frame);
