@@ -58,6 +58,9 @@ type Package = {
 	inputs: string[];
 };
 
+// Whether the build's module is the macOS one, built from Swift packages.
+export const swift = process.platform === "darwin";
+
 const read = (path: string) => readFileSync(path, "utf8");
 const isFile = (path: string) => existsSync(path) && statSync(path).isFile();
 const escapeRegExp = (text: string) =>
@@ -164,15 +167,22 @@ export function inspect(build: string): {
 		names.add(name);
 	};
 	// SwiftPM pins every Swift package but libghostty-spm, which the build
-	// patches: native/libghostty-spm.json pins that one.
+	// patches: native/libghostty-spm.json pins that one. They are in the
+	// macOS module alone: Linux's portal.so holds Portal's own code, and
+	// loads GTK and Wayland from the system.
 	const pins: {
 		identity: string;
 		state: { version?: string; revision: string };
-	}[] = JSON.parse(read(join(root, "native", "Package.resolved"))).pins;
-	const patched: { version: string; revision: string } = JSON.parse(
-		read(join(root, "native", "libghostty-spm.json")),
-	);
-	pins.push({ identity: "libghostty-spm", state: patched });
+	}[] = [];
+	if (swift) {
+		pins.push(
+			...JSON.parse(read(join(root, "native", "Package.resolved"))).pins,
+		);
+		const patched: { version: string; revision: string } = JSON.parse(
+			read(join(root, "native", "libghostty-spm.json")),
+		);
+		pins.push({ identity: "libghostty-spm", state: patched });
+	}
 	for (const pin of pins)
 		ship(`swift:${pin.identity}`, pin.state.version ?? pin.state.revision);
 	const bun = bunVersion(build, problems);
@@ -324,7 +334,7 @@ function index(notices: Notice[], bun?: string): string {
 		"",
 		"Generated from `licenses/inventory.json` and the build's own records; do",
 		"not edit. Portal is licensed under GPL-3.0-or-later; see [LICENSE](LICENSE).",
-		"The components below are part of `portal.bundle` or `portal-host` and keep",
+		`The components below are part of \`${swift ? "portal.bundle" : "portal.so"}\` or \`portal-host\` and keep`,
 		`their own licenses. portal-host embeds the Bun ${bun ?? "(unknown)"} runtime.`,
 		"",
 	];

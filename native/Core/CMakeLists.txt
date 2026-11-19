@@ -4,9 +4,9 @@ cmake_minimum_required(VERSION 3.29)
 # Portal's C core, tested against a fake backend: the Emacs bindings, the view
 # registry, input handoff, terminal views, web views' rules and bridge,
 # system-wide shortcuts, the status panel, Rex connections, and the notification pipe. This needs only a C compiler and Emacs: no Swift, Apple
-# frameworks, Bun or Ghostty. The top-level project includes it, and it can be
+# frameworks, GTK, Bun or Ghostty. The top-level project includes it, and it can be
 # configured alone to run just these tests. SwiftPM compiles the same sources
-# into the production module.
+# into the production module on macOS, and the top-level project on Linux.
 project(portal-core LANGUAGES C)
 set(portal_root "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 
@@ -27,13 +27,21 @@ if(NOT EXISTS "${EMACS_INCLUDE}/emacs-module.h")
     message(FATAL_ERROR "Set -DEMACS_INCLUDE=/path/to/include containing emacs-module.h")
 endif()
 
+# The core without the bindings, emacs.c: what a backend is linked with.
+set(core_sources views.c input.c terminals.c web.c channel.c shortcuts.c status.c rex.c json.c)
+if(NOT PROJECT_IS_TOP_LEVEL)
+    # For the top-level project, which builds the Linux module from them.
+    list(TRANSFORM core_sources PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/"
+        OUTPUT_VARIABLE PORTAL_CORE_SOURCES)
+    set(PORTAL_CORE_SOURCES "${PORTAL_CORE_SOURCES}" PARENT_SCOPE)
+endif()
+
 include(CTest)
 if(BUILD_TESTING)
     set(fake_backend "${portal_root}/test/portal-fake-backend.c")
     # The core's registry and pipe and the fake backend compile without
     # emacs-module.h, so nothing the platform calls can reach Emacs.
-    add_library(portal-test-core OBJECT views.c input.c terminals.c web.c channel.c
-        shortcuts.c status.c rex.c json.c "${fake_backend}")
+    add_library(portal-test-core OBJECT ${core_sources} "${fake_backend}")
     target_include_directories(portal-test-core PUBLIC include . "${portal_root}/test")
     if(NOT APPLE)
         # channel.c masks SIGPIPE with pthread_sigmask, which an older glibc

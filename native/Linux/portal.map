@@ -1,0 +1,11 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* What portal.so exports: the two symbols Emacs looks up in a module.  The
+   core and the backend call each other inside the library, where no other
+   library's symbol of the same name can take a call's place. */
+{
+    global:
+        emacs_module_init;
+        plugin_is_GPL_compatible;
+    local:
+        *;
+};
