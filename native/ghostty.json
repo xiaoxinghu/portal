@@ -1,5 +1,6 @@
 {
 	"url": "https://github.com/ghostty-org/ghostty.git",
 	"version": "v1.4.0",
-	"revision": "83fb95624b0439ee660c2679b43b38c8b63769cd"
+	"revision": "83fb95624b0439ee660c2679b43b38c8b63769cd",
+	"zig": "0.17.0"
 }
