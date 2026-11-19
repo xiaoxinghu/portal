@@ -480,7 +480,13 @@ A position is in the desktop's own pixels, which are Emacs's."
     ;; None of it reached Emacs: F10 opened no menu, and nothing waits.
     (should (portal-linux-gui--get :focused))
     (should-not (read-event nil nil 0.3))
-    (should (= (buffer-size) 0))))
+    (should (= (buffer-size) 0))
+    ;; The pattern keeps the last 512 bytes of what it was given, in whole
+    ;; characters: 200 of three bytes each do not end on that boundary.
+    (portal-linux-gui--type (make-string 200 ?€))
+    (portal-linux-gui--wait
+     (lambda ()
+       (string-match-p "\\`€\\{170\\}\\'" (or (ignore-errors (portal-linux-gui--get :text)) ""))))))
 
 (ert-deftest portal-linux-gui-escape-key-returns-the-keyboard-to-emacs ()
   :tags '(:gui)

@@ -312,8 +312,13 @@ static void note(GString *record, const char *word, bool spaced)
     if (spaced && record->len)
         g_string_append_c(record, ' ');
     g_string_append(record, word);
-    if (record->len > RECORD)
-        g_string_erase(record, 0, (gssize) (record->len - RECORD));
+    if (record->len > RECORD) {
+        /* Whole characters: what it describes is UTF-8. */
+        gsize cut = record->len - RECORD;
+        while (cut < record->len && ((guchar) record->str[cut] & 0xc0) == 0x80)
+            cut++;
+        g_string_erase(record, 0, (gssize) cut);
+    }
 }
 
 /* EVENT's key as "C-M-s-S-name". */
