@@ -11,7 +11,8 @@
 # _SCALE to its size in its own pixels and how many device pixels each is.
 # The output is 2560 by 1600 device pixels at scale 2 and 60 Hz, and a
 # single window fills it, edge to edge, with nothing drawn around it: a
-# pixel of the output is a pixel of the window.
+# pixel of the output is a pixel of the window. A second window takes the
+# right half.
 #
 # It is the compositor Portal's Linux views were written against, so a
 # check here says what a user of it sees. It needs Hyprland 0.56 or newer,
@@ -36,6 +37,7 @@ hl.config({
              disable_splash_rendering = true, disable_watchdog_warning = true },
     decoration = { rounding = 0, shadow = { enabled = false }, blur = { enabled = false } },
     general = { gaps_in = 0, gaps_out = 0, border_size = 0 },
+    dwindle = { force_split = 2 },
     input = { kb_layout = "us", follow_mouse = 1 },
 })
 EOF

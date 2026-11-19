@@ -178,6 +178,13 @@ struct portal_frame {
     GtkWidget *fixed;
     GdkFrameClock *clock;
     struct wl_surface *parent; /* The window's, GDK's proxy. */
+    /* The window's updates are held back, FROZEN being the GdkWindow, until
+       Emacs has drawn (SETTLED) and the views have their frames, or until
+       the timeout DEADLINE (views.c). */
+    GdkWindow *frozen;
+    bool settled;
+    guint deadline;
+    gint64 frozen_at; /* On GLib's monotonic clock, in microseconds. */
     struct portal_view *views; /* Attached or parked here. */
     /* Input (input.c). */
     struct portal_view *keyboard; /* The view the window's keys go to, or NULL. */
@@ -194,7 +201,7 @@ struct portal_frame {
 /* Whether VIEW is a view that exists: for work that finishes after a call
    returns, which a view may not outlive. */
 bool portal_linux_view_alive(const struct portal_view *view);
-/* Have GTK paint VIEW's frame soon, which applies what waits. */
+/* Have GTK paint in VIEW's frame soon, which applies what waits. */
 void portal_linux_view_repaint(struct portal_view *view);
 
 /* What became of a frame given to portal_linux_present. */

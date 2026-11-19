@@ -409,6 +409,14 @@ static void put_properties(struct json *json, const struct portal_view *view)
     }
 }
 
+bool portal_frames_drawn(portal_text *error)
+{
+    if (refused(error))
+        return false;
+    calls.drawn++;
+    return true;
+}
+
 bool portal_view_describe(portal_view *view, portal_text *state, portal_text *error)
 {
     if (!usable(view, -1, error) || refused(error))

@@ -272,6 +272,13 @@ public func portalViewDetach(_ view: OpaquePointer, _ error: UnsafeMutablePointe
     return perform(error) { view.detach() } != nil
 }
 
+/// AppKit shows a view's new frame with its window's next update, which
+/// Emacs's own drawing is in too: nothing waits for this.
+@_cdecl("portal_frames_drawn")
+public func portalFramesDrawn(_ error: UnsafeMutablePointer<portal_text>) -> Bool {
+    perform(error) { () } != nil
+}
+
 @_cdecl("portal_view_describe")
 public func portalViewDescribe(_ view: OpaquePointer, _ state: UnsafeMutablePointer<portal_text>,
                                _ error: UnsafeMutablePointer<portal_text>) -> Bool {

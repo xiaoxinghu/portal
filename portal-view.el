@@ -20,6 +20,7 @@
 (declare-function portal--hide "portal-view" (target))
 (declare-function portal--close "portal-view" (target))
 (declare-function portal--inspect "portal-view" (target))
+(declare-function portal--drawn "portal-view" ())
 (declare-function portal--channel "portal-view" (process))
 (declare-function portal--input "portal-input" (target action &optional serial))
 
@@ -377,12 +378,35 @@ another frame moves it there.  Nothing is sent when nothing moved.
              frame (lambda (title)
                      (portal--place portal-view--target (nth 2 geometry) title)))
           (portal--hide portal-view--target))
+        (portal-view--drawn-soon (or frame (car portal-view--geometry)))
         (setq portal-view--geometry geometry))
       (let ((moved (not (eq window portal-view--window))))
         (setq portal-view--window window
               portal-view--showing windows)
         (portal-view--veil window)
         (when moved (run-hooks 'portal-view-moved-hook))))))
+
+(defvar portal-view--drawn-timer nil
+  "The timer that tells the module Emacs has drawn its frames, or nil.")
+
+(defun portal-view--drawn ()
+  "Tell the module that Emacs has drawn the panes of the views it placed."
+  (setq portal-view--drawn-timer nil)
+  ;; A view placed by a command, not by redisplay, has its pane drawn now.
+  (redisplay t)
+  (portal--drawn))
+
+(defun portal-view--drawn-soon (frame)
+  "Have the module told once Emacs has drawn FRAME, where a view changed.
+Emacs places a view while it lays its panes out, before it draws them.
+On pgtk the module holds the frame's window back from the screen from
+then until it hears that Emacs has drawn, so that the pane and the view
+change in one frame; a timer says so, as timers run once redisplay is
+done.  Elsewhere a window's views and Emacs's drawing reach the screen
+together by themselves, and nothing is told."
+  (when (and (frame-live-p frame) (eq (framep frame) 'pgtk)
+             (not portal-view--drawn-timer))
+    (setq portal-view--drawn-timer (run-at-time 0 nil #'portal-view--drawn))))
 
 (defun portal-view--veil (window)
   "Hide the current buffer's text in WINDOW, the pane that has its view.

@@ -8,16 +8,24 @@
    place.
 
    When changes are made.  Emacs asks for a view's place from a hook that
-   runs before it has drawn its own new layout.  A subsurface moved then
-   would reach the screen a frame or more before the panes around it, so
-   nothing of a view changes on the screen at once.  Emacs's request is
-   only noted (`wanted'), and GTK is asked to paint.  When it does, the
-   handlers on the window's frame clock make it so (`applied'): the
+   runs before it has drawn its own new layout, and the view's content
+   draws for the new size on a thread of its own.  Each alone would reach
+   the screen when it happened to be ready: the view a frame ahead of the
+   panes around it, or a frame behind, or its old frame in the new place.
+   So a change is a transaction on the frame's window.  An attach or a
+   detach only notes what Emacs wants (`wanted') and freezes the window's
+   updates: GTK may run meanwhile, as it does whenever Emacs looks for
+   input, in the middle of a redisplay too, but it paints nothing of the
+   window.  Emacs says when it has drawn (portal_frames_drawn), and the
+   window thaws once each view of it that needs a new frame has been
+   presented one, or UNDRAWN milliseconds later.  GTK then paints Emacs's
+   new layout, and in that paint the views are made so (`applied'): the
    subsurface's position is sent before GTK commits the window's surface,
    which is when the protocol applies it, and the surface's own state, its
-   size and whether it shows anything, is committed just after, from
-   `after-paint'.  All of it is in the same write to the compositor as
-   Emacs's frame.
+   frame, its size and whether it shows anything, is committed just after,
+   from the frame clock's `after-paint': all of it in the same write to the
+   compositor as Emacs's frame.  A window is never frozen for longer than
+   UNSETTLED milliseconds, whatever Emacs says or does not.
 
    Who makes which request.  A view's content may draw on a thread of its
    own, and the frames it draws must go on showing while Lisp is busy, so
@@ -73,10 +81,96 @@ bool portal_linux_view_alive(const struct portal_view *view)
     return false;
 }
 
+/* How long a window stays frozen at most, in milliseconds: for Emacs to say
+   it has drawn, which it does at the end of the redisplay or the command
+   that asked; and after that for the views' frames, which a content draws
+   in a few milliseconds.  Emacs's own drawing waits as long, so neither is
+   more than a hitch. */
+enum { UNSETTLED = 150, UNDRAWN = 50 };
+
+/* One pixel, enough for GTK to paint and commit the window's surface. */
 void portal_linux_view_repaint(struct portal_view *view)
 {
     if (view->frame)
-        gtk_widget_queue_draw(view->frame->fixed);
+        gtk_widget_queue_draw_area(view->frame->fixed, 0, 0, 1, 1);
+}
+
+/* Let FRAME's window paint again, which applies what its views wait for. */
+static void thaw(struct portal_frame *frame)
+{
+    if (!frame->frozen)
+        return;
+    if (frame->deadline)
+        g_source_remove(frame->deadline);
+    frame->deadline = 0;
+    if (!gdk_window_is_destroyed(frame->frozen))
+        gdk_window_thaw_updates(frame->frozen);
+    g_object_unref(frame->frozen);
+    frame->frozen = NULL;
+    gtk_widget_queue_draw_area(frame->fixed, 0, 0, 1, 1);
+}
+
+static gboolean overdue(gpointer data)
+{
+    struct portal_frame *frame = data;
+    frame->deadline = 0;
+    thaw(frame);
+    return G_SOURCE_REMOVE;
+}
+
+/* Thaw FRAME's window after at most WAIT more milliseconds, and never
+   later than UNSETTLED after it froze. */
+static void thaw_within(struct portal_frame *frame, gint64 wait)
+{
+    gint64 left = UNSETTLED - (g_get_monotonic_time() - frame->frozen_at) / 1000;
+    if (frame->deadline)
+        g_source_remove(frame->deadline);
+    frame->deadline = g_timeout_add((guint) CLAMP(MIN(wait, left), 0, UNSETTLED), overdue, frame);
+}
+
+/* Hold back the updates of FRAME's window for a change of its views:
+   until Emacs says it has drawn, or, when Emacs has nothing to draw for
+   it (SETTLED), only until the views have their frames. */
+static void freeze(struct portal_frame *frame, bool settled)
+{
+    GdkWindow *window = gtk_widget_get_window(GTK_WIDGET(frame->window));
+    if (!window || !gtk_widget_get_mapped(GTK_WIDGET(frame->window)))
+        return;
+    if (frame->frozen) {
+        /* One more change of the same transaction. */
+        frame->settled = frame->settled && settled;
+        return;
+    }
+    gdk_window_freeze_updates(window);
+    frame->frozen = g_object_ref(window);
+    frame->frozen_at = g_get_monotonic_time();
+    frame->settled = settled;
+    thaw_within(frame, settled ? UNDRAWN : UNSETTLED);
+}
+
+/* Whether VIEW has what its change needs: a frame to show, if it is to be
+   shown or has a new size.  A frame that fills needs another for a new
+   size too: Hyprland applies a surface's new size only with a buffer. */
+static bool ready(struct portal_view *view)
+{
+    pthread_mutex_lock(&view->lock);
+    bool resized = view->wanted.width != view->applied.width
+                || view->wanted.height != view->applied.height;
+    bool needs = view->surface && view->wanted.shown && !view->held_buffer
+              && (!view->applied.shown || resized);
+    pthread_mutex_unlock(&view->lock);
+    return !needs;
+}
+
+/* Thaw FRAME's window if Emacs has drawn and its views are ready. */
+static void consider(struct portal_frame *frame)
+{
+    if (!frame->frozen || !frame->settled)
+        return;
+    for (struct portal_view *view = frame->views; view; view = view->next)
+        if (!ready(view))
+            return;
+    thaw(frame);
 }
 
 /* The surface. */
@@ -161,11 +255,17 @@ static void conceal(struct portal_view *view)
     }
 }
 
+/* A frame is held for VIEW: its window may be waiting for it, and if not,
+   only a paint shows it. */
 static gboolean kick(gpointer data)
 {
     struct portal_view *view = data;
     /* The view may have ended since its thread asked. */
-    if (portal_linux_view_alive(view))
+    if (!portal_linux_view_alive(view) || !view->frame)
+        return G_SOURCE_REMOVE;
+    if (view->frame->frozen)
+        consider(view->frame);
+    else
         portal_linux_view_repaint(view);
     return G_SOURCE_REMOVE;
 }
@@ -180,7 +280,9 @@ enum portal_presented portal_linux_present(struct portal_view *view, struct wl_b
     int32_t scale = view->surface_scale > 0 ? view->surface_scale : 1;
     bool resizing = view->wanted.width != view->applied.width
                  || view->wanted.height != view->applied.height;
-    bool for_wanted = width == view->wanted.width * scale && height == view->wanted.height * scale;
+    /* A frame that fills is for any size. */
+    bool for_wanted = (!width && !height)
+                   || (width == view->wanted.width * scale && height == view->wanted.height * scale);
     if (!view->surface || !view->wanted.shown) {
         result = PORTAL_REFUSED;
     } else if (!view->applied.shown || (resizing && for_wanted)) {
@@ -204,7 +306,8 @@ enum portal_presented portal_linux_present(struct portal_view *view, struct wl_b
         result = PORTAL_PRESENTED;
     }
     pthread_mutex_unlock(&view->lock);
-    /* A held frame waits for GTK to paint, which nothing else may ask for. */
+    /* A held frame waits for GTK to paint, which nothing else may ask for,
+       and GTK may wait for it. */
     if (result == PORTAL_HELD)
         g_idle_add_full(G_PRIORITY_DEFAULT, kick, view, NULL);
     return result;
@@ -322,6 +425,10 @@ static void cover(struct portal_frame *frame)
         bool occluded = view->attached && covered(frame, &view->rect);
         if (occluded != view->occluded) {
             view->occluded = occluded;
+            /* The child frame goes from the screen when GTK next paints:
+               so does the view come back, if its frame is there by then. */
+            if (!occluded)
+                freeze(frame, true);
             want(view, false);
         }
     }
@@ -396,19 +503,16 @@ static void follow_parent(struct portal_frame *frame, bool mapped)
 static void window_unmapped(GtkWidget *window, gpointer data)
 {
     (void) window;
+    thaw(data);
     follow_parent(data, false);
 }
 
-/* GTK is about to paint FRAME's window: send each view's new position, in
-   the window's surface, which the compositor applies with the commit of
-   that surface that follows. */
-static void before_paint(GdkFrameClock *clock, gpointer data)
+/* Send each view of FRAME its new position in the window's surface, where
+   the compositor applies it with the commit of that surface that follows.
+   Emacs's menu bar and tool bar are GTK's, beside the GtkFixed, which they
+   move in the window; a tab bar is Emacs's own, inside it. */
+static void position(struct portal_frame *frame)
 {
-    (void) clock;
-    struct portal_frame *frame = data;
-    follow_parent(frame, gtk_widget_get_mapped(GTK_WIDGET(frame->window)));
-    /* Emacs's menu bar and tool bar are GTK's, beside the GtkFixed, which
-       they move in the window; a tab bar is Emacs's own, inside it. */
     int left = 0, top = 0;
     gtk_widget_translate_coordinates(frame->fixed, GTK_WIDGET(frame->window), 0, 0, &left, &top);
     for (struct portal_view *view = frame->views; view; view = view->next) {
@@ -423,15 +527,38 @@ static void before_paint(GdkFrameClock *clock, gpointer data)
     }
 }
 
+/* GTK draws Emacs's widget, in a paint of a window that is not frozen:
+   before it commits the window's surface. */
+static gboolean emacs_drawn(GtkWidget *fixed, cairo_t *cairo, gpointer data)
+{
+    (void) fixed, (void) cairo;
+    position(data);
+    return FALSE;
+}
+
+static void before_paint(GdkFrameClock *clock, gpointer data)
+{
+    (void) clock;
+    struct portal_frame *frame = data;
+    follow_parent(frame, gtk_widget_get_mapped(GTK_WIDGET(frame->window)));
+}
+
 /* GTK has painted FRAME's window and committed its surface: make each
-   view's surface what Emacs wants, in the same write to the compositor. */
+   view's surface what Emacs wants, in the same write to the compositor.
+   The clock runs for a frozen window too, which paints and commits
+   nothing: its views wait with it. */
 static void after_paint(GdkFrameClock *clock, gpointer data)
 {
     (void) clock;
     struct portal_frame *frame = data;
+    if (frame->frozen)
+        return;
     /* A child frame's first frame is in this paint. */
     watch_children(frame);
     cover(frame);
+    /* A paint that drew nothing of Emacs's widget sent no position: late,
+       then, for this commit of the window's surface. */
+    position(frame);
     int scale = gtk_widget_get_scale_factor(GTK_WIDGET(frame->window));
     for (struct portal_view *view = frame->views; view; view = view->next) {
         if (scale != view->scale)
@@ -464,6 +591,7 @@ static void frame_free(struct portal_frame *frame)
     while (*link != frame)
         link = &(*link)->next;
     *link = frame->next;
+    thaw(frame);
     portal_linux_input_unwatch(frame);
     unwatch_children(frame);
     g_signal_handlers_disconnect_by_data(frame->clock, frame);
@@ -561,6 +689,7 @@ static struct portal_frame *frame_titled(portal_string title, portal_text *error
     frame->parent = gtk_widget_get_mapped(GTK_WIDGET(window))
                         ? gdk_wayland_window_get_wl_surface(native)
                         : NULL;
+    g_signal_connect(fixed, "draw", G_CALLBACK(emacs_drawn), frame);
     g_signal_connect(clock, "before-paint", G_CALLBACK(before_paint), frame);
     g_signal_connect(clock, "after-paint", G_CALLBACK(after_paint), frame);
     g_signal_connect(window, "destroy", G_CALLBACK(window_destroyed), frame);
@@ -614,10 +743,7 @@ bool portal_view_create(portal_kind kind, portal_string target, const portal_opt
 bool portal_view_destroy(portal_view *view, portal_text *error)
 {
     (void) error;
-    struct portal_frame *frame = view->frame;
-    /* The pane shows Emacs's again from the next paint on. */
-    portal_linux_view_repaint(view);
-    if (frame)
+    if (view->frame)
         portal_linux_input_park(view);
     /* In this order.  The content's threads stop, and its buffers go; then
        the surface, with what the view made on the content's queue; then the
@@ -660,6 +786,7 @@ bool portal_view_attach(portal_view *view, portal_string title, portal_rect rect
     view->rect = rect;
     view->occluded = covered(frame, &rect);
     portal_linux_input_place(view);
+    freeze(frame, false);
     want(view, moved);
     return true;
 }
@@ -672,7 +799,22 @@ bool portal_view_detach(portal_view *view, portal_text *error)
     view->attached = false;
     view->occluded = false;
     portal_linux_input_park(view);
+    if (view->frame)
+        freeze(view->frame, false);
     want(view, false);
+    return true;
+}
+
+bool portal_frames_drawn(portal_text *error)
+{
+    (void) error;
+    for (struct portal_frame *frame = frames; frame; frame = frame->next) {
+        if (!frame->frozen || frame->settled)
+            continue;
+        frame->settled = true;
+        thaw_within(frame, UNDRAWN);
+        consider(frame);
+    }
     return true;
 }
 
