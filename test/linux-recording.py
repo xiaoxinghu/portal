@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""linux-recording.py RECORDING: whether the view was where its pane was, in
-every frame of a recording that test/linux-follow.sh made.
+"""linux-recording.py RECORDING [RRGGBB]: whether the view was where its pane
+was, in every frame of a recording that test/linux-follow.sh made.  With
+RRGGBB, the view is that color, as a terminal whose frames are its theme's
+background alone is, and not the test pattern.
 
 The recording is of Emacs as test/portal-linux-follow.el colors it: the
 test pattern (a red edge, a magenta fill, a blue square) over its pane,
@@ -43,8 +45,13 @@ FRINGE = 16
 CELL = 8
 
 
+VIEW = None  # The view's one color, as (red, green, blue), or None for the pattern.
+
+
 def kind(red, green, blue):
     """What a pixel is: G the pane, M the view, D and L the mode lines, F a fringe."""
+    if VIEW and abs(red - VIEW[0]) < 12 and abs(green - VIEW[1]) < 12 and abs(blue - VIEW[2]) < 12:
+        return 'M'
     if red < 40 and green > 215 and blue < 40:
         return 'G'
     if red > 215 and green < 40 and blue < 40:
@@ -185,6 +192,8 @@ def main(recording):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 2:
+    if len(sys.argv) not in (2, 3):
         sys.exit(__doc__)
+    if len(sys.argv) == 3:
+        VIEW = tuple(int(sys.argv[2][i:i + 2], 16) for i in (0, 2, 4))
     sys.exit(main(sys.argv[1]))

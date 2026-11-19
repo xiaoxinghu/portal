@@ -284,6 +284,14 @@ bool portal_linux_input_focused(const struct portal_view *view);
 /* The content's app has handled the press offered to it: it USED it, or
    the core decides what happens to it. */
 void portal_linux_input_settle(struct portal_view *view, bool used);
+/* Translate EVENT's key code with the modifiers STATE, setting *KEYVAL,
+   and set *CONSUMED, if not NULL, to the modifiers the event's own
+   translation used.  False when the keymap GDK has now does not translate
+   the code to the event's keyval: it changed since the event was made, as
+   a virtual keyboard's does each time it starts, and the event's keyval is
+   all there is to go by. */
+bool portal_linux_input_translate(const GdkEventKey *event, GdkModifierType state, guint *keyval,
+                                  GdkModifierType *consumed);
 /* Show the pointer over VIEW as NAME, a cursor's CSS name in static memory,
    or as its parent's for NULL. */
 void portal_linux_input_cursor(struct portal_view *view, const char *name);

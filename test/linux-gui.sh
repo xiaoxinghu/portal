@@ -21,30 +21,36 @@ export PORTAL_LINUX_SELECTOR="${1:-}"
 export MALLOC_PERTURB_=165
 sh "$root/test/gui-ert.sh" \
     -l "$root/test/portal-linux-gui-tests.el" \
+    -l "$root/test/portal-linux-terminal-tests.el" \
     --eval '(portal-gui-ert-start
              (list (quote and) "^portal-linux-gui-"
                    (let ((focus (getenv "PORTAL_LINUX_SELECTOR")))
                      (if (equal focus "") t focus))))'
 # Emacs quits with a view open, shown and drawing, and the keyboard in it:
-# the view ends in kill-emacs-hook, and Emacs exits as it was asked to.
+# the view ends in kill-emacs-hook, and Emacs exits as it was asked to. Once
+# with the test pattern, and once with a terminal whose program is printing
+# as fast as it can, so that its renderer and the presenter are busy.
 [ -z "$PORTAL_LINUX_SELECTOR" ] || exit 0
-status=0
-"${EMACS:-emacs}" -Q --module-assertions -L "$root" -l "$root/portal.el" --eval '
+for view in "(:directory \"/\" :test-pattern t)" "(:directory \"/\" :command \"yes\")"; do
+    status=0
+    "${EMACS:-emacs}" -Q --module-assertions -L "$root" -l "$root/portal.el" --eval "
 (run-at-time
  1 nil
  (lambda ()
-   (switch-to-buffer (get-buffer-create "*quit*"))
-   (let ((target (portal-view-open (quote terminal) (quote (:directory "/" :test-pattern t))))
+   (switch-to-buffer (get-buffer-create \"*quit*\"))
+   (let ((target (portal-view-open 'terminal '$view))
          (deadline (+ (float-time) 10)))
      (while (and (not (plist-get (portal--inspect target) :showing)) (< (float-time) deadline))
        (accept-process-output nil 0.02)
        (redisplay t))
-     (kill-emacs (if (and (portal--input target "focus")
+     (sit-for 0.5)
+     (kill-emacs (if (and (portal--input target \"focus\")
                           (plist-get (portal--inspect target) :showing))
                      0
-                   3)))))' || status=$?
-if [ "$status" != 0 ]; then
-    echo "GUI checks failed: Emacs quitting with a view open exited $status" >&2
-    exit 1
-fi
-echo "Emacs quit with a view open" >&2
+                   3)))))" || status=$?
+    if [ "$status" != 0 ]; then
+        echo "GUI checks failed: Emacs quitting with a view $view open exited $status" >&2
+        exit 1
+    fi
+    echo "Emacs quit with a view $view open" >&2
+done

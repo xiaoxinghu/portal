@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Run via: sh test/linux-follow.sh [fill]
+# Run via: sh test/linux-follow.sh [fill|terminal]
 # Record a view following its pane and check every frame of the recording:
 # after ./build.sh, on the desktop of test/linux-desktop.sh. A fresh Emacs
 # opens a test pattern in a pane and changes that pane, one command every
@@ -14,7 +14,9 @@
 # be exactly over its pane, covering all of it and nothing else, but for
 # the frames in which a window the compositor has resized shows its last
 # frame at the new size, which are counted apart. With "fill", the pattern is a single pixel
-# stretched over the pane.
+# stretched over the pane. With "terminal", the view is a terminal whose shell
+# prints blank lines all the while, so that its renderer makes frames as the
+# pane changes, each one its theme's orange background.
 #
 # It exits 0 when no frame is out of place, 1 when one is, naming each, and
 # 77 where the desktop cannot start. The recording stays in
@@ -66,6 +68,7 @@ recorder=$!
 sleep 1
 : >"$work/go"
 await done 300
+echo "The view at the end: $(cat "$work/facts")"
 sleep 0.5
 kill -INT "$recorder"
 wait "$recorder" 2>/dev/null || :
@@ -73,4 +76,9 @@ recorder=
 kill -KILL "$emacs" 2>/dev/null || :
 wait "$emacs" 2>/dev/null || :
 emacs=
-python3 -B "$root/test/linux-recording.py" "$logs/follow.mkv"
+if [ "$PORTAL_FOLLOW_PATTERN" = terminal ]; then
+    # Great Pumpkin's background (test/portal-linux-follow.el).
+    python3 -B "$root/test/linux-recording.py" "$logs/follow.mkv" f98128
+else
+    python3 -B "$root/test/linux-recording.py" "$logs/follow.mkv"
+fi

@@ -19,7 +19,7 @@
    Each terminal has a configuration of its own, made from its theme, its
    opacity and its text size (config_text), applied when it is made and
    again at each change.  Without a theme, it follows the desktop's light or
-   dark preference, which the XDG desktop portal says.  Ghostty's own key
+   dark preference, which the XDG desktop portal says (scheme_follow).  Ghostty's own key
    bindings are cleared, but Copy and Paste: on Linux they are Control and
    Alt chords, which would take keys from the shell, and Portal sizes the
    text itself.
@@ -104,7 +104,11 @@ static void format_number(char *text, size_t size, double number)
 }
 
 /* The configuration of a terminal with THEME, OPACITY and POINTS, as the
-   text of a file, allocated with g_malloc. */
+   text of a file, allocated with g_malloc.  Without a theme, Alabaster or
+   Afterglow, as the desktop is light or dark: Portal chooses, and not
+   Ghostty with a theme of the form light:...,dark:..., since Ghostty then
+   reads such a configuration anew from its lines for the dark, and the
+   command and directory a surface was made with are not among them. */
 static char *config_text(const char *theme, double opacity, double points)
 {
     char alpha[32], size[32];
@@ -122,7 +126,8 @@ static char *config_text(const char *theme, double opacity, double points)
         "keybind = clear\n"
         "keybind = ctrl+shift+c=copy_to_clipboard\n"
         "keybind = ctrl+shift+v=paste_from_clipboard\n",
-        theme ? theme : "light:Alabaster,dark:Afterglow", alpha, size, PADDING, PADDING);
+        theme ? theme : app.scheme == GHOSTTY_COLOR_SCHEME_DARK ? "Afterglow" : "Alabaster", alpha,
+        size, PADDING, PADDING);
 }
 
 /* Ghostty's configuration for THEME, OPACITY and POINTS, or NULL with
@@ -188,15 +193,18 @@ static ghostty_color_scheme_e scheme_of(GVariant *value)
     return dark ? GHOSTTY_COLOR_SCHEME_DARK : GHOSTTY_COLOR_SCHEME_LIGHT;
 }
 
+/* The desktop is light or dark now: each terminal of the default theme
+   takes the one for it. */
 static void scheme_apply(ghostty_color_scheme_e scheme)
 {
     if (scheme == app.scheme)
         return;
     app.scheme = scheme;
-    ghostty_app_set_color_scheme(app.app, scheme);
-    for (struct terminal *terminal = app.terminals; terminal; terminal = terminal->next)
-        if (terminal->surface)
-            ghostty_surface_set_color_scheme(terminal->surface, scheme);
+    for (struct terminal *terminal = app.terminals; terminal; terminal = terminal->next) {
+        portal_text error = {0};
+        if (!terminal->theme && !reconfigure(terminal, &error))
+            free(error.data);
+    }
 }
 
 static void setting_changed(GDBusConnection *bus, const gchar *sender, const gchar *path,
@@ -400,8 +408,7 @@ static bool act(ghostty_app_t ghostty, ghostty_target_s target, ghostty_action_s
         open_url(action.action.open_url.url, action.action.open_url.len);
         return true;
     case GHOSTTY_ACTION_RELOAD_CONFIG:
-        /* As after a change of the light or dark preference: the
-           configuration again, which Ghostty reads in that light. */
+        /* The configuration again, which is all of it. */
         if (terminal) {
             portal_text error = {0};
             if (!reconfigure(terminal, &error))
@@ -576,6 +583,7 @@ static bool app_start(const struct portal_wayland *wayland, portal_text *error)
         return true;
     if (!portal_linux_ghostty_start(&app.resources, error))
         return false;
+    scheme_follow();
     ghostty_config_t config = config_make(NULL, 1, PORTAL_TERMINAL_POINTS, error);
     if (!config)
         return false;
@@ -594,8 +602,6 @@ static bool app_start(const struct portal_wayland *wayland, portal_text *error)
     if (!app.app)
         return portal_linux_fail(error, "Ghostty could not start its app");
     app.egl = egl_display(wayland);
-    scheme_follow();
-    ghostty_app_set_color_scheme(app.app, app.scheme);
     return true;
 }
 
@@ -882,13 +888,12 @@ static void terminal_key(void *content, const GdkEventKey *event, const char *te
         return;
     bool press = event->type == GDK_KEY_PRESS;
     bool repeat = key_repeats(terminal, event->hardware_keycode, press);
-    GdkKeymap *keymap = gdk_keymap_get_for_display(gdk_window_get_display(event->window));
     GdkModifierType consumed = 0;
     guint unshifted = 0;
-    gdk_keymap_translate_keyboard_state(keymap, event->hardware_keycode, event->state,
-                                        event->group, NULL, NULL, NULL, &consumed);
-    gdk_keymap_translate_keyboard_state(keymap, event->hardware_keycode, 0, event->group,
-                                        &unshifted, NULL, NULL, NULL);
+    if (!portal_linux_input_translate(event, 0, &unshifted, &consumed)) {
+        consumed = 0;
+        unshifted = gdk_keyval_to_lower(event->keyval);
+    }
     ghostty_input_mods_e mods = mods_of(event->state), modifier = modifier_of(event->keyval);
     mods = press ? mods | modifier : mods & ~modifier;
     char typed[8] = {0};
@@ -1140,7 +1145,6 @@ bool portal_linux_terminal_create(struct portal_view *view, const portal_option 
         terminal->surface = ghostty_surface_new(app.app, &surface);
         if (terminal->surface) {
             ghostty_surface_update_config(terminal->surface, config);
-            ghostty_surface_set_color_scheme(terminal->surface, app.scheme);
         } else {
             portal_linux_fail(error, "Ghostty could not make a terminal");
         }

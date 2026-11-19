@@ -366,13 +366,24 @@ void portal_linux_input_park(struct portal_view *view)
    no other modifier, and Portal's modifiers.  Alt is Meta.  The keys that
    type a control character have it, as on macOS; a key that types no
    character, such as an arrow, is 0. */
+bool portal_linux_input_translate(const GdkEventKey *event, GdkModifierType state, guint *keyval,
+                                  GdkModifierType *consumed)
+{
+    GdkKeymap *keymap = gdk_keymap_get_for_display(gdk_window_get_display(event->window));
+    guint again;
+    return gdk_keymap_translate_keyboard_state(keymap, event->hardware_keycode, event->state,
+                                               event->group, &again, NULL, NULL, consumed)
+        && again == event->keyval
+        && gdk_keymap_translate_keyboard_state(keymap, event->hardware_keycode, state,
+                                               event->group, keyval, NULL, NULL, NULL);
+}
+
 static portal_chord chord_of(const GdkEventKey *event)
 {
     guint symbol = event->keyval, plain;
-    GdkKeymap *keymap = gdk_keymap_get_for_display(gdk_window_get_display(event->window));
-    if (gdk_keymap_translate_keyboard_state(keymap, event->hardware_keycode,
-                                            event->state & GDK_SHIFT_MASK, event->group, &plain,
-                                            NULL, NULL, NULL))
+    /* Its keyval with Shift alone; or, where the key's code no longer
+       translates as it did, the keyval it came with, Control and all. */
+    if (portal_linux_input_translate(event, event->state & GDK_SHIFT_MASK, &plain, NULL))
         symbol = plain;
     uint32_t character;
     switch (symbol) {
