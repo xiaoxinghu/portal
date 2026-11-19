@@ -10,9 +10,9 @@
    status.c where the status panel goes, rex.c the connections to Rex
    servers, and channel.c owns the pipe that carries records to Emacs.
    The platform implements the operations below: the production module links
-   the macOS backend, native/Backend.swift, and the core's tests link
-   test/portal-fake-backend.c.  Nothing here knows about Emacs values or a UI
-   toolkit.
+   the macOS backend, native/Backend.swift, or on Linux native/Linux/backend.c,
+   and the core's tests link test/portal-fake-backend.c.  Nothing here knows
+   about Emacs values or a UI toolkit.
 
    Every operation is a primitive (docs/adr/0003): something a platform must
    do, which the core cannot build from the others.  Portal's rules stay in
@@ -625,8 +625,9 @@ typedef struct portal_chord {
     uint32_t modifiers;
 } portal_chord;
 
-/* Whether CHORD is the configured return-to-Emacs key (Super-period by
-   default). Check key-downs before holding or offering events, including
+/* Whether CHORD is the configured return-to-Emacs key (Super-period until
+   Lisp configures its own, as it does when the module loads). Check
+   key-downs before holding or offering events, including
    during a handoff. On a match return focus and report portal_input_focus
    even if already unfocused, so the handoff ends without waiting for Lisp
    or the app. Releases and modifier changes never trigger escape. */

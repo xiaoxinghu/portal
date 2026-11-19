@@ -93,8 +93,10 @@ and mood-line, show it without configuration. A hand-built
 ## The escape key
 
 `portal-input-escape-key` reserves one chord across all native views, before
-an app can claim it. The default is `"s-."` (Command-period). Change it live with
-Customize or, for example:
+an app can claim it. The default is `"s-."` (Command-period) on macOS. On
+Linux it is `"C-<escape>"` (Control-Escape): Super is the desktop's modifier
+there, and a compositor takes the chords it binds before Emacs sees them.
+Change it live with Customize or, for example:
 
 ```elisp
 (setq portal-input-escape-key "C-s-g") ; Control-Command-G

@@ -29,6 +29,12 @@ For an SSH-only test account, set these in its `~/.zshenv` so non-interactive
 builds inherit them. Verify actual native compilation, not only
 `native-comp-available-p`, before saving a prepared VM.
 
+On Linux, where Portal has a module and no views, the checks are those
+[Contributing](../CONTRIBUTING.md#building-on-linux) lists. None is graphical:
+that the built module loads in a graphical Emacs, and what it finds there,
+was checked by hand when it was written, in `emacs -Q` 31.1 with a pgtk frame
+on Wayland.
+
 ## Writing tests
 
 - Test at the narrowest useful boundary. Use the real core with a fake platform
@@ -612,9 +618,10 @@ windows or register real hot keys.
 
 ## C core checks
 
-Run this standalone build for shared rules without the native backend.
-It still needs macOS for `F_SETNOSIGPIPE`; a fake platform does not make the pipe
-portable.
+Run this standalone build for shared rules without the native backend, on
+macOS or Linux. The pipe's writes raise no SIGPIPE on either, by a setting of
+the descriptor on macOS and by masking the signal around each write on Linux
+(`native/Core/channel.c`).
 
 ```sh
 cmake -S native/Core -B build/core
