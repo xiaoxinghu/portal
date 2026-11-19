@@ -71,13 +71,15 @@ Debug | ReleaseFast) ;;
     ;;
 esac
 
-# Zig runs in the source copy: a relative path must not start there.
+# Git and Zig run in the source copy: a relative path must not start there.
 absolute() {
     case $1 in
     /*) printf '%s\n' "$1" ;;
     *) printf '%s/%s\n' "$PWD" "$1" ;;
     esac
 }
+pin=$(absolute "$pin")
+patches=$(absolute "$patches")
 dest=$(absolute "$dest")
 prefix=$(absolute "$prefix")
 

@@ -140,6 +140,8 @@ class BuildGhosttyLinux(unittest.TestCase):
         self.assertFalse(self.source.exists())
 
     def test_relative_paths_are_the_callers_not_the_source_copys(self):
+        self.add_patch("0001-one.patch", "one", "1")
+
         result = subprocess.run(
             ["sh", str(SCRIPT), "--pin", "pin.json", "--patches", "patches",
              "--source", "build/ghostty", "--prefix", "out"],
@@ -148,7 +150,7 @@ class BuildGhosttyLinux(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root / "out" / "lib" / "libghostty.so").read_text(),
-                         "one\ntwo\nthree\n")
+                         "1\ntwo\nthree\n")
         self.assertEqual(git(self.source, "status", "--porcelain"), "")
 
     def test_keeps_a_current_copy_and_builds_the_changes_made_in_it(self):
