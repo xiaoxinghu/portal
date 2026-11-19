@@ -413,6 +413,18 @@ A position is in the desktop's own pixels, which are Emacs's."
                 ;; Nothing of it is left in the first frame.
                 (should (= 0 (portal-linux-gui--count
                               screen 'fill (portal-linux-gui--box window))))))
+            ;; GTK destroys a hidden window's surface, and the view's with
+            ;; it: both come back with the window.
+            (make-frame-invisible other t)
+            (portal-linux-gui--wait (lambda () (not (portal-linux-gui--get :showing))))
+            (make-frame-visible other)
+            (let ((far (frame-selected-window other)))
+              (portal-linux-gui--wait (lambda () (portal-linux-gui--settled-p far)))
+              (portal-linux-gui--pause 0.3)
+              (pcase-let ((screen (portal-linux-gui--screen))
+                          (`(,left ,top . ,_) (portal-linux-gui--box far)))
+                (should (eq (portal-linux-gui--kind (portal-linux-gui--pixel screen left top))
+                            'edge))))
             ;; Its frame deleted under it, while its thread draws.
             (delete-frame other)
             (portal-linux-gui--pause 0.3)
@@ -423,6 +435,28 @@ A position is in the desktop's own pixels, which are Emacs's."
       ;; And it shows again where its buffer does.
       (switch-to-buffer buffer)
       (portal-linux-gui--covers window))))
+
+(ert-deftest portal-linux-gui-view-ends-in-the-middle-of-a-change ()
+  :tags '(:gui)
+  "A view closed while its window waits for Emacs to draw leaves it painting."
+  (portal-linux-gui--with-view 'terminal '(:directory "/")
+    (let ((window (selected-window)) (buffer (current-buffer)))
+      (portal-linux-gui--covers window)
+      ;; Placed anew and closed before Emacs is idle again.
+      (set-window-buffer (split-window-below) (get-buffer-create "*scratch*"))
+      (portal-view-sync)
+      (kill-buffer buffer)
+      (should-not (portal--inspect portal-linux-gui--target))
+      ;; The window paints again: another view shows in it.
+      (delete-other-windows)
+      (switch-to-buffer (generate-new-buffer "*portal-linux-gui-next*"))
+      (unwind-protect
+          (progn
+            (face-remap-add-relative 'default :background portal-linux-gui--pane)
+            (let ((portal-linux-gui--target
+                   (portal-view-open 'terminal '(:directory "/" :test-pattern t))))
+              (portal-linux-gui--covers (selected-window))))
+        (kill-buffer (current-buffer))))))
 
 ;;; The keyboard
 
