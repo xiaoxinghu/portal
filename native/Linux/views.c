@@ -49,17 +49,21 @@
      portal_linux_present holds until then.
    - A frame callback is asked for on a wrapper of the surface that belongs
      to the view's queue, and the content's buffers belong to that queue
-     too: both are heard on the content's thread.
+     too: both are heard on the content's thread, which may be one that
+     serves several views, as a terminal's presenter does.
+   - A content whose frames are bottom-up has the surface turned over
+     (`flipped'), from the surface's first commit.
 
    A subsurface cannot change its parent, so a view that moves to another
    frame gets a new surface there.  The content never sees a surface: it
    presents buffers, which any surface takes.
 
    Ending a view, in the order that keeps a queue from outliving what was
-   made on it (portal_view_destroy): the content stops its threads and
-   destroys its buffers; the surface goes, with the frame callback and the
-   wrapper; the queue is round-tripped, which delivers what was still on its
-   way, and destroyed; then the input method and the widget. */
+   made on it (portal_view_destroy): the content stops drawing; the surface
+   goes, with the frame callback and the wrapper, so that nothing the
+   content then frees is on the screen; the content destroys its buffers;
+   the queue is round-tripped, which delivers what was still on its way,
+   and destroyed; then the input method and the widget. */
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
@@ -351,6 +355,10 @@ static void surface_make(struct portal_view *view)
     view->viewport = wp_viewporter_get_viewport(wayland->viewporter, view->surface);
     view->framed = wl_proxy_create_wrapper(view->surface);
     wl_proxy_set_queue((struct wl_proxy *) view->framed, view->queue);
+    /* Turned over: the viewport's source below is then in the frame's own
+       orientation, its top left the pane's. */
+    if (view->flipped)
+        wl_surface_set_buffer_transform(view->surface, WL_OUTPUT_TRANSFORM_FLIPPED_180);
     wl_surface_commit(view->surface);
     view->applied = (struct portal_geometry) {0};
     view->showing = false;
@@ -780,13 +788,16 @@ bool portal_view_destroy(portal_view *view, portal_text *error)
     (void) error;
     if (view->frame)
         portal_linux_input_park(view);
-    /* In this order.  The content's threads stop, and its buffers go; then
-       the surface, with what the view made on the content's queue; then the
+    /* In this order.  The content stops drawing; the surface goes, with
+       what the view made on the content's queue, and with it what the
+       screen shows of the content; the content's buffers go; then the
        queue, once a round trip has delivered what was on its way to it.  A
        queue destroyed with a proxy still on it, or events still to come for
        one, brings Emacs down. */
-    view->class->destroy(view->content);
+    if (view->class->stop)
+        view->class->stop(view->content);
     surface_destroy(view);
+    view->class->destroy(view->content);
     wl_display_roundtrip_queue(view->wayland->display, view->queue);
     wl_event_queue_destroy(view->queue);
     portal_linux_input_close(view);

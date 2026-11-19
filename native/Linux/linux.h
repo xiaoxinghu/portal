@@ -7,7 +7,10 @@
               surface over a pane, and when each change reaches the screen.
    input.c    a view's keyboard and pointer: the invisible widget in the
               frame, who gets each key, the input method.
-   pattern.c  the one kind of content so far, a test pattern.
+   terminal.c a terminal: a content that is a Ghostty surface, and Ghostty's
+              app, which every terminal shares.
+   presenter.c the thread that shows every terminal's frames.
+   pattern.c  the other kind of content, a test pattern for the checks.
 
    A view has two parts in an Emacs frame, as docs/architecture.md says: a
    Wayland subsurface of the frame's window, which shows its pixels, and an
@@ -15,9 +18,9 @@
    the pixels are and what the input does is the view's content, below.
 
    Threads.  Everything here runs on the module thread, Emacs's main thread,
-   which is GTK's, except what a content does on threads of its own.  Such a
-   thread may call only portal_linux_present and what is said to be for any
-   thread. */
+   which is GTK's, except what a content does on threads of its own or
+   shares.  Such a thread may call only portal_linux_present and what is
+   said to be for any thread. */
 #ifndef PORTAL_LINUX_H
 #define PORTAL_LINUX_H
 
@@ -44,24 +47,38 @@ struct portal_wayland {
     struct wl_subcompositor *subcompositor;
     struct wp_viewporter *viewporter;
     struct wl_shm *shm;
+    bool shm_abgr; /* wl_shm takes ABGR8888, RGBA bytes as they are. */
+    /* Version 3, or NULL for a compositor that takes no DMABUFs: a
+       terminal's frames then come in memory. */
+    struct zwp_linux_dmabuf_v1 *dmabuf;
 };
 /* The display and its globals, bound at the first call.  Fails for an Emacs
    with no display, for a display that is not Wayland, and for a compositor
    that lacks one of them. */
 const struct portal_wayland *portal_linux_wayland(portal_text *error);
 
-/* A view's content: what it shows and what its input does.  One kind of
-   content exists, the test pattern (pattern.c); a terminal and a page are to
-   come.  The view calls these on the module thread, except FRAME.
+/* A view's content: what it shows and what its input does.  Two kinds of
+   content exist, a terminal (terminal.c) and the test pattern (pattern.c);
+   a page is to come.  The view calls these on the module thread, except
+   FRAME.
 
-   A content draws on a thread of its own if it wants to, into wl_buffers it
-   makes, and shows each with portal_linux_present.  Every proxy it makes
-   belongs to the view's queue (portal_linux_view_queue), so that its
-   buffers' releases arrive on the thread that dispatches that queue, and
-   nothing of its is ever dispatched by GDK. */
+   A content draws on a thread, its own or one it shares with others, into
+   wl_buffers it makes, and shows each with portal_linux_present.  Every
+   proxy it makes belongs to the view's queue, so that its buffers' releases
+   arrive on the thread that dispatches that queue, and nothing of its is
+   ever dispatched by GDK.  Only that thread dispatches the queue, from the
+   view's create until the content's STOP, or its DESTROY if it has no STOP.
+
+   A view ends in this order (portal_view_destroy): STOP, if the content has
+   one; the view's surface destroyed; DESTROY; the view's queue round-tripped,
+   which delivers what was still on its way to it, and destroyed. */
 struct portal_content_class {
-    /* End the content: stop and join its threads, then destroy every proxy
-       it made.  The view destroys its surface and the queue afterwards. */
+    /* Stop drawing, before the view's surface goes: no thread of the
+       content's dispatches the view's queue or presents a frame after this
+       returns.  NULL for a content whose DESTROY does all of it. */
+    void (*stop)(void *content);
+    /* End the content: stop and join its threads, if STOP has not, then
+       destroy every proxy it made. */
     void (*destroy)(void *content);
     /* The pane is WIDTH by HEIGHT of Emacs's pixels at SCALE device pixels
        each, and SHOWN or not: a view is not shown while it is detached, or
@@ -77,10 +94,14 @@ struct portal_content_class {
     /* The view's widget gained or lost the keyboard. */
     void (*focus)(void *content, bool focused);
     /* A key event for the content, a press, a repeat or a release, which
-       the core passed and the input method did not take. */
-    void (*key)(void *content, const GdkEventKey *event);
-    /* Text the input method committed, and the text it is composing, with
-       the cursor's position in it in characters; "" once it is done. */
+       the core passed.  TEXT is what the input method committed for it, as
+       it does for a key that types, or NULL; COMPOSING, whether the input
+       method is composing.  A press the input method took for itself,
+       giving no text or composing, does not come here. */
+    void (*key)(void *content, const GdkEventKey *event, const char *text, bool composing);
+    /* Text the input method committed apart from any key, as when it ends
+       composing, and the text it is composing, with the cursor's position
+       in it in characters; "" once it is done. */
     void (*text)(void *content, const char *text);
     void (*preedit)(void *content, const char *text, int cursor);
     /* A button, motion, scroll or crossing event over the view, with its
@@ -117,6 +138,9 @@ struct portal_view {
     size_t target_length;
     const struct portal_content_class *class;
     void *content;
+    /* The content's frames are bottom-up, its first row the bottom one:
+       set when it is made, for every frame it presents. */
+    bool flipped;
     const struct portal_wayland *wayland;
     /* The content's threads' queue, the view's from create to destroy. */
     struct wl_event_queue *queue;
@@ -144,6 +168,13 @@ struct portal_view {
     bool holding;        /* Key events go to HELD. */
     GQueue held;         /* GdkEvent copies, oldest first. */
     guint replay;        /* The idle source that delivers HELD, or 0. */
+    /* The input method: whether it is composing; and while a key event is
+       being filtered, whether it was composing then (KEYING), and what it
+       committed for that key (TYPED). */
+    const char *cursor; /* The pointer's shape over the view, a CSS name, or NULL. */
+    bool composing;
+    enum { PORTAL_KEYING_NONE, PORTAL_KEYING_PLAIN, PORTAL_KEYING_COMPOSING } keying;
+    GString *typed;
 
     /* The surface, and what of it the content's threads share: everything
        from here on, under LOCK.  Whoever holds the lock leaves no state
@@ -253,8 +284,11 @@ bool portal_linux_input_focused(const struct portal_view *view);
 /* The content's app has handled the press offered to it: it USED it, or
    the core decides what happens to it. */
 void portal_linux_input_settle(struct portal_view *view, bool used);
+/* Show the pointer over VIEW as NAME, a cursor's CSS name in static memory,
+   or as its parent's for NULL. */
+void portal_linux_input_cursor(struct portal_view *view, const char *name);
 
-/* backend.c and pattern.c. */
+/* backend.c, terminal.c and pattern.c. */
 
 /* Give VIEW, a new view, the content its kind and OPTIONS ask for, setting
    its class and content; or fail, as for a kind that has none yet. */
@@ -263,5 +297,54 @@ bool portal_linux_content_create(struct portal_view *view, const portal_option *
 /* Make a test pattern for VIEW from OPTIONS. */
 bool portal_linux_pattern_create(struct portal_view *view, const portal_option *options,
                                  size_t count, portal_text *error);
+/* Make a terminal for VIEW from OPTIONS, whose :directory the core has
+   checked. */
+bool portal_linux_terminal_create(struct portal_view *view, const portal_option *options,
+                                  size_t count, portal_text *error);
+/* Start Ghostty's library, once, and set *RESOURCES to the directory of
+   its resources, which stays as long as the process; or fail, the same way
+   each time after a first failure. */
+bool portal_linux_ghostty_start(const char **resources, portal_text *error);
+
+/* presenter.c, for terminal.c: what shows a terminal's frames.
+
+   A stage is a terminal as the presenter has it: its Ghostty surface and
+   the buffers made for its frames.  The presenter is one thread for every
+   terminal, with a Wayland queue of its own, which it reads the display
+   with, and it dispatches each stage's view's queue.  Ghostty's renderer
+   announces each frame on its own thread; the presenter takes the latest
+   when the view's last frame has reached the screen, at its frame
+   callback, and shows it, so it commits no faster than the compositor
+   shows.  A frame is kept until the compositor releases the buffer it was
+   shown with.
+
+   A stage is made, with portal_linux_stage_new, before its Ghostty
+   surface, whose frame-ready callback is portal_linux_stage_ready with the
+   stage; started with that surface; stopped before the surface is freed,
+   which Portal's main thread does; and freed after the view's surface is
+   gone.  Between the stop and the free, Ghostty may still announce frames,
+   until ghostty_surface_free returns. */
+struct portal_stage;
+struct portal_stage *portal_linux_stage_new(struct portal_view *view);
+/* Ghostty's frame-ready callback for the stage DATA: on the render thread. */
+void portal_linux_stage_ready(void *data);
+/* Start showing SURFACE, a ghostty_surface_t, on STAGE's view. */
+bool portal_linux_stage_start(struct portal_stage *stage, void *surface, portal_text *error);
+/* The view changed: its size, its scale or whether it is SHOWN.  The stage
+   asks Ghostty to show or hide the surface to match, off the main thread:
+   Ghostty takes the terminal's lock for that, which its IO thread holds
+   most of the time under a flood of output. */
+void portal_linux_stage_configure(struct portal_stage *stage, bool shown);
+/* A frame shown on STAGE's view has reached the screen: its frame
+   callback, on the presenter's thread. */
+void portal_linux_stage_frame(struct portal_stage *stage);
+/* Forget STAGE's surface: nothing of the presenter's calls into it after
+   this returns, and it may be freed. */
+void portal_linux_stage_stop(struct portal_stage *stage);
+/* Destroy STAGE's buffers, freeing the frames they showed, and STAGE. */
+void portal_linux_stage_free(struct portal_stage *stage);
+/* Add what the presenter counted for STAGE to DESCRIPTION, as members of a
+   JSON object, each followed by a comma. */
+void portal_linux_stage_describe(struct portal_stage *stage, struct json *description);
 
 #endif

@@ -332,10 +332,17 @@ static void name_key(const GdkEventKey *event, char *name, size_t size)
              event->state & GDK_SHIFT_MASK ? "S-" : "", symbol ? symbol : "?");
 }
 
-static void pattern_key(void *content, const GdkEventKey *event)
+static void pattern_key(void *content, const GdkEventKey *event, const char *text,
+                        bool composing)
 {
+    (void) composing;
     struct pattern *pattern = content;
     char name[96];
+    /* A key that types is its text, as the input method committed it. */
+    if (text) {
+        note(pattern->text, text, false);
+        return;
+    }
     if (event->is_modifier)
         return;
     name_key(event, name, sizeof name);
@@ -466,6 +473,7 @@ static void pattern_paste(void *content, const char *text)
 }
 
 static const struct portal_content_class pattern_class = {
+    .stop = NULL,
     .destroy = pattern_destroy,
     .configure = pattern_configure,
     .frame = pattern_frame,

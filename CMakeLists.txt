@@ -318,7 +318,7 @@ install it, or name it with ZIG")
     if(NOT TIC)
         message(FATAL_ERROR "Ghostty's build compiles its terminfo with tic: install ncurses")
     endif()
-    pkg_check_modules(ghostty_egl QUIET egl)
+    pkg_check_modules(ghostty_egl QUIET IMPORTED_TARGET egl)
     if(NOT ghostty_egl_FOUND)
         message(FATAL_ERROR "Ghostty's library links EGL: install its development files, \
 pkg-config's egl, such as libglvnd's")
@@ -358,33 +358,47 @@ pkg-config's egl, such as libglvnd's")
         IMPORTED_LOCATION "${ghostty_prefix}/lib/libghostty.so"
         IMPORTED_SONAME libghostty.so)
 
-    # The one Wayland protocol the backend speaks beyond the core's, which
-    # sizes a view's surface: its C comes from wayland-protocols' XML.
+    # The Wayland protocols the backend speaks beyond the core's: the one
+    # that sizes a view's surface, and the one that shows a terminal's
+    # frames as the GPU drew them.  Their C comes from wayland-protocols' XML.
     pkg_get_variable(wayland_protocols wayland-protocols pkgdatadir)
     pkg_get_variable(wayland_scanner wayland-scanner wayland_scanner)
     if(NOT wayland_protocols OR NOT wayland_scanner)
         message(FATAL_ERROR "Portal needs wayland-protocols and wayland-scanner, as pkg-config finds them")
     endif()
-    set(viewporter_xml "${wayland_protocols}/stable/viewporter/viewporter.xml")
     set(protocols "${CMAKE_BINARY_DIR}/linux/protocols")
     file(MAKE_DIRECTORY "${protocols}")
-    add_custom_command(
-        OUTPUT "${protocols}/viewporter-client-protocol.h" "${protocols}/viewporter-protocol.c"
-        COMMAND "${wayland_scanner}" client-header "${viewporter_xml}"
-            "${protocols}/viewporter-client-protocol.h"
-        COMMAND "${wayland_scanner}" private-code "${viewporter_xml}"
-            "${protocols}/viewporter-protocol.c"
-        DEPENDS "${viewporter_xml}"
-        COMMENT "Generating the viewporter protocol"
-        VERBATIM)
+    set(protocol_sources)
+    foreach(protocol viewporter linux-dmabuf)
+        if(protocol STREQUAL "viewporter")
+            set(protocol_xml "${wayland_protocols}/stable/viewporter/viewporter.xml")
+        else()
+            set(protocol_xml "${wayland_protocols}/stable/linux-dmabuf/linux-dmabuf-v1.xml")
+            set(protocol linux-dmabuf-v1)
+        endif()
+        add_custom_command(
+            OUTPUT "${protocols}/${protocol}-client-protocol.h" "${protocols}/${protocol}-protocol.c"
+            COMMAND "${wayland_scanner}" client-header "${protocol_xml}"
+                "${protocols}/${protocol}-client-protocol.h"
+            COMMAND "${wayland_scanner}" private-code "${protocol_xml}"
+                "${protocols}/${protocol}-protocol.c"
+            DEPENDS "${protocol_xml}"
+            COMMENT "Generating the ${protocol} protocol"
+            VERBATIM)
+        list(APPEND protocol_sources
+            "${protocols}/${protocol}-protocol.c" "${protocols}/${protocol}-client-protocol.h")
+    endforeach()
     add_library(portal-module MODULE native/Core/emacs.c ${PORTAL_CORE_SOURCES}
-        native/Linux/backend.c native/Linux/views.c native/Linux/input.c native/Linux/pattern.c
-        "${protocols}/viewporter-protocol.c" "${protocols}/viewporter-client-protocol.h")
+        native/Linux/backend.c native/Linux/views.c native/Linux/input.c
+        native/Linux/terminal.c native/Linux/presenter.c native/Linux/pattern.c
+        ${protocol_sources})
     target_include_directories(portal-module PRIVATE
         native/Core/include native/Core "${EMACS_INCLUDE}" "${ghostty_prefix}/include"
         "${protocols}")
+    # EGL: a terminal's renderer draws with a display on Emacs's own
+    # Wayland connection, the compositor's GPU.
     target_link_libraries(portal-module PRIVATE PkgConfig::portal_platform Threads::Threads
-        ghostty ${CMAKE_DL_LIBS})
+        PkgConfig::ghostty_egl ghostty ${CMAKE_DL_LIBS})
     add_dependencies(portal-module ghostty-linux)
     # The bindings offer portal--terminal-engine, which only this backend has.
     target_compile_definitions(portal-module PRIVATE PORTAL_TERMINAL_ENGINE)
