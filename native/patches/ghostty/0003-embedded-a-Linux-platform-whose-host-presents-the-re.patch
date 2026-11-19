@@ -41,10 +41,10 @@ if nothing changed.
  src/renderer/Metal.zig             |   2 +
  src/renderer/OpenGL.zig            |  48 ++++-
  src/renderer/generic.zig           |  13 ++
- src/renderer/opengl/ExportPool.zig | 295 +++++++++++++++++++++++++++++
+ src/renderer/opengl/ExportPool.zig | 300 +++++++++++++++++++++++++++++
  src/renderer/opengl/Frame.zig      |  20 +-
  src/renderer/opengl/Target.zig     | 136 +------------
- 10 files changed, 632 insertions(+), 140 deletions(-)
+ 10 files changed, 637 insertions(+), 140 deletions(-)
  create mode 100644 src/renderer/opengl/ExportPool.zig
 
 diff --git a/include/ghostty.h b/include/ghostty.h
@@ -597,10 +597,10 @@ index df70aa3c7..a1a76d3ce 100644
                  self.animationWake() != null or
 diff --git a/src/renderer/opengl/ExportPool.zig b/src/renderer/opengl/ExportPool.zig
 new file mode 100644
-index 000000000..4a702aa7a
+index 000000000..15cac8a12
 --- /dev/null
 +++ b/src/renderer/opengl/ExportPool.zig
-@@ -0,0 +1,295 @@
+@@ -0,0 +1,300 @@
 +//! The textures finished frames are exported from.
 +//!
 +//! A frame is copied out of its render target into one of these plain
@@ -781,19 +781,24 @@ index 000000000..4a702aa7a
 +}
 +
 +/// A texture of this size that no frame holds, or null if every texture
-+/// is held. Textures of another size are deleted on the way, so a resize
-+/// leaves nothing behind.
++/// is held. Every texture of another size that no frame holds is deleted
++/// on the way, so a resize leaves none behind but those still shown.
 +fn acquire(self: *ExportPool, width: usize, height: usize) !?usize {
++    var found: ?usize = null;
 +    var empty: ?usize = null;
 +    for (&self.textures, 0..) |*t, i| {
 +        if (t.held.load(.seq_cst)) continue;
 +        if (t.gpu) |gpu| {
-+            if (gpu.width == width and gpu.height == height) return i;
++            if (gpu.width == width and gpu.height == height) {
++                if (found == null) found = i;
++                continue;
++            }
 +            gpu.deinit();
 +            t.gpu = null;
 +        }
 +        if (empty == null) empty = i;
 +    }
++    if (found) |i| return i;
 +
 +    const i = empty orelse return null;
 +    self.textures[i].gpu = try .init(width, height);
