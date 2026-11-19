@@ -122,6 +122,79 @@ library, update the release and Ghostty versions in the terminal guide, and
 run the checks. Run it again after fixing a patch or regaining the network:
 with the pin already moved, it checks the patches and resolves again.
 
+### Ghostty on Linux
+
+Portal's module does not build on Linux yet. Its terminal there will draw with
+Ghostty's own embedding library, which no release ships for Linux, so Portal
+builds it from source with Zig and its own patches: Ghostty's library has no
+Linux platform to embed. `native/ghostty.json` pins the release: the version
+tag and the revision that tag must name. On Linux, one command builds it:
+
+```sh
+tools/build-ghostty-linux.sh
+```
+
+It fetches the pinned release's source with Git into `build/ghostty`, checks the
+revision, applies `native/patches/ghostty/*.patch` in name order, one commit
+each, and runs `zig build -Dapp-runtime=none` there. A patch that does not
+apply fails the build, naming it. It needs Git, ncurses' `tic` and the Zig that
+Ghostty's `build.zig.zon` names, 0.17 for this pin, as `zig` on `PATH` or in
+`ZIG`. Ghostty builds everything else from source and links it in; Zig
+downloads those sources on the first build, which takes three to four minutes
+on ten cores. Zig's cache is `build/ghostty-cache`: about 1 GB after one build,
+more with each mode and each changed patch, and safe to delete. The outputs
+are in `build/ghostty-linux`:
+
+- `lib/libghostty.so`, the library under its soname, and `include/ghostty.h`,
+  its header. The library needs `libc`, `libm` and `libEGL` at run time.
+- `share/ghostty`, the shell integration and themes. A host sets
+  `GHOSTTY_RESOURCES_DIR` to it before `ghostty_init`; Ghostty finds the
+  terminfo database in `share/terminfo` beside it.
+
+`--optimize Debug` builds with Zig's safety checks in place of ReleaseFast, and
+`--prefix DIR` installs somewhere else. A Debug build also checks every page of
+a terminal after each change and takes a minute to print 2 MB: it is for
+finding faults, not for use. ReleaseSafe is not offered, because Ghostty at this
+pin does not compile in it here: glibc's fortified `ptsname_r` does not get
+through Zig's translation of C. `PORTAL_GHOSTTY_CLONE` names a local clone of
+Ghostty to fetch the tag from in place of the network.
+
+The patches today:
+
+- `0001-build-link-the-GL-and-EGL-loaders-into-an-OpenGL-lib.patch` compiles
+  glad, the OpenGL and EGL loader, into the library. Ghostty's build compiles it
+  into executables only, so the library as built cannot be linked. It is
+  Ghostty's bug: drop the patch once a pinned release has fixed it.
+- `0002-build-install-the-resources-with-the-Linux-library.patch` installs the
+  resources, which Ghostty's build installs only with an executable, and
+  leaves out the desktop file, services and icons of the application.
+- `0003-embedded-a-Linux-platform-whose-host-presents-the-re.patch` adds
+  `GHOSTTY_PLATFORM_LINUX`, a surface whose host shows the frames itself:
+  `ghostty_surface_take_frame` hands over the renderer's latest frame, a DMABUF
+  or pixels in memory, a callback given with the surface announces each frame
+  on the render thread, and `ghostty_frame_free` gives the frame's texture
+  back, which the renderer does not draw into before. The comments on these in
+  `ghostty.h` are the contract a host is written to.
+
+To change a patch, edit the copy in `build/ghostty` and run the script again:
+while the pin, the patches and the script stay the same, it builds the changes
+made there and says so. Commit them in the copy, amending a patch's commit or
+adding one on top, then write the whole set back, with REVISION from the pin:
+
+```sh
+rm native/patches/ghostty/*.patch
+git -C build/ghostty format-patch --zero-commit --no-signature \
+    -o "$PWD/native/patches/ghostty" REVISION
+```
+
+The next run remakes the copy from the patch files. To move the pin, apply the
+patches to the new tag in a clone of Ghostty with `git am`, repair those that
+stop, write them back the same way and change `native/ghostty.json`;
+`tools/ghostty-version.py` knows only the macOS wrapper. The
+`test_build_ghostty_linux.py` tests run the script against a stand-in for
+Ghostty and for Zig. Nothing in this repository runs the library yet: the Linux
+terminal will bring its checks.
+
 For TypeScript editing, install the host's development dependencies and run its
 checks:
 
