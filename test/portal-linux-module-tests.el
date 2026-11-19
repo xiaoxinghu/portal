@@ -77,7 +77,12 @@
     ;; Once started, it answers the same.
     (should (equal (portal--terminal-engine) engine))
     ;; Emacs's own environment, which its subprocesses get, is not changed.
-    (should (equal (getenv "GHOSTTY_RESOURCES_DIR") portal-linux-module-tests--resources))))
+    (should (equal (getenv "GHOSTTY_RESOURCES_DIR") portal-linux-module-tests--resources))
+    ;; Its themes, of which the default is two.
+    (let ((themes (portal--terminal-themes)))
+      (should (> (length themes) 100))
+      (should (member "Alabaster" themes))
+      (should (member "Afterglow" themes)))))
 
 (ert-deftest portal-linux-module-says-what-linux-lacks ()
   ;; Batch Emacs has opened no display, which the backend asks GDK, before
@@ -86,8 +91,6 @@
     (should (equal (portal-linux-module-tests--error #'portal--open "web" options)
                    "Portal's native views need a graphical Emacs frame; \
 this Emacs has opened no display")))
-  (should (equal (portal-linux-module-tests--error #'portal--terminal-themes)
-                 "Portal has no terminals on Linux yet"))
   (should (equal (portal-linux-module-tests--error #'portal--web-load "web:1" "about:blank")
                  "No Portal view web:1"))
   (should (equal (portal-linux-module-tests--error #'portal--launcher-inspect)

@@ -8,21 +8,24 @@
    What is real:
 
    - Views and input (views.c, input.c): a view is a Wayland subsurface over
-     its pane and an invisible GTK3 widget in the frame.  The one content a
-     view can have so far is a test pattern (pattern.c), made with the
-     option :test-pattern, which the checks of the view machinery use.
+     its pane and an invisible GTK3 widget in the frame.
+   - Terminals with a local shell (terminal.c, presenter.c): Ghostty's
+     library, linked from Portal's own build of it, draws each one, and
+     Portal shows its frames.  ghostty_start starts the library with the
+     resources installed beside this module, and portal_terminal_engine
+     describes it.
+   - A test pattern (pattern.c), the content of a view made with the option
+     :test-pattern, of either kind, which the checks of the view machinery
+     use.
    - Timers, on GLib's main loop, which Emacs runs.
-   - ghostty_start, which starts Ghostty's library, linked from Portal's own
-     build of it, with the resources installed beside this module; and
-     portal_terminal_engine, which describes it.
    - portal_status_hide, which hides a panel that is never shown.
 
    What is not, and what each operation waits for: it fails, saying what
    Portal lacks on Linux, and changes nothing.
 
-   - Terminals, on the Ghostty that ghostty_start starts, and web views, on
-     WebKitGTK.  Without :test-pattern, creating a view of either kind
-     fails.
+   - Fed terminals, which show a Rex block: they need Ghostty patches of
+     libghostty-spm's that Portal's Linux build does not apply.
+   - Web views, on WebKitGTK.  Without :test-pattern, creating one fails.
    - Message sockets, which carry Rex connections.
    - System-wide keys, posted keys and the status panel, which Wayland gives
      a client no direct way to do.
@@ -45,6 +48,7 @@
 #include <gdk/gdkwayland.h>
 #include <ghostty.h>
 
+#include "linux-dmabuf-v1-client-protocol.h"
 #include "linux.h"
 #include "viewporter-client-protocol.h"
 
@@ -78,7 +82,21 @@ static void announce(void *data, struct wl_registry *registry, uint32_t name,
         wayland->viewporter = wl_registry_bind(registry, name, &wp_viewporter_interface, 1);
     else if (!strcmp(interface, wl_shm_interface.name))
         wayland->shm = wl_registry_bind(registry, name, &wl_shm_interface, 1);
+    /* Version 3 has the modifiers and the import without a round trip. */
+    else if (!strcmp(interface, zwp_linux_dmabuf_v1_interface.name) && version >= 3)
+        wayland->dmabuf = wl_registry_bind(registry, name, &zwp_linux_dmabuf_v1_interface, 3);
 }
+
+/* The formats wl_shm takes, which it announces once it is bound.  DATA is
+   static: the proxy outlives the binding, on GDK's queue. */
+static void shm_format(void *data, struct wl_shm *shm, uint32_t format)
+{
+    (void) shm;
+    if (format == WL_SHM_FORMAT_ABGR8888)
+        *(bool *) data = true;
+}
+
+static const struct wl_shm_listener shm_listener = {shm_format};
 
 static void withdraw(void *data, struct wl_registry *registry, uint32_t name)
 {
@@ -123,8 +141,12 @@ const struct portal_wayland *portal_linux_wayland(portal_text *error)
     struct wl_registry *registry = wl_display_get_registry(wrapped);
     wl_proxy_wrapper_destroy(wrapped);
     wl_registry_add_listener(registry, &registry_listener, &found);
-    bool answered = wl_display_roundtrip_queue(connection, queue) >= 0
-                 && wl_display_roundtrip_queue(connection, queue) >= 0;
+    static bool abgr;
+    bool answered = wl_display_roundtrip_queue(connection, queue) >= 0;
+    if (found.shm)
+        wl_shm_add_listener(found.shm, &shm_listener, &abgr);
+    answered = answered && wl_display_roundtrip_queue(connection, queue) >= 0;
+    found.shm_abgr = abgr;
     struct wl_proxy *bound[] = {(struct wl_proxy *) found.compositor,
                                 (struct wl_proxy *) found.subcompositor,
                                 (struct wl_proxy *) found.viewporter,
@@ -136,9 +158,14 @@ const struct portal_wayland *portal_linux_wayland(portal_text *error)
         else
             complete = false;
     }
+    /* Not needed: without it, terminals show their frames from memory. */
+    if (found.dmabuf)
+        wl_proxy_set_queue((struct wl_proxy *) found.dmabuf, NULL);
     wl_registry_destroy(registry);
     wl_event_queue_destroy(queue);
     if (!complete) {
+        if (found.dmabuf)
+            zwp_linux_dmabuf_v1_destroy(found.dmabuf);
         for (size_t i = 0; i < sizeof bound / sizeof *bound; i++)
             if (bound[i])
                 wl_proxy_destroy(bound[i]);
@@ -262,6 +289,14 @@ static bool ghostty_start(portal_text *error)
            portal_linux_fail(error, "%s", ghostty.failure.data ? ghostty.failure.data : "Portal is out of memory");
 }
 
+bool portal_linux_ghostty_start(const char **resources, portal_text *error)
+{
+    if (!ghostty_start(error))
+        return false;
+    *resources = ghostty.resources;
+    return true;
+}
+
 /* TEXT, LENGTH bytes, as a JSON string allocated with malloc, or NULL. */
 static char *json_string(const char *text, size_t length)
 {
@@ -311,11 +346,6 @@ bool portal_terminal_engine(portal_text *json, portal_text *error)
 }
 
 /* What each group of operations says until it is written. */
-static bool no_terminals(portal_text *error)
-{
-    return portal_linux_fail(error, "Portal has no terminals on Linux yet");
-}
-
 static bool no_web(portal_text *error)
 {
     return portal_linux_fail(error, "Portal has no web views on Linux yet");
@@ -341,8 +371,8 @@ static bool no_status(portal_text *error)
     return portal_linux_fail(error, "Portal has no status panel on Linux yet");
 }
 
-/* The content of a new view.  Only a test pattern can be made, whatever the
-   kind: the kind still decides what the core does with the view's keys. */
+/* The content of a new view: a terminal, or a test pattern of either kind,
+   where the kind still decides what the core does with the view's keys. */
 bool portal_linux_content_create(struct portal_view *view, const portal_option *options,
                                  size_t count, portal_text *error)
 {
@@ -352,7 +382,8 @@ bool portal_linux_content_create(struct portal_view *view, const portal_option *
             pattern = options[i].is_string || options[i].flag;
     if (pattern)
         return portal_linux_pattern_create(view, options, count, error);
-    return view->kind == PORTAL_TERMINAL ? no_terminals(error) : no_web(error);
+    return view->kind == PORTAL_TERMINAL ? portal_linux_terminal_create(view, options, count, error)
+                                         : no_web(error);
 }
 
 /* The launcher. */
@@ -469,65 +500,6 @@ bool portal_web_print(portal_view *web, const portal_string *file, portal_text *
 {
     (void) web, (void) file;
     return no_web(error);
-}
-
-/* Terminal views: as for web views. */
-
-bool portal_terminal_list_themes(portal_text **names, size_t *count, portal_text *error)
-{
-    (void) names, (void) count;
-    return no_terminals(error);
-}
-
-bool portal_terminal_apply_theme(portal_view *terminal, const portal_string *name,
-                                 portal_text *error)
-{
-    (void) terminal, (void) name;
-    return no_terminals(error);
-}
-
-bool portal_terminal_set_opacity(portal_view *terminal, double opacity, portal_text *error)
-{
-    (void) terminal, (void) opacity;
-    return no_terminals(error);
-}
-
-bool portal_terminal_set_text_size(portal_view *terminal, double points, portal_text *error)
-{
-    (void) terminal, (void) points;
-    return no_terminals(error);
-}
-
-bool portal_terminal_paste_text(portal_view *terminal, portal_string text, portal_text *error)
-{
-    (void) terminal, (void) text;
-    return no_terminals(error);
-}
-
-bool portal_terminal_press_enter(portal_view *terminal, portal_text *error)
-{
-    (void) terminal;
-    return no_terminals(error);
-}
-
-bool portal_terminal_read_text(portal_view *terminal, portal_text *text, portal_text *error)
-{
-    (void) terminal, (void) text;
-    return no_terminals(error);
-}
-
-bool portal_terminal_feed(portal_view *terminal, const char *bytes, size_t length,
-                          portal_text *error)
-{
-    (void) terminal, (void) bytes, (void) length;
-    return no_terminals(error);
-}
-
-bool portal_terminal_hold_grid(portal_view *terminal, uint32_t columns, uint32_t rows,
-                               portal_text *error)
-{
-    (void) terminal, (void) columns, (void) rows;
-    return no_terminals(error);
 }
 
 /* Message sockets.  Open fails, so the core has no socket to send on, read,

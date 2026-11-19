@@ -231,10 +231,12 @@ A position is in the desktop's own pixels, which are Emacs's."
 (ert-deftest portal-linux-gui-says-which-views-linux-lacks ()
   :tags '(:gui)
   (portal-view--load)
-  (should (equal (cadr (should-error (portal--open "terminal" '(:directory "/")) :type 'error))
-                 "Portal has no terminals on Linux yet"))
+  (should (equal (cadr (should-error (portal--open "terminal" '(:fed t)) :type 'error))
+                 "Portal has no fed terminals on Linux yet: \
+Rex blocks need Ghostty patches it does not apply"))
   (should (equal (cadr (should-error (portal--open "web" nil) :type 'error))
                  "Portal has no web views on Linux yet"))
+  ;; A failed open leaves nothing behind.
   (should-not (portal--inspect "terminal:1")))
 
 (ert-deftest portal-linux-gui-view-covers-its-pane-to-the-pixel ()
@@ -660,7 +662,9 @@ A position is in the desktop's own pixels, which are Emacs's."
           (portal-linux-gui--point 'move (+ (/ left scale) 100) (+ (/ top scale) 40) 'click))
         (portal-linux-gui--wait (lambda () (not (portal-linux-gui--get :focused))))
         (should-not (portal-linux-gui--get :inside))
-        (should (= (portal-linux-gui--get :presses) 1))))))
+        (should (= (portal-linux-gui--get :presses) 1))
+        ;; That click is Emacs's to read, here, not the next test's.
+        (portal-linux-gui--events)))))
 
 ;;; The pipe
 

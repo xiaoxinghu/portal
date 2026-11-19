@@ -6,8 +6,11 @@
 ;; changes that pane as a user would, one command at a time: splits, a pane
 ;; made larger, one pane again, the buffer switched away and back, a second
 ;; frame that halves the first and goes again, another program's window
-;; that does the same, and, when asked, a child frame over the pane.  test/linux-recording.py reads the recording and
-;; says whether the view was where its pane was in every frame of it.
+;; that does the same, and, when asked, a child frame over the pane.
+;; test/linux-recording.py reads the recording and says whether the view
+;; was where its pane was in every frame of it.  The view is a test pattern,
+;; or with PORTAL_FOLLOW_PATTERN "terminal" a terminal whose shell prints
+;; blank lines as fast as it can, so that it makes frames all the while.
 ;;
 ;; Everything Emacs draws is a flat color that the reader can tell apart:
 ;; the view's pane green, which no frame may show, since the view covers
@@ -17,6 +20,9 @@
 
 (require 'portal-view)
 
+(defconst portal-linux-follow-terminal-theme "Great Pumpkin"
+  "The theme of a terminal followed, whose orange background is the view's color.")
+
 (defvar portal-linux-follow--directory (getenv "PORTAL_FOLLOW_DIRECTORY")
   "Where the script and this file leave each other word.")
 (defvar portal-linux-follow--buffer nil)
@@ -24,6 +30,7 @@
 (defvar portal-linux-follow--child nil)
 (defvar portal-linux-follow--other nil)
 (defvar portal-linux-follow--program nil)
+(defvar portal-linux-follow--target nil "The view followed.")
 
 (defun portal-linux-follow--say (name)
   (write-region "" nil (expand-file-name name portal-linux-follow--directory) nil 'silent))
@@ -92,6 +99,10 @@
                (lambda ()
                  (if (null queue)
                      (progn (cancel-timer timer)
+                            ;; What the view counted, for the script to print.
+                            (write-region (format "%S\n" (portal--inspect portal-linux-follow--target))
+                                          nil (expand-file-name "facts" portal-linux-follow--directory)
+                                          nil 'silent)
                             (portal-linux-follow--say "done"))
                    (let ((step (pop queue)))
                      (when (getenv "PORTAL_LINUX_TRACE") (princ (format "step %s\n" step) #'external-debugging-output))
@@ -121,9 +132,17 @@
   (dolist (face '(mode-line mode-line-inactive mode-line-active))
     (when (facep face) (face-remap-add-relative face :background "#804000")))
   (let* ((kind (getenv "PORTAL_FOLLOW_PATTERN"))
-         (target (portal-view-open 'terminal
-                                   (list :directory "/"
-                                         :test-pattern (if (equal kind "fill") "fill" t))))
+         (target
+          (portal-view-open
+           'terminal
+           (if (equal kind "terminal")
+               ;; A terminal under output all the while, its frames all
+               ;; its theme's flat background: blank lines, with the
+               ;; cursor hidden.
+               (list :directory "/" :theme portal-linux-follow-terminal-theme :points 12
+                     :command "sh -c 'printf \"\\033[?25l\"; exec yes \"\"'")
+             (list :directory "/" :test-pattern (if (equal kind "fill") "fill" t)))))
+         (_ (setq portal-linux-follow--target target))
          (names (mapcar #'intern (split-string (getenv "PORTAL_FOLLOW_STEPS"))))
          (rounds (string-to-number (getenv "PORTAL_FOLLOW_ROUNDS")))
          (interval (string-to-number (getenv "PORTAL_FOLLOW_INTERVAL"))))

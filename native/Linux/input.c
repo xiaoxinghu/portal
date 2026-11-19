@@ -170,17 +170,49 @@ static gboolean widget_pointed(GtkWidget *widget, GdkEvent *event, gpointer data
    widget, above every window in Emacs's GtkFixed then.  A child frame of
    Emacs's is such a window too, and the pointer over one must be its own
    wherever a view's pane is, so the widget's goes to the bottom. */
-static void widget_mapped(GtkWidget *widget, gpointer data)
+/* The widget's own window, an input-only child of its parent's, or NULL
+   while it has none. */
+static GdkWindow *widget_window(GtkWidget *widget)
 {
-    struct portal_view *view = data;
     GdkWindow *parent = gtk_widget_get_window(widget);
-    gtk_im_context_set_client_window(view->method, parent);
     for (GList *item = parent ? gdk_window_peek_children(parent) : NULL; item; item = item->next) {
         gpointer owner = NULL;
         gdk_window_get_user_data(item->data, &owner);
         if (owner == widget)
-            gdk_window_lower(item->data);
+            return item->data;
     }
+    return NULL;
+}
+
+/* Show the pointer over VIEW's widget as its content last asked. */
+static void point(struct portal_view *view)
+{
+    GdkWindow *window = view->widget ? widget_window(view->widget) : NULL;
+    if (!window)
+        return;
+    GdkCursor *cursor =
+        view->cursor ? gdk_cursor_new_from_name(gdk_window_get_display(window), view->cursor) : NULL;
+    gdk_window_set_cursor(window, cursor);
+    if (cursor)
+        g_object_unref(cursor);
+}
+
+void portal_linux_input_cursor(struct portal_view *view, const char *name)
+{
+    if (view->cursor == name)
+        return;
+    view->cursor = name;
+    point(view);
+}
+
+static void widget_mapped(GtkWidget *widget, gpointer data)
+{
+    struct portal_view *view = data;
+    gtk_im_context_set_client_window(view->method, gtk_widget_get_window(widget));
+    GdkWindow *window = widget_window(widget);
+    if (window)
+        gdk_window_lower(window);
+    point(view);
 }
 
 static void widget_unrealized(GtkWidget *widget, gpointer data)
@@ -190,10 +222,19 @@ static void widget_unrealized(GtkWidget *widget, gpointer data)
     gtk_im_context_set_client_window(view->method, NULL);
 }
 
+/* The input method.  As in Ghostty's own GTK view: text committed while a
+   key is filtered, and nothing was being composed, is what that key types,
+   and goes to the content with the key (deliver); text committed apart
+   from a key, or that ends composing, goes as text. */
 static void committed(GtkIMContext *method, gchar *text, gpointer data)
 {
     (void) method;
     struct portal_view *view = data;
+    if (view->keying == PORTAL_KEYING_PLAIN) {
+        g_string_append(view->typed, text);
+        return;
+    }
+    view->composing = false;
     view->class->text(view->content, text);
 }
 
@@ -202,9 +243,27 @@ static void composing(GtkIMContext *method, gpointer data)
     struct portal_view *view = data;
     gchar *text = NULL;
     gint cursor = 0;
+    /* Some input methods change the preedit after a commit, with no new
+       start. */
+    view->composing = true;
     gtk_im_context_get_preedit_string(method, &text, NULL, &cursor);
     view->class->preedit(view->content, text ? text : "", cursor);
     g_free(text);
+}
+
+static void composing_started(GtkIMContext *method, gpointer data)
+{
+    (void) method;
+    struct portal_view *view = data;
+    view->composing = true;
+}
+
+static void composing_ended(GtkIMContext *method, gpointer data)
+{
+    (void) method;
+    struct portal_view *view = data;
+    view->composing = false;
+    view->class->preedit(view->content, "", 0);
 }
 
 void portal_linux_input_open(struct portal_view *view)
@@ -231,6 +290,9 @@ void portal_linux_input_open(struct portal_view *view)
     view->method = gtk_im_multicontext_new();
     g_signal_connect(view->method, "commit", G_CALLBACK(committed), view);
     g_signal_connect(view->method, "preedit-changed", G_CALLBACK(composing), view);
+    g_signal_connect(view->method, "preedit-start", G_CALLBACK(composing_started), view);
+    g_signal_connect(view->method, "preedit-end", G_CALLBACK(composing_ended), view);
+    view->typed = g_string_new(NULL);
     g_queue_init(&view->held);
 }
 
@@ -258,6 +320,8 @@ void portal_linux_input_close(struct portal_view *view)
     g_signal_handlers_disconnect_by_data(view->method, view);
     g_object_unref(view->method);
     view->method = NULL;
+    g_string_free(view->typed, TRUE);
+    view->typed = NULL;
     g_signal_handlers_disconnect_by_data(view->widget, view);
     gtk_widget_destroy(view->widget);
     g_object_unref(view->widget);
@@ -302,13 +366,24 @@ void portal_linux_input_park(struct portal_view *view)
    no other modifier, and Portal's modifiers.  Alt is Meta.  The keys that
    type a control character have it, as on macOS; a key that types no
    character, such as an arrow, is 0. */
+bool portal_linux_input_translate(const GdkEventKey *event, GdkModifierType state, guint *keyval,
+                                  GdkModifierType *consumed)
+{
+    GdkKeymap *keymap = gdk_keymap_get_for_display(gdk_window_get_display(event->window));
+    guint again;
+    return gdk_keymap_translate_keyboard_state(keymap, event->hardware_keycode, event->state,
+                                               event->group, &again, NULL, NULL, consumed)
+        && again == event->keyval
+        && gdk_keymap_translate_keyboard_state(keymap, event->hardware_keycode, state,
+                                               event->group, keyval, NULL, NULL, NULL);
+}
+
 static portal_chord chord_of(const GdkEventKey *event)
 {
     guint symbol = event->keyval, plain;
-    GdkKeymap *keymap = gdk_keymap_get_for_display(gdk_window_get_display(event->window));
-    if (gdk_keymap_translate_keyboard_state(keymap, event->hardware_keycode,
-                                            event->state & GDK_SHIFT_MASK, event->group, &plain,
-                                            NULL, NULL, NULL))
+    /* Its keyval with Shift alone; or, where the key's code no longer
+       translates as it did, the keyval it came with, Control and all. */
+    if (portal_linux_input_translate(event, event->state & GDK_SHIFT_MASK, &plain, NULL))
         symbol = plain;
     uint32_t character;
     switch (symbol) {
@@ -345,12 +420,22 @@ static portal_chord chord_of(const GdkEventKey *event)
     return (portal_chord) {character, modifiers};
 }
 
-/* Give EVENT to VIEW's app: its input method, which takes the keys that
-   type or compose, and otherwise its content. */
+/* Give EVENT to VIEW's app: its input method first, then its content with
+   the text the input method committed for it.  A press the input method
+   took for itself goes no further: one it is composing with, one that
+   ends composing, which commits text of its own, and one that typed
+   nothing, as when it opens a picker of its own. */
 static void deliver(struct portal_view *view, GdkEventKey *event)
 {
-    if (!gtk_im_context_filter_keypress(view->method, event))
-        view->class->key(view->content, event);
+    bool before = view->composing;
+    view->keying = before ? PORTAL_KEYING_COMPOSING : PORTAL_KEYING_PLAIN;
+    g_string_truncate(view->typed, 0);
+    bool taken = gtk_im_context_filter_keypress(view->method, event);
+    view->keying = PORTAL_KEYING_NONE;
+    if (taken && (view->composing || before || !view->typed->len))
+        return;
+    view->class->key(view->content, event, view->typed->len ? view->typed->str : NULL,
+                     view->composing);
 }
 
 /* The view whose handoff Emacs is handling in FRAME's window, or whose app

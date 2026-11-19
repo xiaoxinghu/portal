@@ -125,8 +125,8 @@ with the pin already moved, it checks the patches and resolves again.
 
 ### Building on Linux
 
-Portal's module builds and loads on Linux, and has views there with nothing
-to show in them yet. `./build.sh` makes `build/portal.so` in place of
+Portal's module builds and loads on Linux, and has views there and
+terminals with a local shell, but no web views yet. `./build.sh` makes `build/portal.so` in place of
 `build/portal.bundle`, with `build/ghostty-linux` beside it and
 `build/portal-host` and `build/licenses` as on macOS. CMake compiles the
 module itself: the C bindings and core with the backend in
@@ -135,14 +135,13 @@ GTK 3, `wayland-client` and Ghostty's library, which
 [the next section](#ghostty-on-linux) says how Portal builds. No Swift is
 involved.
 
-The backend has the view machinery, input and timers:
+The backend has the view machinery, input, timers and terminals:
 [the architecture notes](docs/architecture.md#views-on-linux) say how a view
-gets into a frame. It starts Ghostty's library and says what it is, but has
-neither a terminal nor a web view to put in a view, so opening either fails,
-saying which Linux lacks, as do Rex connections, the system-wide keys, the
-status panel and the launcher. The one content a view can have is a test
-pattern, made with the option `:test-pattern`, which exists for the checks of
-the machinery. `native/Linux/linux.h` says which file has what, and
+gets into a frame and how a terminal's frames reach it. A web view, a fed
+terminal (a Rex block), the system-wide keys, the status panel and the
+launcher fail, saying what Linux lacks. A view can also show a test
+pattern, made with the option `:test-pattern`, which exists for the checks
+of the machinery. `native/Linux/linux.h` says which file has what, and
 `backend.c`'s first comment what is real and what each missing piece waits
 for. The link fails when the backend lacks a primitive of `portal.h`, or
 Ghostty's library a function the backend calls, and
@@ -156,7 +155,8 @@ A build needs:
   `cc`; CMake 3.29 or newer, Ninja and `pkg-config`;
 - the development files of GTK 3, `wayland-client` and EGL, as pkg-config's
   `gtk+-3.0`, `wayland-client` and `egl`, and `wayland-protocols` with
-  `wayland-scanner`, which make the C of the viewporter protocol;
+  `wayland-scanner`, which make the C of the viewporter and linux-dmabuf
+  protocols;
 - for Ghostty's library, Zig at the version `native/ghostty.json` names or a
   later patch release of it, as `zig` on `PATH` or in `ZIG`, ncurses' `tic`
   and Git;
@@ -177,21 +177,23 @@ graphical ones in place of the macOS suites:
 ```sh
 sh test/linux-gui.sh
 sh test/linux-follow.sh
+sh test/linux-follow.sh terminal
 ```
 
 CTest leaves out the suites of the macOS module, `rex` and `libghostty-spm`,
 and of the macOS VM runner, and adds `linux-module`, which loads the built
 module in batch Emacs. The Python tests skip those of Swift helpers and of
-the macOS Ghostty wrapper. `linux-gui.sh` runs the views and their input in a
-graphical Emacs, and `linux-follow.sh` records a view following its pane and
-checks every frame; both are in the default loop for a change to
+the macOS Ghostty wrapper. `linux-gui.sh` runs the views, their input and
+terminals in a graphical Emacs, and `linux-follow.sh` records a view
+following its pane and checks every frame, and with `terminal` does so for a
+terminal under output; both are in the default loop for a change to
 `native/Linux` or `portal-view.el`, and `sh test/gui-all.sh` runs both.
 They need Hyprland, and run on a desktop of their own, off your screen:
 [Testing Portal](docs/testing.md#linux-graphical-checks) says how.
 
 ### Ghostty on Linux
 
-Portal's terminal on Linux will draw with Ghostty's own embedding library,
+Portal's terminal on Linux draws with Ghostty's own embedding library,
 which no release ships for Linux, so Portal builds it from source with Zig and
 its own patches: Ghostty's library has no Linux platform to embed.
 `native/ghostty.json` pins the release: the version tag, the revision that tag

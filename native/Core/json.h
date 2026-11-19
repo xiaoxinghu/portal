@@ -3,8 +3,8 @@
    server's responses and stream messages (rex.c).  core.h writes JSON;
    this reads it.  Nothing is parsed ahead of need: a value is a span of
    the text it came in, found by skipping over what comes before it, and
-   decoded only when asked.  Only the core and its tests include this
-   header. */
+   decoded only when asked.  Only the core, its tests and the Linux backend,
+   which reads a terminal's :argv with it, include this header. */
 #ifndef PORTAL_JSON_H
 #define PORTAL_JSON_H
 
