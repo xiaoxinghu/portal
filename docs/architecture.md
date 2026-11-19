@@ -20,8 +20,9 @@ separate feature libraries:
   pinned Ghostty dependency.
 - [`native/Linux/backend.c`](../native/Linux/backend.c) is the same interface
   for an Emacs built with pgtk, on GTK 3 and Wayland, which CMake links with
-  the core into `portal.so`. Its operations fail so far: the module builds and
-  loads on Linux, and has no views there
+  the core into `portal.so`, with Portal's own build of Ghostty's library.
+  Its operations fail so far: the module builds and loads on Linux, starts
+  Ghostty, and has no views there
   ([building on Linux](../CONTRIBUTING.md#building-on-linux)).
 - The [input bridge](terminal-input-bridge.md), [hosted-app bridge](editor-bridge.md)
   and [launcher panel](launcher-native-panel.md) explain their protocols and platform-specific hazards.

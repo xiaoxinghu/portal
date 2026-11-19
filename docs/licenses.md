@@ -22,6 +22,7 @@ Distribute these together; the notices are part of the release:
 | --- | --- |
 | `LICENSE`, `portal*.el` | Portal's license and Lisp |
 | `build/portal.bundle` | The native module and the terminal resources it loads |
+| `build/portal.so`, `build/ghostty-linux` | On Linux, the native module and, beside it, Ghostty's library and resources, as `build.sh --prune` leaves them |
 | `build/portal-host` | The standalone app host, with the Bun runtime inside |
 | `build/licenses/` | A copy of Portal's license, the generated index and every third-party notice |
 
@@ -71,8 +72,32 @@ Thenable.
 
 A Linux build's module, `build/portal.so`, contains Portal's C core and C
 backend and nothing of another project: it loads GTK 3 and `wayland-client`
-from the system. So `build/licenses` there has the host's notices and none of
-the Swift packages' or Ghostty's, until the module links Ghostty.
+from the system, and Ghostty's library from `build/ghostty-linux` beside it.
+That library is Portal's own build of the Ghostty release
+`native/ghostty.json` pins, with Portal's patches, so its notices are
+required by that pin (`ghostty@VERSION` in the inventory), not by a Swift
+package. Zig's build links into `lib/ghostty-internal.so` FreeType, HarfBuzz,
+fontconfig with libxml2, libpng, zlib, Oniguruma, glslang, SPIRV-Cross, Dear
+ImGui with Dear Bindings and its ProggyClean font, glad, Wuffs, Highway,
+simdutf, stb_image and stb_image_resize, libxev, libvaxis, z2d, zf, uucode,
+X11's `rgb.txt`, the Zig standard library and compiler-rt, and the LLVM
+libc++, libc++abi and libunwind that Zig bundles, plus the embedded JetBrains
+Mono and Symbols Nerd Font fonts. It loads only libc, libm and libEGL from the
+system, and exports Ghostty's C API alone. The evidence for each is in the
+component's entry. zigimg is absent: libvaxis's image loading is not reached.
+
+The resources ship as Ghostty has them, not as libghostty-spm rewrote them for
+macOS: `share/ghostty/shell-integration` holds Ghostty's bash and zsh
+integration, which is GPL-3.0-or-later (derived from Kitty's), its elvish,
+fish and nushell integration under Ghostty's MIT license, and bash-preexec;
+`share/ghostty/themes` holds the iTerm2-Color-Schemes themes; `share/terminfo`
+holds Ghostty's terminfo entry.
+
+Several of these versions are not the ones Ghostty's `build.zig.zon` files
+name: their labels are stale (fontconfig is 2.18.3, simdutf 9.0.0), and the
+inventory records what the archives contain. The Zig and LLVM runtime
+components describe the Zig that builds the library, any patch release of the
+one the pin names.
 
 Both outputs link only macOS system frameworks and libraries, including the Swift
 runtime and libc++, which Portal does not redistribute. A search of Portal's own
@@ -86,7 +111,9 @@ These build or test Portal but are not part of its outputs:
   `portal-host`.
 - The host's development dependencies (Biome, TypeScript and type packages) and
   any installed npm package that the bundler records do not name.
-- Apple's Swift and Clang toolchains and SDK, CMake and Ninja.
+- Apple's Swift and Clang toolchains and SDK, CMake and Ninja; on Linux, GCC,
+  CMake, Ninja, pkg-config, Zig and ncurses' `tic`, which compiles Ghostty's
+  terminfo.
 - Emacs's `emacs-module.h` (GPL-3.0-or-later), read at compile time.
 - The GNU ELPA packages downloaded for tests: Consult, Embark, Vertico, Orderless
   and Marginalia.
@@ -116,7 +143,9 @@ The generated index repeats the per-component items.
    or a written offer; the LGPL and MPL-2.0 also require it for JavaScriptCore
    and z2d. That source is Portal at the release commit, which holds its patches
    to libghostty-spm; libghostty-spm at its pinned revision, including its `Patches/` and build scripts that produce the
-   prebuilt library; Ghostty at the revision that release names; the dependency archives Ghostty's `build.zig.zon` files pin; Bun at its
+   prebuilt library; Ghostty at the revision that release names, or on Linux
+   at the revision `native/ghostty.json` pins, with Portal's patches and
+   `tools/build-ghostty-linux.sh`; the dependency archives Ghostty's `build.zig.zon` files pin; Bun at its
    release tag, with oven-sh/WebKit at the commit Bun pins and the libraries Bun's
    build scripts pin; and the npm packages at the lockfile versions. Statically
    linked LGPL code, such as JavaScriptCore in Bun, also needs a way to relink
@@ -164,6 +193,12 @@ failure names the file to update:
   `lipo`, list its members with `ar -t` and its symbols with `nm`, read the
   `build.zig.zon` files at the Ghostty revision its `Ghostty.ref` names, and
   update the Ghostty components and texts.
+- **A new Ghostty pin on Linux, or new patches there.** The pin is in
+  `native/ghostty.json`. Read the `build.zig.zon` files and
+  `src/build/SharedDeps.zig` at the new revision, check the library with
+  `readelf -d` and `strings` (it exports only `ghostty_` symbols, so `nm`
+  shows little), and update the components whose `when` names
+  `ghostty@VERSION`, with their texts.
 - **A new Bun version.** Add `licenses/texts/bun/VERSION/LICENSE.md` from that
   release's tag and a component for `bun@VERSION`.
 
