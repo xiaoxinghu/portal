@@ -16,7 +16,7 @@ GIT_ENV = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM":
            "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "test@invalid"}
 # Stands in for Zig: records how it was called and installs what Ghostty's build would.
 FAKE_ZIG = """#!/bin/sh
-if [ "$1" = version ]; then echo 0.0.0; exit 0; fi
+if [ "$1" = version ]; then echo "${ZIG_VERSION:-9.8.7}"; exit 0; fi
 [ -f build.zig.zon ] || { echo "not run in the source copy" >&2; exit 1; }
 printf '%s\\n' "$@" >"$ZIG_CALL"
 [ -z "${ZIG_FAILS:-}" ] || exit 1
@@ -62,10 +62,11 @@ class BuildGhosttyLinux(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def pin(self, revision):
+    def pin(self, revision, zig="9.8.7"):
         self.pin_file = self.root / "pin.json"
         self.pin_file.write_text(json.dumps({
-            "url": self.upstream.as_uri(), "version": "v1.0.0", "revision": revision}, indent="\t"))
+            "url": self.upstream.as_uri(), "version": "v1.0.0", "revision": revision,
+            "zig": zig}, indent="\t"))
 
     def add_patch(self, name, old, new):
         """Write a patch, made with format-patch, that changes line OLD to NEW."""
@@ -219,12 +220,42 @@ class BuildGhosttyLinux(unittest.TestCase):
         self.assertIn("builds with Zig 9.8.7", result.stderr)
 
     def test_a_failed_build_fails_and_names_both_versions(self):
-        result = self.run_script(ZIG_FAILS="1")
+        result = self.run_script(ZIG_FAILS="1", ZIG_VERSION="9.8.9")
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("asks for Zig 9.8.7", result.stderr)
-        self.assertIn("is 0.0.0", result.stderr)
+        self.assertIn("is 9.8.9", result.stderr)
         self.assertFalse((self.prefix / "lib" / "libghostty.so").exists())
+
+    def test_a_later_patch_release_of_zig_builds(self):
+        # A development build counts by its release, as in Ghostty's check.
+        for version in ["9.8.10", "9.8.7-dev.12+abc"]:
+            with self.subTest(version=version):
+                result = self.run_script(ZIG_VERSION=version)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.built(), "one\ntwo\nthree\n")
+
+    def test_another_zig_is_refused_before_anything_is_fetched(self):
+        # Ghostty's own check: the same major and minor, and no earlier patch.
+        for version in ["9.8.6", "9.9.0", "10.8.7", "9.8", "unknown"]:
+            with self.subTest(version=version):
+                result = self.run_script(ZIG_VERSION=version)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"is Zig {version}; Ghostty v1.0.0 builds with Zig 9.8.7 or a later",
+                              result.stderr)
+                self.assertFalse(self.source.exists())
+
+    def test_a_pin_whose_zig_the_source_does_not_ask_for_fails_before_the_build(self):
+        self.pin(self.revision, zig="9.8.6")
+
+        result = self.run_script()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("names Zig 9.8.6, but Ghostty v1.0.0's build.zig.zon asks for Zig 9.8.7",
+                      result.stderr)
+        self.assertFalse(self.zig_call.exists(), "nothing was built")
 
     def test_the_patches_in_the_tree_are_the_pinned_ones(self):
         """Each patch names its place in the set, so that one left out or left over shows."""

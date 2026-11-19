@@ -63,8 +63,8 @@
 			"version": "2.13.2",
 			"source": "https://deps.files.ghostty.org/freetype-1220b81f6ecfb3fd222f76cf9106fecfa6554ab07ec7fdc4124b9bb063ae2adf969d.tar.gz",
 			"license": "FTL (FreeType is FTL or GPL-2.0-or-later); BDF and PCF drivers under X11-style terms; gzip module under Zlib",
-			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026110702"],
+			"shipped": "portal.dylib (in libghostty.a); Linux: ghostty-linux/lib/ghostty-internal.so",
+			"when": ["swift:libghostty-spm@2.2.2026110702", "ghostty@v1.4.0"],
 			"texts": [
 				"freetype/LICENSE.TXT",
 				"freetype/FTL.TXT",
@@ -79,8 +79,8 @@
 			"version": "1.6.43",
 			"source": "https://deps.files.ghostty.org/libpng-1220aa013f0c83da3fb64ea6d327f9173fa008d10e28bc9349eac3463457723b1c66.tar.gz",
 			"license": "libpng-2.0",
-			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026110702"],
+			"shipped": "portal.dylib (in libghostty.a); Linux: ghostty-linux/lib/ghostty-internal.so",
+			"when": ["swift:libghostty-spm@2.2.2026110702", "ghostty@v1.4.0"],
 			"texts": ["libpng/LICENSE"]
 		},
 		{
@@ -89,8 +89,8 @@
 			"version": "1.3.1",
 			"source": "https://deps.files.ghostty.org/zlib-1220fed0c74e1019b3ee29edae2051788b080cd96e90d56836eea857b0b966742efb.tar.gz",
 			"license": "Zlib",
-			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026110702"],
+			"shipped": "portal.dylib (in libghostty.a); Linux: ghostty-linux/lib/ghostty-internal.so",
+			"when": ["swift:libghostty-spm@2.2.2026110702", "ghostty@v1.4.0"],
 			"texts": ["zlib/LICENSE"]
 		},
 		{
@@ -99,8 +99,8 @@
 			"version": "6.9.9",
 			"source": "https://deps.files.ghostty.org/oniguruma-1220c15e72eadd0d9085a8af134904d9a0f5dfcbed5f606ad60edc60ebeccd9706bb.tar.gz",
 			"license": "BSD-2-Clause",
-			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026110702"],
+			"shipped": "portal.dylib (in libghostty.a); Linux: ghostty-linux/lib/ghostty-internal.so",
+			"when": ["swift:libghostty-spm@2.2.2026110702", "ghostty@v1.4.0"],
 			"texts": ["oniguruma/COPYING"]
 		},
 		{
@@ -109,8 +109,8 @@
 			"version": "7411f488fe2e2c205c3d3b3d28638b7356522930",
 			"source": "https://deps.files.ghostty.org/wuffs-7411f488fe2e2c205c3d3b3d28638b7356522930.tar.gz",
 			"license": "Apache-2.0 OR MIT",
-			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026110702"],
+			"shipped": "portal.dylib (in libghostty.a); Linux: ghostty-linux/lib/ghostty-internal.so",
+			"when": ["swift:libghostty-spm@2.2.2026110702", "ghostty@v1.4.0"],
 			"texts": ["wuffs/LICENSE", "wuffs/LICENSE-APACHE", "wuffs/LICENSE-MIT"]
 		},
 		{
@@ -119,8 +119,8 @@
 			"version": "66486a10623fa0d72fe91260f96c892e41aceb06",
 			"source": "https://deps.files.ghostty.org/highway-66486a10623fa0d72fe91260f96c892e41aceb06.tar.gz",
 			"license": "Apache-2.0 OR BSD-3-Clause",
-			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026110702"],
+			"shipped": "portal.dylib (in libghostty.a); Linux: ghostty-linux/lib/ghostty-internal.so",
+			"when": ["swift:libghostty-spm@2.2.2026110702", "ghostty@v1.4.0"],
 			"texts": ["highway/LICENSE", "highway/LICENSE-BSD3"]
 		},
 		{
@@ -129,8 +129,8 @@
 			"version": "9.0.0",
 			"source": "https://github.com/ghostty-org/ghostty/tree/042b16b6146ada29877dfeeea9f286889e4adeb1/pkg/simdutf/vendor",
 			"license": "Apache-2.0 OR MIT",
-			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026110702"],
+			"shipped": "portal.dylib (in libghostty.a); Linux: ghostty-linux/lib/ghostty-internal.so",
+			"when": ["swift:libghostty-spm@2.2.2026110702", "ghostty@v1.4.0"],
 			"texts": ["simdutf/LICENSE-APACHE", "simdutf/LICENSE-MIT"],
 			"note": "License files from simdutf v9.0.0; Ghostty vendors the amalgamated source"
 		},
@@ -151,8 +151,8 @@
 			"version": "819ffa180ca20e31c7eded74e2e1aceb1eab557f",
 			"source": "https://deps.files.ghostty.org/libxev-819ffa180ca20e31c7eded74e2e1aceb1eab557f.tar.gz",
 			"license": "MIT",
-			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026110702"],
+			"shipped": "portal.dylib (in libghostty.a); Linux: ghostty-linux/lib/ghostty-internal.so",
+			"when": ["swift:libghostty-spm@2.2.2026110702", "ghostty@v1.4.0"],
 			"texts": ["libxev/LICENSE"]
 		},
 		{
@@ -161,8 +161,8 @@
 			"version": "6fd944a27fb3d6f596e981076381a3131f2448b4 (0.6.0)",
 			"source": "https://deps.files.ghostty.org/vaxis-6fd944a27fb3d6f596e981076381a3131f2448b4.tar.gz",
 			"license": "MIT",
-			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026110702"],
+			"shipped": "portal.dylib (in libghostty.a); Linux: ghostty-linux/lib/ghostty-internal.so",
+			"when": ["swift:libghostty-spm@2.2.2026110702", "ghostty@v1.4.0"],
 			"texts": ["vaxis/LICENSE"]
 		},
 		{
@@ -192,8 +192,8 @@
 			"version": "ea62149739404a73c202b48a33bf6dd2af4bd9b0 (0.2.0)",
 			"source": "https://deps.files.ghostty.org/uucode-ea62149739404a73c202b48a33bf6dd2af4bd9b0.tar.gz",
 			"license": "MIT; Unicode-3.0 data; MIT UTF-8 decoder by Bjoern Hoehrmann",
-			"shipped": "portal.dylib (in libghostty.a)",
-			"when": ["swift:libghostty-spm@2.2.2026110702"],
+			"shipped": "portal.dylib (in libghostty.a); Linux: ghostty-linux/lib/ghostty-internal.so",
+			"when": ["swift:libghostty-spm@2.2.2026110702", "ghostty@v1.4.0"],
 			"texts": [
 				"uucode/LICENSE.md",
 				"uucode/LICENSE_unicode",
@@ -217,8 +217,8 @@
 			"version": "2.304",
 			"source": "https://deps.files.ghostty.org/JetBrainsMono-2.304.tar.gz",
 			"license": "OFL-1.1",
-			"shipped": "portal.dylib (Ghostty's embedded fallback font)",
-			"when": ["swift:libghostty-spm@2.2.2026110702"],
+			"shipped": "portal.dylib (Ghostty's embedded fallback font); Linux: ghostty-linux/lib/ghostty-internal.so",
+			"when": ["swift:libghostty-spm@2.2.2026110702", "ghostty@v1.4.0"],
 			"texts": ["jetbrains-mono/OFL.txt"]
 		},
 		{
@@ -227,8 +227,8 @@
 			"version": "3.4.0",
 			"source": "https://deps.files.ghostty.org/NerdFontsSymbolsOnly-3.4.0.tar.gz",
 			"license": "MIT; glyphs under CC-BY-4.0, Apache-2.0, OFL-1.1, MIT and others per license-audit.md",
-			"shipped": "portal.dylib (Ghostty's embedded symbol font)",
-			"when": ["swift:libghostty-spm@2.2.2026110702"],
+			"shipped": "portal.dylib (Ghostty's embedded symbol font); Linux: ghostty-linux/lib/ghostty-internal.so",
+			"when": ["swift:libghostty-spm@2.2.2026110702", "ghostty@v1.4.0"],
 			"texts": [
 				"nerd-fonts/LICENSE",
 				"nerd-fonts/license-audit.md",
@@ -242,6 +242,219 @@
 				"nerd-fonts/glyphs/weather-icons/OFL.txt"
 			],
 			"note": "Glyph licenses from the nerd-fonts v3.4.0 repository; Devicons, IEC Power Symbols, Seti-UI (MIT) and Font Logos (Unlicense) ship no license file there"
+		},
+		{
+			"id": "ghostty",
+			"name": "Ghostty",
+			"version": "v1.4.0 (83fb95624b0439ee660c2679b43b38c8b63769cd), with Portal's patches",
+			"source": "https://github.com/ghostty-org/ghostty/tree/83fb95624b0439ee660c2679b43b38c8b63769cd",
+			"license": "MIT",
+			"shipped": "ghostty-linux/lib/ghostty-internal.so; ghostty-linux/share/terminfo; ghostty-linux/share/ghostty/shell-integration (elvish, fish and nushell)",
+			"when": ["ghostty@v1.4.0"],
+			"texts": ["ghostty/LICENSE"],
+			"note": "Built by tools/build-ghostty-linux.sh with native/patches/ghostty applied; its LICENSE is byte for byte the one the macOS revision has"
+		},
+		{
+			"id": "ghostty-shell-integration",
+			"name": "Ghostty bash and zsh integration (based on Kitty's)",
+			"version": "v1.4.0 (83fb95624b0439ee660c2679b43b38c8b63769cd)",
+			"source": "https://github.com/ghostty-org/ghostty/tree/83fb95624b0439ee660c2679b43b38c8b63769cd/src/shell-integration",
+			"license": "GPL-3.0-or-later",
+			"shipped": "ghostty-linux/share/ghostty/shell-integration (bash/ghostty.bash, zsh/.zshenv, zsh/ghostty-integration)",
+			"when": ["ghostty@v1.4.0"],
+			"texts": [
+				"ghostty-shell-integration/bash-NOTICE",
+				"ghostty-shell-integration/zsh-NOTICE"
+			],
+			"note": "The license headers at the top of bash/ghostty.bash and zsh/.zshenv; zsh/ghostty-integration carries the zsh one. The GPL-3.0 text is Portal's LICENSE. These are Ghostty's GPL-3.0 originals, not the MIT rewrite libghostty-spm ships on macOS"
+		},
+		{
+			"id": "bash-preexec",
+			"name": "bash-preexec",
+			"version": "0.7.0, as vendored by Ghostty v1.4.0 with one change",
+			"source": "https://github.com/rcaloras/bash-preexec/blob/d866eeefdb8dfce075cbd4e37dc73c4deb4b0bd2/LICENSE.md",
+			"license": "MIT",
+			"shipped": "ghostty-linux/share/ghostty/shell-integration/bash/bash-preexec.sh",
+			"when": ["ghostty@v1.4.0"],
+			"texts": ["bash-preexec/0.7.0/LICENSE.md"],
+			"note": "Ghostty vendors the script, whose header names V0.7.0, without its license file; the text is upstream's at the 0.7.0 tag. The script differs from 0.7.0 only in Ghostty's commented-out __bp_adjust_histcontrol call"
+		},
+		{
+			"id": "iterm2-color-schemes",
+			"name": "iTerm2-Color-Schemes themes (Ghostty format)",
+			"version": "release-20261019-151001-86a776d",
+			"source": "https://deps.files.ghostty.org/ghostty-themes-release-20261019-151001-86a776d.tgz",
+			"license": "MIT",
+			"shipped": "ghostty-linux/share/ghostty/themes",
+			"when": ["ghostty@v1.4.0"],
+			"texts": ["iterm2-color-schemes/LICENSE"],
+			"note": "The theme archive ships no license; the text is the iTerm2-Color-Schemes repository's at 86a776d947b6f0c95d35005cb67f3cea435362fc, the commit the release names. It says the copyright and license of each theme belong to that theme's author"
+		},
+		{
+			"id": "stb",
+			"name": "stb_image and stb_image_resize",
+			"version": "stb_image 2.28; stb_image_resize 0.97",
+			"source": "https://github.com/ghostty-org/ghostty/tree/83fb95624b0439ee660c2679b43b38c8b63769cd/src/stb",
+			"license": "MIT OR Unlicense",
+			"shipped": "ghostty-linux/lib/ghostty-internal.so",
+			"when": ["ghostty@v1.4.0"],
+			"texts": ["stb/LICENSE"],
+			"note": "The license block at the end of stb_image.h; stb_image_resize.h ends with the same block. Ghostty's src/stb/stb.c compiles both"
+		},
+		{
+			"id": "z2d",
+			"name": "z2d",
+			"version": "40af3e84a4e15a9f31d126b3f281f23ce6a3dae5 (0.13.0)",
+			"source": "https://deps.files.ghostty.org/z2d-40af3e84a4e15a9f31d126b3f281f23ce6a3dae5.tar.gz",
+			"license": "MPL-2.0 (with code adapted from Cairo under MPL-1.1, redistributed under MPL-2.0)",
+			"shipped": "ghostty-linux/lib/ghostty-internal.so",
+			"when": ["ghostty@v1.4.0"],
+			"texts": ["z2d/LICENSE", "z2d/COPYING"],
+			"note": "Both texts are byte for byte the same in 0.13.0 and 0.13.2",
+			"blocker": "MPL-2.0 code in executable form: a binary release must tell recipients how to obtain this source (docs/licenses.md)"
+		},
+		{
+			"id": "zig",
+			"name": "Zig standard library and compiler-rt",
+			"version": "0.17.x, the Zig that builds the library: 0.17.0, which native/ghostty.json names, or a later patch release; 0.17.1 here",
+			"source": "https://codeberg.org/ziglang/zig/src/tag/0.17.1",
+			"license": "MIT",
+			"shipped": "ghostty-linux/lib/ghostty-internal.so",
+			"when": ["ghostty@v1.4.0"],
+			"texts": ["zig/LICENSE"],
+			"note": "The library's embedded Zig version string reads 0.17.1, the Zig that built it. The glibc start files Zig links (libc_nonshared) carry the LGPL's linking exception and need no notice"
+		},
+		{
+			"id": "llvm-runtimes",
+			"name": "LLVM libc++, libc++abi and libunwind (as bundled with Zig)",
+			"version": "as bundled with the Zig that builds the library; LLVM 22.1.8 (_LIBCPP_VERSION 220108) from Zig 0.17.1 here",
+			"source": "https://codeberg.org/ziglang/zig/src/tag/0.17.1/lib",
+			"license": "Apache-2.0 WITH LLVM-exception; legacy University of Illinois/NCSA and MIT",
+			"shipped": "ghostty-linux/lib/ghostty-internal.so",
+			"when": ["ghostty@v1.4.0"],
+			"texts": [
+				"llvm/libcxx/LICENSE.TXT",
+				"llvm/libcxxabi/LICENSE.TXT",
+				"llvm/libunwind/LICENSE.TXT"
+			],
+			"note": "Zig compiles and links them statically for the C++ dependencies (glslang, SPIRV-Cross, Dear ImGui, simdutf, Highway); on macOS the system's libc++ is used"
+		},
+		{
+			"id": "ghostty-harfbuzz",
+			"name": "HarfBuzz",
+			"version": "11.0.0",
+			"source": "https://deps.files.ghostty.org/harfbuzz-11.0.0.tar.xz",
+			"license": "MIT-Modern-Variant (HarfBuzz \"Old MIT\"); MIT for Microsoft's USE data; Unicode data",
+			"shipped": "ghostty-linux/lib/ghostty-internal.so",
+			"when": ["ghostty@v1.4.0"],
+			"texts": ["harfbuzz/COPYING", "harfbuzz/ms-use/COPYING"],
+			"note": "Its generated tables include Microsoft's ms-use data and Unicode Character Database data, under the Unicode license staged with uucode"
+		},
+		{
+			"id": "fontconfig",
+			"name": "Fontconfig",
+			"version": "2.18.3",
+			"source": "https://deps.files.ghostty.org/N-V-__8AAOgqbADacob-q2_DMQlmgaG4xKHRuW-6PJ4oJzMZ.tar.xz",
+			"license": "HPND-sell-variant; MIT, HPND and public-domain parts and Unicode data, per COPYING",
+			"shipped": "ghostty-linux/lib/ghostty-internal.so",
+			"when": ["ghostty@v1.4.0"],
+			"texts": ["fontconfig/COPYING"],
+			"note": "The archive's meson.build and fontconfig.h say 2.18.3; Ghostty's pkg/fontconfig/build.zig.zon still labels it 2.14.2"
+		},
+		{
+			"id": "libxml2",
+			"name": "libxml2 (for Fontconfig)",
+			"version": "2.11.5",
+			"source": "https://deps.files.ghostty.org/libxml2-2.11.5.tar.gz",
+			"license": "MIT; ISC-style for hash.c and list.c; MIT for timsort.h",
+			"shipped": "ghostty-linux/lib/ghostty-internal.so",
+			"when": ["ghostty@v1.4.0"],
+			"texts": [
+				"libxml2/Copyright",
+				"libxml2/hash.c-NOTICE",
+				"libxml2/list.c-NOTICE",
+				"libxml2/timsort.h-NOTICE"
+			],
+			"note": "Copyright is the archive's license file; the NOTICE files are the license comments at the top of hash.c, list.c and timsort.h, which xpath.c includes. The trio files are not compiled"
+		},
+		{
+			"id": "glslang",
+			"name": "glslang",
+			"version": "14.2.0",
+			"source": "https://deps.files.ghostty.org/glslang-12201278a1a05c0ce0b6eb6026c65cd3e9247aa041b1c260324bf29cee559dd23ba1.tar.gz",
+			"license": "BSD-3-Clause, BSD-2-Clause, MIT, Apache-2.0 and others per LICENSE.txt; the Bison parser is GPL-3.0-or-later WITH Bison-exception-2.2",
+			"shipped": "ghostty-linux/lib/ghostty-internal.so",
+			"when": ["ghostty@v1.4.0"],
+			"texts": ["glslang/LICENSE.txt"]
+		},
+		{
+			"id": "spirv-cross",
+			"name": "SPIRV-Cross",
+			"version": "13.1.1, as Ghostty's pkg/spirv-cross labels it (C API ABI 0.59.0)",
+			"source": "https://deps.files.ghostty.org/spirv_cross-1220fb3b5586e8be67bc3feb34cbe749cf42a60d628d2953632c2f8141302748c8da.tar.gz",
+			"license": "Apache-2.0 OR MIT; Khronos free-use terms for the SPIR-V headers",
+			"shipped": "ghostty-linux/lib/ghostty-internal.so",
+			"when": ["ghostty@v1.4.0"],
+			"texts": [
+				"spirv-cross/LICENSE",
+				"spirv-cross/LICENSES/MIT.txt",
+				"spirv-cross/LICENSES/LicenseRef-KhronosFreeUse.txt"
+			]
+		},
+		{
+			"id": "dear-imgui",
+			"name": "Dear ImGui (docking branch) and Dear Bindings",
+			"version": "Dear ImGui 1.92.5-docking; Dear Bindings 0.17",
+			"source": "https://deps.files.ghostty.org/DearBindings_v0.17_ImGui_v1.92.5-docking.tar.gz",
+			"license": "MIT",
+			"shipped": "ghostty-linux/lib/ghostty-internal.so",
+			"when": ["ghostty@v1.4.0"],
+			"texts": ["imgui/LICENSE.txt", "dear-bindings/LICENSE.txt"],
+			"note": "Dear ImGui from https://deps.files.ghostty.org/N-V-__8AAEbOfQBnvcFcCX2W5z7tDaN8vaNZGamEQtNOe0UI.tar.gz; Dear Bindings' license is from its DearBindings_v0.17_ImGui_v1.92.5-docking tag (2b12a29197ec944cd364031a9776cde814546d52), as its generated archive has none. Dear ImGui compiles in modified stb_rect_pack 1.01 and stb_textedit 1.14, whose license block is stb's, and a public-domain gl3w loader"
+		},
+		{
+			"id": "font-proggy-clean",
+			"name": "ProggyClean font (Dear ImGui's default font)",
+			"version": "as embedded in Dear ImGui 1.92.5",
+			"source": "https://github.com/bluescan/proggyfonts/blob/139ec08a38096161291792313ef5803fc4f0e37b/LICENSE",
+			"license": "MIT",
+			"shipped": "ghostty-linux/lib/ghostty-internal.so",
+			"when": ["ghostty@v1.4.0"],
+			"texts": ["proggy-fonts/LICENSE"],
+			"note": "imgui_draw.cpp names the font MIT-licensed and points to proggyfonts.net's License.txt; the text is the ProggyFonts repository's"
+		},
+		{
+			"id": "glad",
+			"name": "glad OpenGL and EGL loaders",
+			"version": "gl.c generated by glad 2.0.8; glad_egl.c by glad 0.1.36",
+			"source": "https://github.com/ghostty-org/ghostty/tree/83fb95624b0439ee660c2679b43b38c8b63769cd/vendor/glad",
+			"license": "Generated code: WTFPL OR CC0-1.0; Khronos API registry: Apache-2.0; EGL headers: MIT-style Khronos terms",
+			"shipped": "ghostty-linux/lib/ghostty-internal.so",
+			"when": ["ghostty@v1.4.0"],
+			"texts": ["glad/LICENSE"],
+			"note": "Linked by Portal's patch 0001. The text is glad's LICENSE at v2.0.8 (73db193f853e2ee079bf3ca8a64aa2eaf6459043), which gives the Khronos terms; the Apache-2.0 text itself is staged with SPIRV-Cross"
+		},
+		{
+			"id": "zf",
+			"name": "zf",
+			"version": "87153bb86b75d21fbac897b738f316d449f5d0c9 (0.11.0)",
+			"source": "https://deps.files.ghostty.org/zf-87153bb86b75d21fbac897b738f316d449f5d0c9.tar.gz",
+			"license": "MIT",
+			"shipped": "ghostty-linux/lib/ghostty-internal.so",
+			"when": ["ghostty@v1.4.0"],
+			"texts": ["zf/LICENSE"],
+			"note": "Ranks themes in the +list-themes action, which the library's ghostty_cli_try_action reaches"
+		},
+		{
+			"id": "x11-rgb",
+			"name": "X11 color names (rgb.txt)",
+			"version": "rgb.txt identical to xorg/app/rgb 1.1.1",
+			"source": "https://gitlab.freedesktop.org/xorg/app/rgb/-/blob/rgb-1.1.1/COPYING",
+			"license": "MIT-open-group; MIT",
+			"shipped": "ghostty-linux/lib/ghostty-internal.so",
+			"when": ["ghostty@v1.4.0"],
+			"texts": ["x11-rgb/COPYING"],
+			"note": "Ghostty embeds src/terminal/res/rgb.txt to parse X11 color names"
 		},
 		{
 			"id": "bun",

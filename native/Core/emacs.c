@@ -327,6 +327,9 @@ STRINGS(web_go, portal_web_views_go(a[0], a[1], error))
 STRINGS(web_download_directory, portal_web_views_download_directory(a[0], error))
 STRINGS(web_find_done, portal_web_views_find_done(a[0], error))
 STRINGS(terminal_themes, portal_terminals_themes(result, error))
+#ifdef PORTAL_TERMINAL_ENGINE
+STRINGS(terminal_engine, portal_terminal_engine(result, error))
+#endif
 STRINGS(terminal_text, portal_terminals_text(a[0], result, error))
 STRINGS(launcher_detach, portal_launcher_detach(error))
 STRINGS(launcher_prepare, portal_launcher_prepare(error))
@@ -973,6 +976,11 @@ static const struct export {
      "Show TARGET's text at POINTS, a number, clamped to 6 to 72."},
     {"portal--terminal-themes", 0, 0, STRINGS_FUNCTION(terminal_themes, RESULT_JSON),
      "Return the available terminal theme names."},
+#ifdef PORTAL_TERMINAL_ENGINE
+    {"portal--terminal-engine", 0, 0, STRINGS_FUNCTION(terminal_engine, RESULT_JSON),
+     "Start the terminal engine if needed; return its name, version, build mode and "
+     "resources."},
+#endif
     {"portal--terminal-paste", 2, 3, Fterminal_paste, NULL,
      "Paste TEXT into terminal TARGET; press Enter if ENTER is non-nil."},
     {"portal--terminal-text", 1, 1, STRINGS_FUNCTION(terminal_text, RESULT_STRING),

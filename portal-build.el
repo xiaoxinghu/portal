@@ -84,10 +84,15 @@ Keep this list the same as build.sh's.")
         "portal.bundle/Contents/Resources/GhosttyKit_GhosttyTerminal.bundle/Contents/Resources/terminfo/78/xterm-ghostty"
         "portal.bundle/Contents/Resources/GhosttyKit_GhosttyTerminal.bundle/Contents/Resources/Ghostty/shell-integration"
         "portal-host")
-    '("portal.so" "portal-host"))
+    '("portal.so"
+      "ghostty-linux/lib/libghostty.so"
+      "ghostty-linux/share/ghostty/shell-integration"
+      "ghostty-linux/share/terminfo/x/xterm-ghostty"
+      "portal-host"))
   "Files of a complete build, relative to the build directory.
 macOS builds a bundle that holds the module and Ghostty's resources;
-Linux builds the module alone.")
+Linux builds the module and keeps Ghostty's library and resources in
+ghostty-linux beside it.")
 
 (defconst portal-build--module
   (if (eq system-type 'darwin) "portal.bundle/Contents/MacOS/portal.dylib" "portal.so")
@@ -95,8 +100,11 @@ Linux builds the module alone.")
 It is relative to the build directory.")
 
 (defconst portal-build--tools
-  (if (eq system-type 'darwin) '("cmake" "ninja" "xcrun") '("cmake" "ninja" "cc" "pkg-config"))
-  "The programs a build needs before it can start, besides Emacs and Bun.")
+  (if (eq system-type 'darwin)
+      '("cmake" "ninja" "xcrun")
+    '("cmake" "ninja" "cc" "pkg-config" "tic"))
+  "The programs a build needs before it can start, besides Emacs and Bun.
+On Linux, Zig too, which `portal-build--ghostty-problem' checks.")
 
 (defconst portal-build--record "portal-build.eld"
   "The file in which a successful build records its identity.")
@@ -273,6 +281,43 @@ They are `exec-path', which a build gets as PATH, then the
 `portal-build--tool-directories' that build.sh adds."
   (append exec-path (seq-difference portal-build--tool-directories exec-path)))
 
+(defun portal-build--zig-release (version)
+  "Return VERSION, a Zig version, as a list of three integers, or nil.
+A development build counts by its release, as Ghostty's build counts it."
+  (when (string-match "\\`\\([0-9]+\\)\\.\\([0-9]+\\)\\.\\([0-9]+\\)\\(?:[-+]\\|\\'\\)"
+                      version)
+    (mapcar (lambda (group) (string-to-number (match-string group version))) '(1 2 3))))
+
+(defun portal-build--ghostty-problem ()
+  "Return why a Linux build cannot build Ghostty's library, or nil.
+It needs the Zig that native/ghostty.json names, or a later patch release
+of it, as Ghostty's build itself requires: `zig' where the build finds its
+tools, or the program the ZIG environment variable names.  And EGL to link
+against, which pkg-config finds."
+  (let* ((pin (with-temp-buffer
+                (insert-file-contents (expand-file-name "native/ghostty.json" portal-build-root))
+                (json-parse-buffer)))
+         (needs (gethash "zig" pin))
+         (exec-path (portal-build--exec-path))
+         (zig (executable-find (or (getenv "ZIG") "zig")))
+         (has (and zig (with-temp-buffer
+                         (and (eql 0 (ignore-errors (call-process zig nil '(t nil) nil "version")))
+                              (string-trim (buffer-string))))))
+         (wanted (portal-build--zig-release needs))
+         (found (and has (portal-build--zig-release has))))
+    (cond ((not zig)
+           (format "Zig %s, which builds Ghostty's library: install it, or name it \
+with the ZIG environment variable" needs))
+          ((not (and found (= (nth 0 found) (nth 0 wanted)) (= (nth 1 found) (nth 1 wanted))
+                     (>= (nth 2 found) (nth 2 wanted))))
+           (format "Zig %s or a later %s patch release, which builds Ghostty's library: \
+%s is Zig %s" needs needs zig (or has "of an unknown version")))
+          ((not (and (executable-find "pkg-config")
+                     (eql 0 (ignore-errors (call-process "pkg-config" nil nil nil
+                                                         "--exists" "egl")))))
+           "EGL's development files, which Ghostty's library links against: \
+install pkg-config's egl, such as libglvnd's"))))
+
 (defun portal-build--check-prerequisites ()
   "Signal a `user-error' if `portal-build' cannot succeed, saying why."
   (let ((build (portal-build-file "")))
@@ -294,8 +339,11 @@ add their directory to `exec-path'"
                   (if (eq system-type 'darwin)
                       (format-message "install CMake and Ninja, for example \
 with `brew install cmake ninja', and Xcode")
-                    "install CMake, Ninja, a C compiler and pkg-config, with the \
-development files of GTK 3 and Wayland")))))
+                    "install CMake, Ninja, a C compiler, pkg-config and ncurses' tic, \
+with the development files of GTK 3 and Wayland")))
+    (when-let* (((eq system-type 'gnu/linux))
+                (problem (portal-build--ghostty-problem)))
+      (user-error "Portal's build needs %s" problem))))
 
 (defun portal-build--environment ()
   "Return the process environment for a build that this Emacs will load."
@@ -450,6 +498,10 @@ could replace one that Emacs already uses."
     (module-load (portal-build-file portal-build--module))
     (unless (fboundp 'portal--web-load)
       (error "Portal's native module lacks its functions"))
+    ;; On Linux, start Ghostty's library from the module's own place, with
+    ;; the resources beside it.
+    (when (fboundp 'portal--terminal-engine)
+      (portal--terminal-engine))
     (portal-build--probe-host (portal-build-file "portal-host"))
     (portal-build--record-identity)
     (message "The Portal build is complete")))

@@ -324,6 +324,14 @@ bool portal_web_print(portal_view *web, const portal_string *file, portal_text *
    *NAMES is an array of *COUNT texts, allocated with malloc like each text,
    and the core frees them all. */
 bool portal_terminal_list_themes(portal_text **names, size_t *count, portal_text *error);
+/* Describe the terminal engine as a JSON object, starting it first if it has
+   not started: its "engine", such as "ghostty", its "version", the "mode"
+   it was built in and the directory of "resources" it reads.  Only Linux's
+   backend has it so far, where the engine is Portal's own build of Ghostty;
+   the bindings offer it as portal--terminal-engine only where
+   PORTAL_TERMINAL_ENGINE is defined, as the Linux module's build does.  The
+   macOS module's Ghostty is the libghostty-spm release its pin names. */
+bool portal_terminal_engine(portal_text *json, portal_text *error);
 /* Apply the theme NAME, which the platform listed, or the default theme for a
    null NAME, to TERMINAL.  The default may follow the system's appearance. */
 bool portal_terminal_apply_theme(portal_view *terminal, const portal_string *name,

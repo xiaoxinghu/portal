@@ -127,28 +127,36 @@ with the pin already moved, it checks the patches and resolves again.
 
 Portal has no native views on Linux yet, but its module builds and loads
 there. `./build.sh` makes `build/portal.so` in place of `build/portal.bundle`,
-with `build/portal-host` and `build/licenses` as on macOS. CMake compiles the
-module itself: the C bindings and core with
-[`native/Linux/backend.c`](native/Linux/backend.c), the backend for an Emacs
-built with pgtk, linked against GTK 3 and `wayland-client`. No Swift is
-involved, and no Ghostty: [the next section](#ghostty-on-linux) builds that
-library, which the module does not link yet. The backend's operations fail,
-each saying what Linux lacks, so the module answers only what the core
-answers by itself; the file's first comment lists what is real and what each
-missing piece waits for. The link fails when the backend lacks a primitive of
-`portal.h`, and `native/Linux/portal.map` keeps every symbol but Emacs's two
-entry points inside the library.
+with `build/ghostty-linux` beside it and `build/portal-host` and
+`build/licenses` as on macOS. CMake compiles the module itself: the C
+bindings and core with [`native/Linux/backend.c`](native/Linux/backend.c), the
+backend for an Emacs built with pgtk, linked against GTK 3, `wayland-client`
+and Ghostty's library, which [the next section](#ghostty-on-linux) says how
+Portal builds. No Swift is involved. The backend's operations fail, each
+saying what Linux lacks, so the module answers only what the core answers by
+itself and what Ghostty's library says of itself; the file's first comment
+lists what is real and what each missing piece waits for. The link fails when
+the backend lacks a primitive of `portal.h`, or Ghostty's library a function
+the backend calls, and `native/Linux/portal.map` keeps every symbol but
+Emacs's two entry points inside the module.
 
 A build needs:
 
 - Emacs 31.1 built with pgtk and modules, and its `emacs-module.h`;
 - GCC 15 or newer, or a Clang with C23's `#embed`, which the core uses, as
   `cc`; CMake 3.29 or newer, Ninja and `pkg-config`;
-- the development files of GTK 3 and `wayland-client`, as pkg-config's
-  `gtk+-3.0` and `wayland-client`;
+- the development files of GTK 3, `wayland-client` and EGL, as pkg-config's
+  `gtk+-3.0`, `wayland-client` and `egl`;
+- for Ghostty's library, Zig at the version `native/ghostty.json` names or a
+  later patch release of it, as `zig` on `PATH` or in `ZIG`, ncurses' `tic`
+  and Git;
 - Bun, chosen [as on macOS](#build-outputs-and-distribution): the pinned
   release has glibc builds for aarch64 and x64. Only one build runs per
   checkout at a time there too, with `flock` for the lock.
+
+`M-x portal-build` checks for each of them before it starts, and names what
+is missing. A first build takes three to four minutes on ten cores, most of
+it Zig building Ghostty.
 
 Configuration writes `build/compile_commands.json` for clangd.
 
@@ -162,32 +170,46 @@ macOS.
 
 ### Ghostty on Linux
 
-Portal's module does not link Ghostty on Linux yet. Its terminal there will draw with
-Ghostty's own embedding library, which no release ships for Linux, so Portal
-builds it from source with Zig and its own patches: Ghostty's library has no
-Linux platform to embed. `native/ghostty.json` pins the release: the version
-tag and the revision that tag must name. On Linux, one command builds it:
+Portal's terminal on Linux will draw with Ghostty's own embedding library,
+which no release ships for Linux, so Portal builds it from source with Zig and
+its own patches: Ghostty's library has no Linux platform to embed.
+`native/ghostty.json` pins the release: the version tag, the revision that tag
+must name, and the Zig that the release's `build.zig.zon` asks for, so that a
+build can check Zig before it fetches anything. `./build.sh` builds the
+library with this script, which also runs alone:
 
 ```sh
 tools/build-ghostty-linux.sh
 ```
 
-It fetches the pinned release's source with Git into `build/ghostty`, checks the
-revision, applies `native/patches/ghostty/*.patch` in name order, one commit
-each, and runs `zig build -Dapp-runtime=none` there. A patch that does not
-apply fails the build, naming it. It needs Git, ncurses' `tic` and the Zig that
-Ghostty's `build.zig.zon` names, 0.17 for this pin, as `zig` on `PATH` or in
-`ZIG`. Ghostty builds everything else from source and links it in; Zig
-downloads those sources on the first build, which takes three to four minutes
-on ten cores. Zig's cache is `build/ghostty-cache`: about 1 GB after one build,
-more with each mode and each changed patch, and safe to delete. The outputs
-are in `build/ghostty-linux`:
+It checks Zig and `tic`, fetches the pinned release's source with Git into
+`build/ghostty`, checks the revision and the pin's Zig, applies
+`native/patches/ghostty/*.patch` in name order, one commit each, and runs
+`zig build -Dapp-runtime=none` there. A patch that does not apply fails the
+build, naming it. A Zig of the pin's major and minor version at the same patch
+release or a later one builds it, as Ghostty's build itself requires. Ghostty
+builds everything else from source and links it in; Zig downloads those
+sources on the first build into its own global cache. Zig's cache for the
+build is `build/ghostty-cache`: about 1 GB after one build, more with each
+mode and each changed patch, and safe to delete. The outputs are in
+`build/ghostty-linux`:
 
 - `lib/libghostty.so`, the library under its soname, and `include/ghostty.h`,
   its header. The library needs `libc`, `libm` and `libEGL` at run time.
 - `share/ghostty`, the shell integration and themes. A host sets
   `GHOSTTY_RESOURCES_DIR` to it before `ghostty_init`; Ghostty finds the
   terminfo database in `share/terminfo` beside it.
+
+CMake runs the script only when the pin, a patch, the set of patches or the
+script has changed, or one of those outputs is gone: the script runs Zig each time, which takes
+seconds even with nothing to build. `portal.so` links the library and finds it
+by its rpath, `$ORIGIN/ghostty-linux/lib`, so `ghostty-linux` stays beside the
+module wherever Portal is installed. The module works out the resources'
+directory from its own place, sets `GHOSTTY_RESOURCES_DIR` to it in its own
+process and starts Ghostty on first use: nothing of an installed Ghostty is
+used. `portal--terminal-engine`, which only the Linux module has, starts it
+and answers with its version, build mode and resources; the build's own check
+calls it, and so does the `linux-module` suite.
 
 `--optimize Debug` builds with Zig's safety checks in place of ReleaseFast, and
 `--prefix DIR` installs somewhere else. A Debug build also checks every page of
@@ -213,6 +235,12 @@ The patches today:
   on the render thread, and `ghostty_frame_free` gives the frame's texture
   back, which the renderer does not draw into before. The comments on these in
   `ghostty.h` are the contract a host is written to.
+- `0004-build-export-only-the-C-API-from-the-Linux-library.patch` gives the
+  shared library a version script that exports the `ghostty_` functions alone.
+  Without it the library exports every symbol of what it links in statically,
+  and in Emacs, which has loaded the system's FreeType, HarfBuzz, fontconfig,
+  libxml2, libpng and zlib first, a thousand of its own calls went to those
+  copies instead of its own.
 
 To change a patch, edit the copy in `build/ghostty` and run the script again:
 while the pin, the patches and the script stay the same, it builds the changes
@@ -225,13 +253,19 @@ git -C build/ghostty format-patch --zero-commit --no-signature \
     -o "$PWD/native/patches/ghostty" REVISION
 ```
 
-The next run remakes the copy from the patch files. To move the pin, apply the
+The next run remakes the copy from the patch files. `./build.sh` does not
+run the script for changes made in the copy alone: run it yourself, and
+`./build.sh` then builds the module against the library it made. To move the pin, apply the
 patches to the new tag in a clone of Ghostty with `git am`, repair those that
-stop, write them back the same way and change `native/ghostty.json`;
-`tools/ghostty-version.py` knows only the macOS wrapper. The
-`test_build_ghostty_linux.py` tests run the script against a stand-in for
-Ghostty and for Zig. Nothing in this repository runs the library yet: the Linux
-terminal will bring its checks.
+stop, write them back the same way and change `native/ghostty.json`, its Zig
+too; `tools/ghostty-version.py` knows only the macOS wrapper. Then follow
+[Licenses](docs/licenses.md#when-dependencies-change) for what the library
+now links in. The `test_build_ghostty_linux.py` tests run the script against a
+stand-in for Ghostty and for Zig.
+
+The pin is shaped so that a prebuilt library can join it: a download with
+its checksum, for each architecture, in place of the build, once the patches
+stop changing. The outputs would stay where they are.
 
 For TypeScript editing, install the host's development dependencies and run its
 checks:
@@ -275,7 +309,7 @@ does not hot-reload that library.
 
 The single build command produces `build/portal.bundle`,
 `build/portal-host` and `build/licenses`; a [Linux build](#building-on-linux)
-has `build/portal.so` for the bundle. The bundle contains the one native Emacs module at
+has `build/portal.so` and `build/ghostty-linux` for the bundle. The bundle contains the one native Emacs module at
 `Contents/MacOS/portal.dylib` and Ghostty's resources. CMake recompiles the host when its TypeScript entry point
 or HTML changes. Both binaries are built for the current Mac's CPU
 architecture and macOS 13 or later; see [supported platforms](docs/platforms.md)
@@ -288,7 +322,9 @@ Only one `./build.sh` runs per checkout at a time.
 `./build.sh --prune`, which `M-x portal-build` runs for installed packages,
 builds without tests and then deletes everything else in `build/` except
 `tools/`, the lock and the build log, as well as `host/node_modules` and
-`host/.generated`: about 750 MB. Its next build starts afresh. Build without
+`host/.generated`: about 750 MB. On Linux it keeps, of `build/ghostty-linux`,
+the library and the resources, and deletes Ghostty's source copy and Zig's
+cache for it, over 1 GB more. Its next build starts afresh. Build without
 `--prune` for development.
 
 `./build.sh` chooses Bun with `tools/resolve-bun.sh`: the `BUN` environment
@@ -302,7 +338,8 @@ to rediscover every tool. Update the pinned version, its asset URLs and
 digests together in `tools/bun.manifest`, and test the build with it.
 
 To distribute this layout, include `LICENSE` and all `portal*.el` files at the
-package root, `build/portal-host`, the complete `build/portal.bundle`,
+package root, `build/portal-host`, the complete `build/portal.bundle` (on Linux,
+`build/portal.so` and `build/ghostty-linux` as `--prune` leaves it),
 `build/licenses` and `build/portal-build.eld`, or set `portal-build-directory`
 to where the build outputs are; the host needs no adjacent web assets. Without
 `native/`, Portal accepts only a record from the same `Version:` as `portal.el`. Keep the

@@ -11,10 +11,11 @@
 #   share/ghostty          the resources, for GHOSTTY_RESOURCES_DIR
 #   share/terminfo         found by Ghostty beside them
 #
-# --pin names a JSON file holding Ghostty's url, the version tag and that tag's
-# revision (native/ghostty.json).  --source (build/ghostty) becomes a copy of
-# that source with every --patches/*.patch (native/patches/ghostty) applied in
-# name order, one commit each.  A copy made from the same pin, patches and
+# --pin names a JSON file holding Ghostty's url, the version tag, that tag's
+# revision and the Zig its build.zig.zon asks for (native/ghostty.json).
+# --source (build/ghostty) becomes a copy of that source with every
+# --patches/*.patch (native/patches/ghostty) applied in name order, one commit
+# each.  A copy made from the same pin, patches and
 # script is kept, with any changes made in it since, so a patch can be developed
 # there; anything else is replaced.  A patch that does not apply fails the build.
 # This is the shape of patch-libghostty-spm.sh, which reads its pin with macOS's
@@ -27,9 +28,11 @@
 # installed.  Zig's cache is beside the source copy, in SOURCE-cache, and
 # outlives it.
 #
-# $ZIG names the Zig to use when it is not `zig` on PATH: the version the
-# source's build.zig.zon asks for.  $PORTAL_GHOSTTY_CLONE names a local clone
-# of Ghostty to fetch the tag from in place of the pin's url.
+# $ZIG names the Zig to use when it is not `zig` on PATH.  It must be the pin's
+# Zig or a later patch release of it, as Ghostty's build itself requires; the
+# pin's Zig must be the one the source's build.zig.zon asks for.  Zig and tic
+# are checked before anything is fetched.  $PORTAL_GHOSTTY_CLONE names a local
+# clone of Ghostty to fetch the tag from in place of the pin's url.
 set -eu
 
 me=build-ghostty-linux
@@ -100,6 +103,32 @@ field() {
 url=$(field url)
 version=$(field version)
 revision=$(field revision)
+needs=$(field zig)
+
+# Ghostty's build takes a Zig of the same major and minor version, at the
+# same patch release or a later one.
+zig=${ZIG:-zig}
+if ! command -v "$zig" >/dev/null 2>&1; then
+    echo "$me: no $zig: Ghostty $version builds with Zig $needs; name one with \$ZIG" >&2
+    exit 1
+fi
+has=$("$zig" version 2>/dev/null || echo unknown)
+release() {
+    printf '%s\n' "${1%%[-+]*}" | sed -n 's/^\([0-9][0-9]*\)\.\([0-9][0-9]*\)\.\([0-9][0-9]*\)$/\1 \2 \3/p'
+}
+fits=$(
+    set -- $(release "$needs") $(release "$has")
+    [ "$#" -eq 6 ] && [ "$1" -eq "$4" ] && [ "$2" -eq "$5" ] && [ "$3" -le "$6" ] && echo yes
+) || true
+if [ -z "$fits" ]; then
+    echo "$me: $zig is Zig $has; Ghostty $version builds with Zig $needs or a later $needs patch release: name one with \$ZIG" >&2
+    exit 1
+fi
+# Ghostty's build runs tic to compile its terminfo, and hides what tic says.
+if ! command -v tic >/dev/null 2>&1; then
+    echo "$me: no tic, which compiles Ghostty's terminfo: install ncurses" >&2
+    exit 1
+fi
 
 # Name order, whatever the locale.
 LC_ALL=C
@@ -164,15 +193,11 @@ else
     echo "Patched Ghostty $version with $count patches in $dest"
 fi
 
-zig=${ZIG:-zig}
-needs=$(sed -n 's/.*minimum_zig_version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$dest/build.zig.zon")
-if ! command -v "$zig" >/dev/null 2>&1; then
-    echo "$me: no $zig: Ghostty $version builds with Zig ${needs:-as its build.zig.zon says}; name one with \$ZIG" >&2
-    exit 1
-fi
-# Ghostty's build runs tic to compile its terminfo, and hides what tic says.
-if ! command -v tic >/dev/null 2>&1; then
-    echo "$me: no tic, which compiles Ghostty's terminfo: install ncurses" >&2
+# The pin names the Zig so that it can be checked before the fetch, and by
+# portal-build.el before a build: it must be the one the source asks for.
+asks=$(sed -n 's/.*minimum_zig_version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$dest/build.zig.zon")
+if [ "$asks" != "$needs" ]; then
+    echo "$me: $pin names Zig $needs, but Ghostty $version's build.zig.zon asks for Zig ${asks:-nothing}: correct the pin" >&2
     exit 1
 fi
 
@@ -185,7 +210,7 @@ fi
     -Demit-docs=false \
     --prefix "$prefix" \
     --cache-dir "$dest-cache") || {
-    echo "$me: zig build failed; Ghostty $version asks for Zig ${needs:-as its build.zig.zon says}, and $zig is $("$zig" version 2>/dev/null || echo unknown)" >&2
+    echo "$me: zig build failed; Ghostty $version asks for Zig $needs, and $zig is $has" >&2
     exit 1
 }
 

@@ -28,6 +28,7 @@ stand-in build.sh, Lisp and a node_modules directory.  No build is running."
                            "host/node_modules/dependency/index.js" "host/.generated/asset.js"
                            "tools/bun.manifest" "CMakeLists.txt"))
              (portal-build-test--write file file))
+           (portal-build-test--write "native/ghostty.json" "{\"zig\": \"9.8.7\"}\n")
            (portal-build-test--write "portal.el" ";; Version: 1.0\n")
            (portal-build-test--write "build.sh" "echo built")
            ,@body)
@@ -78,7 +79,7 @@ stand-in build.sh, Lisp and a node_modules directory.  No build is running."
   (portal-build-test--with-root
     (should (equal (portal-build--input-files)
                    '("CMakeLists.txt" "build.sh" "host/server.ts" "native/Core/emacs.c"
-                     "native/Package.swift" "tools/bun.manifest")))
+                     "native/Package.swift" "native/ghostty.json" "tools/bun.manifest")))
     (let ((identity (portal-build-source-identity)))
       ;; Lisp, installed packages and generated files need no rebuild.
       (portal-build-test--write "portal.el" ";; Version: 1.0\n;; changed\n")
@@ -188,13 +189,45 @@ stand-in build.sh, Lisp and a node_modules directory.  No build is running."
       (should (member portal-build--module portal-build--artifacts))
       (should (equal portal-build--loaded "the build")))))
 
-(defun portal-build-test--tools ()
-  "Return an `exec-path' with stand-ins for the build's tools."
+(defun portal-build-test--tools (&optional zig)
+  "Return an `exec-path' with stand-ins for the build's tools.
+The stand-in Zig, which Linux's build checks, says it is ZIG, or the
+version the tree's pin names.  The stand-in pkg-config finds everything."
   (let ((bin (expand-file-name "bin/" portal-build-root)))
-    (dolist (tool portal-build--tools)
+    (dolist (tool (cons "pkg-config" portal-build--tools))
       (portal-build-test--write (concat "bin/" tool) "#!/bin/sh\n")
       (set-file-modes (expand-file-name tool bin) #o755))
+    (portal-build-test--write "bin/zig" (format "#!/bin/sh\necho '%s'\n" (or zig "9.8.7")))
+    (set-file-modes (expand-file-name "zig" bin) #o755)
     (list bin "/usr/bin" "/bin")))
+
+(ert-deftest portal-build-ghostty-needs-the-pinned-zig-and-egl ()
+  ;; Linux builds Ghostty's library: with the pin's Zig or a later patch
+  ;; release of it, as Ghostty's own build requires.
+  (portal-build-test--with-root
+    (let ((process-environment (cons "ZIG" process-environment)))
+      (dolist (version '("9.8.7" "9.8.10" "9.8.7-dev.3+abc"))
+        (let ((exec-path (portal-build-test--tools version)))
+          (should-not (portal-build--ghostty-problem))))
+      (dolist (version '("9.8.6" "9.9.0" "10.8.7" "9.8" "unknown"))
+        (let ((exec-path (portal-build-test--tools version)))
+          (should (equal (portal-build--ghostty-problem)
+                         (format "Zig 9.8.7 or a later 9.8.7 patch release, which builds \
+Ghostty's library: %s is Zig %s"
+                                 (expand-file-name "bin/zig" portal-build-root) version)))))
+      (let ((exec-path (portal-build-test--tools)))
+        (delete-file (expand-file-name "bin/zig" portal-build-root))
+        (should (string-prefix-p "Zig 9.8.7, which builds Ghostty's library: install it"
+                                 (portal-build--ghostty-problem)))
+        ;; ZIG names another program.
+        (portal-build-test--write "bin/zig-9.8" "#!/bin/sh\necho 9.8.7\n")
+        (set-file-modes (expand-file-name "bin/zig-9.8" portal-build-root) #o755)
+        (let ((process-environment (cons "ZIG=zig-9.8" process-environment)))
+          (should-not (portal-build--ghostty-problem)))))
+    ;; pkg-config finds no EGL.
+    (let ((exec-path (portal-build-test--tools)))
+      (portal-build-test--write "bin/pkg-config" "#!/bin/sh\nexit 1\n")
+      (should (string-prefix-p "EGL's development files" (portal-build--ghostty-problem))))))
 
 (ert-deftest portal-build-diagnoses-unusable-destinations ()
   (portal-build-test--with-root

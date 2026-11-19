@@ -25,18 +25,23 @@ test("the build stages every required notice", () => {
 	expect(check(build)).toEqual([]);
 });
 
-// The Swift packages' notices are the macOS module's.
+// The Swift packages' notices are the macOS module's; Linux's are those of
+// Portal's own build of Ghostty. Ghostty's own license is in both.
 const ofSwift = [
 	"libghostty-spm/LICENSE",
 	"bash-preexec/LICENSE-bash-preexec.md",
-	"ghostty/LICENSE",
+];
+const ofGhosttyLinux = [
+	"ghostty-shell-integration/bash-NOTICE",
+	"llvm/libcxx/LICENSE.TXT",
 ];
 // One in every build, for the tests that damage a notice.
 const everywhere = "fonts/xiaolai/OFL.txt";
 
 test.each([
 	"LICENSE",
-	...(swift ? ofSwift : []),
+	...(swift ? ofSwift : ofGhosttyLinux),
+	"ghostty/LICENSE",
 	everywhere,
 	"npm/react@19.2.4/LICENSE",
 	"README.md",

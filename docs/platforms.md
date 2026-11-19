@@ -50,14 +50,16 @@ into an Emacs 31.1 built with pgtk, and Portal's Lisp lets a pgtk frame on
 Wayland through to it, but the module has no views: opening a terminal or a
 page fails with "Portal has no native views on Linux yet". Other frames are
 refused before any native code loads, with the reason: an Emacs built
-without pgtk, a text terminal, or a pgtk frame that GDK put on X11.
-[Building on Linux](../CONTRIBUTING.md#building-on-linux) says what a build
-needs and which checks run.
+without pgtk, a text terminal, or a pgtk frame that GDK put on X11. The module
+links [Portal's own build of Ghostty](../CONTRIBUTING.md#ghostty-on-linux)'s
+library, with its resources beside it, and starts it, though nothing draws
+with it yet. [Building on Linux](../CONTRIBUTING.md#building-on-linux) says
+what a build needs and which checks run.
 
 That much was run on 2026-11-19 on one machine: Arch Linux on aarch64 (an M1
 Pro under Asahi), Hyprland 0.56.2, Arch's `emacs-wayland` 31.1, GTK 3.24.52,
-GCC 16.1, CMake 4.5 and Bun 1.3.14, Portal's pin. No x64 machine has built
-it.
+GCC 16.1, CMake 4.5, Zig 0.17.1 and Bun 1.3.14, Portal's pin. No x64 machine
+has built it.
 
 ## Requirements
 
