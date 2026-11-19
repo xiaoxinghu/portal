@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxing Hu <hi@xiaoxing.dev>
+Date: Thu, 19 Nov 2026 20:32:39 +1300
+Subject: [PATCH 2/3] build: install the resources with the Linux library
+
+A host of the library needs what the app does at run time: the shell
+integration, the themes and the terminfo database, found through
+GHOSTTY_RESOURCES_DIR. Only executables and the macOS framework installed
+them.
+
+Install them with the library off Darwin as well, without the files that
+make an application of it: the desktop file, the services and the icons.
+---
+ build.zig                      | 4 ++++
+ src/build/GhosttyResources.zig | 6 ++++--
+ 2 files changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/build.zig b/build.zig
+index 85a91fb1d..7b994bb57 100644
+--- a/build.zig
++++ b/build.zig
+@@ -227,6 +227,10 @@ pub fn build(b: *std.Build) !void {
+         // build on macOS this way ironically so we need to fix that.
+         if (!config.target.result.os.tag.isDarwin()) {
+             lib_shared.installHeader(); // Only need one header
++
++            // The library's host needs the resources as the app does:
++            // GHOSTTY_RESOURCES_DIR is where it finds them.
++            resources.install();
+             if (config.target.result.os.tag == .windows) {
+                 lib_shared.install("ghostty-internal.dll");
+                 lib_static.install("ghostty-internal-static.lib");
+diff --git a/src/build/GhosttyResources.zig b/src/build/GhosttyResources.zig
+index e90cba95b..3f7e80d01 100644
+--- a/src/build/GhosttyResources.zig
++++ b/src/build/GhosttyResources.zig
+@@ -224,8 +224,10 @@ pub fn init(b: *std.Build, cfg: *const Config, deps: *const SharedDeps) !Ghostty
+         try steps.append(b.allocator, &install_step.step);
+     }
+ 
+-    // App (Linux)
+-    if (cfg.target.result.os.tag == .linux) try addLinuxAppResources(
++    // App (Linux). The library is no application: it has no desktop
++    // file, service or icon.
++    if (cfg.target.result.os.tag == .linux and
++        cfg.app_runtime != .none) try addLinuxAppResources(
+         b,
+         cfg,
+         &steps,
