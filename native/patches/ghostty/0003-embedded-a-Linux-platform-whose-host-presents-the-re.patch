@@ -26,8 +26,9 @@ grows to six and past that a frame is dropped and drawn again once a
 texture is free. A frame names its texture with an id, so that a host
 keeps one imported buffer a texture. Freeing a frame only clears a flag,
 from any thread and also after the surface is gone; GL objects are deleted
-on the render thread. The GTK app holds a texture until GDK drops the
-texture it built from the frame.
+on the render thread. The GTK app, which frees a frame's planes when GDK
+drops the texture built from them, would hold a texture until then: that is
+read from its source, and it was not built with this change.
 
 ghostty_surface_draw drew on the caller's thread, where OpenGL has no
 context: with OpenGL it now asks the render thread for a frame, drawn even
