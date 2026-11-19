@@ -138,7 +138,7 @@ static bool canvas_make(struct pattern *pattern, struct canvas *canvas, int32_t 
 
 /* A buffer WIDTH by HEIGHT that the compositor does not have, or NULL while
    it has them all.  Buffers of another size go as they come back. */
-static struct canvas *canvas_free_one(struct pattern *pattern, int32_t width, int32_t height)
+static struct canvas *canvas_available(struct pattern *pattern, int32_t width, int32_t height)
 {
     struct canvas *unused = NULL;
     for (size_t i = 0; i < BUFFERS; i++) {
@@ -159,7 +159,7 @@ static struct canvas *canvas_free_one(struct pattern *pattern, int32_t width, in
 static void draw(struct pattern *pattern, int32_t width, int32_t height, int32_t scale)
 {
     int32_t columns = pattern->fill ? 1 : width * scale, rows = pattern->fill ? 1 : height * scale;
-    struct canvas *canvas = canvas_free_one(pattern, columns, rows);
+    struct canvas *canvas = canvas_available(pattern, columns, rows);
     if (!canvas)
         return; /* The next release or frame callback draws. */
     uint32_t tick = pattern->tick++;

@@ -165,6 +165,7 @@ struct portal_view {
     /* A frame the content presented for WANTED, kept until it is applied. */
     struct wl_buffer *held_buffer;
     int32_t held_width, held_height;
+    bool held_stale; /* It was held before the view was last hidden. */
     /* The frame showing is the one the content presented last, so the
        damage it gives with its next is against what the screen has. */
     bool sequential;

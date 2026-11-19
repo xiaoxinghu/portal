@@ -156,7 +156,14 @@ static bool ready(struct portal_view *view)
     pthread_mutex_lock(&view->lock);
     bool resized = view->wanted.width != view->applied.width
                 || view->wanted.height != view->applied.height;
-    bool needs = view->surface && view->wanted.shown && !view->held_buffer
+    int32_t scale = view->surface_scale > 0 ? view->surface_scale : 1;
+    /* A frame held since before the view was last hidden is not one the
+       content drew for this change. */
+    bool has = view->held_buffer && !view->held_stale
+            && ((!view->held_width && !view->held_height)
+                || (view->held_width == view->wanted.width * scale
+                    && view->held_height == view->wanted.height * scale));
+    bool needs = view->surface && view->wanted.shown && !has
               && (!view->applied.shown || resized);
     pthread_mutex_unlock(&view->lock);
     return !needs;
@@ -291,6 +298,7 @@ enum portal_presented portal_linux_present(struct portal_view *view, struct wl_b
         view->held_buffer = buffer;
         view->held_width = width;
         view->held_height = height;
+        view->held_stale = false;
         view->sequential = false;
         result = PORTAL_HELD;
     } else {
@@ -571,6 +579,7 @@ static void after_paint(GdkFrameClock *clock, gpointer data)
             view->applied = view->wanted;
             if (!view->wanted.shown) {
                 conceal(view);
+                view->held_stale = true;
             } else if (view->held_buffer) {
                 show(view, view->held_buffer, view->held_width, view->held_height, NULL);
                 view->held_buffer = NULL;
