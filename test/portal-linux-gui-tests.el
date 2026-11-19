@@ -387,6 +387,37 @@ A position is in the desktop's own pixels, which are Emacs's."
         (when (frame-live-p child) (delete-frame child)))
       (portal-linux-gui--covers window))))
 
+(ert-deftest portal-linux-gui-child-frame-leaves-for-another-frame ()
+  :tags '(:gui)
+  "A child frame given another parent covers no view here, and outlives them."
+  (portal-linux-gui--with-view 'terminal '(:directory "/")
+    (let ((home (selected-frame)) (window (selected-window)) (buffer (current-buffer))
+          child other)
+      (unwind-protect
+          (progn
+            (setq child (make-frame `((parent-frame . ,home) (left . 200) (top . 150)
+                                      (width . 30) (height . 5) (minibuffer . nil)
+                                      (no-accept-focus . t) (undecorated . t))))
+            (set-window-buffer (frame-selected-window child) (get-buffer-create "*scratch*"))
+            (portal-linux-gui--wait (lambda () (portal-linux-gui--get :occluded)))
+            (setq other (make-frame))
+            (set-window-buffer (frame-selected-window other) (get-buffer-create "*scratch*"))
+            (set-frame-parameter child 'parent-frame other)
+            (portal-linux-gui--wait (lambda () (not (portal-linux-gui--get :occluded))))
+            (portal-linux-gui--covers window)
+            ;; The view ends, and its frame is forgotten; the child frame
+            ;; goes on changing where it is now.
+            (kill-buffer buffer)
+            (make-frame-invisible child t)
+            (portal-linux-gui--pause 0.2)
+            (make-frame-visible child)
+            (set-frame-position child 40 40)
+            (portal-linux-gui--pause 0.2)
+            (should (frame-live-p child)))
+        (when (frame-live-p child) (delete-frame child))
+        (when (frame-live-p other) (delete-frame other))
+        (select-frame-set-input-focus home)))))
+
 (ert-deftest portal-linux-gui-view-moves-to-another-frame-and-outlives-it ()
   :tags '(:gui)
   (portal-linux-gui--with-view 'terminal '(:directory "/")

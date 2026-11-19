@@ -461,6 +461,21 @@ static void child_allocated(GtkWidget *child, GdkRectangle *area, gpointer data)
     cover(data);
 }
 
+/* CHILD is out of FRAME's GtkFixed: deleted, or a child frame of another
+   frame now, or a frame of its own.  It is watched no longer, as FRAME may
+   end before it does; and it covers nothing here. */
+static void child_removed(GtkContainer *fixed, GtkWidget *child, gpointer data)
+{
+    (void) fixed;
+    struct portal_frame *frame = data;
+    GQuark watched = g_quark_from_static_string("portal-watched");
+    if (g_object_get_qdata(G_OBJECT(child), watched) != frame)
+        return;
+    g_object_set_qdata(G_OBJECT(child), watched, NULL);
+    g_signal_handlers_disconnect_by_data(child, frame);
+    cover(frame);
+}
+
 /* Hear of each child frame of FRAME that comes, goes or moves.  GtkFixed
    announces no new child, so this looks each time GTK has painted: a child
    frame is first seen with its first frame.  One that goes is heard of at
@@ -707,6 +722,7 @@ static struct portal_frame *frame_titled(portal_string title, portal_text *error
                         ? gdk_wayland_window_get_wl_surface(native)
                         : NULL;
     g_signal_connect(fixed, "draw", G_CALLBACK(emacs_drawn), frame);
+    g_signal_connect(fixed, "remove", G_CALLBACK(child_removed), frame);
     g_signal_connect(clock, "before-paint", G_CALLBACK(before_paint), frame);
     g_signal_connect(clock, "after-paint", G_CALLBACK(after_paint), frame);
     g_signal_connect(window, "destroy", G_CALLBACK(window_destroyed), frame);
