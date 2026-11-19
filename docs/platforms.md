@@ -16,7 +16,7 @@ separate claims.
 | GNU Emacs 31.1 NS | any | Intel | Unverified | Unverified |
 | x86_64 Emacs under Rosetta | any | Apple Silicon | Unsupported | Unsupported |
 | GNU Emacs 30 or earlier | any | any | Unsupported: refused | Unsupported: refused |
-| GNU Emacs 31.1 pgtk on Linux, Wayland | — | any | Unsupported: no views yet, see [Linux](#linux) | Unsupported: refused |
+| GNU Emacs 31.1 pgtk on Linux, Wayland | — | any | Unsupported: no terminal or page yet, see [Linux](#linux) | Unsupported: refused |
 | Text frames, terminal-only builds, non-NS builds on macOS, other systems | — | — | Unsupported: refused | Unsupported: refused |
 
 Revision `a360712c9d272d950d8d8255ef74570f7e90b7d9` is the `emacs-31.1` release
@@ -46,20 +46,27 @@ not only passing checks; see [launcher safety](launcher.md#set-up-safely).
 ## Linux
 
 Portal does not work on Linux yet. Its native module builds there and loads
-into an Emacs 31.1 built with pgtk, and Portal's Lisp lets a pgtk frame on
-Wayland through to it, but the module has no views: opening a terminal or a
-page fails with "Portal has no native views on Linux yet". Other frames are
-refused before any native code loads, with the reason: an Emacs built
-without pgtk, a text terminal, or a pgtk frame that GDK put on X11. The module
-links [Portal's own build of Ghostty](../CONTRIBUTING.md#ghostty-on-linux)'s
+into an Emacs 31.1 built with pgtk, and it can put a view in a pane of a
+frame on Wayland and give it the keyboard and the pointer, but it has
+nothing to show in one: opening a terminal fails with "Portal has no
+terminals on Linux yet", and a page with "Portal has no web views on Linux
+yet". Other frames are refused before any native code loads, with the
+reason: an Emacs built without pgtk, a text terminal, or a pgtk frame that
+GDK put on X11. The module links
+[Portal's own build of Ghostty](../CONTRIBUTING.md#ghostty-on-linux)'s
 library, with its resources beside it, and starts it, though nothing draws
-with it yet. [Building on Linux](../CONTRIBUTING.md#building-on-linux) says
-what a build needs and which checks run.
+with it yet. [Building on Linux](../CONTRIBUTING.md#building-on-linux)
+says what a build needs and which checks run.
 
-That much was run on 2026-11-19 on one machine: Arch Linux on aarch64 (an M1
-Pro under Asahi), Hyprland 0.56.2, Arch's `emacs-wayland` 31.1, GTK 3.24.52,
-GCC 16.1, CMake 4.5, Zig 0.17.1 and Bun 1.3.14, Portal's pin. No x64 machine
-has built it.
+The view machinery was run on 2026-11-20 on one machine, with a test pattern
+for content: Arch Linux on aarch64 (an M1 Pro under Asahi), Hyprland 0.56.2,
+Arch's `emacs-wayland` 31.1, GTK 3.24.52, GCC 16.1, CMake 4.5, Zig 0.17.1 and
+Bun 1.3.14, Portal's pin, at scale 2. `sh test/linux-gui.sh` passed, 18 tests,
+and `sh test/linux-follow.sh` found no frame out of place in recordings of
+3,719 frames and, with the stretched pattern, 3,715. They ran on the
+[test desktop](testing.md#linux-graphical-checks), a headless output of a
+second Hyprland with no animations. No other compositor, no other scale, no
+screen a person looks at and no x64 machine has run it.
 
 ## Requirements
 

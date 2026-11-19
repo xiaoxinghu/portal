@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Helpers that the core's own files share, for portal.h's strings and errors.
-   Only the core includes this header. */
+   Only the core includes this header, and a backend written in C, which
+   uses them as the core does. */
 #ifndef PORTAL_CORE_H
 #define PORTAL_CORE_H
 

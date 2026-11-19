@@ -357,10 +357,32 @@ pkg-config's egl, such as libglvnd's")
     set_target_properties(ghostty PROPERTIES
         IMPORTED_LOCATION "${ghostty_prefix}/lib/libghostty.so"
         IMPORTED_SONAME libghostty.so)
+
+    # The one Wayland protocol the backend speaks beyond the core's, which
+    # sizes a view's surface: its C comes from wayland-protocols' XML.
+    pkg_get_variable(wayland_protocols wayland-protocols pkgdatadir)
+    pkg_get_variable(wayland_scanner wayland-scanner wayland_scanner)
+    if(NOT wayland_protocols OR NOT wayland_scanner)
+        message(FATAL_ERROR "Portal needs wayland-protocols and wayland-scanner, as pkg-config finds them")
+    endif()
+    set(viewporter_xml "${wayland_protocols}/stable/viewporter/viewporter.xml")
+    set(protocols "${CMAKE_BINARY_DIR}/linux/protocols")
+    file(MAKE_DIRECTORY "${protocols}")
+    add_custom_command(
+        OUTPUT "${protocols}/viewporter-client-protocol.h" "${protocols}/viewporter-protocol.c"
+        COMMAND "${wayland_scanner}" client-header "${viewporter_xml}"
+            "${protocols}/viewporter-client-protocol.h"
+        COMMAND "${wayland_scanner}" private-code "${viewporter_xml}"
+            "${protocols}/viewporter-protocol.c"
+        DEPENDS "${viewporter_xml}"
+        COMMENT "Generating the viewporter protocol"
+        VERBATIM)
     add_library(portal-module MODULE native/Core/emacs.c ${PORTAL_CORE_SOURCES}
-        native/Linux/backend.c)
+        native/Linux/backend.c native/Linux/views.c native/Linux/input.c native/Linux/pattern.c
+        "${protocols}/viewporter-protocol.c" "${protocols}/viewporter-client-protocol.h")
     target_include_directories(portal-module PRIVATE
-        native/Core/include native/Core "${EMACS_INCLUDE}" "${ghostty_prefix}/include")
+        native/Core/include native/Core "${EMACS_INCLUDE}" "${ghostty_prefix}/include"
+        "${protocols}")
     target_link_libraries(portal-module PRIVATE PkgConfig::portal_platform Threads::Threads
         ghostty ${CMAKE_DL_LIBS})
     add_dependencies(portal-module ghostty-linux)
@@ -391,6 +413,25 @@ pkg-config's egl, such as libglvnd's")
         VERBATIM)
     add_custom_target(portal ALL DEPENDS "${CMAKE_BINARY_DIR}/portal.so")
     if(BUILD_TESTING)
+        # The graphical checks' pointer, which moves and clicks through the
+        # compositor's virtual pointer (test/linux-gui.sh).
+        set(pointer_xml "${CMAKE_SOURCE_DIR}/test/fixtures/wlr-virtual-pointer-unstable-v1.xml")
+        set(pointer_header "${protocols}/wlr-virtual-pointer-unstable-v1-client-protocol.h")
+        set(pointer_code "${protocols}/wlr-virtual-pointer-unstable-v1-protocol.c")
+        add_custom_command(
+            OUTPUT "${pointer_header}" "${pointer_code}"
+            COMMAND "${wayland_scanner}" client-header "${pointer_xml}" "${pointer_header}"
+            COMMAND "${wayland_scanner}" private-code "${pointer_xml}" "${pointer_code}"
+            DEPENDS "${pointer_xml}"
+            COMMENT "Generating the virtual pointer protocol"
+            VERBATIM)
+        add_executable(portal-test-pointer test/linux-pointer.c "${pointer_code}" "${pointer_header}")
+        target_include_directories(portal-test-pointer PRIVATE "${protocols}")
+        target_link_libraries(portal-test-pointer PRIVATE PkgConfig::portal_platform)
+        target_compile_options(portal-test-pointer PRIVATE -Wall -Wextra -Werror)
+        set_target_properties(portal-test-pointer PROPERTIES
+            C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/linux")
         # The built module in batch Emacs: what it answers with no view, and
         # what it says of each part the backend lacks.
         add_test(NAME linux-module

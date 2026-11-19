@@ -795,6 +795,56 @@ Return the view's target."
           (should (equal features `((,origin "17" "4") (,origin "17" "3"))))
           (should (equal portal-view-test--handled `(("ping" ,origin (,target "1"))))))))))
 
+(ert-deftest portal-view-pgtk-frame-stays-focused-while-its-view-has-the-keyboard ()
+  "On pgtk, GTK's focus-out for a view taking the keyboard never runs."
+  (portal-view-test--environment
+    (let* ((target (portal-view-test--open "view"))
+           (frame (selected-frame))
+           (handled nil)
+           (handle (lambda (event) (push event handled)))
+           (event (list 'focus-out frame)))
+      (cl-flet ((state (&rest facts)
+                  (puthash target (append facts (gethash target portal-fake-native--views))
+                           portal-fake-native--views)))
+        ;; Emacs has the keyboard: the frame's window lost it.
+        (portal-view--keep-frame-focus handle event)
+        (should (equal handled (list event)))
+        ;; The view has the keyboard of a window that has it.
+        (state :focused t :active t)
+        (portal-view--keep-frame-focus handle event)
+        (should (equal handled (list event)))
+        ;; The window lost the keyboard, the view's with it.
+        (state :active nil)
+        (portal-view--keep-frame-focus handle event)
+        (should (= (length handled) 2))
+        ;; Another frame's focus is its own.
+        (state :active t)
+        (portal-view--keep-frame-focus handle (list 'focus-out 'another-frame))
+        (should (= (length handled) 3))))))
+
+(ert-deftest portal-view-says-emacs-has-drawn-on-pgtk-frames-alone ()
+  "A timer tells the module once redisplay is done, where the module waits."
+  (portal-view-test--environment
+    (portal-view-test--open "view")
+    (should-not portal-view--drawn-timer)
+    (let ((drawn 0))
+      (unwind-protect
+          (cl-letf (((symbol-function 'framep) (lambda (_frame) 'pgtk))
+                    ((symbol-function 'portal--drawn) (lambda () (cl-incf drawn) t)))
+            ;; Two changes before Emacs is idle are told once.
+            (set-window-buffer (split-window-below) (get-buffer-create "*scratch*"))
+            (portal-view-sync)
+            (delete-other-windows)
+            (portal-view-sync)
+            (should (timerp portal-view--drawn-timer))
+            (should (= drawn 0))
+            (timer-event-handler portal-view--drawn-timer)
+            (should (= drawn 1))
+            (should-not portal-view--drawn-timer))
+        (when portal-view--drawn-timer
+          (cancel-timer portal-view--drawn-timer)
+          (setq portal-view--drawn-timer nil))))))
+
 (ert-deftest portal-view-unsupported-emacs-names-what-to-change ()
   ;; Each requirement names its own fix; a newer build is checked first.
   (dlet ((features (cons 'ns (remq 'pgtk features))))

@@ -10,7 +10,7 @@
    status.c where the status panel goes, rex.c the connections to Rex
    servers, and channel.c owns the pipe that carries records to Emacs.
    The platform implements the operations below: the production module links
-   the macOS backend, native/Backend.swift, or on Linux native/Linux/backend.c,
+   the macOS backend, native/Backend.swift, or on Linux the one in native/Linux,
    and the core's tests link test/portal-fake-backend.c.  Nothing here knows
    about Emacs values or a UI toolkit.
 
@@ -159,6 +159,16 @@ bool portal_view_detach(portal_view *view, portal_text *error);
    terminal's grid.  The core adds the view's "id", "kind", "visible" and
    "edges", so the platform never reports those. */
 bool portal_view_describe(portal_view *view, portal_text *state, portal_text *error);
+/* Emacs has drawn its frames as every attach and detach since the last call
+   left them: the platform may show those changes now.  Emacs asks for a
+   view's place while it lays its panes out, before it draws them.  A
+   platform whose views would otherwise reach the screen before or after
+   Emacs's own drawing holds both back from an attach or a detach until
+   this call, and then for as long as it chooses, so that they change
+   together; it never waits for a call that may not come.  macOS shows a
+   view's new place with its window's next update, as it shows Emacs's
+   drawing, and does nothing here. */
+bool portal_frames_drawn(portal_text *error);
 
 /* Web views.  The core decides what a web view loads and how, where its page
    may navigate, which messages cross the bridge, and how large each site's

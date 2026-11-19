@@ -13,6 +13,7 @@
    destroyed it, or a view of the wrong kind, which must never happen. */
 struct portal_fake_calls {
     size_t created, destroyed, attached, detached, described, misused;
+    size_t drawn; /* Times Emacs said it had drawn its frames. */
     size_t loaded, went, posted; /* Web pages loaded, history steps, and messages posted. */
     size_t focused, unfocused, replayed, discarded;
     size_t copied, pasted; /* Copy and Paste commands given to views' apps. */

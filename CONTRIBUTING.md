@@ -125,20 +125,29 @@ with the pin already moved, it checks the patches and resolves again.
 
 ### Building on Linux
 
-Portal has no native views on Linux yet, but its module builds and loads
-there. `./build.sh` makes `build/portal.so` in place of `build/portal.bundle`,
-with `build/ghostty-linux` beside it and `build/portal-host` and
-`build/licenses` as on macOS. CMake compiles the module itself: the C
-bindings and core with [`native/Linux/backend.c`](native/Linux/backend.c), the
-backend for an Emacs built with pgtk, linked against GTK 3, `wayland-client`
-and Ghostty's library, which [the next section](#ghostty-on-linux) says how
-Portal builds. No Swift is involved. The backend's operations fail, each
-saying what Linux lacks, so the module answers only what the core answers by
-itself and what Ghostty's library says of itself; the file's first comment
-lists what is real and what each missing piece waits for. The link fails when
-the backend lacks a primitive of `portal.h`, or Ghostty's library a function
-the backend calls, and `native/Linux/portal.map` keeps every symbol but
-Emacs's two entry points inside the module.
+Portal's module builds and loads on Linux, and has views there with nothing
+to show in them yet. `./build.sh` makes `build/portal.so` in place of
+`build/portal.bundle`, with `build/ghostty-linux` beside it and
+`build/portal-host` and `build/licenses` as on macOS. CMake compiles the
+module itself: the C bindings and core with the backend in
+[`native/Linux`](native/Linux), for an Emacs built with pgtk, linked against
+GTK 3, `wayland-client` and Ghostty's library, which
+[the next section](#ghostty-on-linux) says how Portal builds. No Swift is
+involved.
+
+The backend has the view machinery, input and timers:
+[the architecture notes](docs/architecture.md#views-on-linux) say how a view
+gets into a frame. It starts Ghostty's library and says what it is, but has
+neither a terminal nor a web view to put in a view, so opening either fails,
+saying which Linux lacks, as do Rex connections, the system-wide keys, the
+status panel and the launcher. The one content a view can have is a test
+pattern, made with the option `:test-pattern`, which exists for the checks of
+the machinery. `native/Linux/linux.h` says which file has what, and
+`backend.c`'s first comment what is real and what each missing piece waits
+for. The link fails when the backend lacks a primitive of `portal.h`, or
+Ghostty's library a function the backend calls, and
+`native/Linux/portal.map` keeps every symbol but Emacs's two entry points
+inside the module.
 
 A build needs:
 
@@ -146,7 +155,8 @@ A build needs:
 - GCC 15 or newer, or a Clang with C23's `#embed`, which the core uses, as
   `cc`; CMake 3.29 or newer, Ninja and `pkg-config`;
 - the development files of GTK 3, `wayland-client` and EGL, as pkg-config's
-  `gtk+-3.0`, `wayland-client` and `egl`;
+  `gtk+-3.0`, `wayland-client` and `egl`, and `wayland-protocols` with
+  `wayland-scanner`, which make the C of the viewporter protocol;
 - for Ghostty's library, Zig at the version `native/ghostty.json` names or a
   later patch release of it, as `zig` on `PATH` or in `ZIG`, ncurses' `tic`
   and Git;
@@ -161,12 +171,23 @@ it Zig building Ghostty.
 Configuration writes `build/compile_commands.json` for clangd.
 
 [The checks](#checks) that run on Linux are CTest, the host checks, the Python
-tests and `git diff --check`, with `nproc` for the number of jobs. CTest
-leaves out the suites of the macOS module, `rex` and `libghostty-spm`, and of
-the macOS VM runner, and adds `linux-module`, which loads the built module in
-batch Emacs. The Python tests skip those of Swift helpers and of the macOS
-Ghostty wrapper. There are no graphical checks on Linux yet: those stay on
-macOS.
+tests and `git diff --check`, with `nproc` for the number of jobs, and two
+graphical ones in place of the macOS suites:
+
+```sh
+sh test/linux-gui.sh
+sh test/linux-follow.sh
+```
+
+CTest leaves out the suites of the macOS module, `rex` and `libghostty-spm`,
+and of the macOS VM runner, and adds `linux-module`, which loads the built
+module in batch Emacs. The Python tests skip those of Swift helpers and of
+the macOS Ghostty wrapper. `linux-gui.sh` runs the views and their input in a
+graphical Emacs, and `linux-follow.sh` records a view following its pane and
+checks every frame; both are in the default loop for a change to
+`native/Linux` or `portal-view.el`, and `sh test/gui-all.sh` runs both.
+They need Hyprland, and run on a desktop of their own, off your screen:
+[Testing Portal](docs/testing.md#linux-graphical-checks) says how.
 
 ### Ghostty on Linux
 
@@ -397,10 +418,11 @@ graphical suite:
 sh test/gui-all.sh
 ```
 
-It runs `test/views-gui.sh`, `test/input-gui.sh`, `test/launcher-gui.sh`,
+On macOS it runs `test/views-gui.sh`, `test/input-gui.sh`, `test/launcher-gui.sh`,
 `test/terminal-shell-startup.sh`, `test/rex-server-gui.sh` and
 `test/package-gui.sh` in turn, after a failure too, and fails if any of them
-did; run one of those to repeat a single suite. In a VM the wrapper builds
+did; run one of those to repeat a single suite. On Linux it runs
+[the two Linux checks](#building-on-linux) the same way. In a VM the wrapper builds
 once for all of them. `rex-server-gui.sh` checks Portal against a
 [real Rex server](docs/testing.md#against-a-real-rex-server); where none is
 installed it reports itself not run.

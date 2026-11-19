@@ -320,6 +320,7 @@ LISP_FUNCTION(Fstrings)
 STRINGS(hide, portal_views_hide(a[0], error))
 STRINGS(close_view, portal_views_close(a[0], error))
 STRINGS(inspect, portal_views_inspect(a[0], result, error))
+STRINGS(drawn, portal_frames_drawn(error))
 STRINGS(web_load, portal_web_views_load(a[0], a[1], error))
 STRINGS(web_send, portal_web_views_send(a[0], a[1], error))
 STRINGS(web_receive, portal_web_views_receive(a[0], result, error))
@@ -941,6 +942,8 @@ static const struct export {
      "End TARGET and release its view."},
     {"portal--inspect", 1, 1, STRINGS_FUNCTION(inspect, RESULT_JSON),
      "Return TARGET's native state as a plist, or nil for an unknown target."},
+    {"portal--drawn", 0, 0, STRINGS_FUNCTION(drawn, RESULT_T),
+     "Say that Emacs has drawn its frames as the views placed and hidden since need them."},
     {"portal--channel", 1, 1, Fchannel, NULL,
      "Send every view's records, lines of \"TYPE TARGET FIELD...\", to pipe PROCESS; nil "
      "disconnects."},
