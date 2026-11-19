@@ -15,6 +15,10 @@ if [ -z "${PORTAL_TEST_DESKTOP:-}" ]; then
     exec sh "$root/test/linux-desktop.sh" sh "$0" "$@"
 fi
 export PORTAL_LINUX_SELECTOR="${1:-}"
+# glibc fills freed memory with this byte, so that reading a frame or a view
+# that has been freed, as when a frame is deleted with views in it, crashes
+# Emacs here and does not pass by luck.
+export MALLOC_PERTURB_=165
 sh "$root/test/gui-ert.sh" \
     -l "$root/test/portal-linux-gui-tests.el" \
     --eval '(portal-gui-ert-start

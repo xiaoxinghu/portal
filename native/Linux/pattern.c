@@ -219,9 +219,14 @@ static void *run(void *data)
         if (shown && pattern->due && width > 0 && height > 0)
             draw(pattern, width, height, scale > 0 ? scale : 1);
         /* Read the display with GDK, which reads it on the main thread:
-           whoever reads queues the other's events. */
-        while (wl_display_prepare_read_queue(display, queue) != 0)
-            wl_display_dispatch_queue_pending(display, queue);
+           whoever reads queues the other's events.  Events GDK has read
+           for this queue may be a frame callback, which asks for a frame:
+           back to the drawing, not on to a wait that nothing would end. */
+        if (wl_display_prepare_read_queue(display, queue) != 0) {
+            if (wl_display_dispatch_queue_pending(display, queue) < 0)
+                break;
+            continue;
+        }
         wl_display_flush(display);
         struct pollfd waits[] = {{wl_display_get_fd(display), POLLIN, 0},
                                  {pattern->wake, POLLIN, 0}};

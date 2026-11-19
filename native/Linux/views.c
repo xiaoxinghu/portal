@@ -639,9 +639,9 @@ static void window_destroyed(GtkWidget *window, gpointer data)
 {
     (void) window;
     struct portal_frame *frame = data;
-    /* The last view to leave frees FRAME. */
-    while (frame->views) {
-        struct portal_view *view = frame->views;
+    /* The last view to leave frees FRAME, which is not looked at again. */
+    for (struct portal_view *view = frame->views, *next; view; view = next) {
+        next = view->next;
         leave(view);
         want(view, false);
     }
