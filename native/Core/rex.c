@@ -15,6 +15,8 @@
    its first paint and its typing never cross Emacs.  The order of that work, and what each step guards
    against, is in rex.h; the protocol is the server's own documentation
    ("Data Connections" in the server's /llms.txt). */
+#define _POSIX_C_SOURCE 200809L /* For gethostname and clock_gettime. */
+
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>

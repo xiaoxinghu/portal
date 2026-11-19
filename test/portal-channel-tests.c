@@ -344,6 +344,34 @@ static void test_a_closed_reader_raises_no_sigpipe(void)
     CHECK(portal_channel_connect(next.write));
     CHECK(closed(pipe.write));
     CHECK(took(next, 0, "escape web:1 6 0\nbridge web:1\n"));
+    /* The writes left the thread's signal mask as it was. */
+    sigset_t mask;
+    CHECK(!pthread_sigmask(SIG_SETMASK, NULL, &mask) && !sigismember(&mask, SIGPIPE));
+    settle();
+    close(next.read);
+}
+
+/* A SIGPIPE pending before a write was not the pipe's: a platform that takes
+   the pipe's own, for lack of a descriptor that raises none, leaves it. */
+static void test_a_pending_sigpipe_stays(void)
+{
+    sigset_t sigpipe, mask, pending;
+    sigemptyset(&sigpipe);
+    sigaddset(&sigpipe, SIGPIPE);
+    pthread_sigmask(SIG_BLOCK, &sigpipe, &mask);
+    raise(SIGPIPE);
+    struct pipe pipe = open_pipe();
+    CHECK(portal_channel_connect(pipe.write));
+    close(pipe.read);
+    CHECK(notify("select", "web:1", NULL));
+    CHECK(!sigpending(&pending) && sigismember(&pending, SIGPIPE));
+    /* Ignoring a pending signal discards it, so unblocking delivers none. */
+    signal(SIGPIPE, SIG_IGN);
+    pthread_sigmask(SIG_SETMASK, &mask, NULL);
+    signal(SIGPIPE, SIG_DFL);
+    struct pipe next = open_pipe();
+    CHECK(portal_channel_connect(next.write));
+    CHECK(took(next, 0, "select web:1\n"));
     settle();
     close(next.read);
 }
@@ -400,6 +428,7 @@ int main(void)
     test_reconnecting_cancels_the_retry();
     test_interrupted_and_short_writes();
     test_a_closed_reader_raises_no_sigpipe();
+    test_a_pending_sigpipe_stays();
     test_descriptor_ownership();
     test_launcher_without_views();
     if (failures) {

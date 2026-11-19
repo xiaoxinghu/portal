@@ -35,6 +35,12 @@ if(BUILD_TESTING)
     add_library(portal-test-core OBJECT views.c input.c terminals.c web.c channel.c
         shortcuts.c status.c rex.c json.c "${fake_backend}")
     target_include_directories(portal-test-core PUBLIC include . "${portal_root}/test")
+    if(NOT APPLE)
+        # channel.c masks SIGPIPE with pthread_sigmask, which an older glibc
+        # keeps in libpthread.
+        find_package(Threads REQUIRED)
+        target_link_libraries(portal-test-core PUBLIC Threads::Threads)
+    endif()
     set_target_properties(portal-test-core PROPERTIES POSITION_INDEPENDENT_CODE ON)
     # The real bindings with the fake backend in place of native/Backend.swift.
     add_library(portal-test-module MODULE emacs.c)

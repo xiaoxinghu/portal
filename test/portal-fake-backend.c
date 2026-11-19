@@ -1204,13 +1204,14 @@ size_t portal_fake_hotkey_restarts(void)
     return hotkey_restarts;
 }
 
-/* KEY, as the hot key and key post primitives take it, in NAME. */
-static void key_name(uint32_t key, char name[8])
+/* KEY, as the hot key and key post primitives take it, in NAME, which holds
+   any function key's number. */
+static void key_name(uint32_t key, char name[12])
 {
     if (key > PORTAL_FUNCTION_KEY)
-        snprintf(name, 8, "F%u", (unsigned) (key - PORTAL_FUNCTION_KEY));
+        snprintf(name, 12, "F%u", (unsigned) (key - PORTAL_FUNCTION_KEY));
     else
-        snprintf(name, 8, "%s",
+        snprintf(name, 12, "%s",
                  key == ' '                 ? "Space"
                  : key == PORTAL_ESCAPE_KEY ? "Escape"
                                             : (char[]) {(char) key, 0});
@@ -1222,7 +1223,7 @@ const char *portal_fake_hotkeys(void)
     size_t length = 0;
     text[0] = '\0';
     for (size_t i = 0; i < hotkey_count; i++) {
-        char name[8];
+        char name[12];
         key_name(hotkeys[i].key, name);
         length += (size_t) snprintf(text + length, sizeof text - length, "%s%llu:%s+%u",
                                     i ? " " : "", (unsigned long long) hotkeys[i].hotkey, name,
@@ -1242,7 +1243,7 @@ bool portal_key_post(uint32_t key, uint32_t modifiers, portal_text *error)
 {
     if (refused(error))
         return false;
-    char name[8];
+    char name[12];
     key_name(key, name);
     if (key == PORTAL_FUNCTION_KEY + 19)
         return fail(error, "The fake may not post %s+%u", name, (unsigned) modifiers);

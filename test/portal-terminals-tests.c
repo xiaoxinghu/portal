@@ -78,7 +78,7 @@ static void test_options_are_checked_before_creation(void)
         size_t count;
         const char *message;
     } cases[] = {
-        {{{0}}, 0, "A terminal view needs a :directory"},
+        {.count = 0, .message = "A terminal view needs a :directory"},
         {{flag_option("directory", false)}, 1, "A terminal view needs a :directory"},
         {{string_option("command", "ls")}, 1, "A terminal view needs a :directory"},
         {{flag_option("directory", true)}, 1, "Option :directory must be a string"},
