@@ -200,8 +200,8 @@ mode and each changed patch, and safe to delete. The outputs are in
   `GHOSTTY_RESOURCES_DIR` to it before `ghostty_init`; Ghostty finds the
   terminfo database in `share/terminfo` beside it.
 
-CMake runs the script only when the pin, a patch or the script has changed, or
-one of those outputs is gone: the script runs Zig each time, which takes
+CMake runs the script only when the pin, a patch, the set of patches or the
+script has changed, or one of those outputs is gone: the script runs Zig each time, which takes
 seconds even with nothing to build. `portal.so` links the library and finds it
 by its rpath, `$ORIGIN/ghostty-linux/lib`, so `ghostty-linux` stays beside the
 module wherever Portal is installed. The module works out the resources'

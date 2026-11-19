@@ -295,7 +295,8 @@ else()
     # and the resources in build/ghostty-linux, which an installed Portal keeps
     # beside portal.so: the module finds the library by its rpath, and the
     # resources from its own place. The script runs Zig every time, so it runs
-    # only when the pin, a patch or the script changed, or an output is gone.
+    # only when the pin, a patch, the set of patches or the script changed, or
+    # an output is gone.
     # To build changes made in its copy, build/ghostty, run the script itself.
     set(ghostty_pin "${CMAKE_SOURCE_DIR}/native/ghostty.json")
     file(READ "${ghostty_pin}" ghostty_pin_json)
@@ -323,6 +324,11 @@ install it, or name it with ZIG")
 pkg-config's egl, such as libglvnd's")
     endif()
     file(GLOB ghostty_patch_files CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/native/patches/ghostty/*.patch")
+    # The patch set by name, rewritten only when it changes: a patch removed
+    # leaves every remaining dependency older than the stamp, but not this.
+    list(JOIN ghostty_patch_files "\n" ghostty_patch_names)
+    file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/ghostty-linux.patches"
+        CONTENT "${ghostty_patch_names}\n" @ONLY)
     set(ghostty_prefix "${CMAKE_BINARY_DIR}/ghostty-linux")
     set(ghostty_stamp "${CMAKE_BINARY_DIR}/ghostty-linux.stamp")
     # build.sh configures on every build: an output deleted since makes the
@@ -341,6 +347,7 @@ pkg-config's egl, such as libglvnd's")
         COMMAND "${CMAKE_COMMAND}" -E touch "${ghostty_stamp}"
         BYPRODUCTS "${ghostty_prefix}/lib/libghostty.so" "${ghostty_prefix}/include/ghostty.h"
         DEPENDS "${ghostty_pin}" ${ghostty_patch_files}
+            "${CMAKE_BINARY_DIR}/ghostty-linux.patches"
             "${CMAKE_SOURCE_DIR}/tools/build-ghostty-linux.sh"
         USES_TERMINAL
         COMMENT "Building Ghostty ${ghostty_version}'s library with Zig: minutes the first time"
