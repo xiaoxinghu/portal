@@ -51,15 +51,33 @@ if found=$(command -v bun 2>/dev/null) && [ -f "$found" ]; then
     say "ignoring $found ($(describe "$found")): Portal needs Bun.markdown.html and Bun $version or newer"
 fi
 
-[ "$(uname -s)" = Darwin ] || fail "Portal builds only on macOS"
-# The hardware's architecture, even when this shell runs under Rosetta.
-if [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then
-    platform=darwin-aarch64
-elif [ "$(sysctl -n hw.optional.avx2_0 2>/dev/null)" = 1 ]; then
-    platform=darwin-x64
-else
-    platform=darwin-x64-baseline
-fi
+case $(uname -s) in
+Darwin)
+    # The hardware's architecture, even when this shell runs under Rosetta.
+    if [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then
+        platform=darwin-aarch64
+    elif [ "$(sysctl -n hw.optional.avx2_0 2>/dev/null)" = 1 ]; then
+        platform=darwin-x64
+    else
+        platform=darwin-x64-baseline
+    fi
+    ;;
+Linux)
+    # Bun's builds for glibc; its x64 build needs AVX2, the baseline one does not.
+    case $(uname -m) in
+    aarch64 | arm64) platform=linux-aarch64 ;;
+    x86_64 | amd64)
+        if grep -qw avx2 /proc/cpuinfo 2>/dev/null; then
+            platform=linux-x64
+        else
+            platform=linux-x64-baseline
+        fi
+        ;;
+    *) fail "Portal's pinned Bun has no download for $(uname -m): install Bun $version or newer, or set BUN" ;;
+    esac
+    ;;
+*) fail "Portal builds only on macOS and Linux" ;;
+esac
 
 directory=$tools/bun/$version/$platform
 cached=$directory/bun
@@ -79,13 +97,18 @@ trap 'rm -rf "$work"' EXIT
 say "downloading Bun $version for $platform from $url"
 curl -fsSL --proto '=https,file' --retry 2 -o "$work/bun.zip" "$url" ||
     fail "could not download $url"
-actual=$(shasum -a 256 "$work/bun.zip" | awk '{ print $1 }')
+# macOS has shasum, and Linux sha256sum without it more often than not.
+if command -v shasum >/dev/null 2>&1; then
+    actual=$(shasum -a 256 "$work/bun.zip" | awk '{ print $1 }')
+else
+    actual=$(sha256sum "$work/bun.zip" | awk '{ print $1 }')
+fi
 [ "$actual" = "$digest" ] ||
     fail "$url has SHA-256 $actual, not the expected $digest; nothing was cached"
 unzip -q "$work/bun.zip" -d "$work/unpacked" || fail "could not unpack $url"
 bun=$(find "$work/unpacked" -type f -name bun | head -n 1)
 [ -n "$bun" ] || fail "$url contains no bun executable"
 chmod +x "$bun"
-compatible "$bun" || fail "the Bun from $url does not run on this Mac"
+compatible "$bun" || fail "the Bun from $url does not run on this machine"
 mv -f "$bun" "$cached"
 use "$cached" "downloaded"

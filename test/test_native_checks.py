@@ -2,6 +2,7 @@
 """Native test failures must exit with status 1, never terminate by signal."""
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -44,6 +45,7 @@ struct CheckFailureReporting {
 '''
 
 
+@unittest.skipUnless(sys.platform == "darwin", "compiles the macOS checks' helpers with Swift")
 class NativeCheckTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -20,6 +21,8 @@ def git(directory, *args):
                           capture_output=True, text=True).stdout.strip()
 
 
+@unittest.skipUnless(sys.platform == "darwin",
+                     "patches the macOS module's Ghostty wrapper, reading the pin with plutil")
 class PatchLibghosttySpm(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
