@@ -52,20 +52,20 @@
 
 #include "portal.h"
 
-/* Fail with the formatted message, for a Lisp `error' signal. */
+/* Fail with the formatted message, for a Lisp `error' signal.  Without
+   memory for it, leave *ERROR unset. */
 static bool fail(portal_text *error, const char *format, ...)
 {
-    char message[256];
     va_list arguments;
     va_start(arguments, format);
-    int length = vsnprintf(message, sizeof message, format, arguments);
+    int length = vsnprintf(NULL, 0, format, arguments);
     va_end(arguments);
-    size_t size = length < (int) sizeof message ? (size_t) length : sizeof message - 1;
-    char *data = malloc(size + 1);
+    char *data = length < 0 ? NULL : malloc((size_t) length + 1);
     if (data) {
-        memcpy(data, message, size);
-        data[size] = '\0';
-        *error = (portal_text) {data, size};
+        va_start(arguments, format);
+        vsnprintf(data, (size_t) length + 1, format, arguments);
+        va_end(arguments);
+        *error = (portal_text) {data, (size_t) length};
     }
     return false;
 }
