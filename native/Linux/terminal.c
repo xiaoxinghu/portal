@@ -937,10 +937,16 @@ static void terminal_preedit(void *content, const char *text, int cursor)
         ghostty_surface_preedit(terminal->surface, text, strlen(text));
 }
 
+/* GDK's button BUTTON as Ghostty's: by name, since the two number the
+   middle and the right ones the other way round. */
 static ghostty_input_mouse_button_e button_of(guint button)
 {
-    return button >= 1 && button <= 11 ? (ghostty_input_mouse_button_e) button
-                                       : GHOSTTY_MOUSE_UNKNOWN;
+    static const ghostty_input_mouse_button_e buttons[] = {
+        GHOSTTY_MOUSE_UNKNOWN, GHOSTTY_MOUSE_LEFT,  GHOSTTY_MOUSE_MIDDLE, GHOSTTY_MOUSE_RIGHT,
+        GHOSTTY_MOUSE_FOUR,    GHOSTTY_MOUSE_FIVE,  GHOSTTY_MOUSE_SIX,    GHOSTTY_MOUSE_SEVEN,
+        GHOSTTY_MOUSE_EIGHT,   GHOSTTY_MOUSE_NINE,  GHOSTTY_MOUSE_TEN,    GHOSTTY_MOUSE_ELEVEN,
+    };
+    return button < G_N_ELEMENTS(buttons) ? buttons[button] : GHOSTTY_MOUSE_UNKNOWN;
 }
 
 static void terminal_pointer(void *content, const GdkEvent *event)

@@ -214,6 +214,26 @@ keyboard may then move on."
       (portal-linux-terminal--run target "echo AGAIN-$((3*3))")
       (portal-linux-terminal--shows target "AGAIN-9"))))
 
+(ert-deftest portal-linux-gui-terminal-reports-the-button-clicked ()
+  :tags '(:gui)
+  "A program that asks for the mouse is told which button was pressed.
+In xterm's report of a press, 1b 5b 4d then the button: 21 the middle, 22
+the right; its release follows, which the program reads too."
+  (portal-linux-terminal--with
+    (let ((target (portal-linux-terminal--open))
+          (window (selected-window))
+          (scale (portal-linux-gui--scale)))
+      (pcase-let ((`(,left ,top . ,_) (portal-linux-gui--box window)))
+        (pcase-dolist (`(,button ,code ,name) '((273 "22" "RIGHT") (274 "21" "MIDDLE")))
+          (portal-linux-terminal--run
+           target
+           (format "stty raw -echo; printf '\\033[?1000h'; head -c 3; head -c 3 | od -An -tx1 | sed 's/^/%s/'; head -c 6 >/dev/null; printf '\\033[?1000l'; stty sane"
+                   name))
+          (portal-linux-gui--pause 0.5)
+          (portal-linux-gui--point 'move (+ (/ left scale) 200) (+ (/ top scale) 200)
+                                   'click button)
+          (portal-linux-terminal--shows target (format "%s %s" name code)))))))
+
 ;;; Frames
 
 (ert-deftest portal-linux-gui-terminal-draws-while-lisp-is-busy ()
