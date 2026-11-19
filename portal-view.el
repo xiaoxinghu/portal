@@ -19,6 +19,7 @@
 (declare-function portal--place "portal-view" (target edges title))
 (declare-function portal--hide "portal-view" (target))
 (declare-function portal--close "portal-view" (target))
+(declare-function portal--inspect "portal-view" (target))
 (declare-function portal--channel "portal-view" (process))
 (declare-function portal--input "portal-input" (target action &optional serial))
 
@@ -211,7 +212,39 @@ The native module finds FRAME's window by this title."
                    (kill-emacs-hook . portal-view--close-all)))
     (if install
         (add-hook (car entry) (cdr entry))
-      (remove-hook (car entry) (cdr entry)))))
+      (remove-hook (car entry) (cdr entry))))
+  (when (featurep 'pgtk)
+    (if install
+        (advice-add 'handle-focus-out :around #'portal-view--keep-frame-focus)
+      (advice-remove 'handle-focus-out #'portal-view--keep-frame-focus))))
+
+;; On pgtk a view takes the keyboard as a widget of the frame's window, and
+;; GTK tells Emacs's own widget that it lost the keyboard: Emacs then
+;; reports the frame unfocused, though its window has the keyboard still.
+;; On macOS a frame is focused while its window is the key window, whatever
+;; in it has the keyboard, and Portal keeps it so here: `frame-focus-state'
+;; stays t, and neither `focus-out-hook' nor `after-focus-change-function'
+;; runs, when a view of the frame takes the keyboard.  The module gives the
+;; keyboard back to Emacs's widget before the window itself loses it, so a
+;; focus-out that arrives while no view of the frame has the keyboard is
+;; the real one, and is handled as ever.
+
+(defun portal-view--keyboard-in-frame-p (frame)
+  "Whether a Portal view placed in FRAME has the keyboard of FRAME's window.
+A view keeps its window's keyboard while the window is without it, as
+when another application is in front: `:active' says the window has it."
+  (cl-some (lambda (buffer)
+             (with-current-buffer buffer
+               (and (eq frame (car portal-view--geometry))
+                    (let ((state (ignore-errors (portal--inspect portal-view--target))))
+                      (and (plist-get state :focused) (plist-get state :active))))))
+           (portal-view-buffers)))
+
+(defun portal-view--keep-frame-focus (handle event)
+  "Call HANDLE, `handle-focus-out', with EVENT unless a view took the keyboard.
+Around advice, in place while any Portal view is open on pgtk."
+  (unless (portal-view--keyboard-in-frame-p (nth 1 event))
+    (funcall handle event)))
 
 (defun portal-view-open (kind options)
   "Open a Portal view of KIND for the current buffer and return its target.
