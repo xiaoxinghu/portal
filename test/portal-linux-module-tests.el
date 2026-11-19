@@ -2,17 +2,30 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;; Loads the module a Linux build made, build/portal.so: the real bindings and
-;; core, linked with native/Linux/backend.c.  PORTAL_TEST_BUILD names the
-;; build directory; run with --module-assertions.  The backend has no views
-;; yet, so these tests say what the module does without them, and that each
-;; missing piece fails with a message of its own.  Batch Emacs opens no
-;; display: what the module finds in a graphical Emacs, a test there must say.
+;; core, linked with native/Linux/backend.c and Ghostty's library.
+;; PORTAL_TEST_BUILD names the build directory; run with --module-assertions.
+;; The backend has no views yet, so these tests say what the module does
+;; without them, and that each missing piece fails with a message of its own.
+;; Batch Emacs opens no display: what the module finds in a graphical Emacs, a
+;; test there must say.
 
 (require 'ert)
+(require 'subr-x)
 
-(let ((build (getenv "PORTAL_TEST_BUILD")))
-  (unless build (error "Set PORTAL_TEST_BUILD to the build directory"))
-  (module-load (expand-file-name "portal.so" build)))
+(defconst portal-linux-module-tests--build
+  (let ((build (getenv "PORTAL_TEST_BUILD")))
+    (unless build (error "Set PORTAL_TEST_BUILD to the build directory"))
+    (file-name-as-directory (file-truename build)))
+  "The build directory whose module these tests load.")
+
+(defconst portal-linux-module-tests--pin
+  (expand-file-name "../native/ghostty.json" (file-name-directory load-file-name))
+  "The pin of the Ghostty that Portal builds.")
+
+(defconst portal-linux-module-tests--resources (getenv "GHOSTTY_RESOURCES_DIR")
+  "GHOSTTY_RESOURCES_DIR as Emacs had it before the module, as from a Ghostty terminal.")
+
+(module-load (expand-file-name "portal.so" portal-linux-module-tests--build))
 
 (defun portal-linux-module-tests--error (function &rest arguments)
   "Return the message of the error that FUNCTION signals for ARGUMENTS."
@@ -23,7 +36,7 @@
   ;; One from each part of the bindings, the launcher's included.
   (dolist (function '(portal--open portal--web-load portal--terminal-themes portal--input
                       portal--launcher-inspect portal--shortcuts portal--status-show
-                      portal--rex-open))
+                      portal--rex-open portal--terminal-engine))
     (should (module-function-p (symbol-function function)))))
 
 (ert-deftest portal-linux-module-answers-what-needs-no-view ()
@@ -42,6 +55,27 @@
   (should (portal--terminal-theme nil))
   ;; A hidden status panel hides again.
   (should (portal--status-hide)))
+
+(ert-deftest portal-linux-module-starts-portals-own-ghostty ()
+  ;; The library Portal built, found by the module's rpath, with the
+  ;; resources installed beside the module.
+  (let* ((pin (with-temp-buffer
+                (insert-file-contents portal-linux-module-tests--pin)
+                (json-parse-buffer)))
+         (resources (expand-file-name "ghostty-linux/share/ghostty"
+                                      portal-linux-module-tests--build))
+         (engine (portal--terminal-engine)))
+    (should (equal (plist-get engine :engine) "ghostty"))
+    (should (equal (plist-get engine :version)
+                   (string-remove-prefix "v" (gethash "version" pin))))
+    (should (equal (plist-get engine :mode) "ReleaseFast"))
+    (should (equal (plist-get engine :resources) resources))
+    (should (file-directory-p (expand-file-name "shell-integration" resources)))
+    (should (file-exists-p (expand-file-name "../terminfo/x/xterm-ghostty" resources)))
+    ;; Once started, it answers the same.
+    (should (equal (portal--terminal-engine) engine))
+    ;; Emacs's own environment, which its subprocesses get, is not changed.
+    (should (equal (getenv "GHOSTTY_RESOURCES_DIR") portal-linux-module-tests--resources))))
 
 (ert-deftest portal-linux-module-says-what-linux-lacks ()
   ;; Batch Emacs has opened no display, which the backend asks GDK.

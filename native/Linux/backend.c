@@ -13,6 +13,9 @@
      other kind.  Creating a view asks it first, so that failure already
      tells an Emacs that could never show a view from one that only waits
      for views to be written.
+   - ghostty_start, which starts Ghostty's library, linked from Portal's own
+     build of it, with the resources installed beside this module; and
+     portal_terminal_engine, which describes it.
    - portal_status_hide, which hides a panel that is never shown.
 
    What is not, and what each operation waits for:
@@ -21,7 +24,8 @@
      frame.  Timers come with them: portal_timer_start starts none here, so
      nothing the core schedules ever runs.  Nothing can schedule yet, as
      only views and connections do.
-   - Terminals, on Ghostty's library, and web views, on WebKitGTK.
+   - Terminals, on the Ghostty that ghostty_start starts, and web views,
+     on WebKitGTK.
    - Message sockets, which carry Rex connections.
    - System-wide keys, posted keys and the status panel, which Wayland gives
      a client no direct way to do.
@@ -31,13 +35,19 @@
    GTK3 is not a choice: this code runs inside Emacs's process, whose
    toolkit it is, and uses the GTK that Emacs has loaded and initialized.
    It never calls gtk_init. */
+/* dladdr and realpath. */
+#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <locale.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include <gdk/gdk.h>
 #include <gdk/gdkwayland.h>
+#include <ghostty.h>
 #include <wayland-client.h>
 
 #include "portal.h"
@@ -78,6 +88,166 @@ static struct wl_display *wayland_display(portal_text *error)
         return NULL;
     }
     return gdk_wayland_display_get_wl_display(display);
+}
+
+/* A copy of the text FORMAT makes, allocated with malloc, or NULL. */
+static char *text_of(const char *format, ...)
+{
+    va_list arguments;
+    va_start(arguments, format);
+    int length = vsnprintf(NULL, 0, format, arguments);
+    va_end(arguments);
+    char *text = length < 0 ? NULL : malloc((size_t) length + 1);
+    if (text) {
+        va_start(arguments, format);
+        vsnprintf(text, (size_t) length + 1, format, arguments);
+        va_end(arguments);
+    }
+    return text;
+}
+
+/* Whether PATH, in DIRECTORY, is a directory. */
+static bool has_directory(const char *directory, const char *path)
+{
+    char *name = text_of("%s/%s", directory, path);
+    struct stat status;
+    bool found = name && !stat(name, &status) && S_ISDIR(status.st_mode);
+    free(name);
+    return found;
+}
+
+/* Ghostty's resources, as the build installs them beside this module: the
+   shell integration and themes in ghostty-linux/share/ghostty, which
+   GHOSTTY_RESOURCES_DIR names, and the terminfo database in share/terminfo
+   beside it, where Ghostty looks for it.  An installed Portal keeps that
+   directory with the module, as the macOS bundle keeps them inside itself.
+   Return the directory, allocated with malloc, or NULL with *ERROR set. */
+static char *ghostty_resources(portal_text *error)
+{
+    Dl_info info;
+    char *module = NULL;
+    if (!dladdr((void *) ghostty_resources, &info) || !info.dli_fname ||
+        !(module = realpath(info.dli_fname, NULL))) {
+        fail(error, "Portal cannot find where its module is installed");
+        return NULL;
+    }
+    *strrchr(module, '/') = '\0';
+    char *directory = text_of("%s/ghostty-linux/share/ghostty", module);
+    free(module);
+    if (!directory)
+        fail(error, "Portal is out of memory");
+    else if (!has_directory(directory, "shell-integration") ||
+             !has_directory(directory, "../terminfo")) {
+        fail(error, "Portal's build lacks Ghostty's resources in %s: build Portal again",
+             directory);
+        free(directory);
+        directory = NULL;
+    }
+    return directory;
+}
+
+/* Start Ghostty's library with Portal's own resources; set *RESOURCES to
+   their directory, which GHOSTTY_RESOURCES_DIR now names.
+
+   Ghostty's start changes the whole process, which is Emacs's: it ignores
+   SIGPIPE, raises the limit of open files and sets the locale from the
+   environment.  The locale is put back, since Emacs keeps LC_NUMERIC at
+   "C" for its printing of numbers; the rest stays.  So batch Emacs, which
+   does not ignore SIGPIPE itself, does from then on. */
+static bool ghostty_open(char **resources, portal_text *error)
+{
+    char *directory = ghostty_resources(error);
+    if (!directory)
+        return false;
+    /* Ghostty reads it as it starts, and then looks nowhere else: nothing of
+       an installed Ghostty is used.  Emacs's process-environment, which its
+       own subprocesses get, is not changed. */
+    if (setenv("GHOSTTY_RESOURCES_DIR", directory, 1)) {
+        free(directory);
+        return fail(error, "Portal cannot set GHOSTTY_RESOURCES_DIR");
+    }
+    /* Emacs's arguments are not Ghostty's: one such as +10, a line number to
+       Emacs, would read as an action, and fail the start. */
+    char *locale = text_of("%s", setlocale(LC_ALL, NULL));
+    char program[] = "portal", *arguments[] = {program, NULL};
+    int status = ghostty_init(1, arguments);
+    if (locale)
+        setlocale(LC_ALL, locale);
+    free(locale);
+    if (status) {
+        free(directory);
+        return fail(error, "Ghostty's library failed to start");
+    }
+    *resources = directory;
+    return true;
+}
+
+/* Ghostty's library once started, or why it could not start.  Only Emacs's
+   main thread starts it, from a module function, so it needs no lock. */
+static struct {
+    bool tried;
+    char *resources; /* GHOSTTY_RESOURCES_DIR, once started. */
+    portal_text failure; /* Why it did not start. */
+} ghostty;
+
+/* Start Ghostty's library, once.  After a failed start, fail each time with
+   the same message: Ghostty's global state is never started twice. */
+static bool ghostty_start(portal_text *error)
+{
+    if (!ghostty.tried) {
+        ghostty.tried = true;
+        ghostty_open(&ghostty.resources, &ghostty.failure);
+    }
+    return ghostty.resources ||
+           fail(error, "%s", ghostty.failure.data ? ghostty.failure.data : "Portal is out of memory");
+}
+
+/* TEXT, LENGTH bytes, as a JSON string allocated with malloc, or NULL. */
+static char *json_string(const char *text, size_t length)
+{
+    /* Each byte escaped at most as \u00XX, two quotes and a NUL. */
+    char *json = malloc(6 * length + 3), *end = json;
+    if (!json)
+        return NULL;
+    *end++ = '"';
+    for (size_t i = 0; i < length; i++) {
+        unsigned char c = (unsigned char) text[i];
+        if (c == '"' || c == '\\') {
+            *end++ = '\\';
+            *end++ = (char) c;
+        } else if (c < 0x20) {
+            end += snprintf(end, 7, "\\u%04x", c);
+        } else {
+            *end++ = (char) c;
+        }
+    }
+    *end++ = '"';
+    *end = '\0';
+    return json;
+}
+
+bool portal_terminal_engine(portal_text *json, portal_text *error)
+{
+    if (!ghostty_start(error))
+        return false;
+    ghostty_info_s info = ghostty_info();
+    const char *mode = info.build_mode == GHOSTTY_BUILD_MODE_DEBUG          ? "Debug"
+                       : info.build_mode == GHOSTTY_BUILD_MODE_RELEASE_SAFE ? "ReleaseSafe"
+                       : info.build_mode == GHOSTTY_BUILD_MODE_RELEASE_FAST ? "ReleaseFast"
+                                                                            : "ReleaseSmall";
+    char *version = json_string(info.version, info.version_len);
+    char *resources = json_string(ghostty.resources, strlen(ghostty.resources));
+    char *text = version && resources
+                     ? text_of("{\"engine\":\"ghostty\",\"version\":%s,\"mode\":\"%s\","
+                               "\"resources\":%s}",
+                               version, mode, resources)
+                     : NULL;
+    free(version);
+    free(resources);
+    if (!text)
+        return fail(error, "Portal is out of memory");
+    *json = (portal_text) {text, strlen(text)};
+    return true;
 }
 
 /* What each group of operations says until it is written. */

@@ -23,8 +23,9 @@ if [ -z "${PORTAL_BUILD_LOCKED:-}" ]; then
 fi
 
 # --prune, first, builds only what Portal runs and then deletes everything else:
-# the build tree and the host's packages, about 750 MB.  Installed packages use
-# it; the next build starts afresh from SwiftPM's and Bun's download caches.
+# the build tree and the host's packages, about 750 MB, and on Linux Ghostty's
+# source and Zig's cache, over 1 GB more.  Installed packages use it; the next
+# build starts afresh from SwiftPM's, Zig's and Bun's download caches.
 prune=
 if [ "${1:-}" = --prune ]; then
     prune=1
@@ -54,9 +55,19 @@ cmake --build --preset dev
 if [ -n "$prune" ]; then
     # Keep the outputs, the build record and log, the lock and the Bun cache.
     find build -mindepth 1 -maxdepth 1 ! -name portal.bundle ! -name portal.so \
-        ! -name portal-host \
+        ! -name ghostty-linux ! -name portal-host \
         ! -name licenses ! -name portal-build.eld ! -name portal-build.log \
         ! -name .build.lock ! -name tools -exec rm -rf {} +
+    # Of Ghostty's install on Linux, what portal.so loads: the library, by its
+    # file and its soname, and the resources.
+    if [ -d build/ghostty-linux ]; then
+        find build/ghostty-linux -mindepth 1 -maxdepth 1 ! -name lib ! -name share \
+            -exec rm -rf {} +
+        find build/ghostty-linux/lib -mindepth 1 -maxdepth 1 ! -name ghostty-internal.so \
+            ! -name libghostty.so -exec rm -rf {} +
+        find build/ghostty-linux/share -mindepth 1 -maxdepth 1 ! -name ghostty \
+            ! -name terminfo -exec rm -rf {} +
+    fi
     rm -rf host/node_modules host/.generated
     echo "Removed the intermediate files: the next build starts afresh"
 fi

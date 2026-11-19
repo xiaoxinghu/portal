@@ -283,26 +283,95 @@ if(APPLE)
         VERBATIM)
 else()
     # Linux: this project compiles the one native module itself, the C bindings
-    # and core with the GTK3 backend, into portal.so. No Swift and, until the
-    # terminal is written, no Ghostty.
+    # and core with the GTK3 backend, into portal.so, linked with Ghostty's
+    # library. No Swift.
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(portal_platform REQUIRED IMPORTED_TARGET gtk+-3.0 wayland-client)
     find_package(Threads REQUIRED)
+
+    # Ghostty's embedding library, which no release ships for Linux, built by
+    # tools/build-ghostty-linux.sh from the release native/ghostty.json pins
+    # with native/patches/ghostty applied. It installs the library, its header
+    # and the resources in build/ghostty-linux, which an installed Portal keeps
+    # beside portal.so: the module finds the library by its rpath, and the
+    # resources from its own place. The script runs Zig every time, so it runs
+    # only when the pin, a patch or the script changed, or an output is gone.
+    # To build changes made in its copy, build/ghostty, run the script itself.
+    set(ghostty_pin "${CMAKE_SOURCE_DIR}/native/ghostty.json")
+    file(READ "${ghostty_pin}" ghostty_pin_json)
+    string(JSON ghostty_version GET "${ghostty_pin_json}" version)
+    string(JSON ghostty_zig GET "${ghostty_pin_json}" zig)
+    if(DEFINED CACHE{ZIG} AND NOT EXISTS "${ZIG}")
+        message(STATUS "Recorded Zig ${ZIG} no longer exists; searching again")
+        unset(ZIG CACHE)
+    endif()
+    if(DEFINED ENV{ZIG} AND NOT DEFINED CACHE{ZIG})
+        set(ZIG "$ENV{ZIG}" CACHE FILEPATH "The Zig that builds Ghostty's library")
+    endif()
+    find_program(ZIG NAMES zig)
+    if(NOT ZIG)
+        message(FATAL_ERROR "Ghostty ${ghostty_version} builds with Zig ${ghostty_zig}: \
+install it, or name it with ZIG")
+    endif()
+    find_program(TIC NAMES tic)
+    if(NOT TIC)
+        message(FATAL_ERROR "Ghostty's build compiles its terminfo with tic: install ncurses")
+    endif()
+    pkg_check_modules(ghostty_egl QUIET egl)
+    if(NOT ghostty_egl_FOUND)
+        message(FATAL_ERROR "Ghostty's library links EGL: install its development files, \
+pkg-config's egl, such as libglvnd's")
+    endif()
+    file(GLOB ghostty_patch_files CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/native/patches/ghostty/*.patch")
+    set(ghostty_prefix "${CMAKE_BINARY_DIR}/ghostty-linux")
+    set(ghostty_stamp "${CMAKE_BINARY_DIR}/ghostty-linux.stamp")
+    # build.sh configures on every build: an output deleted since makes the
+    # next one build the library again.
+    foreach(output lib/libghostty.so include/ghostty.h share/ghostty/shell-integration share/terminfo)
+        if(NOT EXISTS "${ghostty_prefix}/${output}")
+            file(REMOVE "${ghostty_stamp}")
+        endif()
+    endforeach()
+    add_custom_command(
+        OUTPUT "${ghostty_stamp}"
+        COMMAND "${CMAKE_COMMAND}" -E env "ZIG=${ZIG}"
+            sh "${CMAKE_SOURCE_DIR}/tools/build-ghostty-linux.sh"
+            --pin "${ghostty_pin}" --patches "${CMAKE_SOURCE_DIR}/native/patches/ghostty"
+            --source "${CMAKE_BINARY_DIR}/ghostty" --prefix "${ghostty_prefix}"
+        COMMAND "${CMAKE_COMMAND}" -E touch "${ghostty_stamp}"
+        BYPRODUCTS "${ghostty_prefix}/lib/libghostty.so" "${ghostty_prefix}/include/ghostty.h"
+        DEPENDS "${ghostty_pin}" ${ghostty_patch_files}
+            "${CMAKE_SOURCE_DIR}/tools/build-ghostty-linux.sh"
+        USES_TERMINAL
+        COMMENT "Building Ghostty ${ghostty_version}'s library with Zig: minutes the first time"
+        VERBATIM)
+    add_custom_target(ghostty-linux DEPENDS "${ghostty_stamp}")
+    add_library(ghostty SHARED IMPORTED)
+    set_target_properties(ghostty PROPERTIES
+        IMPORTED_LOCATION "${ghostty_prefix}/lib/libghostty.so"
+        IMPORTED_SONAME libghostty.so)
     add_library(portal-module MODULE native/Core/emacs.c ${PORTAL_CORE_SOURCES}
         native/Linux/backend.c)
     target_include_directories(portal-module PRIVATE
-        native/Core/include native/Core "${EMACS_INCLUDE}")
-    target_link_libraries(portal-module PRIVATE PkgConfig::portal_platform Threads::Threads)
+        native/Core/include native/Core "${EMACS_INCLUDE}" "${ghostty_prefix}/include")
+    target_link_libraries(portal-module PRIVATE PkgConfig::portal_platform Threads::Threads
+        ghostty ${CMAKE_DL_LIBS})
+    add_dependencies(portal-module ghostty-linux)
+    # The bindings offer portal--terminal-engine, which only this backend has.
+    target_compile_definitions(portal-module PRIVATE PORTAL_TERMINAL_ENGINE)
     target_compile_options(portal-module PRIVATE -Wall -Wextra -Werror)
     # A primitive of portal.h that the backend lacks fails the link here, not a
     # call in Emacs later; and only Emacs's entry points leave the module.
     set(module_exports "${CMAKE_SOURCE_DIR}/native/Linux/portal.map")
     target_link_options(portal-module PRIVATE
         -Wl,--no-undefined "-Wl,--version-script=${module_exports}")
+    # The library is found from the module's own place, build/portal.so or
+    # wherever an installed Portal keeps it, never from where it was built.
     set_target_properties(portal-module PROPERTIES
         C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
         PREFIX "" OUTPUT_NAME portal LINK_DEPENDS "${module_exports}"
-        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/linux")
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/linux"
+        BUILD_WITH_INSTALL_RPATH ON INSTALL_RPATH "$ORIGIN/ghostty-linux/lib")
     # Publish atomically: never overwrite a library already mapped by Emacs.
     add_custom_command(
         OUTPUT "${CMAKE_BINARY_DIR}/portal.so"
