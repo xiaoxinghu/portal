@@ -203,9 +203,12 @@ version the tree's pin names.  The stand-in pkg-config finds everything."
 
 (ert-deftest portal-build-ghostty-needs-the-pinned-zig-and-egl ()
   ;; Linux builds Ghostty's library: with the pin's Zig or a later patch
-  ;; release of it, as Ghostty's own build requires.
+  ;; release of it, as Ghostty's own build requires.  The build also
+  ;; searches Homebrew's and MacPorts' directories, where a Mac may have a
+  ;; Zig of its own: the stand-ins alone are searched here.
   (portal-build-test--with-root
-    (let ((process-environment (cons "ZIG" process-environment)))
+    (let ((process-environment (cons "ZIG" process-environment))
+          (portal-build--tool-directories nil))
       (dolist (version '("9.8.7" "9.8.10" "9.8.7-dev.3+abc"))
         (let ((exec-path (portal-build-test--tools version)))
           (should-not (portal-build--ghostty-problem))))
