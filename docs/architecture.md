@@ -491,6 +491,35 @@ pane, filled with the theme's background, with the terminal inside it at
 its bottom-left, sized to its grid. Everything else, its theme, text size,
 placement, input and lifetime, is any terminal view's.
 
+**A fed terminal's rules are written once, beside the backends.** Of what a
+platform adds to a fed terminal besides Ghostty's drawing, three things are
+rules with no graphics in them: the order of output and grids, a grid
+waiting for the output before it and holding the output after it until the
+terminal has taken it, a quarter of a second at most; the geometry, a
+terminal that holds a grid sized to it with Ghostty's 2-point padding and
+half a cell to spare and hung from its pane's bottom-left corner, and the
+grid its pane would hold; and the backlog's two marks, looked at again
+every 10 ms while the core waits. They are `native/Shared/fed-terminal.c`,
+over plain values: it asks a backend to parse bytes, wait until they are
+parsed, say how many wait, keep two timers and put the terminal at a
+rectangle in its pane, and makes the core's two reports itself. The
+`fed-terminal` suite checks it against a backend and a core the test plays.
+The Linux backend is to use it for its fed terminal; macOS still has the
+same rules, with the same numbers, in Swift in `native/Terminal.swift`
+(`flush`, `tookGrid`, `viewportResized`, `holdGrid`, `fitInPane`,
+`reportPane` and `FedBacklog`), until a Mac can build and run the switch.
+
+They stay beside the backends for now, as the message socket does. The
+better end is the core, as [ADR 0003](adr/0003-platform-interface-primitives.md)
+has it: the rules in `native/Core`, tested against the fake platform, and
+`portal.h` asking a platform only to parse bytes, say how many wait and put
+the terminal at a rectangle, and telling the core the cell's size, the
+pane's size and the grid taken, in place of `portal_terminal_feed` and
+`portal_terminal_hold_grid` doing it all. That changes `portal.h` and the
+Swift together, which needs a Mac; once both backends call
+`fed-terminal.c`, the move is mostly its backend table becoming
+primitives.
+
 Lisp opens one in a block's buffer the first time a window shows the
 buffer, and calls `portal--rex-show` with the view's target, the
 connection and the block. From then on, in `native/Core/rex.c`, the core

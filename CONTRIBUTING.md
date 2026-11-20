@@ -185,9 +185,13 @@ sh test/linux-follow.sh terminal
 
 CTest leaves out the suite of the macOS Ghostty wrapper, `libghostty-spm`,
 and of the macOS VM runner, and adds `linux-module`, which loads the built
-module in batch Emacs, and `message-socket`, the
+module in batch Emacs; `message-socket`, the
 [portable message socket](docs/architecture.md#rex-connections) against a
-server the test plays. The Python tests skip those of Swift helpers and of
+server the test plays; `fed-terminal`, a
+[fed terminal's rules](docs/architecture.md#rex-connections) against a
+backend the test plays; and `shared-macos`, which compiles each C file of
+`native/Shared` for macOS with Zig's cross-compile, since nothing here runs
+them on a Mac. The Python tests skip those of Swift helpers and of
 the macOS Ghostty wrapper. `linux-gui.sh` runs the views, their input and
 terminals in a graphical Emacs, and `linux-follow.sh` records a view
 following its pane and checks every frame, and with `terminal` does so for a

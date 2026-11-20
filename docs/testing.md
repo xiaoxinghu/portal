@@ -552,6 +552,17 @@ graphical one on macOS alone:
   values. Build it with `-fsanitize=thread`, and with
   `-fsanitize=address,undefined`, after changing the socket: its threads
   share a lock, a pipe and a count.
+- `fed-terminal`, on Linux, runs a fed terminal's rules,
+  `native/Shared/fed-terminal.c`, with no Emacs, no window and no surface
+  ([portal-fed-terminal-tests.c](../test/portal-fed-terminal-tests.c)):
+  a backend and a core the test plays write each call down, and each test
+  compares them line by line with what should have happened. The order with
+  a grid between outputs, a grid taken late and grids in a row; the
+  rectangle and the pane's grid at scales 1 and 2; a backlog crossing both
+  marks, its crossings heard out of order. Build it with
+  `-fsanitize=address,undefined` after changing the rules. `shared-macos`
+  compiles that file and the socket for macOS, on Apple silicon and Intel,
+  with Zig.
 - `rex` runs `portal-rex.el` on the built module against the fake server, in
   batch Emacs: message sockets need no window. Batch Emacs runs no main run
   loop, so the module's `rex ID` record never arrives there, and nor do its
