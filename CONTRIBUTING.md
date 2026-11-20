@@ -29,8 +29,7 @@ cmake --build --preset dev
 On macOS, CMake locates Emacs, builds the Bun host, and invokes the native Swift package;
 [on Linux](#building-on-linux) it compiles a C module instead.
 `native/Package.swift` links three targets into one module: `PortalCore`,
-the portable C core; `PortalShared`, the C of `native/Shared`, the message socket and a fed
-terminal's rules; and `Portal`, the Swift backend containing the host, web, terminal and input code. There are no separate feature libraries
+the portable C core, a fed terminal's rules among them; `PortalShared`, the C of `native/Shared`, the message socket; and `Portal`, the Swift backend containing the host, web, terminal and input code. There are no separate feature libraries
 or plugin builds. Ghostty comes through its Swift wrapper, libghostty-spm, which
 Portal patches; [the Ghostty dependency](#the-ghostty-dependency) says how it is
 pinned. Configuration writes the discovered header path to
@@ -141,8 +140,9 @@ sockets: [the architecture notes](docs/architecture.md#views-on-linux) say
 how a view gets into a frame and how a terminal's frames reach it, and
 [where the sockets are](docs/architecture.md#rex-connections), in
 [`native/Shared`](native/Shared), which holds what a backend needs nothing
-of its platform for: the message sockets, and a fed terminal's rules, which
-the fed terminals (a Rex block's screen) of both backends follow. A web view, the
+of its platform for: the message sockets. A fed terminal's rules, which
+the fed terminals (a Rex block's screen) of both backends follow, are the
+core's, in `native/Core/fed.c`. A web view, the
 system-wide keys, the status panel and the launcher fail, saying what Linux
 lacks. A view can also show a test
 pattern, made with the option `:test-pattern`, which exists for the checks

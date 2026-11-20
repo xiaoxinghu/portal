@@ -475,59 +475,50 @@ core is its pty. On macOS the platform makes it from libghostty-spm's
 (see [Contributing](../CONTRIBUTING.md#the-ghostty-dependency)); on Linux
 from the same two Ghostty patches, a host-managed surface fed with
 `ghostty_surface_write_buffer_replay` by a thread of Portal's own
-([Terminals on Linux](#terminals-on-linux)). Either way it gives the core
-three things: it parses the bytes the core feeds it
-(`portal_terminal_feed`), off the main thread and in order, answering no
-query in them, since the server has answered each already and a second
-answer would reach the program as typing; it hands the core what it would
-write to its program, keys, mouse reports, pastes and its own reports, in
-order on the main thread (`portal_terminal_input`); it holds the grid the
-core gives it (`portal_terminal_hold_grid`), whatever its pane's size; and
-it reports the grid its pane would hold, with the cells' size in pixels
-(`portal_terminal_grid`); and it reports when it has more than half a
-megabyte fed and not yet parsed, and when it is down to a quarter of that
-again (`portal_terminal_backlog`). On macOS the view Portal places is a clipping
-pane, filled with the theme's background, with the terminal inside it at
-its bottom-left, sized to its grid; on Linux the view's frames are placed
-in its pane over a backdrop of that background
+([Terminals on Linux](#terminals-on-linux)). Either way it parses the
+bytes the core gives it (`portal_terminal_parse`), off the main thread and
+in order, answering no query in them, since the server has answered each
+already and a second answer would reach the program as typing; it hands
+the core what it would write to its program, keys, mouse reports, pastes
+and its own reports, in order on the main thread (`portal_terminal_input`);
+and it does what the core's rules for it ask, below. On macOS the view
+Portal places is a clipping pane, filled with the theme's background, with
+the terminal inside it at its bottom-left, sized to its grid; on Linux the
+view's frames are placed in its pane over a backdrop of that background
 ([Views on Linux](#views-on-linux)). Everything else, its theme, text size,
 placement, input and lifetime, is any terminal view's.
 
-**A fed terminal's rules are written once, beside the backends.** Of what a
-platform adds to a fed terminal besides Ghostty's drawing, three things are
-rules with no graphics in them: the order of output and grids, a grid
-waiting for the output before it and holding the output after it until the
-terminal has taken it, a quarter of a second at most; the geometry, a
-terminal that holds a grid sized to it with Ghostty's 2-point padding and
-half a cell to spare and hung from its pane's bottom-left corner, and the
-grid its pane would hold; and the backlog's two marks, looked at again
-every 10 ms while the core waits. Ghostty's padding is told in pixels, by
-default 2 for each of the pane's units as on macOS; Ghostty on Linux counts
-96 pixels to the inch and keeps whole ones, 5 at scale 2. They are `native/Shared/fed-terminal.c`,
-over plain values: it asks a backend to parse bytes, wait until they are
-parsed, say how many wait, keep two timers and put the terminal at a
-rectangle in its pane, and makes the core's two reports itself. The
-`fed-terminal` suite checks it against a backend and a core the test plays.
-Both backends use it. On macOS, `FedRules` in `native/Terminal.swift`
-gives it the package's in-memory session to parse, `Timer`s, and the
-terminal's frame inside its clipping pane; the Swift package compiles the
-file as its C target `PortalShared`, whose `module.modulemap` is what Swift
-imports. The padding a terminal's configuration gives Ghostty is the
-file's `PORTAL_FED_PADDING`, on both systems and for every terminal, so a
-fed terminal's numbers are in that file alone.
-
-They stay beside the backends for now, as the message socket does. The
-better end is the core, as [ADR 0003](adr/0003-platform-interface-primitives.md)
-has it: the rules in `native/Core`, tested against the fake platform, and
-`portal.h` asking a platform only to parse bytes, say how many wait and put
-the terminal at a rectangle, and telling the core the cell's size, the
-pane's size and the grid taken, in place of `portal_terminal_feed` and
-`portal_terminal_hold_grid` doing it all; its timers would be the core's
-`portal_timer_start`. With both backends calling `fed-terminal.c`, that
-move is the backend table becoming primitives, but it changes `portal.h`,
-the core, the fake platform and both backends at once, and needs both
-systems' graphical checks: it is a change of its own, not part of the
-Mac's switch.
+**A fed terminal's rules are the core's.** Of what a fed terminal needs
+besides Ghostty's drawing, three things are rules with no graphics in
+them, and `native/Core/fed.c` keeps them, as
+[ADR 0003](adr/0003-platform-interface-primitives.md) has it: the order of
+output and grids, a grid waiting for the output before it and holding the
+output after it until the terminal has taken it, a quarter of a second at
+most; the geometry, a terminal that holds a grid sized to it with
+Ghostty's 2-point padding and half a cell to spare and hung from its
+pane's bottom-left corner, and the grid its pane would hold, which sizes
+the block; and the backlog, past half a megabyte given and not yet parsed
+the stream waiting unread until a quarter of that is left, looked at again
+every 10 ms meanwhile. Rex gives a block's output and grids to the rules
+(`portal_fed_feed`, `portal_fed_hold_grid`), and the rules ask the
+platform, with `portal.h`'s fed terminal primitives, to parse bytes
+(`portal_terminal_parse`), wait until they are parsed
+(`portal_terminal_drain`), say how many wait (`portal_terminal_pending`)
+and put the terminal at a rectangle in its pane (`portal_terminal_place`);
+their two timers are the core's `portal_timer_start`. The platform tells
+them its pane, its scale and Ghostty's padding in pixels
+(`portal_terminal_pane`), its cell (`portal_terminal_cell`), each grid it
+takes (`portal_terminal_took_grid`) and each crossing of the backlog's
+marks (`portal_terminal_backlog`, with the pure
+`portal_terminal_backlog_crossed` for a platform that counts the bytes
+itself, as Linux's feeder does). Ghostty's padding is 2 points
+(`PORTAL_TERMINAL_PADDING`) for every terminal on both systems, which is 2
+pixels for each of the pane's units on macOS, and on Linux, where Ghostty
+counts 96 pixels to the inch and keeps whole ones, 5 at scale 2. The
+`fed-core` suite runs the rules against the fake platform, which takes the
+grid it is placed at as a terminal would. On macOS the package's in-memory
+session parses, counts and says when its count crosses the marks, and the
+terminal's frame inside its clipping pane is the rectangle.
 
 Lisp opens one in a block's buffer the first time a window shows the
 buffer, and calls `portal--rex-show` with the view's target, the
@@ -855,10 +846,10 @@ and to the rules. The core's output goes on a queue that the terminal's
 feeder thread parses with `ghostty_surface_write_buffer_replay`, 64 KiB at a
 time so that the renderer draws between, counting the bytes not parsed yet,
 which the backlog rule reads; macOS has the package's session for this.
-The rules (`native/Shared/fed-terminal.c`) decide the rest: the order of
+The core's rules (`native/Core/fed.c`) decide the rest: the order of
 output and grids, where the terminal goes in its pane, sized to its grid or
-to the pane, and when the core hears of a backlog. Their timers are GLib's,
-and where they put the terminal is its surface's size and its view's
+to the pane, and when the stream waits for a backlog. Where they put the
+terminal is its surface's size and its view's
 placement, over a backdrop of the theme's background at the terminal's
 opacity; below an opacity of 1 Ghostty draws its own background clear, as
 on macOS. A pointer's place is the surface's, from where the terminal is.
