@@ -10,6 +10,7 @@
 
 (require 'ert)
 (require 'portal-rex)
+(require 'portal-rex-list)
 (require 'portal-fake-rex)
 
 (defun portal-rex-gui-tests--wait (done &optional seconds)
@@ -1158,6 +1159,42 @@ Each is (WINDOW . MARK).")
                         (portal-rex-gui-tests--wait
                          (lambda () (equal (current-message) line))))))))
         (message nil)
+        (mapc #'portal-rex-disconnect (portal-rex-connections))))))
+
+(ert-deftest portal-rex-gui-the-list-of-agents-follows-an-idle-emacs ()
+  :tags '(:gui)
+  ;; *Rex agents* left open in a window: an agent at work starts to ask,
+  ;; and its row says so, with no key pressed.
+  (portal-fake-rex-with (server)
+    (let* ((portal-rex-socket (portal-fake-rex-socket server))
+           (connection (portal-rex-connect))
+           (buffer (portal-rex-block-buffer connection "block:fake-1"))
+           (report (lambda (&rest record)
+                     (portal-fake-rex-command
+                      server :block_event "block:fake-1" :name "program_status_changed"
+                      :payload (list :id "" :record record :reason "report"))))
+           (row (lambda ()
+                  (with-current-buffer "*Rex agents*"
+                    (save-excursion
+                      (goto-char (point-min))
+                      (buffer-substring-no-properties (pos-bol) (pos-eol))))))
+           (inhibit-message t))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (portal-rex-list-agents)
+            (redisplay t)
+            (funcall report :state "working" :app "claude-code" :msg "Reading slides.ts")
+            (portal-rex-gui-tests--wait (lambda () (string-search "◌ working" (funcall row))))
+            (should (string-search (buffer-name buffer) (funcall row)))
+            (should (string-search "Reading slides.ts" (funcall row)))
+            (funcall report :state "blocked" :kind "question" :app "claude-code"
+                     :msg "Clean up the task now?")
+            (portal-rex-gui-tests--wait (lambda () (string-search "● question" (funcall row))))
+            (should (string-search "Clean up the task now?" (funcall row)))
+            (redisplay t)
+            (should (eq (window-buffer (selected-window)) (get-buffer "*Rex agents*"))))
+        (when (get-buffer "*Rex agents*") (kill-buffer "*Rex agents*"))
         (mapc #'portal-rex-disconnect (portal-rex-connections))))))
 
 (provide 'portal-rex-gui-tests)

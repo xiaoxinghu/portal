@@ -85,20 +85,19 @@ open, however the program's status has changed since.")
     ('error "failed")
     (state (symbol-name state))))
 
+(defun portal-terminal--status-cell (status)
+  "Return STATUS as a mark and a word in its state's face."
+  (let ((mark (alist-get (plist-get status :state) portal-terminal-status-marks))
+        (word (truncate-string-to-width (portal-terminal--status-word status) 12)))
+    (propertize (if mark (concat mark " " word) word)
+                'face (intern (format "portal-terminal-status-%s" (plist-get status :state))))))
+
 (defun portal-terminal--status-cells (statuses)
   "Return the status column for STATUSES, one string each, or nil.
 Each is a mark and a word in the state's face, padded to the same width;
 a nil status gives spaces.  Without any status there is no column."
   (when (delq nil (copy-sequence statuses))
-    (let* ((cells (mapcar (lambda (status)
-                            (and status
-                                 (let ((mark (alist-get (plist-get status :state)
-                                                        portal-terminal-status-marks))
-                                       (word (truncate-string-to-width
-                                              (portal-terminal--status-word status) 12)))
-                                   (propertize (if mark (concat mark " " word) word)
-                                               'face (intern (format "portal-terminal-status-%s"
-                                                                     (plist-get status :state)))))))
+    (let* ((cells (mapcar (lambda (status) (and status (portal-terminal--status-cell status)))
                           statuses))
            (width (apply #'max (mapcar #'string-width (delq nil (copy-sequence cells))))))
       (mapcar (lambda (cell)

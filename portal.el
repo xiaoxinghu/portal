@@ -38,6 +38,8 @@
 
 ;; Connects to no Rex server until `portal-rex-connect' is called.
 (require 'portal-rex)
+;; Lists nothing until `portal-rex-list-agents' is called.
+(require 'portal-rex-list)
 
 (defcustom portal-terminal-consult-auto-enable t
   "Whether loading Portal and Consult enables their terminal integration.
