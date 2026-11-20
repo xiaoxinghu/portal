@@ -16,7 +16,10 @@
 
 (let ((build (getenv "PORTAL_TEST_BUILD")))
   (unless build (error "Set PORTAL_TEST_BUILD to the build directory"))
-  (module-load (expand-file-name "portal.bundle/Contents/MacOS/portal.dylib" build)))
+  (module-load (expand-file-name (if (eq system-type 'darwin)
+                                     "portal.bundle/Contents/MacOS/portal.dylib"
+                                   "portal.so")
+                                 build)))
 
 (require 'portal-rex)
 (require 'portal-rex-parity
@@ -645,7 +648,9 @@ arrives as C-g does, by `quit-flag', the first time NATIVE is called."
       ;; A path no socket address holds.
       (let ((long (expand-file-name (make-string 120 ?a) (portal-fake-rex-directory server))))
         (write-region "" nil long nil 'silent)
-        (should (string-prefix-p "A socket's path is at most 103 bytes"
+        ;; As long as the system's socket address allows.
+        (should (string-prefix-p (format "A socket's path is at most %d bytes"
+                                         (if (eq system-type 'darwin) 103 107))
                                  (cadr (should-error (portal-rex-connect long)))))
         (should-not portal-rex--connections))
       ;; And then one that works.
@@ -1845,7 +1850,16 @@ It and those before it are taken: a later call finds only newer ones."
       (should (equal (cadr (should-error (portal-rex-session-rename connection "session:a"
                                                                     (make-string 129 ?x))
                                          :type 'user-error))
-                     "Cannot rename Rex session work: session.set_label: label must be at most 128 characters without control characters")))))
+                     "Cannot rename Rex session work: session.set_label: label must be at most 128 characters without control characters"))
+      ;; A label whose event is late, as a real server's sometimes is, is
+      ;; the session's all the same when the command returns: Emacs asks
+      ;; what the server calls it.  Here the event never comes.
+      (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "late")
+                                                 (:session_id "session:b" :label "games")])
+      (portal-fake-rex-command server :result "session.set_label" :payload '(:revision 9))
+      (portal-rex-session-rename connection "session:a" " late ")
+      (should (equal (portal-rex--session-label connection "session:a") "late"))
+      (should (equal (portal-rex-tests--names) '("*rex: games/shell*" "*rex: late/api*"))))))
 
 (ert-deftest portal-rex-session-destroy-asks-naming-the-blocks ()
   (portal-rex-tests--with (server)
@@ -2223,7 +2237,7 @@ The placeholders BODY leaves are killed, and the timers it arms cancelled."
         (portal-fake-rex-command server :upgrade "ok")
         (bookmark-prop-set "api" 'server "studio")
         (should (equal (cadr (should-error (funcall jump "api") :type 'user-error))
-                       "Cannot reach the Rex host studio: Portal connects only to the Rex server on this Mac"))
+                       "Cannot reach the Rex host studio: Portal connects only to the Rex server on this machine"))
         (should-not portal-rex--connections)))))
 
 (defvar desktop-buffer-ok-count)
@@ -2614,7 +2628,7 @@ in its order, giving the frame TABS where its frameset would."
         (should (equal (portal-rex-tests--said)
                        (concat
                         (format "Could not restore Rex block z/9: No Rex server is running: there is no socket at %s; " missing)
-                        "Could not restore Rex block home/far: Cannot reach the Rex host studio: Portal connects only to the Rex server on this Mac; "
+                        "Could not restore Rex block home/far: Cannot reach the Rex host studio: Portal connects only to the Rex server on this machine; "
                         (format "Could not restore Rex blocks work/old, work/api: Cannot connect to the Rex server at %s: The server refused the connection: HTTP/1.1 400 Bad Request" socket))))
         ;; Once the server takes connections, connecting restores what it
         ;; can, and says what has closed.

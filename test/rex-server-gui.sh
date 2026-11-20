@@ -7,8 +7,11 @@
 # fails the run. SELECTOR, an ERT regexp, narrows the tests.
 # Rex is private beta software, so this runs only where a Rex Server is:
 # PORTAL_TEST_REX names its rex program, or else the test VM's
-# /Applications/Rex Server.app or the one Rex's Mac app keeps. Elsewhere it
-# says it did not run and exits 77, which test/gui-all.sh reports as not run.
+# /Applications/Rex Server.app or the one Rex's Mac app keeps, or on Linux the
+# rex on PATH, which is the server too. Elsewhere it says it did not run and
+# exits 77, which test/gui-all.sh reports as not run. On Linux it runs on a
+# desktop of its own, as test/linux-gui.sh does, and the tests that need a
+# block's screen are skipped: Portal has no fed terminals there yet.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$root/test/gui-desktop.sh"
@@ -19,11 +22,17 @@ if [ -z "$rex" ]; then
         if [ -x "$candidate" ]; then rex=$candidate; break; fi
     done
 fi
+if [ -z "$rex" ] && [ "$(uname -s)" = Linux ]; then
+    rex=$(command -v rex || :)
+fi
 if [ -z "$rex" ]; then
     echo "Real Rex server checks not run: no Rex Server here; set PORTAL_TEST_REX to its rex program." >&2
     exit 77
 fi
 [ -x "$rex" ] || { echo "PORTAL_TEST_REX is not a program: $rex" >&2; exit 2; }
+if [ "$(uname -s)" = Linux ] && [ -z "${PORTAL_TEST_DESKTOP:-}" ]; then
+    PORTAL_TEST_REX=$rex exec sh "$root/test/linux-desktop.sh" sh "$0" "$@"
+fi
 echo "Rex Server: $rex, $(HOME=/var/empty "$rex" --autostart=false version | head -1)"
 # The servers' directories: nothing else runs from here.
 servers=$(mktemp -d /tmp/portal-rex.XXXXXX)
@@ -35,7 +44,8 @@ PORTAL_TEST_REX=$rex PORTAL_TEST_REX_DIRECTORY=$servers PORTAL_REX_SERVER_SELECT
     --eval '(portal-gui-ert-start
              (list (quote and) "^portal-rex-server-gui-"
                    (let ((focus (getenv "PORTAL_REX_SERVER_SELECTOR")))
-                     (if (equal focus "") t focus))))' || status=$?
+                     (if (equal focus "") t focus)))
+             (portal-rex-server-gui-tests-allowed-skips))' || status=$?
 left=$(pgrep -f "$servers/" || :)
 if [ -n "$left" ]; then
     echo "Rex servers left running, now killed:" >&2

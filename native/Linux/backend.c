@@ -18,6 +18,8 @@
      :test-pattern, of either kind, which the checks of the view machinery
      use.
    - Timers, on GLib's main loop, which Emacs runs.
+   - Message sockets, which carry Rex connections: the portable ones of
+     native/Shared, told of on that loop.
    - portal_status_hide, which hides a panel that is never shown.
 
    What is not, and what each operation waits for: it fails, saying what
@@ -26,7 +28,6 @@
    - Fed terminals, which show a Rex block: they need Ghostty patches of
      libghostty-spm's that Portal's Linux build does not apply.
    - Web views, on WebKitGTK.  Without :test-pattern, creating one fails.
-   - Message sockets, which carry Rex connections.
    - System-wide keys, posted keys and the status panel, which Wayland gives
      a client no direct way to do.
    - The launcher, which rests on the NS build of Emacs and has no Linux
@@ -50,6 +51,7 @@
 
 #include "linux-dmabuf-v1-client-protocol.h"
 #include "linux.h"
+#include "message-socket.h"
 #include "viewporter-client-protocol.h"
 
 bool portal_linux_fail(portal_text *error, const char *format, ...)
@@ -356,11 +358,6 @@ static bool no_launcher(portal_text *error)
     return portal_linux_fail(error, "Portal's launcher needs the macOS build of Emacs");
 }
 
-static bool no_sockets(portal_text *error)
-{
-    return portal_linux_fail(error, "Portal has no Rex connections on Linux yet");
-}
-
 static bool no_system_keys(portal_text *error)
 {
     return portal_linux_fail(error, "Portal has no system-wide keys on Linux yet");
@@ -502,39 +499,54 @@ bool portal_web_print(portal_view *web, const portal_string *file, portal_text *
     return no_web(error);
 }
 
-/* Message sockets.  Open fails, so the core has no socket to send on, read,
-   wait for or close. */
+/* Message sockets, which carry the core's Rex connections: the portable
+   ones of native/Shared/message-socket.c.  What is this backend's own is
+   the way from a socket's thread to the module thread: GLib's default main
+   context, which Emacs dispatches whenever it waits for or polls input in a
+   graphical session.  Batch Emacs runs no such loop, so there the core is
+   never told that a socket has something to read, and its caller waits for
+   each message with portal_socket_wait. */
+static gboolean socket_ready(gpointer data)
+{
+    portal_socket_ready(*(uint64_t *) data);
+    return G_SOURCE_REMOVE;
+}
+
+/* On the socket's thread: g_idle_add_full may be called from any. */
+static void socket_wake(uint64_t socket, void *context)
+{
+    (void) context;
+    uint64_t *copy = g_new(uint64_t, 1);
+    *copy = socket;
+    g_idle_add_full(G_PRIORITY_DEFAULT, socket_ready, copy, g_free);
+}
 
 bool portal_socket_open(uint64_t socket, portal_string path, portal_string resource,
                         portal_string protocol, bool binary, portal_text *error)
 {
-    (void) socket, (void) path, (void) resource, (void) protocol, (void) binary;
-    return no_sockets(error);
+    return portal_message_socket_open(socket, path, resource, protocol, binary, socket_wake, NULL,
+                                      error);
 }
 
 bool portal_socket_send(uint64_t socket, portal_string text, portal_text *error)
 {
-    (void) socket, (void) text;
-    return no_sockets(error);
+    return portal_message_socket_send(socket, text, error);
 }
 
 bool portal_socket_read(uint64_t socket, portal_text **messages, size_t *count, bool *ended,
                         int *code, portal_text *reason, portal_text *error)
 {
-    (void) socket, (void) messages, (void) count, (void) ended, (void) code, (void) reason;
-    return no_sockets(error);
+    return portal_message_socket_read(socket, messages, count, ended, code, reason, error);
 }
 
 bool portal_socket_wait(uint64_t socket, uint64_t milliseconds, bool *ready, portal_text *error)
 {
-    (void) socket, (void) milliseconds, (void) ready;
-    return no_sockets(error);
+    return portal_message_socket_wait(socket, milliseconds, ready, error);
 }
 
 bool portal_socket_close(uint64_t socket, portal_text *error)
 {
-    (void) socket;
-    return no_sockets(error);
+    return portal_message_socket_close(socket, error);
 }
 
 /* Timers, on GLib's default main context, which Emacs dispatches whenever

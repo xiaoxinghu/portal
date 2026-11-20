@@ -28,11 +28,13 @@
 
 (defun portal-real-rex--environment (directory)
   "Return `process-environment' for rex run by the server in DIRECTORY.
-Its home is in DIRECTORY, and no variable of Rex or XDG's leads it to
-another server or to the user's files."
+Its home is in DIRECTORY, and no variable of Rex, XDG's or zsh's leads
+it to another server or to the user's files: with ZDOTDIR set, a block's
+zsh would read the user's own startup files in that home."
   (cons (concat "HOME=" (expand-file-name "home" directory))
         (cl-remove-if (lambda (variable)
-                        (string-match-p "\\`\\(?:HOME\\|REX_[A-Z_]*\\|XDG_[A-Z_]*\\)=" variable))
+                        (string-match-p "\\`\\(?:HOME\\|ZDOTDIR\\|REX_[A-Z_]*\\|XDG_[A-Z_]*\\)="
+                                        variable))
                       process-environment)))
 
 (defun portal-real-rex--output (server)
@@ -46,6 +48,9 @@ another server or to the user's files."
                              (or (getenv "PORTAL_TEST_REX_DIRECTORY") temporary-file-directory))))
                        (make-temp-file "rex" t))))
     (make-directory (expand-file-name "home" directory))
+    ;; A home with no startup file of zsh's makes a zsh built with its
+    ;; new-user module, as Arch's is, ask how to write one before any prompt.
+    (write-region "" nil (expand-file-name "home/.zshrc" directory) nil 'silent)
     (portal-real-rex--run (portal-real-rex--make :directory directory
                                                  :socket (expand-file-name "s" directory)))))
 

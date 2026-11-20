@@ -135,11 +135,14 @@ GTK 3, `wayland-client` and Ghostty's library, which
 [the next section](#ghostty-on-linux) says how Portal builds. No Swift is
 involved.
 
-The backend has the view machinery, input, timers and terminals:
-[the architecture notes](docs/architecture.md#views-on-linux) say how a view
-gets into a frame and how a terminal's frames reach it. A web view, a fed
-terminal (a Rex block), the system-wide keys, the status panel and the
-launcher fail, saying what Linux lacks. A view can also show a test
+The backend has the view machinery, input, timers, terminals and message
+sockets: [the architecture notes](docs/architecture.md#views-on-linux) say
+how a view gets into a frame and how a terminal's frames reach it, and
+[where the sockets are](docs/architecture.md#rex-connections), in
+[`native/Shared`](native/Shared), which holds what a backend needs nothing
+of its platform for. A web view, a fed terminal (a Rex block's screen), the
+system-wide keys, the status panel and the launcher fail, saying what Linux
+lacks. A view can also show a test
 pattern, made with the option `:test-pattern`, which exists for the checks
 of the machinery. `native/Linux/linux.h` says which file has what, and
 `backend.c`'s first comment what is real and what each missing piece waits
@@ -180,14 +183,18 @@ sh test/linux-follow.sh
 sh test/linux-follow.sh terminal
 ```
 
-CTest leaves out the suites of the macOS module, `rex` and `libghostty-spm`,
+CTest leaves out the suite of the macOS Ghostty wrapper, `libghostty-spm`,
 and of the macOS VM runner, and adds `linux-module`, which loads the built
-module in batch Emacs. The Python tests skip those of Swift helpers and of
+module in batch Emacs, and `message-socket`, the
+[portable message socket](docs/architecture.md#rex-connections) against a
+server the test plays. The Python tests skip those of Swift helpers and of
 the macOS Ghostty wrapper. `linux-gui.sh` runs the views, their input and
 terminals in a graphical Emacs, and `linux-follow.sh` records a view
 following its pane and checks every frame, and with `terminal` does so for a
 terminal under output; both are in the default loop for a change to
-`native/Linux` or `portal-view.el`, and `sh test/gui-all.sh` runs both.
+`native/Linux` or `portal-view.el`, and `sh test/gui-all.sh` runs both, and
+the [real-server tier](docs/testing.md#against-a-real-rex-server) where
+`rex` is installed.
 They need Hyprland, and run on a desktop of their own, off your screen:
 [Testing Portal](docs/testing.md#linux-graphical-checks) says how.
 
@@ -424,7 +431,7 @@ On macOS it runs `test/views-gui.sh`, `test/input-gui.sh`, `test/launcher-gui.sh
 `test/terminal-shell-startup.sh`, `test/rex-server-gui.sh` and
 `test/package-gui.sh` in turn, after a failure too, and fails if any of them
 did; run one of those to repeat a single suite. On Linux it runs
-[the two Linux checks](#building-on-linux) the same way. In a VM the wrapper builds
+[the two Linux checks](#building-on-linux) and `test/rex-server-gui.sh` the same way. In a VM the wrapper builds
 once for all of them. `rex-server-gui.sh` checks Portal against a
 [real Rex server](docs/testing.md#against-a-real-rex-server); where none is
 installed it reports itself not run.

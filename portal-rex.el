@@ -43,9 +43,17 @@
   :group 'portal
   :prefix "portal-rex-")
 
-(defcustom portal-rex-socket "~/Library/Application Support/rex/server.sock"
-  "The Unix socket of this Mac's Rex server.
-`portal-rex-connect' connects to it unless given another."
+(defcustom portal-rex-socket
+  (if (eq system-type 'darwin)
+      "~/Library/Application Support/rex/server.sock"
+    (expand-file-name "rex/server.sock"
+                      (or (getenv "XDG_RUNTIME_DIR") (format "/run/user/%d" (user-uid)))))
+  "The Unix socket of this machine's Rex server.
+`portal-rex-connect' connects to it unless given another.  The default
+is where Rex keeps a user's own server: on macOS under
+~/Library/Application Support/rex, where Rex's app starts it, and on
+Linux in $XDG_RUNTIME_DIR/rex, where systemd's rex.socket listens and
+starts the server at the first connection."
   :type 'file)
 
 (defcustom portal-rex-timeout 5
@@ -566,7 +574,7 @@ returns what the session is called now.")
   "The directory of this buffer's block on its Rex server's machine, or nil.
 It is the last directory the block's program reported, or, until one
 does, that of its foreground process; nil until the buffer is first
-shown.  On this Mac's server it is also the buffer's `default-directory',
+shown.  On this machine's server it is also the buffer's `default-directory',
 as a terminal's directory is.  A block on another machine would keep its
 path here alone, leaving `default-directory' as it is.")
 
@@ -664,7 +672,7 @@ BEFORE is another session's ID; without it, the session goes last."
 (defun portal-rex--buffer-name (connection session-id label)
   "Return the name of the buffer of a block called LABEL.
 The block is in the session SESSION-ID on CONNECTION's server.  Every
-connection is to a server on this Mac, so the name carries no host."
+connection is to a server on this machine, so the name carries no host."
   (format "*rex: %s/%s*" (or (portal-rex--session-label connection session-id) session-id)
           label))
 
@@ -1013,7 +1021,7 @@ says why; one whose stream ended keeps its last screen."
 ;; What the block's terminal reports, its title, directory, program and
 ;; exit, reaches its buffer as a terminal's does: the native module follows
 ;; the block's events and describes them as the terminal's, so
-;; `portal-terminal-metadata' has them, and a directory from this Mac
+;; `portal-terminal-metadata' has them, and a directory from this machine
 ;; becomes `default-directory'.
 
 (defun portal-rex--terminal-changed (state)
@@ -1840,7 +1848,7 @@ The answer, to `portal-rex--attached', makes the connection ready."
 ;;;###autoload
 (defun portal-rex-connect (&optional socket)
   "Connect to the Rex server on the Unix socket SOCKET, and return the connection.
-SOCKET defaults to `portal-rex-socket', this Mac's server; with a prefix
+SOCKET defaults to `portal-rex-socket', this machine's server; with a prefix
 argument, read it.  Emacs can be connected to several servers at once,
 and connecting again to one returns the connection it has.
 
@@ -2061,7 +2069,7 @@ on it carry on; requests still waiting fail with the code
 
 ;;;###autoload
 (defcustom portal-rex-connect-at-startup nil
-  "Whether to connect to this Mac's Rex server once Emacs has started.
+  "Whether to connect to this machine's Rex server once Emacs has started.
 The server is `portal-rex-socket'.  Emacs does not wait for it: a server
 that is slow or stopped delays nothing, and Emacs says once why it could
 not connect.  Restoring a desktop that holds Rex buffers connects to
@@ -2112,7 +2120,7 @@ SERVER is as a record names it: a socket's file name, or the label of a
 host in Rex's host list, which Portal cannot reach yet."
   (if (file-name-absolute-p server)
       (expand-file-name server)
-    (user-error "Cannot reach the Rex host %s: Portal connects only to the Rex server on this Mac" server)))
+    (user-error "Cannot reach the Rex host %s: Portal connects only to the Rex server on this machine" server)))
 
 (defun portal-rex--restorable ()
   "Make bookmarks and the desktop keep the current buffer's block.
@@ -2127,7 +2135,7 @@ The buffer is a block's, or a placeholder."
 Restoring a desktop makes one for each Rex block it held.  Once Emacs
 connects to the block's server, the buffer becomes the block's, in the
 windows that show it; a block that has closed takes its placeholder with
-it.  \\[portal-rex-connect] connects to this Mac's server.")
+it.  \\[portal-rex-connect] connects to this machine's server.")
 
 (defun portal-rex--make-placeholder (name record why)
   "Make and return a placeholder called NAME for RECORD's block.
@@ -2278,8 +2286,9 @@ This Mac's server too, when `portal-rex-connect-at-startup' says so."
 ;;;###autoload
 (progn
   (defun portal-rex-at-startup ()
-    "Connect to this Mac's Rex server, if `portal-rex-connect-at-startup' says so.
-On `emacs-startup-hook'.  Emacs does not wait for the server."
+    "Connect to this machine's Rex server, if the user asked for that.
+The option is `portal-rex-connect-at-startup'.  On `emacs-startup-hook'.
+Emacs does not wait for the server."
     (when (bound-and-true-p portal-rex-connect-at-startup)
       (require 'portal-rex)
       (portal-rex--restore-soon)))
@@ -2536,7 +2545,29 @@ it made the session."
                      (format "Cannot rename Rex session %s"
                              (portal-rex--session-name connection session-id))
                      "session.set_label" (list :session_id session-id :label (or label "")))
+    ;; Its event usually comes before the answer, and the session has its
+    ;; label by now; if it has not, or the server chose the label, ask.
+    (unless (and label (not (string-empty-p (string-trim label)))
+                 (equal (portal-rex--session-label connection session-id) (string-trim label)))
+      (portal-rex--follow-session-label connection session-id))
     nil))
+
+(defun portal-rex--follow-session-label (connection session-id)
+  "Call the session SESSION-ID of CONNECTION what its server calls it now.
+The event of a new label may come after the answer to the call that set
+it, as a real server's sometimes does: this asks for the server's
+sessions, and renames the session's buffers as the event will.  A server
+that does not say changes nothing, and the event still comes."
+  (when-let* ((listed (condition-case nil
+                          (portal-rex-call connection "session.list")
+                        (portal-rex-error nil)))
+              (session (seq-find (lambda (known) (equal (plist-get known :session_id) session-id))
+                                 (plist-get listed :sessions)))
+              (label (plist-get session :label))
+              ((stringp label))
+              ((not (equal label (portal-rex--session-label connection session-id)))))
+    (portal-rex--label-session connection session-id label)
+    (mapc #'portal-rex--rename-buffer (portal-rex-buffers connection session-id))))
 
 ;;;###autoload
 (defun portal-rex-session-destroy (connection session-id &optional confirm)

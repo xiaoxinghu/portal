@@ -30,6 +30,7 @@ themselves and need no Rex installed.
 - [Receive events](#receive-events)
 - [When a connection is lost](#when-a-connection-is-lost)
 - [Ghostty versions](#ghostty-versions)
+- [On Linux](#on-linux)
 - [What is not built](#what-is-not-built)
 
 For the words used here, see [the domain vocabulary](../CONTEXT.md#rex); for
@@ -37,14 +38,16 @@ where the code sits, [Rex connections](architecture.md#rex-connections).
 
 ## Connect and disconnect
 
-`M-x portal-rex-connect` connects to the Rex server on this Mac, through its
-Unix socket, `~/Library/Application Support/rex/server.sock`. That is where
-Rex's Mac application starts its server; set `portal-rex-socket` if yours
+`M-x portal-rex-connect` connects to the Rex server on this machine, through
+its Unix socket. On macOS that is
+`~/Library/Application Support/rex/server.sock`, where Rex's Mac application
+starts its server; on Linux, `$XDG_RUNTIME_DIR/rex/server.sock`, where
+[systemd listens for it](#on-linux). Set `portal-rex-socket` if yours
 listens elsewhere. With a prefix argument the command reads a socket's path
 instead, and from Lisp it takes one:
 
 ```elisp
-(portal-rex-connect)                        ; this Mac's server
+(portal-rex-connect)                        ; this machine's server
 (portal-rex-connect "~/elsewhere/server.sock")
 ```
 
@@ -866,8 +869,30 @@ lacks, and whether a newer release would help. It is the only check there is;
 [Contributing](../CONTRIBUTING.md#the-ghostty-dependency) says how to bump the
 pin when it would.
 
+## On Linux
+
+On Linux Emacs connects to a Rex server and does everything here but show
+a block's screen. Each block has its buffer, which follows the server; the
+commands make, rename and destroy sessions, start terminals and end
+blocks; a block's program says what it is doing, in the mode line, the
+echo area and the pickers; and bookmarks and the desktop restore the
+blocks' buffers. A window that shows a block's buffer shows its text, which
+says which block it is, and the echo area says why there is no more:
+"Portal has no fed terminals on Linux yet". So a block's title, directory
+and program, which Emacs learns once a window shows its screen, stay
+unknown there too.
+
+Rex's package for Linux is one program, `rex`, the server and its command
+line, with no application. `systemctl --user enable --now rex.socket` has
+systemd listen at `$XDG_RUNTIME_DIR/rex/server.sock`, Portal's default
+there, and start the server at the first connection, Emacs's included.
+A record in a bookmark or a desktop names its server by that socket's
+path, which differs between a Mac and a Linux machine as between any two
+machines.
+
 ## What is not built
 
 Portal's Rex client is being built in steps. Not built yet:
 
+- A block's screen on Linux, as [above](#on-linux).
 - Servers on other machines.
