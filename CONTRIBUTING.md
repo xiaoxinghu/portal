@@ -251,26 +251,69 @@ Ghostty to fetch the tag from in place of the network.
 
 The patches today:
 
-- `0001-build-link-the-GL-and-EGL-loaders-into-an-OpenGL-lib.patch` compiles
+- `0001-termio-a-host-managed-backend-that-feeds-a-surface-w.patch` adds
+  `GHOSTTY_SURFACE_IO_BACKEND_HOST_MANAGED`, a surface that runs no program:
+  the host writes its output in with `ghostty_surface_write_buffer` and ends it
+  with `ghostty_surface_process_exit`, and the surface hands what it would
+  have written to a pty, and each new grid, to the `receive_buffer` and
+  `receive_resize` callbacks given with it. A Rex block's screen is such a
+  surface.
+- `0002-embedded-replay-a-host-s-output-without-answering-it.patch` adds
+  `ghostty_surface_write_buffer_replay`, which parses as
+  `ghostty_surface_write_buffer` does and answers no query in what it is fed:
+  a Rex server has answered them already.
+- `0003-build-link-the-GL-and-EGL-loaders-into-an-OpenGL-lib.patch` compiles
   glad, the OpenGL and EGL loader, into the library. Ghostty's build compiles it
   into executables only, so the library as built cannot be linked. It is
   Ghostty's bug: drop the patch once a pinned release has fixed it.
-- `0002-build-install-the-resources-with-the-Linux-library.patch` installs the
+- `0004-build-install-the-resources-with-the-Linux-library.patch` installs the
   resources, which Ghostty's build installs only with an executable, and
   leaves out the desktop file, services and icons of the application.
-- `0003-embedded-a-Linux-platform-whose-host-presents-the-re.patch` adds
+- `0005-embedded-a-Linux-platform-whose-host-presents-the-re.patch` adds
   `GHOSTTY_PLATFORM_LINUX`, a surface whose host shows the frames itself:
   `ghostty_surface_take_frame` hands over the renderer's latest frame, a DMABUF
   or pixels in memory, a callback given with the surface announces each frame
   on the render thread, and `ghostty_frame_free` gives the frame's texture
   back, which the renderer does not draw into before. The comments on these in
   `ghostty.h` are the contract a host is written to.
-- `0004-build-export-only-the-C-API-from-the-Linux-library.patch` gives the
+- `0006-build-export-only-the-C-API-from-the-Linux-library.patch` gives the
   shared library a version script that exports the `ghostty_` functions alone.
   Without it the library exports every symbol of what it links in statically,
   and in Emacs, which has loaded the system's FreeType, HarfBuzz, fontconfig,
   libxml2, libpng and zlib first, a thousand of its own calls went to those
   copies instead of its own.
+
+The first two are libghostty-spm's, so that a surface is fed the same way on
+both systems: its `Patches/ghostty/0002-host-managed-io.patch`, unchanged, and
+what its `0011-replay-response-suppression.sh` does, at the release
+`native/libghostty-spm.json` pins. That script edits Ghostty's source by exact
+anchors, and the build here applies only patch files, so `0002` is the
+script's result as a patch. They come before Portal's own: on top of the Linux
+platform one hunk of the first does not apply, in `ghostty.h`. They are
+recorded for [the licenses](docs/licenses.md) as libghostty-spm's, MIT. The
+`ghostty-fed` CTest suite makes such a surface with no window, on Mesa's
+surfaceless EGL display, feeds it, reads its text back and checks that a
+replayed query is not answered; it is skipped, exit 77, where no EGL renders
+without a display server.
+
+When either pin moves, remake the two from the package at its pin, in a clone
+of Ghostty at the Linux pin's REVISION, with SPM a checkout of the package,
+PORTAL this checkout, and the message of each from the patch it replaces, its
+release updated:
+
+```sh
+git checkout --detach REVISION
+git apply --index SPM/Patches/ghostty/0002-host-managed-io.patch
+git commit                             # 0001's message
+SPM/Patches/ghostty/0011-replay-response-suppression.sh .
+git add -A && git commit               # 0002's message
+git am -3 PORTAL/native/patches/ghostty/000[3-9]-*.patch
+```
+
+and write the set back with the `format-patch` command below. The script
+stops at an anchor it cannot find, and `git am` at a patch that does not
+apply: repair it there, as the next paragraph says. Should the package rename
+or renumber either, its `Patches/ghostty/README.md` lists them.
 
 To change a patch, edit the copy in `build/ghostty` and run the script again:
 while the pin, the patches and the script stay the same, it builds the changes

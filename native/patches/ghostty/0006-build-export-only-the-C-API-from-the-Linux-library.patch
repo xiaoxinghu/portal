@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Xiaoxing Hu <hi@xiaoxing.dev>
 Date: Thu, 19 Nov 2026 23:33:19 +1300
-Subject: [PATCH 4/4] build: export only the C API from the Linux library
+Subject: [PATCH 6/6] build: export only the C API from the Linux library
 
 The shared library exported every symbol of the libraries linked into it
 statically: FreeType, HarfBuzz, fontconfig, libxml2, libpng, zlib, Dear

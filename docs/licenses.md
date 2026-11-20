@@ -76,7 +76,9 @@ from the system, and Ghostty's library from `build/ghostty-linux` beside it.
 That library is Portal's own build of the Ghostty release
 `native/ghostty.json` pins, with Portal's patches, so its notices are
 required by that pin (`ghostty@VERSION` in the inventory), not by a Swift
-package. Zig's build links into `lib/ghostty-internal.so` FreeType, HarfBuzz,
+package. Two of those patches, the host-managed backend and replay without
+replies, are libghostty-spm's, under its MIT license, and have a component of
+their own with the package's license text. Zig's build links into `lib/ghostty-internal.so` FreeType, HarfBuzz,
 fontconfig with libxml2, libpng, zlib, Oniguruma, glslang, SPIRV-Cross, Dear
 ImGui with Dear Bindings and its ProggyClean font, glad, Wuffs, Highway,
 simdutf, stb_image and stb_image_resize, libxev, libvaxis, z2d, zf, uucode,
