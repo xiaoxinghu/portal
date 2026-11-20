@@ -774,7 +774,8 @@ Afterglow as the desktop is light or dark, which the XDG desktop portal
 says; Portal chooses, since a configuration whose theme depends on the
 scheme is rebuilt by Ghostty from its lines, without the command the
 surface was made with. Ghostty's own key bindings are cleared but for its
-Copy and Paste, Control-Shift-C and Control-Shift-V.
+Copy and Paste: Control-Shift-C and Control-Shift-V, and Emacs's own
+Control-Insert and Shift-Insert, the latter pasting the clipboard.
 
 **Closing a terminal** goes: its clipboard requests denied; the presenter
 forgets it and nothing calls into the surface; the surface freed, which

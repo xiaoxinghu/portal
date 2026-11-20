@@ -487,10 +487,15 @@ surface of its own over the pane ([how](architecture.md#terminals-on-linux)).
 What differs from macOS:
 
 - **Keys.** The escape back to Emacs is Control-Escape
-  (`portal-input-escape-key`). Ghostty's own copy and paste are
-  Control-Shift-C and Control-Shift-V; its other Linux key bindings are
-  off, so Alt and Control chords reach the shell. Super chords go to Emacs,
-  as Command chords do on macOS.
+  (`portal-input-escape-key`). Copy and paste are Control-Shift-C and
+  Control-Shift-V, as in other Linux terminals, and Control-Insert and
+  Shift-Insert, as in Emacs; Ghostty's other Linux key bindings are off, so
+  Alt and Control chords reach the shell. Super chords go to Emacs, as
+  Command chords do on macOS. Shift-Insert pastes the clipboard, as Emacs's
+  `yank` does, not the primary selection; a middle click pastes that. Where
+  the desktop takes Super-C and Super-V for itself, as Omarchy's universal
+  copy and paste do, have it send Emacs Control-Insert and Shift-Insert:
+  they copy and paste whatever Emacs's pane shows, a terminal or a buffer.
 - **Themes** are the catalog of the Ghostty Portal builds, with the same
   names. Without `portal-terminal-theme`, a terminal is Alabaster or
   Afterglow as the desktop prefers light or dark, which the XDG desktop
