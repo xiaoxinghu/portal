@@ -27,22 +27,6 @@ Messages arrive by the module's record, as between commands."
     (with-current-buffer (messages-buffer)
       (buffer-substring-no-properties start (point-max)))))
 
-(defun portal-rex-server-gui-tests--screens-p ()
-  "Return non-nil where Portal shows a block's screen.
-That is not yet on Linux, which has no fed terminals: the tests that need
-a block's view are skipped there."
-  (eq system-type 'darwin))
-
-(defun portal-rex-server-gui-tests-allowed-skips ()
-  "Return the tests that may skip on this system, for test/rex-server-gui.sh.
-They are those that need a block's screen, where Portal shows none."
-  (unless (portal-rex-server-gui-tests--screens-p)
-    '(portal-rex-server-gui-shows-a-block-and-types-in-it
-      portal-rex-server-gui-the-client-last-used-sizes-a-block
-      portal-rex-server-gui-a-blocks-details-reach-its-buffer
-      portal-rex-server-gui-reattaches-a-block-by-its-id
-      portal-rex-server-gui-a-flood-reaches-its-buffer-whole)))
-
 (defun portal-rex-server-gui-tests--new-session (server label)
   "Create a session called LABEL on SERVER with rex, and return its ID.
 Its one block runs cat, without a login shell."
@@ -262,7 +246,6 @@ Its one block runs cat, without a login shell."
 
 (ert-deftest portal-rex-server-gui-shows-a-block-and-types-in-it ()
   :tags '(:gui)
-  (skip-unless (portal-rex-server-gui-tests--screens-p))
   ;; What only a real server shows: its first paint of a block that ran
   ;; before Emacs came, typing at its shell, and its answers to a program's
   ;; queries, which the terminal leaves to it, so the program gets one.
@@ -344,14 +327,17 @@ Its one block runs cat, without a login shell."
 
 (ert-deftest portal-rex-server-gui-the-client-last-used-sizes-a-block ()
   :tags '(:gui)
-  (skip-unless (portal-rex-server-gui-tests--screens-p))
   ;; What only a real server shows: the grid it keeps as Emacs requests,
-  ;; takes and resizes a block that rex itself also claims.  A block made
-  ;; by `rex new' stays its maker's, a client that has gone, until another
-  ;; takes it.
+  ;; takes and resizes a block that another client holds, and that rex
+  ;; itself also claims.  The other client is the test's own, and stays
+  ;; connected while it holds the block: servers differ on the claim of a
+  ;; client that has gone, as `rex new' has once it returns.  Rex 0.1.0 on
+  ;; macOS keeps it until another takes the block; the Linux server of
+  ;; 2026-11-19 lets it go, and a request then takes the block.
   (portal-real-rex-with (server)
     (let* ((session (portal-rex-server-gui-tests--new-session server "sized"))
            (connection (portal-rex-connect (portal-real-rex-socket server)))
+           (other (portal-rex-parity--open (portal-real-rex-socket server)))
            (buffer (car (portal-rex-buffers connection session)))
            (block (buffer-local-value 'portal-rex-block-id buffer))
            (me (plist-get (plist-get (portal-rex-connection-welcome connection) :client) :id))
@@ -373,6 +359,16 @@ Its one block runs cat, without a login shell."
            (made (funcall grid)))
       (unwind-protect
           (save-window-excursion
+            ;; The other client has the block when Emacs comes.  Its
+            ;; messages are not Emacs's, whose record handler would close a
+            ;; connection it does not know.
+            (advice-add 'portal-rex--record :before-until
+                        (lambda (id &rest _) (and other (= (string-to-number id) (car other))))
+                        '((name . portal-rex-server-gui-tests-other)))
+            (portal-rex-parity--call other "session.attach" (list :session_id session))
+            (portal-rex-parity--call other "session.own_block"
+                                     (list :session_id session :block_ids (vector block)
+                                           :mode "take"))
             (delete-other-windows)
             (switch-to-buffer (get-buffer-create "*rex-server-gui-elsewhere*"))
             ;; Emacs has the keyboard: the frames say so, whatever the VM's
@@ -380,8 +376,8 @@ Its one block runs cat, without a login shell."
             (advice-add 'frame-focus-state :override (lambda (&rest _) t)
                         '((name . portal-rex-server-gui-tests)))
             (let ((right (split-window-right)))
-              ;; Shown in a pane not in use, the block stays its maker's, at
-              ;; its maker's size, and Emacs draws it so, saying so.
+              ;; Shown in a pane not in use, the block stays the other
+              ;; client's, at its size, and Emacs draws it so, saying so.
               (set-window-buffer right buffer)
               (redisplay t)
               (portal-rex-server-gui-tests--wait
@@ -389,7 +385,7 @@ Its one block runs cat, without a login shell."
               (should (equal (plist-get (funcall rex) :owner) "other"))
               (should-not (equal (plist-get (funcall size) :owner) me))
               (portal-rex-server-gui-tests--wait (lambda () (equal (funcall drawn) (list made made))))
-              (should (string-search ":sized elsewhere" (funcall mark)))
+              (should (string-search ":sized by Parity" (funcall mark)))
               ;; The server keeps the pane's size for Emacs meanwhile.
               (portal-rex-server-gui-tests--wait
                (lambda () (> (length (plist-get (funcall size) :desired)) 0)))
@@ -405,6 +401,9 @@ Its one block runs cat, without a login shell."
               (should (equal (plist-get (funcall rex) :owner) "self"))
               (portal-rex-server-gui-tests--wait
                (lambda () (not (string-search "sized" (funcall mark)))))
+              ;; The other client goes, which leaves the block Emacs's.
+              (portal--rex-close (car other))
+              (setq other nil)
               ;; rex takes the block and leaves: the server gives it back to
               ;; Emacs, in line for it, at Emacs's size.
               (let ((ours (funcall grid)))
@@ -418,12 +417,13 @@ Its one block runs cat, without a login shell."
                 (should (equal (funcall grid) ours))
                 (should (equal (funcall drawn) (list ours ours))))))
         (advice-remove 'frame-focus-state 'portal-rex-server-gui-tests)
+        (advice-remove 'portal-rex--record 'portal-rex-server-gui-tests-other)
+        (when other (portal--rex-close (car other)))
         (mapc #'portal-rex-disconnect (portal-rex-connections))
         (kill-buffer "*rex-server-gui-elsewhere*")))))
 
 (ert-deftest portal-rex-server-gui-a-blocks-details-reach-its-buffer ()
   :tags '(:gui)
-  (skip-unless (portal-rex-server-gui-tests--screens-p))
   ;; What only a real server shows: the events its terminal sends as a
   ;; shell sets a title, changes directory and runs a program, reaching the
   ;; block's buffer as a terminal's details, and the block closing, and its
@@ -559,7 +559,6 @@ Its one block runs cat, without a login shell."
 
 (ert-deftest portal-rex-server-gui-reattaches-a-block-by-its-id ()
   :tags '(:gui)
-  (skip-unless (portal-rex-server-gui-tests--screens-p))
   ;; A buffer finds its block again by ID once Emacs has disconnected and
   ;; connected again, as when it restarts with the desktop, and the
   ;; program in it ran on meanwhile, with no command given.
@@ -599,7 +598,6 @@ Its one block runs cat, without a login shell."
 
 (ert-deftest portal-rex-server-gui-a-flood-reaches-its-buffer-whole ()
   :tags '(:gui)
-  (skip-unless (portal-rex-server-gui-tests--screens-p))
   ;; What only a real server shows: a block's output, flooded while Emacs
   ;; reads slowly, reaching its terminal whole, whether the server held it
   ;; all or asked for a new stream; and C-c stopping a flood.

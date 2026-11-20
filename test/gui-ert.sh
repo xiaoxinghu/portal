@@ -19,7 +19,8 @@ logs=${PORTAL_TEST_LOGS:-$root/build}
 # macOS has no way to type into Emacs from outside without a permission, so
 # its suites inject AppKit events with this module. On Linux they type and
 # point through the compositor of test/linux-desktop.sh, with wtype and
-# build/linux/portal-test-pointer, which the build makes.
+# build/linux/portal-test-pointer, which the build makes, and the
+# injector's calls are test/portal-linux-keys.el's.
 darwin=
 if [ "$(uname -s)" = Darwin ]; then
     darwin=1
@@ -44,6 +45,8 @@ if [ -n "$darwin" ]; then
                                              (getenv "PORTAL_GUI_ROOT")))'
     emacs=/Applications/Emacs.app/Contents/MacOS/Emacs
 else
+    # The injector's calls, typing with wtype.
+    set -- "$@" -l "$root/test/portal-linux-keys.el"
     emacs=emacs
 fi
 set -- "$@" -l "$root/test/portal-gui-ert.el"

@@ -1,10 +1,11 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Run via: sh test/linux-gui.sh [SELECTOR]
-# Portal's views and input on Linux, after ./build.sh: the suite of
-# test/portal-linux-gui-tests.el in one fresh Emacs, through test/gui-ert.sh,
-# then an Emacs that quits with a view open. SELECTOR, an ERT regexp, narrows
-# the suite. It runs on a desktop of its own, a second Hyprland with a
+# Portal's views, input and terminals on Linux, after ./build.sh: the suites
+# of test/portal-linux-gui-tests.el, its terminals' and fed terminals', and
+# test/portal-rex-gui-tests.el, Rex blocks shown against the fake server, in
+# one fresh Emacs, through test/gui-ert.sh, then an Emacs that quits with a
+# view open. SELECTOR, an ERT regexp, narrows the suites. It runs on a desktop of its own, a second Hyprland with a
 # headless output (test/linux-desktop.sh), so its windows are on no screen of
 # yours and its keys and clicks go nowhere else. Beside Hyprland it needs
 # grim, which reads that output's pixels, and wtype, which types. Exits 77,
@@ -22,8 +23,10 @@ export MALLOC_PERTURB_=165
 sh "$root/test/gui-ert.sh" \
     -l "$root/test/portal-linux-gui-tests.el" \
     -l "$root/test/portal-linux-terminal-tests.el" \
+    -l "$root/test/portal-linux-fed-tests.el" \
+    -l "$root/test/portal-rex-gui-tests.el" \
     --eval '(portal-gui-ert-start
-             (list (quote and) "^portal-linux-gui-"
+             (list (quote and) "^portal-\\(linux\\|rex\\)-gui-"
                    (let ((focus (getenv "PORTAL_LINUX_SELECTOR")))
                      (if (equal focus "") t focus))))'
 # Emacs quits with a view open, shown and drawing, and the keyboard in it:

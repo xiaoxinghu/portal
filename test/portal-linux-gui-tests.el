@@ -231,13 +231,13 @@ A position is in the desktop's own pixels, which are Emacs's."
 (ert-deftest portal-linux-gui-says-which-views-linux-lacks ()
   :tags '(:gui)
   (portal-view--load)
-  (should (equal (cadr (should-error (portal--open "terminal" '(:fed t)) :type 'error))
-                 "Portal has no fed terminals on Linux yet: \
-its backend does not feed a surface"))
-  (should (equal (cadr (should-error (portal--open "web" nil) :type 'error))
-                 "Portal has no web views on Linux yet"))
-  ;; A failed open leaves nothing behind.
-  (should-not (portal--inspect "terminal:1")))
+  (let* ((before (portal--open "terminal" '(:directory "/" :test-pattern t)))
+         (next (format "web:%d" (1+ (string-to-number (cadr (split-string before ":")))))))
+    (portal--close before)
+    (should (equal (cadr (should-error (portal--open "web" nil) :type 'error))
+                   "Portal has no web views on Linux yet"))
+    ;; A failed open leaves nothing behind.
+    (should-not (portal--inspect next))))
 
 (ert-deftest portal-linux-gui-view-covers-its-pane-to-the-pixel ()
   :tags '(:gui)

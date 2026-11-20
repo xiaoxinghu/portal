@@ -10,7 +10,12 @@
 ;; test/linux-recording.py reads the recording and says whether the view
 ;; was where its pane was in every frame of it.  The view is a test pattern,
 ;; or with PORTAL_FOLLOW_PATTERN "terminal" a terminal whose shell prints
-;; blank lines as fast as it can, so that it makes frames all the while.
+;; blank lines as fast as it can, so that it makes frames all the while, or
+;; with "fed" a Rex block's terminal, fed blank lines by the fake Rex
+;; server of test/fake-rex-server.py.  A fed terminal holds the block's
+;; grid, which follows its pane a moment later, from the pane's bottom-left
+;; corner, with the theme's background beside it: the pane is the view's
+;; colour all the same.
 ;;
 ;; Everything Emacs draws is a flat color that the reader can tell apart:
 ;; the view's pane green, which no frame may show, since the view covers
@@ -31,6 +36,8 @@
 (defvar portal-linux-follow--other nil)
 (defvar portal-linux-follow--program nil)
 (defvar portal-linux-follow--target nil "The view followed.")
+(defvar portal-linux-follow--server nil "The fake Rex server of a fed terminal.")
+(defvar portal-linux-follow--feeding nil "The timer that feeds it blank lines.")
 
 (defun portal-linux-follow--say (name)
   (write-region "" nil (expand-file-name name portal-linux-follow--directory) nil 'silent))
@@ -103,12 +110,39 @@
                             (write-region (format "%S\n" (portal--inspect portal-linux-follow--target))
                                           nil (expand-file-name "facts" portal-linux-follow--directory)
                                           nil 'silent)
+                            (when portal-linux-follow--server
+                              (cancel-timer portal-linux-follow--feeding)
+                              (portal-fake-rex-stop portal-linux-follow--server))
                             (portal-linux-follow--say "done"))
                    (let ((step (pop queue)))
-                     (when (getenv "PORTAL_LINUX_TRACE") (princ (format "step %s\n" step) #'external-debugging-output))
+                     (when (getenv "PORTAL_LINUX_TRACE")
+                       (princ (format "step %s %S %S\n" step
+                                      (window-inside-pixel-edges portal-linux-follow--window)
+                                      (portal--inspect portal-linux-follow--target))
+                              #'external-debugging-output))
                      (with-selected-window portal-linux-follow--window
                        (funcall (alist-get step portal-linux-follow--steps)))))))))
       timer)))
+
+(defun portal-linux-follow--fed ()
+  "Show the fake Rex server's block in the selected pane, and feed it.
+Its terminal has the theme of a terminal followed, its cursor hidden, and
+blank lines all the while, as the block's program printed them."
+  (require 'portal-rex)
+  (require 'portal-fake-rex)
+  (setq portal-linux-follow--server (portal-fake-rex-start))
+  (setq portal-terminal-theme portal-linux-follow-terminal-theme)
+  (let ((portal-rex-socket (portal-fake-rex-socket portal-linux-follow--server)))
+    (portal-rex-connect))
+  (setq portal-linux-follow--buffer (get-buffer "*rex: fake/shell*"))
+  (switch-to-buffer portal-linux-follow--buffer)
+  ;; The cursor hidden with each part: what is sent before the block's
+  ;; stream starts reaches nobody.
+  (let ((lines (apply #'concat "\e[?25l" (make-list 40 "\r\n"))))
+    (setq portal-linux-follow--feeding
+          (run-at-time 0 0.02 (lambda ()
+                                (portal-fake-rex-command portal-linux-follow--server
+                                                         :output "block:fake-1" :data lines))))))
 
 (defun portal-linux-follow-start ()
   "Open the view, say when it shows, and run the steps once the script says to."
@@ -125,23 +159,32 @@
   (when (facep 'mode-line-active)
     (set-face-attribute 'mode-line-active nil :background 'unspecified :box 'unspecified))
   (portal-linux-follow--scratch)
-  (setq portal-linux-follow--buffer (generate-new-buffer "*portal-linux-follow*"))
-  (switch-to-buffer portal-linux-follow--buffer)
+  (let ((kind (getenv "PORTAL_FOLLOW_PATTERN")))
+    (if (equal kind "fed")
+        (portal-linux-follow--fed)
+      (setq portal-linux-follow--buffer (generate-new-buffer "*portal-linux-follow*"))
+      (switch-to-buffer portal-linux-follow--buffer)))
   (setq portal-linux-follow--window (selected-window))
   (face-remap-add-relative 'default :background "#00ff00")
   (dolist (face '(mode-line mode-line-inactive mode-line-active))
     (when (facep face) (face-remap-add-relative face :background "#804000")))
   (let* ((kind (getenv "PORTAL_FOLLOW_PATTERN"))
          (target
-          (portal-view-open
-           'terminal
-           (if (equal kind "terminal")
-               ;; A terminal under output all the while, its frames all
-               ;; its theme's flat background: blank lines, with the
-               ;; cursor hidden.
-               (list :directory "/" :theme portal-linux-follow-terminal-theme :points 12
-                     :command "sh -c 'printf \"\\033[?25l\"; exec yes \"\"'")
-             (list :directory "/" :test-pattern (if (equal kind "fill") "fill" t)))))
+          (cond
+           ((equal kind "fed")
+            ;; The block's view opens once its buffer is shown.
+            (redisplay t)
+            portal-view--target)
+           ((equal kind "terminal")
+            ;; A terminal under output all the while, its frames all
+            ;; its theme's flat background: blank lines, with the
+            ;; cursor hidden.
+            (portal-view-open
+             'terminal
+             (list :directory "/" :theme portal-linux-follow-terminal-theme :points 12
+                   :command "sh -c 'printf \"\\033[?25l\"; exec yes \"\"'")))
+           (t (portal-view-open
+               'terminal (list :directory "/" :test-pattern (if (equal kind "fill") "fill" t))))))
          (_ (setq portal-linux-follow--target target))
          (names (mapcar #'intern (split-string (getenv "PORTAL_FOLLOW_STEPS"))))
          (rounds (string-to-number (getenv "PORTAL_FOLLOW_ROUNDS")))
