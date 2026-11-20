@@ -255,18 +255,24 @@ static bool ready_within(uint64_t socket, uint64_t milliseconds)
     return portal_message_socket_wait(socket, milliseconds, &ready, &error) && ready;
 }
 
-/* Read SOCKET once something is there, within two seconds. */
-static struct taken take(uint64_t socket)
+/* Read SOCKET once something is there, within MILLISECONDS. */
+static struct taken take_within(uint64_t socket, uint64_t milliseconds)
 {
     struct taken taken = {0};
     portal_text error = {0};
-    ready_within(socket, 2000);
+    ready_within(socket, milliseconds);
     if (!portal_message_socket_read(socket, &taken.messages, &taken.count, &taken.ended,
                                     &taken.code, &taken.reason, &error)) {
         fprintf(stderr, "read: %s\n", error.data);
         free(error.data);
     }
     return taken;
+}
+
+/* Read SOCKET once something is there, within two seconds. */
+static struct taken take(uint64_t socket)
+{
+    return take_within(socket, 2000);
 }
 
 static bool close_socket(uint64_t socket)
@@ -537,7 +543,10 @@ static void test_binary_and_its_bound(void)
             stalled_at = sent;
         }
         if (bounded || sent == (size_t) MESSAGE * MESSAGES) {
-            struct taken more = take(2);
+            /* Not long: a message may be more than the two ends' buffers
+               hold, 16 KiB on macOS, and arrive only once this thread
+               writes the rest of it. */
+            struct taken more = take_within(2, 5);
             for (size_t i = 0; i < more.count; i++) {
                 size_t message = received / MESSAGE;
                 ordered = ordered && more.messages[i].length == MESSAGE

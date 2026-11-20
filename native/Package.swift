@@ -34,16 +34,22 @@ let package = Package(
         // same sources into the fake-backend tests.
         .target(name: "PortalCore", path: "Core", exclude: ["CMakeLists.txt", "scripts"],
                 cSettings: [.unsafeFlags(["-I", emacsInclude, "-Wall", "-Wextra", "-Werror"])]),
+        // What a backend needs nothing of its platform for, which the Linux
+        // backend shares: the message sockets. module.modulemap is what Swift
+        // imports.
+        .target(name: "PortalShared", dependencies: ["PortalCore"], path: "Shared",
+                sources: ["message-socket.c"], publicHeadersPath: ".",
+                cSettings: [.unsafeFlags(["-Wall", "-Wextra", "-Werror"])]),
         // The macOS backend; all Swift features share one target. Linux/ holds the
         // C backend that CMake builds there instead.
         .target(name: "Portal", dependencies: [
-            "PortalCore", .product(name: "GhosttyTerminal", package: "libghostty-spm"),
+            "PortalCore", "PortalShared", .product(name: "GhosttyTerminal", package: "libghostty-spm"),
             .product(name: "GhosttyTheme", package: "libghostty-spm")
-        ], path: ".", exclude: ["Core", "Linux", "Info.plist"],
+        ], path: ".", exclude: ["Core", "Linux", "Shared", "Info.plist"],
            sources: ["Backend.swift", "CoreCalls.swift", "NativeHost.swift", "NativeInput.swift",
                      "Views.swift", "WebView.swift", "Terminal.swift", "Launcher.swift",
                      "Hotkeys.swift", "KeyPost.swift",
-                     "StatusPanel.swift", "MessageSocket.swift"],
+                     "StatusPanel.swift"],
            swiftSettings: [.unsafeFlags(["-warnings-as-errors"])])
     ]
 )

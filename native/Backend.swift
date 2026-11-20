@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 import PortalCore
+import PortalShared
 
 // The macOS backend of the operations in native/Core/include/portal.h, whose
 // comments define ownership. The core calls each one synchronously; it
@@ -22,14 +23,6 @@ private func owned(_ value: String) -> portal_text {
         if let base = bytes.baseAddress { memcpy(data, base, bytes.count) }
         return portal_text(data: data, length: bytes.count)
     }
-}
-
-/// BYTES, which may be anything, allocated for the core to free.
-private func owned(bytes: Data) -> portal_text {
-    let data = allocate(CChar.self, bytes.count + 1)
-    bytes.withUnsafeBytes { if let base = $0.baseAddress { memcpy(data, base, bytes.count) } }
-    data[bytes.count] = 0
-    return portal_text(data: data, length: bytes.count)
 }
 
 /// Run BODY on the main actor, Emacs's thread, or describe its failure in FAILURE.
@@ -103,23 +96,32 @@ public func portalLauncherDescribe(_ state: UnsafeMutablePointer<portal_text>,
     perform(error, into: state) { try json(NativeLauncher.describe()) }
 }
 
+// Message sockets: native/Shared/message-socket.c, which the Linux backend
+// shares. What is this backend's own is the way from a socket's thread to
+// Emacs's: the main queue, which Emacs's run loop drains.
+
+/// On a socket's own thread, when it has something to read.
+private let socketWake: portal_message_socket_wake = { socket, _ in
+    DispatchQueue.main.async { portal_socket_ready(socket) }
+}
+
+/// Whether this is Emacs's main thread, where the sockets are; if not, say so in FAILURE.
+private func onMainThread(_ failure: UnsafeMutablePointer<portal_text>) -> Bool {
+    perform(failure) {} != nil
+}
+
 @_cdecl("portal_socket_open")
 public func portalSocketOpen(_ socket: UInt64, _ path: portal_string, _ resource: portal_string,
                              _ subprotocol: portal_string, _ binary: Bool,
                              _ error: UnsafeMutablePointer<portal_text>) -> Bool {
-    let path = String(copying: path), resource = String(copying: resource)
-    let subprotocol = String(copying: subprotocol)
-    return perform(error) {
-        try MessageSockets.open(socket, path: path, resource: resource, subprotocol: subprotocol,
-                                binary: binary)
-    } != nil
+    onMainThread(error) && portal_message_socket_open(socket, path, resource, subprotocol, binary,
+                                                      socketWake, nil, error)
 }
 
 @_cdecl("portal_socket_send")
 public func portalSocketSend(_ socket: UInt64, _ text: portal_string,
                              _ error: UnsafeMutablePointer<portal_text>) -> Bool {
-    let bytes = Data(bytes: text.data, count: text.length)
-    return perform(error) { try MessageSockets.socket(socket).send(bytes) } != nil
+    onMainThread(error) && portal_message_socket_send(socket, text, error)
 }
 
 @_cdecl("portal_socket_read")
@@ -129,29 +131,20 @@ public func portalSocketRead(_ socket: UInt64,
                              _ code: UnsafeMutablePointer<Int32>,
                              _ reason: UnsafeMutablePointer<portal_text>,
                              _ error: UnsafeMutablePointer<portal_text>) -> Bool {
-    guard let read = perform(error, { try MessageSockets.socket(socket).read() }) else { return false }
-    let array = allocate(portal_text.self, read.messages.count)
-    for (index, message) in read.messages.enumerated() { (array + index).initialize(to: owned(bytes: message)) }
-    messages.pointee = array
-    count.pointee = read.messages.count
-    ended.pointee = read.reason != nil
-    code.pointee = Int32(read.code)
-    if let why = read.reason { reason.pointee = owned(why) }
-    return true
+    onMainThread(error)
+        && portal_message_socket_read(socket, messages, count, ended, code, reason, error)
 }
 
 /// The one primitive that blocks Emacs's thread, for as long as the core asks.
 @_cdecl("portal_socket_wait")
 public func portalSocketWait(_ socket: UInt64, _ milliseconds: UInt64, _ ready: UnsafeMutablePointer<Bool>,
                              _ error: UnsafeMutablePointer<portal_text>) -> Bool {
-    guard let found = perform(error, { try MessageSockets.socket(socket) }) else { return false }
-    ready.pointee = found.wait(milliseconds: milliseconds)
-    return true
+    onMainThread(error) && portal_message_socket_wait(socket, milliseconds, ready, error)
 }
 
 @_cdecl("portal_socket_close")
 public func portalSocketClose(_ socket: UInt64, _ error: UnsafeMutablePointer<portal_text>) -> Bool {
-    perform(error) { try MessageSockets.close(socket) } != nil
+    onMainThread(error) && portal_message_socket_close(socket, error)
 }
 
 @_cdecl("portal_hotkey_register")
