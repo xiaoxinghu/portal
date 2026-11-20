@@ -459,6 +459,22 @@ pkg-config's egl, such as libglvnd's")
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/linux")
         add_test(NAME message-socket COMMAND portal-message-socket-tests)
         set_tests_properties(message-socket PROPERTIES TIMEOUT 60)
+        # A fed terminal's surface, with the host-managed backend of Ghostty's
+        # patched library, made, fed and read back with no window, drawn on
+        # Mesa's surfaceless display. The link fails when the library lacks a
+        # call; the test exits 77, skipped, where no EGL renders headless.
+        add_executable(portal-ghostty-fed-tests test/portal-ghostty-fed-tests.c)
+        target_include_directories(portal-ghostty-fed-tests PRIVATE "${ghostty_prefix}/include")
+        target_link_libraries(portal-ghostty-fed-tests PRIVATE ghostty Threads::Threads)
+        add_dependencies(portal-ghostty-fed-tests ghostty-linux)
+        target_compile_options(portal-ghostty-fed-tests PRIVATE -Wall -Wextra -Werror)
+        set_target_properties(portal-ghostty-fed-tests PROPERTIES
+            C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/linux"
+            BUILD_WITH_INSTALL_RPATH ON INSTALL_RPATH "${ghostty_prefix}/lib")
+        add_test(NAME ghostty-fed
+            COMMAND portal-ghostty-fed-tests "${ghostty_prefix}/share/ghostty")
+        set_tests_properties(ghostty-fed PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
         # The built module in batch Emacs: what it answers with no view, and
         # what it says of each part the backend lacks.
         add_test(NAME linux-module
