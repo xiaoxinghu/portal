@@ -507,4 +507,5 @@ What differs from macOS:
   the clipboard is refused, since there is nobody to ask.
 - **Rex blocks** have their buffers and no screen: Emacs
   [connects to a Rex server](rex.md#on-linux), but a block's fed terminal
-  needs patches Portal's Linux build does not apply yet.
+  is not built yet: Portal's Ghostty has what it needs, and the backend
+  does not feed it.

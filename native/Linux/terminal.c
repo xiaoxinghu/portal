@@ -1105,7 +1105,7 @@ bool portal_linux_terminal_create(struct portal_view *view, const portal_option 
     const portal_option *fed = option(options, count, "fed");
     if (fed && fed->flag)
         return portal_linux_fail(error, "Portal has no fed terminals on Linux yet: "
-                                        "Rex blocks need Ghostty patches it does not apply");
+                                        "its backend does not feed a surface");
     if (!app_start(view->wayland, error))
         return false;
     char *directory = string_option(options, count, "directory");
