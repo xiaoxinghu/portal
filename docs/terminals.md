@@ -505,5 +505,6 @@ What differs from macOS:
   primary selection. A paste that Ghostty would ask about, such as text with
   a newline in it, goes ahead: you asked for it. A program asking to read
   the clipboard is refused, since there is nobody to ask.
-- **Rex blocks** do not open: their fed terminals need patches Portal's
-  Linux build does not apply yet.
+- **Rex blocks** have their buffers and no screen: Emacs
+  [connects to a Rex server](rex.md#on-linux), but a block's fed terminal
+  needs patches Portal's Linux build does not apply yet.

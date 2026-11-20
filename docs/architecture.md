@@ -358,6 +358,20 @@ thread. The platform checks the upgrade (the status, the accept key, the
 subprotocol), answers pings and a server's close, joins fragments, and ends
 a connection whose server breaks the framing, with a reason for people.
 
+On Linux the socket is `native/Shared/message-socket.c`: the same socket
+in portable C, on POSIX sockets, `poll` and threads, with no toolkit and no
+event loop, written to take the Swift one's place on macOS too. It has the
+five operations as `portal.h` words them and asks a backend for one thing,
+a function it calls off the module thread when a socket that had nothing to
+read has something, which the backend turns into `portal_socket_ready` on
+the module thread: the Linux backend through GLib's main loop. Each socket
+has one thread, which waits in `poll` for the server, for something to
+send and for the module thread, which wakes it through a pipe. It ends a
+connection with the Swift socket's reasons, word for word, which the tests
+of both name. `native/Shared` is for such code: a platform's duty that
+needs nothing of the platform, so that backends share it and do not each
+write it.
+
 **The core owns the connection** (`native/Core/rex.c`): its ID, never
 reused, which is also its first socket's name; the endpoint it asks for,
 `/api/control` with `rex.control.v1`; the hello that opens the protocol,

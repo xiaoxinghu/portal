@@ -323,7 +323,8 @@ PORTAL_TEST_EXPENSIVE=1 sh test/gui-all.sh
 
 On Linux it runs [the two Linux checks](#linux-graphical-checks) instead, as
 `linux`, `linux-follow` and `linux-follow-terminal`, the follow check with a
-terminal, each on its own desktop. In the VM, the runner
+terminal, and the real-server tier, `rex-server`, each on its own desktop.
+In the VM, the runner
 builds once and the suites run one after another in the same run. A failing suite does not stop the others; the wrapper ends with each
 suite's result and fails if any failed. The [real-server tier](#against-a-real-rex-server)
 is "not run" where no Rex Server is installed, and fails nothing. Each suite logs to a directory of its
@@ -530,7 +531,8 @@ it reports; [portal-fake-rex.el](../test/portal-fake-rex.el) starts and
 scripts it from any Emacs, batch or graphical, and any other harness can
 run it as a subprocess. Extend it there as the client grows.
 
-Three suites use it or the fake platform:
+Three suites use it or the fake platform, on macOS and on Linux, the
+graphical one on macOS alone:
 
 - `rex-core` runs the core's connection rules against the fake platform's
   sockets, with no server at all: its requests and answers, and every step
@@ -538,6 +540,18 @@ Three suites use it or the fake platform:
   anywhere, typing in order and the reports it drops; a backlog holding the
   stream unread, a resume, a refused one and a new stream; and a lost
   connection's tries, coming back as the same client and as a new one.
+- `message-socket`, on Linux, runs the portable message socket,
+  `native/Shared/message-socket.c`, with no Emacs and no backend, against a
+  server the test plays on real Unix sockets
+  ([portal-message-socket-tests.c](../test/portal-message-socket-tests.c)):
+  messages both ways, fragments, pings, text that is not UTF-8, every way a
+  server breaks the framing or refuses the upgrade, the bound on a binary
+  socket's unread bytes holding a flood back, a close through a held
+  socket, and the descriptors a socket leaves. It includes the file to
+  reach its SHA-1, base64 and UTF-8, which it checks against published
+  values. Build it with `-fsanitize=thread`, and with
+  `-fsanitize=address,undefined`, after changing the socket: its threads
+  share a lock, a pipe and a count.
 - `rex` runs `portal-rex.el` on the built module against the fake server, in
   batch Emacs: message sockets need no window. Batch Emacs runs no main run
   loop, so the module's `rex ID` record never arrives there, and nor do its
@@ -580,8 +594,18 @@ its sessions are never touched.
 Rex is private beta software, so the tier runs only where a Rex Server is
 installed: the `rex` program that `PORTAL_TEST_REX` names, or else the test
 VM's `/Applications/Rex Server.app`, which [the VM recipe](test-vm.md#rex-server)
-pins, or the one Rex's Mac app keeps. Elsewhere it says so, exits 77 and
+pins, or the one Rex's Mac app keeps, or on Linux the `rex` on `PATH`, which
+is the server too. Elsewhere it says so, exits 77 and
 counts as not run; report it so. It prints the Rex version it ran against.
+
+On Linux it runs on [a desktop of its own](#linux-graphical-checks), and the
+tests that need a block's screen are skipped, by name: Portal has no fed
+terminals there yet. The rest run: the parity checks, buffers following a
+server, sessions and terminals made, a block ended by killing its buffer,
+a program's status, and a server that restarts. A server's home there has
+an empty `.zshrc` and no `ZDOTDIR`: without the first, a zsh built with its
+new-user module, as Arch's is, opens each shell on a question, and with the
+second a block's zsh would read your own startup files.
 
 It belongs to the [full set](../CONTRIBUTING.md#full-set), not the default
 loop. Run it too after changing what Portal sends a Rex server or reads from
