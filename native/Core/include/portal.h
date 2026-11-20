@@ -5,7 +5,8 @@
    registers the Lisp interface (docs/adr/0002), converts arguments and
    results, and signals errors.  views.c owns every Portal view's identity
    and lifecycle, input.c decides who gets each key press, terminals.c keeps
-   the rules of terminal views, web.c those of web views and the bridge,
+   the rules of terminal views, fed.c those of a fed terminal, web.c those
+   of web views and the bridge,
    shortcuts.c the system-wide shortcuts,
    status.c where the status panel goes, rex.c the connections to Rex
    servers, and channel.c owns the pipe that carries records to Emacs.
@@ -292,19 +293,16 @@ bool portal_web_print(portal_view *web, const portal_string *file, portal_text *
 
    A fed terminal, one created with :fed, runs no process and has no pty:
    its program runs elsewhere, such as in a Rex server's block, and the
-   core is its pty.  What the terminal shows is the output the core feeds
-   it with portal_terminal_feed.  What it would write to its program, the
-   keys it encodes, its mouse reports, pastes and its own reports, such as
-   focus changes, it gives the core with portal_terminal_input.  Its grid
-   is the one the core gives it with portal_terminal_hold_grid, the grid
-   its output is laid out for, whatever the size of its pane; until the
-   core gives one, it fills its pane.  It reports the grid its pane would
-   hold, at its text's cell size, with portal_terminal_grid, once it can
-   and at each change.  It parses off the module thread, and reports with
-   portal_terminal_backlog when the output fed and not yet parsed passes
-   PORTAL_TERMINAL_BACKLOG bytes, and again when it is down to a quarter of
-   that, so that the core stops feeding it meanwhile: the last report says
-   how it is, whatever order the crossings were seen in.  It answers no
+   core is its pty.  The core keeps its rules (native/Core/fed.h): the
+   order of its output and of the grids that output is laid out for, where
+   the terminal goes in its pane, and when its program's output must wait.
+   The platform parses what the core gives it, says how much waits, and
+   puts the terminal where the core says, with the fed terminal's
+   primitives below; it tells the core its pane, its cell, each grid it
+   takes and each crossing of its backlog's marks, with the calls at the
+   end of this file.  What it would write to its program, the keys it
+   encodes, its mouse reports, pastes and its own reports, such as focus
+   changes, it gives the core with portal_terminal_input.  It answers no
    query in its output, as whoever produced that output has answered it: a
    second answer would reach the program as typing.  It takes neither
    :command nor :argv, its :directory is
@@ -367,29 +365,53 @@ bool portal_terminal_press_enter(portal_view *terminal, portal_text *error);
 /* Read all of TERMINAL's text, its scrollback and screen.  macOS reads it by
    selecting everything, and leaves that selection active. */
 bool portal_terminal_read_text(portal_view *terminal, portal_text *text, portal_text *error);
-/* Give TERMINAL, a fed terminal, LENGTH bytes of its program's output,
-   which may be any bytes, after the output fed before them.  It parses them
-   off the module thread, in order, without answering any query in them,
-   and holds them while it cannot parse yet. */
-bool portal_terminal_feed(portal_view *terminal, const char *bytes, size_t length,
-                          portal_text *error);
-/* From the output fed after this call on, TERMINAL, a fed terminal, has a
-   grid of COLUMNS by ROWS cells, whatever the size of its pane; the output
-   fed before it is parsed on the grid it had.  The grid is drawn from the
-   pane's bottom-left corner at the terminal's text size, never scaled:
-   clipped at the top and the right where it is larger than the pane, and
-   with the theme's background above it and to its right where it is
-   smaller, so a shell's prompt and cursor stay in view.  The platform holds
-   the output fed after the call while its terminal takes the grid, for at
-   most a quarter of a second. */
-bool portal_terminal_hold_grid(portal_view *terminal, uint32_t columns, uint32_t rows,
-                               portal_text *error);
+/* A fed terminal's primitives, which the core's rules for it call
+   (native/Core/fed.h).  Each fails, changing nothing, on a terminal that
+   is not fed.
+
+   Parse LENGTH bytes of TERMINAL's program's output, which may be any
+   bytes, after the bytes given before them: off the module thread, in
+   order, answering no query in them.  It returns without waiting for them
+   to be parsed. */
+bool portal_terminal_parse(portal_view *terminal, const char *bytes, size_t length,
+                           portal_text *error);
+/* Return once every byte given to TERMINAL with portal_terminal_parse has
+   been parsed, or never will be, as when its engine is gone. */
+bool portal_terminal_drain(portal_view *terminal, portal_text *error);
+/* How many bytes given to TERMINAL with portal_terminal_parse wait to be
+   parsed, in *BYTES. */
+bool portal_terminal_pending(portal_view *terminal, size_t *bytes, portal_text *error);
+/* Where a fed terminal goes in its pane, in the pane's units, AppKit's
+   points or GTK's logical pixels.  X and Y are the rectangle's bottom-left
+   corner from the pane's, with y growing upward, as AppKit has it; TOP is
+   the same rectangle's top edge from the pane's top, with y growing
+   downward, as GTK and Wayland have it.  Y is negative when the rectangle
+   hangs below the pane, TOP when it rises above it. */
+typedef struct portal_pane_rect {
+    double x, y, width, height, top;
+} portal_pane_rect;
+/* Size TERMINAL to RECT and put it there in its pane, from now on, at its
+   text size, never scaled: clipped by the pane, and with the theme's
+   background, at the terminal's opacity, wherever the pane shows no
+   terminal.  The core gives either the pane itself or a rectangle sized to
+   a grid of the terminal's and hung from the pane's bottom-left corner, so
+   a shell's prompt and cursor stay in view.  Until the core first places
+   it, which it does once the view is created, a fed terminal fills its
+   pane, as an engine may need a size to start. */
+bool portal_terminal_place(portal_view *terminal, portal_pane_rect rect, portal_text *error);
 /* The size of a terminal's text, in points: the one it starts at without
-   :points, and the smallest and largest it is shown at. */
+   :points, and the smallest and largest it is shown at; and two numbers of
+   a fed terminal. */
 enum {
-    /* A fed terminal's output waiting to be parsed, in bytes, at which it
-       reports a backlog. */
+    /* A fed terminal's output waiting to be parsed, in bytes, past which
+       its program waits, until it is down to the low mark again. */
     PORTAL_TERMINAL_BACKLOG = 1 << 19,
+    PORTAL_TERMINAL_BACKLOG_LOW = PORTAL_TERMINAL_BACKLOG / 4,
+    /* The padding a platform gives Ghostty inside a terminal, on each side,
+       in points, with window-padding-x and -y, and window-padding-balance
+       off: the core's geometry of a fed terminal counts on it.  Every
+       terminal has it, fed or not. */
+    PORTAL_TERMINAL_PADDING = 2,
     PORTAL_TERMINAL_POINTS = 14,
     PORTAL_TERMINAL_MIN_POINTS = 6,
     PORTAL_TERMINAL_MAX_POINTS = 72,
@@ -605,19 +627,35 @@ void portal_terminal_changed(portal_string target);
    own, as one write.  Writes reach the core in the order the terminal made
    them.  The core ignores a call for a target that names no fed terminal. */
 void portal_terminal_input(portal_string target, const char *bytes, size_t length);
-/* TARGET, a fed terminal, is in a pane that holds a grid of COLUMNS by
-   ROWS cells now, each CELL_WIDTH by CELL_HEIGHT pixels of the screen it
-   is drawn on, or 0 by 0 when the terminal cannot say: the grid the
-   terminal would have if it filled its pane, whatever grid it holds.
-   Reported once it is known, and again at each change, a change of cell
-   size alone included. */
-void portal_terminal_grid(portal_string target, uint32_t columns, uint32_t rows,
-                          uint32_t cell_width, uint32_t cell_height);
-/* TARGET, a fed terminal, has more output waiting to be parsed than
-   PORTAL_TERMINAL_BACKLOG bytes (BACKLOGGED), or no more than a quarter of
-   that again.  Reported at each change, the last report saying how it is
-   now.  The core ignores a call for a target that names no fed terminal. */
-void portal_terminal_backlog(portal_string target, bool backlogged);
+/* What a fed terminal TARGET tells the core's rules for it.  The core
+   ignores a call for a target that names no fed terminal.
+
+   Its pane is WIDTH by HEIGHT of the pane's units now, at SCALE pixels of
+   the screen to each unit, and Ghostty pads the terminal with PADDING
+   pixels on each side: its PORTAL_TERMINAL_PADDING points as Ghostty counts
+   them, which on macOS is that many pixels at scale 1, 4 at scale 2, and on
+   Linux 96 pixels to the inch kept whole, 5 at scale 2.  Told once known
+   and at each change. */
+void portal_terminal_pane(portal_string target, double width, double height, double scale,
+                          double padding);
+/* Its cell is WIDTH by HEIGHT pixels of the screen now, or 0 by 0 while it
+   cannot say.  Told once known and at each change. */
+void portal_terminal_cell(portal_string target, double width, double height);
+/* Its engine has a grid of COLUMNS by ROWS cells now: the size it took
+   after portal_terminal_place, or one on its way there.  Told at each
+   change, on the module thread, though the engine may say it on a thread
+   of its own. */
+void portal_terminal_took_grid(portal_string target, uint32_t columns, uint32_t rows);
+/* Whether the bytes waiting to be parsed, going from BEFORE to AFTER, rose
+   past PORTAL_TERMINAL_BACKLOG or fell to PORTAL_TERMINAL_BACKLOG_LOW: a
+   crossing, which the platform tells with portal_terminal_backlog.  It is
+   pure, and unlike the other calls here may be called on any thread. */
+bool portal_terminal_backlog_crossed(size_t before, size_t after);
+/* Its output waiting to be parsed crossed a mark: the core reads
+   portal_terminal_pending, and while more than the low mark waits, reads
+   it again every 10 ms.  A crossing may be told late, and two in the other
+   order than they happened. */
+void portal_terminal_backlog(portal_string target);
 /* POINTS, a terminal's text size from Lisp, clamped to
    PORTAL_TERMINAL_MIN_POINTS to PORTAL_TERMINAL_MAX_POINTS: the size a new
    terminal starts at.  Lisp derives sizes from Emacs's fonts, so one out of

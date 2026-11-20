@@ -19,6 +19,7 @@
 #include <unistd.h>
 
 #include "channel.h"
+#include "fed.h"
 #include "rex.h"
 #include "portal.h"
 
@@ -168,8 +169,11 @@ uint64_t portal_channel_timer(uint64_t milliseconds)
 
 void portal_timer_fired(uint64_t token)
 {
-    if (token && token != channel.timer)
-        return portal_rex_timer(token);
+    if (token && token != channel.timer) {
+        if (!portal_fed_timer(token))
+            portal_rex_timer(token);
+        return;
+    }
     if (!token)
         return; /* Cancelled by a connection since. */
     channel.timer = 0;

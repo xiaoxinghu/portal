@@ -451,21 +451,38 @@ public func portalTerminalReadText(_ terminal: OpaquePointer, _ text: UnsafeMuta
     return perform(error, into: text) { try session(terminal, as: TerminalSession.self).text() }
 }
 
-@_cdecl("portal_terminal_feed")
-public func portalTerminalFeed(_ terminal: OpaquePointer, _ bytes: UnsafePointer<CChar>?, _ length: Int,
-                               _ error: UnsafeMutablePointer<portal_text>) -> Bool {
+@_cdecl("portal_terminal_parse")
+public func portalTerminalParse(_ terminal: OpaquePointer, _ bytes: UnsafePointer<CChar>?, _ length: Int,
+                                _ error: UnsafeMutablePointer<portal_text>) -> Bool {
     let terminal = native(terminal)
     let output = bytes.map { Data(bytes: $0, count: length) } ?? Data()
-    return perform(error) { try session(terminal, as: TerminalSession.self).feed(output) } != nil
+    return perform(error) { try session(terminal, as: TerminalSession.self).parse(output) } != nil
 }
 
-@_cdecl("portal_terminal_hold_grid")
-public func portalTerminalHoldGrid(_ terminal: OpaquePointer, _ columns: UInt32, _ rows: UInt32,
-                                   _ error: UnsafeMutablePointer<portal_text>) -> Bool {
+@_cdecl("portal_terminal_drain")
+public func portalTerminalDrain(_ terminal: OpaquePointer, _ error: UnsafeMutablePointer<portal_text>) -> Bool {
     let terminal = native(terminal)
-    return perform(error) {
-        try session(terminal, as: TerminalSession.self).holdGrid(columns: columns, rows: rows)
-    } != nil
+    return perform(error) { try session(terminal, as: TerminalSession.self).drain() } != nil
+}
+
+@_cdecl("portal_terminal_pending")
+public func portalTerminalPending(_ terminal: OpaquePointer, _ bytes: UnsafeMutablePointer<Int>,
+                                  _ error: UnsafeMutablePointer<portal_text>) -> Bool {
+    let terminal = native(terminal)
+    guard let count = perform(error, { try session(terminal, as: TerminalSession.self).pending() }) else {
+        return false
+    }
+    bytes.pointee = count
+    return true
+}
+
+@_cdecl("portal_terminal_place")
+public func portalTerminalPlace(_ terminal: OpaquePointer, _ rect: portal_pane_rect,
+                                _ error: UnsafeMutablePointer<portal_text>) -> Bool {
+    let terminal = native(terminal)
+    // AppKit's frame, from the pane's bottom-left corner, y upward.
+    let frame = CGRect(x: rect.x, y: rect.y, width: rect.width, height: rect.height)
+    return perform(error) { try session(terminal, as: TerminalSession.self).place(frame) } != nil
 }
 
 @_cdecl("portal_view_focus")

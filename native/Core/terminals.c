@@ -236,17 +236,3 @@ void portal_terminal_input(portal_string target, const char *bytes, size_t lengt
     if (portal_views_fed(target))
         portal_rex_input(target, bytes, length);
 }
-
-void portal_terminal_grid(portal_string target, uint32_t columns, uint32_t rows,
-                          uint32_t cell_width, uint32_t cell_height)
-{
-    const uint32_t grid[4] = {columns, rows, cell_width, cell_height};
-    if (portal_views_set_grid(target, grid))
-        portal_rex_grid(target);
-}
-
-void portal_terminal_backlog(portal_string target, bool backlogged)
-{
-    if (portal_views_fed(target))
-        portal_rex_backlog(target, backlogged);
-}

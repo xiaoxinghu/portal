@@ -29,16 +29,16 @@ let package = Package(
     ],
     targets: [
         // The C core: the Emacs bindings, the view registry, input, terminal and
-        // web views' rules, shortcuts, Rex connections, the notification pipe, and portal.h, the
+        // web views' rules, a fed terminal's, shortcuts, Rex connections, the notification pipe, and portal.h, the
         // interface the Swift backend implements. web.c embeds the shared browser scripts in scripts/. Core/CMakeLists.txt compiles the
         // same sources into the fake-backend tests.
         .target(name: "PortalCore", path: "Core", exclude: ["CMakeLists.txt", "scripts"],
                 cSettings: [.unsafeFlags(["-I", emacsInclude, "-Wall", "-Wextra", "-Werror"])]),
         // What a backend needs nothing of its platform for, which the Linux
-        // backend shares: the message sockets and a fed terminal's rules.
-        // module.modulemap is what Swift imports.
+        // backend shares: the message sockets. module.modulemap is what Swift
+        // imports.
         .target(name: "PortalShared", dependencies: ["PortalCore"], path: "Shared",
-                sources: ["message-socket.c", "fed-terminal.c"], publicHeadersPath: ".",
+                sources: ["message-socket.c"], publicHeadersPath: ".",
                 cSettings: [.unsafeFlags(["-Wall", "-Wextra", "-Werror"])]),
         // The macOS backend; all Swift features share one target. Linux/ holds the
         // C backend that CMake builds there instead.

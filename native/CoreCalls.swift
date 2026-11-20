@@ -197,17 +197,29 @@ enum Core {
         }
     }
 
-    /// TARGET, a fed terminal, has a grid of COLUMNS by ROWS cells, each
-    /// CELL pixels wide and high, or zero when unknown.
-    static func terminalGrid(_ target: String, columns: UInt32, rows: UInt32,
-                             cellWidth: UInt32, cellHeight: UInt32) {
-        borrow(target) { portal_terminal_grid($0, columns, rows, cellWidth, cellHeight) }
+    /// TARGET, a fed terminal, is in a pane WIDTH by HEIGHT points, at
+    /// SCALE pixels to the point, with PADDING pixels of Ghostty's on each
+    /// side of the terminal.
+    static func terminalPane(_ target: String, width: Double, height: Double, scale: Double,
+                             padding: Double) {
+        borrow(target) { portal_terminal_pane($0, width, height, scale, padding) }
     }
 
-    /// TARGET, a fed terminal, has more output waiting to be parsed than it
-    /// should take on, or has worked it down.
-    static func terminalBacklog(_ target: String, _ backlogged: Bool) {
-        borrow(target) { portal_terminal_backlog($0, backlogged) }
+    /// TARGET, a fed terminal, has cells WIDTH by HEIGHT pixels, or zero
+    /// while unknown.
+    static func terminalCell(_ target: String, width: Double, height: Double) {
+        borrow(target) { portal_terminal_cell($0, width, height) }
+    }
+
+    /// TARGET, a fed terminal, has a grid of COLUMNS by ROWS cells now.
+    static func terminalTookGrid(_ target: String, columns: UInt32, rows: UInt32) {
+        borrow(target) { portal_terminal_took_grid($0, columns, rows) }
+    }
+
+    /// TARGET, a fed terminal, crossed a mark of its output waiting to be
+    /// parsed: the core looks at how much waits.
+    static func terminalBacklog(_ target: String) {
+        borrow(target) { portal_terminal_backlog($0) }
     }
 
     /// The shared links script, started in its world with a report function

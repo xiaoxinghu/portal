@@ -541,7 +541,7 @@ it reports; [portal-fake-rex.el](../test/portal-fake-rex.el) starts and
 scripts it from any Emacs, batch or graphical, and any other harness can
 run it as a subprocess. Extend it there as the client grows.
 
-Three suites use it or the fake platform, on macOS and on Linux, the
+Four suites use it or the fake platform, on macOS and on Linux, the
 graphical one too:
 
 - `rex-core` runs the core's connection rules against the fake platform's
@@ -571,17 +571,18 @@ graphical one too:
       test/portal-message-socket-tests.c -o build/message-socket-tsan
   build/message-socket-tsan
   ```
-- `fed-terminal`, on both systems, runs a fed terminal's rules,
-  `native/Shared/fed-terminal.c`, with no Emacs, no window and no surface
-  ([portal-fed-terminal-tests.c](../test/portal-fed-terminal-tests.c)):
-  a backend and a core the test plays write each call down, and each test
-  compares them line by line with what should have happened. The order with
-  a grid between outputs, a grid taken late and grids in a row; the
-  rectangle and the pane's grid at scales 1 and 2, with the Mac's padding
-  and with Linux's; a backlog crossing both marks, its crossings heard out
-  of order. Build it with
-  `-fsanitize=address,undefined` after changing the rules. `shared-macos`
-  compiles that file and the socket for macOS, on Apple silicon and Intel,
+- `fed-core` runs a fed terminal's rules, `native/Core/fed.c`, against the
+  fake platform ([portal-fed-tests.c](../test/portal-fed-tests.c)): the
+  test plays the platform's side, telling the core the pane, the cell, the
+  grid taken and the backlog's crossings, and compares the fake's log of
+  the primitives the core called and the timers it started, line by line,
+  with what should have happened. The order with a grid between outputs, a
+  grid taken late and grids in a row; the rectangle and the pane's grid at
+  scales 1 and 2, with the Mac's padding and with Linux's; what a platform
+  tells while it creates the view; a backlog crossing both marks, its
+  crossings heard out of order. Build it with
+  `-fsanitize=address,undefined` after changing the rules.
+  `shared-macos` compiles the socket for macOS, on Apple silicon and Intel,
   with Zig.
 - `rex` runs `portal-rex.el` on the built module against the fake server, in
   batch Emacs: message sockets need no window. Batch Emacs runs no main run
@@ -723,7 +724,7 @@ run them in the VM, pass the same `sh -c` command to `bash test/vm.sh`:
 ```sh
 sh -c '
 set -eu
-for core in channel views input terminals web shortcuts status rex json; do
+for core in channel views input terminals fed web shortcuts status rex json; do
   xcrun clang -std=c11 -Wall -Wextra -Werror -I native/Core/include \
     -c native/Core/$core.c -o build/$core.o
 done
@@ -736,7 +737,7 @@ xcrun swiftc -swift-version 6 -warnings-as-errors \
   native/Views.swift native/WebView.swift \
   test/native-checks.swift test/native-terminal-stub.swift test/native-views.swift \
   test/native-focus.swift build/channel.o build/views.o build/input.o build/terminals.o \
-  build/web.o build/shortcuts.o build/status.o build/rex.o build/json.o build/message-socket.o \
+  build/fed.o build/web.o build/shortcuts.o build/status.o build/rex.o build/json.o build/message-socket.o \
   -framework AppKit -framework WebKit -framework Carbon -o build/check-focus
 build/check-focus
 '

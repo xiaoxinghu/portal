@@ -15,8 +15,8 @@
      resources installed beside this module, and portal_terminal_engine
      describes it.
    - Fed terminals, which show a Rex block (terminal.c): Ghostty's
-     host-managed surface, fed by a thread of Portal's, with the order,
-     geometry and backlog of native/Shared/fed-terminal.c.
+     host-managed surface, fed by a thread of Portal's, placed where the
+     core's rules for it say (native/Core/fed.h).
    - A test pattern (pattern.c), the content of a view made with the option
      :test-pattern, of either kind, which the checks of the view machinery
      use.

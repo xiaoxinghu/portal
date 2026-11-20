@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.29)
 
 # Portal's C core, tested against a fake backend: the Emacs bindings, the view
 # registry, input handoff, terminal views, web views' rules and bridge,
-# system-wide shortcuts, the status panel, Rex connections, and the notification pipe. This needs only a C compiler and Emacs: no Swift, Apple
+# system-wide shortcuts, the status panel, Rex connections, a fed terminal's rules, and the notification pipe. This needs only a C compiler and Emacs: no Swift, Apple
 # frameworks, GTK, Bun or Ghostty. The top-level project includes it, and it can be
 # configured alone to run just these tests. SwiftPM compiles the same sources
 # into the production module on macOS, and the top-level project on Linux.
@@ -28,7 +28,7 @@ if(NOT EXISTS "${EMACS_INCLUDE}/emacs-module.h")
 endif()
 
 # The core without the bindings, emacs.c: what a backend is linked with.
-set(core_sources views.c input.c terminals.c web.c channel.c shortcuts.c status.c rex.c json.c)
+set(core_sources views.c input.c terminals.c fed.c web.c channel.c shortcuts.c status.c rex.c json.c)
 if(NOT PROJECT_IS_TOP_LEVEL)
     # For the top-level project, which builds the Linux module from them.
     list(TRANSFORM core_sources PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/"
@@ -70,9 +70,11 @@ if(BUILD_TESTING)
     target_link_libraries(portal-status-tests PRIVATE portal-test-core)
     add_executable(portal-rex-tests "${portal_root}/test/portal-rex-tests.c")
     target_link_libraries(portal-rex-tests PRIVATE portal-test-core)
+    add_executable(portal-fed-tests "${portal_root}/test/portal-fed-tests.c")
+    target_link_libraries(portal-fed-tests PRIVATE portal-test-core)
     foreach(target portal-test-core portal-test-module portal-channel-tests portal-views-tests
             portal-input-tests portal-terminals-tests portal-web-tests
-            portal-shortcuts-tests portal-status-tests portal-rex-tests)
+            portal-shortcuts-tests portal-status-tests portal-rex-tests portal-fed-tests)
         target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
         set_target_properties(${target} PROPERTIES
             C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
@@ -94,6 +96,8 @@ if(BUILD_TESTING)
     set_tests_properties(status-core PROPERTIES TIMEOUT 30)
     add_test(NAME rex-core COMMAND portal-rex-tests)
     set_tests_properties(rex-core PROPERTIES TIMEOUT 30)
+    add_test(NAME fed-core COMMAND portal-fed-tests)
+    set_tests_properties(fed-core PROPERTIES TIMEOUT 30)
     add_test(NAME module
         COMMAND "${CMAKE_COMMAND}" -E env "PORTAL_TEST_MODULE=$<TARGET_FILE:portal-test-module>"
             "${EMACS}" --batch -Q --module-assertions
