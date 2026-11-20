@@ -473,10 +473,13 @@ stops reading its socket until the core reads.
 **A block's screen is a fed terminal.** A terminal view usually runs a
 shell in a pty of its own. A fed terminal, a terminal view opened with
 `:fed`, runs no process: its program runs in a Rex server's block, and the
-core is its pty. The platform makes it from libghostty-spm's
+core is its pty. On macOS the platform makes it from libghostty-spm's
 `InMemoryTerminalSession` with `suppressesTerminalResponses`, Portal's patch
-(see [Contributing](../CONTRIBUTING.md#the-ghostty-dependency)), and gives
-the core three things: it parses the bytes the core feeds it
+(see [Contributing](../CONTRIBUTING.md#the-ghostty-dependency)); on Linux
+from the same two Ghostty patches, a host-managed surface fed with
+`ghostty_surface_write_buffer_replay` by a thread of Portal's own
+([Terminals on Linux](#terminals-on-linux)). Either way it gives the core
+three things: it parses the bytes the core feeds it
 (`portal_terminal_feed`), off the main thread and in order, answering no
 query in them, since the server has answered each already and a second
 answer would reach the program as typing; it hands the core what it would
@@ -486,9 +489,11 @@ core gives it (`portal_terminal_hold_grid`), whatever its pane's size; and
 it reports the grid its pane would hold, with the cells' size in pixels
 (`portal_terminal_grid`); and it reports when it has more than half a
 megabyte fed and not yet parsed, and when it is down to a quarter of that
-again (`portal_terminal_backlog`), from the package's backlog handler. On macOS the view Portal places is a clipping
+again (`portal_terminal_backlog`). On macOS the view Portal places is a clipping
 pane, filled with the theme's background, with the terminal inside it at
-its bottom-left, sized to its grid. Everything else, its theme, text size,
+its bottom-left, sized to its grid; on Linux the view's frames are placed
+in its pane over a backdrop of that background
+([Views on Linux](#views-on-linux)). Everything else, its theme, text size,
 placement, input and lifetime, is any terminal view's.
 
 **A fed terminal's rules are written once, beside the backends.** Of what a
@@ -499,12 +504,14 @@ terminal has taken it, a quarter of a second at most; the geometry, a
 terminal that holds a grid sized to it with Ghostty's 2-point padding and
 half a cell to spare and hung from its pane's bottom-left corner, and the
 grid its pane would hold; and the backlog's two marks, looked at again
-every 10 ms while the core waits. They are `native/Shared/fed-terminal.c`,
+every 10 ms while the core waits. Ghostty's padding is told in pixels, by
+default 2 for each of the pane's units as on macOS; Ghostty on Linux counts
+96 pixels to the inch and keeps whole ones, 5 at scale 2. They are `native/Shared/fed-terminal.c`,
 over plain values: it asks a backend to parse bytes, wait until they are
 parsed, say how many wait, keep two timers and put the terminal at a
 rectangle in its pane, and makes the core's two reports itself. The
 `fed-terminal` suite checks it against a backend and a core the test plays.
-The Linux backend is to use it for its fed terminal; macOS still has the
+The Linux backend uses it for its fed terminal; macOS still has the
 same rules, with the same numbers, in Swift in `native/Terminal.swift`
 (`flush`, `tookGrid`, `viewportResized`, `holdGrid`, `fitInPane`,
 `reportPane` and `FedBacklog`), until a Mac can build and run the switch.
@@ -724,6 +731,24 @@ arrive on the view's own event queue, which the content's thread
 dispatches. `native/Linux/linux.h` has the contract a content is written
 to.
 
+**A content's frames may be placed in the pane, over a backdrop.** A
+frame of the pane's size is shown from its top left. A content whose frames
+are another size, as a fed terminal's that holds a grid, says where they go
+in the pane (`portal_linux_view_place`): a rectangle in device pixels from
+the pane's top left, which may rise above it or run past it. That is a
+change of the view as a new pane size is, taken by the screen with the
+first frame presented for it; the subsurface sits where what shows of the
+frame starts, and the viewport cuts the frame to the pane, on whole pixels
+of Emacs's, losing less than one of them of the frame's padding at an edge.
+A view made with a backdrop has a second subsurface just below its own,
+which the main thread alone commits: one pixel of a colour, stretched over
+the pane, shown while the view is. Two things of Hyprland's, as of 0.56.2,
+are allowed for: it crops a buffer with the viewport's source before it
+turns it over, where the viewporter protocol has the source in the frame
+as turned, so a flipped view's source is turned too on Hyprland, which the
+backend knows by its globals; and it applies a surface's new size only with
+a buffer, so the backdrop attaches its pixel again with each size.
+
 **Keys go to a handler on the window first**, before `GtkWindow`'s own keys,
 such as F10 for the menu bar, and before the focused widget. There the core
 decides, as on macOS: the handler asks it about each press in a view that
@@ -769,7 +794,7 @@ and destroyed, then the input method and the widget.
 ## Terminals on Linux
 
 A terminal on Linux is a view whose content is a Ghostty surface running a
-local shell (`native/Linux/terminal.c`), drawn by Portal's own build of
+local shell, or fed a Rex block's output (`native/Linux/terminal.c`), drawn by Portal's own build of
 Ghostty's library and shown by a presenter of Portal's
 (`native/Linux/presenter.c`). macOS needs no presenter: Ghostty's Metal
 layer puts its frames on the screen itself.
@@ -820,7 +845,26 @@ surface was made with. Ghostty's own key bindings are cleared but for its
 Copy and Paste: Control-Shift-C and Control-Shift-V, and Emacs's own
 Control-Insert and Shift-Insert, the latter pasting the clipboard.
 
-**Closing a terminal** goes: its clipboard requests denied; the presenter
+**A fed terminal is fed by a thread of its own.** Its surface has Ghostty's
+host-managed backend: it runs no program, and hands what it would write to
+a pty, and each grid it takes, to two callbacks on Ghostty's IO thread,
+which bring them to the main thread in order, to `portal_terminal_input`
+and to the rules. The core's output goes on a queue that the terminal's
+feeder thread parses with `ghostty_surface_write_buffer_replay`, 64 KiB at a
+time so that the renderer draws between, counting the bytes not parsed yet,
+which the backlog rule reads; macOS has the package's session for this.
+The rules (`native/Shared/fed-terminal.c`) decide the rest: the order of
+output and grids, where the terminal goes in its pane, sized to its grid or
+to the pane, and when the core hears of a backlog. Their timers are GLib's,
+and where they put the terminal is its surface's size and its view's
+placement, over a backdrop of the theme's background at the terminal's
+opacity; below an opacity of 1 Ghostty draws its own background clear, as
+on macOS. A pointer's place is the surface's, from where the terminal is.
+Its title, directory and program are the core's, as on macOS: nothing is
+sampled.
+
+**Closing a terminal** goes: its clipboard requests denied; a fed
+terminal's feeder ended, and its timers; the presenter
 forgets it and nothing calls into the surface; the surface freed, which
 ends the shell, after which Ghostty announces no frame; the view's surface
 destroyed; the buffers destroyed and the frames they showed freed, which

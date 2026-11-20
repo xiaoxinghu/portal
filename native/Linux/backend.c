@@ -14,6 +14,9 @@
      Portal shows its frames.  ghostty_start starts the library with the
      resources installed beside this module, and portal_terminal_engine
      describes it.
+   - Fed terminals, which show a Rex block (terminal.c): Ghostty's
+     host-managed surface, fed by a thread of Portal's, with the order,
+     geometry and backlog of native/Shared/fed-terminal.c.
    - A test pattern (pattern.c), the content of a view made with the option
      :test-pattern, of either kind, which the checks of the view machinery
      use.
@@ -25,9 +28,6 @@
    What is not, and what each operation waits for: it fails, saying what
    Portal lacks on Linux, and changes nothing.
 
-   - Fed terminals, which show a Rex block.  Ghostty's library has the
-     host-managed surface they rest on, and native/Shared/fed-terminal.c
-     their order, geometry and backlog; nothing here feeds one yet.
    - Web views, on WebKitGTK.  Without :test-pattern, creating one fails.
    - System-wide keys, posted keys and the status panel, which Wayland gives
      a client no direct way to do.

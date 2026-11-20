@@ -322,8 +322,9 @@ PORTAL_TEST_EXPENSIVE=1 sh test/gui-all.sh
 ```
 
 On Linux it runs [the two Linux checks](#linux-graphical-checks) instead, as
-`linux`, `linux-follow` and `linux-follow-terminal`, the follow check with a
-terminal, and the real-server tier, `rex-server`, each on its own desktop.
+`linux`, `linux-follow`, `linux-follow-terminal` and `linux-follow-fed`, the
+follow check with a terminal and with a Rex block's, and the real-server
+tier, `rex-server`, each on its own desktop.
 In the VM, the runner
 builds once and the suites run one after another in the same run. A failing suite does not stop the others; the wrapper ends with each
 suite's result and fails if any failed. The [real-server tier](#against-a-real-rex-server)
@@ -424,6 +425,7 @@ Physical-key delivery on the affected macOS version still needs a manual check.
 sh test/linux-gui.sh
 sh test/linux-follow.sh
 sh test/linux-follow.sh terminal
+sh test/linux-follow.sh fed
 ```
 
 Both run after `./build.sh`, each on **a desktop of its own**:
@@ -438,9 +440,11 @@ it is closed within a moment either way. The scripts exit 77, "could not run
 here", without Hyprland 0.56 or newer and a Wayland session to start it in.
 It is the compositor the views were written against: no other has run them.
 
-`linux-gui.sh` runs [the views' suite](../test/portal-linux-gui-tests.el)
-and [the terminals'](../test/portal-linux-terminal-tests.el) in one fresh
-Emacs through `gui-ert.sh`, and then Emacs quitting with a view open, a
+`linux-gui.sh` runs [the views' suite](../test/portal-linux-gui-tests.el),
+[the terminals'](../test/portal-linux-terminal-tests.el),
+[the fed terminals'](../test/portal-linux-fed-tests.el) and
+[the Rex suite of the fake server](../test/portal-rex-gui-tests.el) in one
+fresh Emacs through `gui-ert.sh`, and then Emacs quitting with a view open, a
 test pattern and then a terminal printing as fast as it can. Pass an ERT
 selector regexp to run part of it. It needs `grim`, which reads the
 output's pixels, `wtype`, which types, and `wf-recorder` with `ffmpeg` and
@@ -477,7 +481,11 @@ prints each frame that is not, and exits 1 if there is one.
 `PORTAL_FOLLOW_STEPS` chooses them, the argument `fill` uses a pattern
 of one pixel stretched over the pane, and the argument `terminal` a terminal
 whose shell prints blank lines all the while, so that its renderer makes
-frames as the pane changes, each its theme's flat orange. The recording stays in
+frames as the pane changes, each its theme's flat orange. The argument `fed`
+shows a Rex block of [the fake server](#rex-checks) instead, fed blank lines
+all the while: its terminal holds the block's grid, from the pane's
+bottom-left corner over the theme's background, so the pane is that orange
+whatever grid it holds. The recording stays in
 `PORTAL_TEST_LOGS`, or `build/linux-follow`. It needs `wf-recorder`,
 `ffmpeg` and Python 3.
 
@@ -490,8 +498,10 @@ beside the echo area and says how many there were: one or two for each
 resize, on this compositor without its animations.
 
 Run both after changing `native/Linux` or `portal-view.el`, the follow check
-with `terminal` too after changing a terminal's presenter, and say which
-machine and compositor ran them: a pass says what that compositor does.
+with `terminal` too after changing a terminal's presenter, and with `fed`
+after changing a fed terminal or where a view's frames go in its pane, and
+say which machine and compositor ran them: a pass says what that compositor
+does.
 
 ## App host checks
 
@@ -532,7 +542,7 @@ scripts it from any Emacs, batch or graphical, and any other harness can
 run it as a subprocess. Extend it there as the client grows.
 
 Three suites use it or the fake platform, on macOS and on Linux, the
-graphical one on macOS alone:
+graphical one too:
 
 - `rex-core` runs the core's connection rules against the fake platform's
   sockets, with no server at all: its requests and answers, and every step
@@ -558,8 +568,9 @@ graphical one on macOS alone:
   a backend and a core the test plays write each call down, and each test
   compares them line by line with what should have happened. The order with
   a grid between outputs, a grid taken late and grids in a row; the
-  rectangle and the pane's grid at scales 1 and 2; a backlog crossing both
-  marks, its crossings heard out of order. Build it with
+  rectangle and the pane's grid at scales 1 and 2, with the Mac's padding
+  and with Linux's; a backlog crossing both marks, its crossings heard out
+  of order. Build it with
   `-fsanitize=address,undefined` after changing the rules. `shared-macos`
   compiles that file and the socket for macOS, on Apple silicon and Intel,
   with Zig.
@@ -568,8 +579,8 @@ graphical one on macOS alone:
   loop, so the module's `rex ID` record never arrives there, and nor do its
   timers, so a lost connection stays lost; these tests take messages by
   waiting, as `portal-rex-call` does.
-- `test/portal-rex-gui-tests.el`, part of `sh test/views-gui.sh`, proves the
-  record: events, answers and a lost connection reaching an idle Emacs, and
+- `test/portal-rex-gui-tests.el`, part of `sh test/views-gui.sh` on macOS
+  and of `sh test/linux-gui.sh` on Linux, proves the record: events, answers and a lost connection reaching an idle Emacs, and
   blocks' buffers following a server meanwhile. It also shows a block in a
   real Ghostty view: the first paint, the stream, a pane's new size, a
   hidden buffer kept current, keys typed in order with one write out at a
@@ -609,11 +620,10 @@ pins, or the one Rex's Mac app keeps, or on Linux the `rex` on `PATH`, which
 is the server too. Elsewhere it says so, exits 77 and
 counts as not run; report it so. It prints the Rex version it ran against.
 
-On Linux it runs on [a desktop of its own](#linux-graphical-checks), and the
-tests that need a block's screen are skipped, by name: Portal has no fed
-terminals there yet. The rest run: the parity checks, buffers following a
-server, sessions and terminals made, a block ended by killing its buffer,
-a program's status, and a server that restarts. A server's home there has
+On Linux it runs on [a desktop of its own](#linux-graphical-checks), every
+test of it, and types with `wtype` through
+[portal-linux-keys.el](../test/portal-linux-keys.el), which `gui-ert.sh`
+loads there in place of the macOS injector's calls. A server's home there has
 an empty `.zshrc` and no `ZDOTDIR`: without the first, a zsh built with its
 new-user module, as Arch's is, opens each shell on a question, and with the
 second a block's zsh would read your own startup files.

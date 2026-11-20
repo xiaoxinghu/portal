@@ -53,6 +53,11 @@
      serves several views, as a terminal's presenter does.
    - A content whose frames are bottom-up has the surface turned over
      (`flipped'), from the surface's first commit.
+   - A content whose frames are not the pane's size says where they go in
+     it (portal_linux_view_place), which changes the view as a new size of
+     its pane does; and a view made with a backdrop has a second surface
+     just below its own, the main thread's alone, which shows a colour over
+     the pane while the view shows.
 
    A subsurface cannot change its parent, so a view that moves to another
    frame gets a new surface there.  The content never sees a surface: it

@@ -505,7 +505,8 @@ What differs from macOS:
   primary selection. A paste that Ghostty would ask about, such as text with
   a newline in it, goes ahead: you asked for it. A program asking to read
   the clipboard is refused, since there is nobody to ask.
-- **Rex blocks** have their buffers and no screen: Emacs
-  [connects to a Rex server](rex.md#on-linux), but a block's fed terminal
-  is not built yet: Portal's Ghostty has what it needs, and the backend
-  does not feed it.
+- **Rex blocks** show their screens as on macOS
+  ([the Rex guide](rex.md#on-linux)). Portal feeds a block's terminal on a
+  thread of its own, where on macOS the Ghostty wrapper does, and a block
+  that another client sizes is drawn from the pane's bottom-left corner
+  over the theme's background at the terminal's opacity, as there.

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Terminals on Linux: a view's content that is a Ghostty surface running a
-   local shell, and Ghostty's app, which every terminal shares.
+   local shell, or fed a Rex block's output (a fed terminal, below), and
+   Ghostty's app, which every terminal shares.
 
    Ghostty draws: its renderer has a thread of its own for each surface, and
    the presenter (presenter.c) shows the frames it makes.  Portal gives the

@@ -7,8 +7,9 @@
               surface over a pane, and when each change reaches the screen.
    input.c    a view's keyboard and pointer: the invisible widget in the
               frame, who gets each key, the input method.
-   terminal.c a terminal: a content that is a Ghostty surface, and Ghostty's
-              app, which every terminal shares.
+   terminal.c a terminal: a content that is a Ghostty surface, running a
+              shell or fed a Rex block's output, and Ghostty's app, which
+              every terminal shares.
    presenter.c the thread that shows every terminal's frames.
    pattern.c  the other kind of content, a test pattern for the checks.
 
@@ -294,13 +295,14 @@ enum portal_presented {
 /* Show BUFFER on VIEW's surface, a frame WIDTH by HEIGHT device pixels, or
    0 by 0 for a frame that fills the pane whatever its size, as a single
    pixel does.  From any thread.  A sized frame is shown from the pane's top
-   left, one buffer pixel to a device pixel, and clipped to the pane.
+   left, or where the view's placement puts it, one buffer pixel to a device
+   pixel, and clipped to the pane.
 
    DAMAGE, if not NULL, is the x, y, width and height of what changed in
    the buffer since the frame before it; otherwise all of it did.
 
-   A frame for the size Emacs wants the pane to have, which the screen does
-   not have yet, is held: the main thread commits it with the pane's new
+   A frame for the size Emacs wants the pane to have, or the placement, which
+   the screen does not have yet, is held: the main thread commits it with the pane's new
    place, after GTK paints.  So is a frame for a view about to be shown.
    A frame held is given up for the next one presented, held or shown:
    *UNUSED is then its buffer, which was never attached and is the caller's
