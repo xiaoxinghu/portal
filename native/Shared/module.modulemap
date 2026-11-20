@@ -3,5 +3,6 @@
 // import it. The Linux build compiles these files itself and reads no module.
 module PortalShared {
     header "message-socket.h"
+    header "fed-terminal.h"
     export *
 }
