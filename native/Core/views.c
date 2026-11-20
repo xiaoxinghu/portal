@@ -15,6 +15,7 @@
 
 #include "channel.h"
 #include "core.h"
+#include "fed.h"
 #include "rex.h"
 #include "terminals.h"
 #include "views.h"
@@ -28,8 +29,8 @@ struct view {
     uint64_t id;
     bool attached;
     bool announced; /* Its portal_views_announce record waits for an inspection. */
-    bool fed;       /* A fed terminal (portal.h). */
-    uint32_t grid[4]; /* A fed terminal's columns, rows and cell size, as it last said. */
+    struct portal_fed *fed; /* A fed terminal's rules (fed.h), or NULL. */
+    uint32_t grid[4]; /* A fed terminal's pane's columns, rows and cell size (fed.h). */
     portal_edges edges; /* Where it is attached, while ATTACHED. */
     struct portal_input input;
     size_t length;
@@ -99,15 +100,17 @@ static struct view *add(portal_kind kind, const portal_option *options, size_t c
     struct view *view = malloc(sizeof *view + length + 1);
     char *target = copy ? malloc(length + 1) : NULL;
     struct portal_web_state *web = kind == PORTAL_WEB ? portal_web_state_new(options, count) : NULL;
-    if (!view || (copy && !target) || (kind == PORTAL_WEB && !web)) {
+    bool is_fed = !opener && kind == PORTAL_TERMINAL && portal_terminals_fed(options, count);
+    struct portal_fed *fed = is_fed ? portal_fed_new((portal_string) {name, length}) : NULL;
+    if (!view || (copy && !target) || (kind == PORTAL_WEB && !web) || (is_fed && !fed)) {
         free(view);
         free(target);
         portal_web_state_free(web);
+        portal_fed_free(fed);
         fail_with(error, "Portal is out of memory");
         return NULL;
     }
-    *view = (struct view) {.kind = kind, .web = web, .id = id, .length = length,
-                           .fed = kind == PORTAL_TERMINAL && portal_terminals_fed(options, count)};
+    *view = (struct view) {.kind = kind, .web = web, .fed = fed, .id = id, .length = length};
     memcpy(view->target, name, length + 1);
     portal_string own = {view->target, length};
     if (!(opener ? portal_web_create_window(opener, own, request, &view->native, error)
@@ -115,6 +118,7 @@ static struct view *add(portal_kind kind, const portal_option *options, size_t c
         free(view);
         free(target);
         portal_web_state_free(web);
+        portal_fed_free(fed);
         return NULL;
     }
     portal_input_open(&view->input, view->native, own, kind, options, count);
@@ -127,6 +131,8 @@ static struct view *add(portal_kind kind, const portal_option *options, size_t c
         memcpy(target, name, length + 1);
         *copy = target;
     }
+    if (fed)
+        portal_fed_opened(fed, view->native);
     return view;
 }
 
@@ -225,6 +231,7 @@ bool portal_views_close(portal_string target, portal_text *error)
     }
     if (view->fed)
         portal_rex_closed(target);
+    portal_fed_free(view->fed);
     portal_web_closing((portal_string) {view->target, view->length}, view->web);
     portal_web_state_free(view->web);
     free(view);

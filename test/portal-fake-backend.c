@@ -9,11 +9,20 @@
    A view created with the option :description describes itself with exactly
    that text instead, for tests of how the core reads descriptions.
 
-   A fed terminal's "fed" is all it has been fed, as a string, with each
-   grid it was given marked in its place, and it reports its pane's grid,
-   in cells of 8 by 16, in the size it is attached at.  It
-   describes no "title", "pwd", "program" or "exited", which the core
-   describes for it.
+   A fed terminal's "fed" is all it has been given to parse, as a string,
+   and it parses at once: its "pending" bytes are what a test says, until
+   it drains.  Attached, it tells the core its pane, the size it is
+   attached at, at scale 1 with no padding, and cells of 8 by 16; and once
+   it has been, it takes the grid it is placed at as such a terminal would,
+   at once, telling the core so, and marks each grid it starts to hold in
+   its place in "fed" as "<grid COLUMNSxROWS>".  Never attached, it takes
+   no grid until a test tells the core it did.  Created with :early, it
+   tells the core a pane of 400 by 300 at scale 1 with 2 pixels of padding,
+   and cells of 8 by 16, while it is created, as a platform may before the
+   core has the view.  Its fed primitives and the
+   timers started are logged (portal-fake-backend.h).  It describes no
+   "title", "pwd", "program" or "exited", which the core describes for
+   it.
 
    A terminal describes the facts every platform's terminal reports, "ready",
    "title", "pwd", "program", "columns", "rows" and "exited", which is true
@@ -92,17 +101,26 @@ struct portal_view {
     bool holding;          /* It holds the presses in HELD, after TRIGGER or OFFERED. */
     struct press held[MAX_KEYS];
     size_t held_count;
+    /* A fed terminal: the grid it took last, 0 by 0 before any; whether it
+       is placed at a grid, not its pane, and which. */
+    uint32_t took[2];
+    bool gridded;
+    uint32_t grid[2];
+    size_t pending; /* Its bytes waiting to be parsed, as a test says. */
 };
 
 static struct portal_fake_calls calls;
 static bool refusing; /* See portal_fake_refuse. */
 static uint64_t timers[MAX_TIMERS]; /* Tokens of the timers not yet fired, oldest first. */
+static uint64_t timer_lengths[MAX_TIMERS]; /* Their milliseconds. */
 static size_t timer_count;
 static struct portal_view *all[MAX_VIEWS]; /* Every view created, destroyed or not. */
 static size_t view_count;
 static struct press posted[MAX_KEYS]; /* Replayed presses the event loop has not run. */
 static size_t posted_count;
 static uint64_t now; /* The fake clock, in milliseconds; see portal_fake_wait. */
+static char *fed_log;      /* What portal_fake_fed_log returns, malloc'd, or NULL. */
+static size_t fed_log_length;
 static char key_log[4096];            /* Where presses went, since the last portal_fake_keys. */
 
 static portal_text copy(const char *data, size_t length)
@@ -207,6 +225,23 @@ static void append(struct portal_view *view, const char *name, const char *separ
     set_string(view, name, bytes, previous.length + gap + length);
     free(bytes);
     free(previous.data);
+}
+
+/* Add a line to the fed log. */
+static void note(const char *format, ...)
+{
+    va_list arguments;
+    va_start(arguments, format);
+    int length = vsnprintf(NULL, 0, format, arguments);
+    va_end(arguments);
+    char *grown = length < 0 ? NULL : realloc(fed_log, fed_log_length + (size_t) length + 1);
+    if (!grown)
+        abort();
+    fed_log = grown;
+    va_start(arguments, format);
+    vsnprintf(fed_log + fed_log_length, (size_t) length + 1, format, arguments);
+    va_end(arguments);
+    fed_log_length += (size_t) length;
 }
 
 /* A growing JSON text. */
@@ -325,6 +360,10 @@ bool portal_view_create(portal_kind kind, portal_string target, const portal_opt
         else
             entry->flag = options[i].flag;
     }
+    if (fed && get(view, "early")) {
+        portal_terminal_pane(target, 400, 300, 1, 2);
+        portal_terminal_cell(target, 8, 16);
+    }
     /* A terminal starts at its :points as macOS's does: clamped by the core. */
     const struct property *points = get(view, "points");
     if (kind == PORTAL_TERMINAL && points && points->kind == REAL)
@@ -362,13 +401,13 @@ bool portal_view_attach(portal_view *view, portal_string frame, portal_rect rect
     set_string(view, "frame", frame.data, frame.length);
     set_integers(view, "size", (int64_t[]) {rect.width, rect.height}, 2);
     set_flag(view, "attached", true);
-    /* A fed terminal's pane holds a grid of cells of 8 by 16, which it
-       reports as a real one does once it is laid out. */
+    /* A fed terminal's pane, with cells of 8 by 16, which it tells as a
+       real one does once it is laid out. */
     const struct property *fed = get(view, "fed");
     if (view->kind == PORTAL_TERMINAL && fed && (fed->kind == STRING || fed->flag)) {
-        uint32_t columns = (uint32_t) (rect.width / 8), rows = (uint32_t) (rect.height / 16);
-        portal_terminal_grid((portal_string) {view->target, strlen(view->target)}, columns, rows,
-                             8, 16);
+        portal_string target = {view->target, strlen(view->target)};
+        portal_terminal_pane(target, (double) rect.width, (double) rect.height, 1, 0);
+        portal_terminal_cell(target, 8, 16);
     }
     return true;
 }
@@ -442,9 +481,10 @@ struct portal_fake_calls portal_fake_calls(void)
 
 void portal_timer_start(uint64_t token, uint64_t milliseconds)
 {
-    (void) milliseconds;
+    note("timer %llu ms\n", (unsigned long long) milliseconds);
     if (timer_count == MAX_TIMERS)
         abort();
+    timer_lengths[timer_count] = milliseconds;
     timers[timer_count++] = token;
 }
 
@@ -453,14 +493,33 @@ size_t portal_fake_timers(void)
     return timer_count;
 }
 
-void portal_fake_fire_timers(void)
+/* Fire the timers started for MILLISECONDS, or every one for 0. */
+static void fire(uint64_t milliseconds)
 {
     uint64_t fired[MAX_TIMERS];
-    size_t count = timer_count;
-    memcpy(fired, timers, count * sizeof *timers);
-    timer_count = 0;
+    size_t count = 0, kept = 0;
+    for (size_t i = 0; i < timer_count; i++) {
+        if (!milliseconds || timer_lengths[i] == milliseconds) {
+            fired[count++] = timers[i];
+        } else {
+            timer_lengths[kept] = timer_lengths[i];
+            timers[kept++] = timers[i];
+        }
+    }
+    timer_count = kept;
     for (size_t i = 0; i < count; i++)
         portal_timer_fired(fired[i]);
+}
+
+void portal_fake_fire_timers(void)
+{
+    fire(0);
+}
+
+void portal_fake_fire_timers_of(uint64_t milliseconds)
+{
+    if (milliseconds)
+        fire(milliseconds);
 }
 
 /* The fake's URL parser percent-encodes, in uppercase, each byte a URL may
@@ -658,39 +717,80 @@ bool portal_terminal_read_text(portal_view *terminal, portal_text *text, portal_
     return true;
 }
 
-/* A fed terminal's output is its "fed" string, everything fed so far. */
-bool portal_terminal_feed(portal_view *terminal, const char *bytes, size_t length,
-                          portal_text *error)
+/* Whether a fed primitive may run on TERMINAL: a working fed terminal,
+   whose "fed" is a string from now on. */
+static bool fed_working(struct portal_view *terminal, portal_text *error)
 {
     if (!working(terminal, error))
         return false;
     const struct property *fed = get(terminal, "fed");
     if (!fed || (fed->kind == FLAG && !fed->flag))
-        return fail(error, "The fake fed a terminal that is not fed");
+        return fail(error, "The fake's terminal is not fed");
     if (fed->kind == FLAG)
         set_string(terminal, "fed", "", 0);
+    return true;
+}
+
+/* A fed terminal's output is its "fed" string, everything parsed so far. */
+bool portal_terminal_parse(portal_view *terminal, const char *bytes, size_t length,
+                           portal_text *error)
+{
+    if (!fed_working(terminal, error))
+        return false;
+    note("parse %.*s\n", (int) length, bytes);
     append(terminal, "fed", "", bytes, length);
     return true;
 }
 
-/* A fed terminal takes a grid in its place in what it is fed: its "fed"
-   string marks it there as "<grid COLUMNSxROWS>", and its "columns" and
-   "rows" are the grid's. */
-bool portal_terminal_hold_grid(portal_view *terminal, uint32_t columns, uint32_t rows,
-                               portal_text *error)
+bool portal_terminal_drain(portal_view *terminal, portal_text *error)
 {
-    char mark[64];
-    if (!working(terminal, error))
+    if (!fed_working(terminal, error))
         return false;
-    const struct property *fed = get(terminal, "fed");
-    if (!fed || (fed->kind == FLAG && !fed->flag))
-        return fail(error, "The fake gave a grid to a terminal that is not fed");
-    if (fed->kind == FLAG)
-        set_string(terminal, "fed", "", 0);
-    int length = snprintf(mark, sizeof mark, "<grid %ux%u>", columns, rows);
-    append(terminal, "fed", "", mark, (size_t) length);
-    set_integer(terminal, "columns", columns);
-    set_integer(terminal, "rows", rows);
+    note("drain\n");
+    terminal->pending = 0;
+    return true;
+}
+
+bool portal_terminal_pending(portal_view *terminal, size_t *bytes, portal_text *error)
+{
+    if (!fed_working(terminal, error))
+        return false;
+    *bytes = terminal->pending;
+    return true;
+}
+
+/* Placed at a grid, which hangs below its pane where a pane-filling
+   rectangle does not, an attached terminal takes it: with cells of 8 by
+   16 at scale 1 and no padding, the rectangle is the grid and half a cell
+   more. */
+bool portal_terminal_place(portal_view *terminal, portal_pane_rect rect, portal_text *error)
+{
+    if (!fed_working(terminal, error))
+        return false;
+    note("place x %g y %g width %g height %g top %g\n", rect.x, rect.y, rect.width, rect.height,
+         rect.top);
+    if (!get(terminal, "size"))
+        return true;
+    bool gridded = rect.y < 0;
+    uint32_t columns = rect.width > 0 ? (uint32_t) (rect.width / 8) : 0;
+    uint32_t rows = rect.height > 0 ? (uint32_t) (rect.height / 16) : 0;
+    if (gridded && (!terminal->gridded || terminal->grid[0] != columns
+                    || terminal->grid[1] != rows)) {
+        char mark[64];
+        int length = snprintf(mark, sizeof mark, "<grid %ux%u>", columns, rows);
+        append(terminal, "fed", "", mark, (size_t) length);
+        terminal->grid[0] = columns;
+        terminal->grid[1] = rows;
+    }
+    terminal->gridded = gridded;
+    if (columns && rows && (terminal->took[0] != columns || terminal->took[1] != rows)) {
+        terminal->took[0] = columns;
+        terminal->took[1] = rows;
+        set_integer(terminal, "columns", columns);
+        set_integer(terminal, "rows", rows);
+        portal_terminal_took_grid((portal_string) {terminal->target, strlen(terminal->target)},
+                                  columns, rows);
+    }
     return true;
 }
 
@@ -1554,6 +1654,23 @@ void portal_fake_socket_closed(uint64_t socket, int code, const char *reason)
 void portal_fake_socket_end(uint64_t socket, const char *reason)
 {
     portal_fake_socket_closed(socket, 0, reason);
+}
+
+void portal_fake_pending(const char *target, size_t bytes)
+{
+    for (size_t i = 0; i < view_count; i++)
+        if (!all[i]->destroyed && !strcmp(all[i]->target, target))
+            all[i]->pending = bytes;
+}
+
+const char *portal_fake_fed_log(void)
+{
+    static char *last;
+    free(last);
+    last = fed_log ? fed_log : calloc(1, 1);
+    fed_log = NULL;
+    fed_log_length = 0;
+    return last;
 }
 
 const char *portal_fake_fed(const char *target)

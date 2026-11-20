@@ -26,7 +26,7 @@ bool portal_channel_send(portal_string type, portal_string target, const portal_
 
 /* Start a timer for another part of the core, and return its token, which
    no other timer has: portal_timer_fired passes a token that is not the
-   channel's own to that part (rex.c). */
+   channel's own to that part (fed.c, then rex.c). */
 uint64_t portal_channel_timer(uint64_t milliseconds);
 
 /* How the channel writes: write(2), unless a test replaces it to produce what

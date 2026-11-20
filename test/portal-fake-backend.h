@@ -37,9 +37,17 @@ void portal_fake_exit(portal_view *terminal);
    one does with escape sequences, and the fake reports the change. */
 void portal_fake_report(portal_view *terminal, const char *title, const char *directory);
 
-/* Everything fed to the fed terminal TARGET so far, "" for none.  Valid
-   until the next call. */
+/* Everything the fed terminal TARGET was given to parse so far, with the
+   grids it held marked, "" for none.  Valid until the next call. */
 const char *portal_fake_fed(const char *target);
+/* BYTES of TARGET's output wait to be parsed, as its pending primitive
+   says until it drains. */
+void portal_fake_pending(const char *target, size_t bytes);
+/* What the core asked of fed terminals and timers since the last call,
+   oldest first, one to a line: "parse BYTES", "drain", "place x X y Y
+   width W height H top T", and "timer N ms" for each timer started, by any
+   part of the core.  Valid until the next call. */
+const char *portal_fake_fed_log(void);
 
 /* The registered hot keys, oldest first, such as "3:P+14 5:F12+2":
    each one's hot key, its key and its portal_modifier bits.  Valid until the
@@ -56,6 +64,8 @@ const char *portal_fake_posted(void);
 size_t portal_fake_timers(void);
 /* Fire those timers, oldest first.  Timers they start wait for the next call. */
 void portal_fake_fire_timers(void);
+/* Fire those started for MILLISECONDS alone, as when one runs out first. */
+void portal_fake_fire_timers_of(uint64_t milliseconds);
 
 /* A user presses CHORD, or it repeats, in the fake's one window.  It goes to
    the view holding a trigger or offering a press, if any, else the view with

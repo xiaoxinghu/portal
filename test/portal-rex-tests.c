@@ -453,6 +453,9 @@ static void test_showing(void)
     answer_with(id, 3, "{\"blocks\":[]}", NULL);
     CHECK(is_text(portal_fake_socket_sent(id), ""));
     CHECK(portal_fake_timers() == 1);
+    /* A pane that holds the same grid is no new grid. */
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 801, 481}, text("frame"), &error));
+    CHECK(portal_fake_timers() == 1);
     /* A new grid meanwhile settles again: the first timer counts for
        nothing, and the block takes the new grid. */
     CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 640, 320}, text("frame"), &error));
@@ -1162,6 +1165,14 @@ static const char *resume_hex(unsigned char token, uint64_t count)
     return hex;
 }
 
+/* TARGET's terminal has BYTES waiting to be parsed, and the platform says
+   a mark was crossed. */
+static void backlog(const char *target, size_t bytes)
+{
+    portal_fake_pending(target, bytes);
+    portal_terminal_backlog(text(target));
+}
+
 static void test_backlog(void)
 {
     portal_text error = {0};
@@ -1170,28 +1181,28 @@ static void test_backlog(void)
     char *target = fed_terminal(&error);
     uint64_t data = show_live(id, target, &number, false, true, "P");
     /* While the terminal has too much to parse, the stream waits unread. */
-    portal_terminal_backlog(text(target), true);
+    backlog(target, PORTAL_TERMINAL_BACKLOG + 1);
     portal_fake_socket_deliver(data, "one ");
     portal_fake_socket_deliver(data, "two ");
     CHECK(is_text(fresh(target), ""));
     bool readable = false;
     CHECK(portal_socket_wait(data, 0, &readable, &error) && readable);
     /* Worked down, it is read where it stopped, in order. */
-    portal_terminal_backlog(text(target), false);
+    backlog(target, PORTAL_TERMINAL_BACKLOG_LOW);
     CHECK(is_text(fresh(target), "one two "));
     CHECK(portal_socket_wait(data, 0, &readable, &error) && !readable);
     portal_fake_socket_deliver(data, "three");
     CHECK(is_text(fresh(target), "three"));
     /* Its end waits too, and comes in its place, after the output. */
-    portal_terminal_backlog(text(target), true);
+    backlog(target, PORTAL_TERMINAL_BACKLOG + 1);
     portal_fake_socket_deliver(data, "last");
     portal_fake_socket_closed(data, 1000, "The server closed the connection (1000)");
     CHECK(strstr(rex_state(target), "\"state\":\"live\"") != NULL);
-    portal_terminal_backlog(text(target), false);
+    backlog(target, 0);
     CHECK(is_text(fresh(target), "last"));
     CHECK(strstr(rex_state(target), "\"state\":\"ended\"") != NULL);
     /* Another terminal's backlog, or none, changes nothing. */
-    portal_terminal_backlog(text("terminal:none"), true);
+    portal_terminal_backlog(text("terminal:none"));
     CHECK(portal_views_close(text(target), &error));
     free(target);
     CHECK(portal_rex_close(id, &error));

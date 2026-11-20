@@ -30,6 +30,7 @@
 
 #include "channel.h"
 #include "core.h"
+#include "fed.h"
 #include "input.h"
 #include "json.h"
 #include "rex.h"
@@ -230,7 +231,6 @@ struct shown {
     bool paint_waits;       /* PAINTING: the paint has come, before the stream's grid. */
     /* Holding up: flow control, and coming back from a stream or a
        connection that ended. */
-    bool backlogged;          /* The terminal has too much to parse. */
     bool deferred;            /* The stream has something unread meanwhile. */
     unsigned char token[16];  /* The latest WELCOME's reconnect token. */
     bool tokened;             /* A WELCOME gave it. */
@@ -575,12 +575,11 @@ static bool succeeded(struct shown *shown, const char *method, const char *respo
     return true;
 }
 
-/* Feed BYTES to SHOWN's terminal. */
+/* Feed BYTES to SHOWN's terminal (fed.h). */
 static void feed(struct shown *shown, const char *bytes, size_t length)
 {
-    portal_view *terminal = portal_views_find(view(shown->target), PORTAL_TERMINAL, NULL);
     portal_text error = {0};
-    if (length && terminal && !portal_terminal_feed(terminal, bytes, length, &error))
+    if (length && !portal_fed_feed(view(shown->target), bytes, length, &error))
         free(error.data);
 }
 
@@ -1234,12 +1233,11 @@ static void output(struct shown *shown, const char *bytes, size_t length)
    whichever client sized the block. */
 static void hold(struct shown *shown)
 {
-    portal_view *terminal = portal_views_find(view(shown->target), PORTAL_TERMINAL, NULL);
     portal_text error = {0};
     if (!shown->columns || !shown->rows
-        || (shown->drawn[0] == shown->columns && shown->drawn[1] == shown->rows) || !terminal)
+        || (shown->drawn[0] == shown->columns && shown->drawn[1] == shown->rows))
         return;
-    if (portal_terminal_hold_grid(terminal, shown->columns, shown->rows, &error)) {
+    if (portal_fed_hold_grid(view(shown->target), shown->columns, shown->rows, &error)) {
         shown->drawn[0] = shown->columns;
         shown->drawn[1] = shown->rows;
     }
@@ -1545,7 +1543,7 @@ static void stream_ready(struct shown *shown)
     bool ended = false;
     int code = 0;
     uint64_t socket = shown->data, id = shown->id;
-    shown->deferred = shown->backlogged || (shown->stage == PAINTING && shown->held.length >= HELD_MOST);
+    shown->deferred = portal_fed_backlogged(view(shown->target)) || (shown->stage == PAINTING && shown->held.length >= HELD_MOST);
     if (shown->deferred || !socket)
         return;
     if (!portal_socket_read(socket, &messages, &count, &ended, &code, &reason, &error)) {
@@ -1890,7 +1888,6 @@ void portal_rex_backlog(portal_string target, bool backlogged)
     struct shown *shown = shown_in(target);
     if (!shown)
         return;
-    shown->backlogged = backlogged;
     if (!backlogged && shown->deferred)
         stream_ready(shown);
 }

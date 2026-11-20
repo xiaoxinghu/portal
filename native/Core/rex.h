@@ -112,7 +112,7 @@ bool portal_rex_resume(uint64_t id, portal_text *error);
    the owner, so claiming the block with "take" (portal_rex_take) is all
    it takes to size it to Emacs's pane.  TARGET always holds the block's
    grid, from the paint on and from each "resize" message at its place in
-   the stream (portal_terminal_hold_grid), as the stream's bytes are laid
+   the stream (portal_fed_hold_grid), as the stream's bytes are laid
    out for it, whoever sized it.  A resize to another grid while the paint
    is on its way asks for the paint again, for that grid, and drops the
    output held until then, as the new paint has it.  A paint that comes
@@ -196,13 +196,14 @@ void portal_rex_describe(portal_string target, struct json *json);
    carries on. */
 void portal_rex_closed(portal_string target);
 
-/* For terminals.c and input.c: what a fed terminal TARGET wrote, its new
-   grid, which views.c holds, and whether it has the keyboard. */
+/* For terminals.c, input.c and fed.c: what a fed terminal TARGET wrote,
+   its pane's new grid, which views.c holds, and whether it has the
+   keyboard. */
 void portal_rex_input(portal_string target, const char *bytes, size_t length);
 void portal_rex_grid(portal_string target);
 void portal_rex_focus(portal_string target, bool focused);
-/* For terminals.c: TARGET, a fed terminal, has too much output to parse,
-   or has worked it down (portal_terminal_backlog). */
+/* For fed.c: TARGET, a fed terminal, has too much output to parse, or has
+   worked it down (portal_fed_backlogged). */
 void portal_rex_backlog(portal_string target, bool backlogged);
 
 /* For channel.c: the timer TOKEN, which is not the channel's, fired. */
