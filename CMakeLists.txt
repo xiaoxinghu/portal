@@ -444,21 +444,6 @@ pkg-config's egl, such as libglvnd's")
         set_target_properties(portal-test-pointer PROPERTIES
             C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/linux")
-        # The portable message socket, native/Shared, against a server the
-        # test plays on real Unix sockets, with no Emacs and no backend. The
-        # macOS module still has its own socket, native/MessageSocket.swift,
-        # so only this one builds the file; the test compiles it by including
-        # it.
-        add_executable(portal-message-socket-tests test/portal-message-socket-tests.c)
-        target_include_directories(portal-message-socket-tests PRIVATE
-            native/Core/include native/Shared)
-        target_link_libraries(portal-message-socket-tests PRIVATE Threads::Threads)
-        target_compile_options(portal-message-socket-tests PRIVATE -Wall -Wextra -Werror)
-        set_target_properties(portal-message-socket-tests PROPERTIES
-            C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
-            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/linux")
-        add_test(NAME message-socket COMMAND portal-message-socket-tests)
-        set_tests_properties(message-socket PROPERTIES TIMEOUT 60)
         # A fed terminal's rules, native/Shared, with a backend and a core
         # the test plays: the order of output and grids, the pane's geometry
         # and the backlog. No backend calls them yet, and the macOS module
@@ -515,6 +500,20 @@ add_custom_target(portal-licenses ALL
     VERBATIM)
 add_dependencies(portal-licenses portal portal-ui-host)
 if(BUILD_TESTING)
+    # The message socket, native/Shared, which both modules build, against a
+    # server the test plays on real Unix sockets, with no Emacs and no
+    # backend. The test compiles the file by including it.
+    find_package(Threads REQUIRED)
+    add_executable(portal-message-socket-tests test/portal-message-socket-tests.c)
+    target_include_directories(portal-message-socket-tests PRIVATE
+        native/Core/include native/Shared)
+    target_link_libraries(portal-message-socket-tests PRIVATE Threads::Threads)
+    target_compile_options(portal-message-socket-tests PRIVATE -Wall -Wextra -Werror)
+    set_target_properties(portal-message-socket-tests PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+    add_test(NAME message-socket COMMAND portal-message-socket-tests)
+    set_tests_properties(message-socket PROPERTIES TIMEOUT 60)
     if(APPLE)
         # Portal's patches to libghostty-spm, tested by the package's own tests on
         # real Ghostty surfaces: those the patches add and the in-memory session's.

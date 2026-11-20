@@ -1,0 +1,7 @@
+// What of native/Shared the Swift backend calls, for Swift: the Swift
+// package's PortalShared target and the standalone checks (docs/testing.md)
+// import it. The Linux build compiles these files itself and reads no module.
+module PortalShared {
+    header "message-socket.h"
+    export *
+}

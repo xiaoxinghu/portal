@@ -187,9 +187,7 @@ sh test/linux-follow.sh fed
 
 CTest leaves out the suite of the macOS Ghostty wrapper, `libghostty-spm`,
 and of the macOS VM runner, and adds `linux-module`, which loads the built
-module in batch Emacs; `message-socket`, the
-[portable message socket](docs/architecture.md#rex-connections) against a
-server the test plays; `fed-terminal`, a
+module in batch Emacs; `fed-terminal`, a
 [fed terminal's rules](docs/architecture.md#rex-connections) against a
 backend the test plays; and `shared-macos`, which compiles each C file of
 `native/Shared` for macOS with Zig's cross-compile, since nothing here runs
