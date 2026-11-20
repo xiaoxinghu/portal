@@ -100,9 +100,7 @@ this Emacs has opened no display")))
   (should (equal (portal-linux-module-tests--error #'portal--shortcut-set 0 "Control-Option-A")
                  "Cannot register shortcut Control-Option-A: \
 Portal has no system-wide keys on Linux yet"))
-  (should (equal (portal-linux-module-tests--error
-                  #'portal--rex-open "/tmp/portal-none.sock" "portal" "0")
-                 "Portal has no Rex connections on Linux yet"))
+  ;; Message sockets it has: test/portal-rex-tests.el connects with them.
   ;; A failed open and a refused shortcut left nothing behind.
   (should-not (portal--inspect "web:1"))
   (should-not (portal--shortcuts)))

@@ -219,16 +219,13 @@ if(BUILD_TESTING)
             ${ert_batch})
     set_tests_properties(terminal-bindings PROPERTIES TIMEOUT 30)
     # The Rex client on the built module, whose sockets need no window, against
-    # test/fake-rex-server.py on sockets of its own. The Linux backend has no
-    # sockets yet.
-    if(APPLE)
-        add_test(NAME rex
-            COMMAND "${CMAKE_COMMAND}" -E env "PORTAL_TEST_BUILD=${CMAKE_BINARY_DIR}"
-                ${test_emacs} -L "${CMAKE_SOURCE_DIR}"
-                -l "${CMAKE_SOURCE_DIR}/test/portal-rex-tests.el"
-                ${ert_batch})
-        set_tests_properties(rex PROPERTIES TIMEOUT 60)
-    endif()
+    # test/fake-rex-server.py on sockets of its own.
+    add_test(NAME rex
+        COMMAND "${CMAKE_COMMAND}" -E env "PORTAL_TEST_BUILD=${CMAKE_BINARY_DIR}"
+            ${test_emacs} -L "${CMAKE_SOURCE_DIR}"
+            -l "${CMAKE_SOURCE_DIR}/test/portal-rex-tests.el"
+            ${ert_batch})
+    set_tests_properties(rex PROPERTIES TIMEOUT 60)
     add_test(NAME excalidraw
         COMMAND ${test_emacs} -L "${CMAKE_SOURCE_DIR}"
             -l "${CMAKE_SOURCE_DIR}/test/portal-excalidraw-tests.el"
@@ -391,10 +388,11 @@ pkg-config's egl, such as libglvnd's")
     add_library(portal-module MODULE native/Core/emacs.c ${PORTAL_CORE_SOURCES}
         native/Linux/backend.c native/Linux/views.c native/Linux/input.c
         native/Linux/terminal.c native/Linux/presenter.c native/Linux/pattern.c
+        native/Shared/message-socket.c
         ${protocol_sources})
     target_include_directories(portal-module PRIVATE
-        native/Core/include native/Core "${EMACS_INCLUDE}" "${ghostty_prefix}/include"
-        "${protocols}")
+        native/Core/include native/Core native/Shared "${EMACS_INCLUDE}"
+        "${ghostty_prefix}/include" "${protocols}")
     # EGL: a terminal's renderer draws with a display on Emacs's own
     # Wayland connection, the compositor's GPU.
     target_link_libraries(portal-module PRIVATE PkgConfig::portal_platform Threads::Threads
@@ -446,6 +444,21 @@ pkg-config's egl, such as libglvnd's")
         set_target_properties(portal-test-pointer PROPERTIES
             C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/linux")
+        # The portable message socket, native/Shared, against a server the
+        # test plays on real Unix sockets, with no Emacs and no backend. The
+        # macOS module still has its own socket, native/MessageSocket.swift,
+        # so only this one builds the file; the test compiles it by including
+        # it.
+        add_executable(portal-message-socket-tests test/portal-message-socket-tests.c)
+        target_include_directories(portal-message-socket-tests PRIVATE
+            native/Core/include native/Shared)
+        target_link_libraries(portal-message-socket-tests PRIVATE Threads::Threads)
+        target_compile_options(portal-message-socket-tests PRIVATE -Wall -Wextra -Werror)
+        set_target_properties(portal-message-socket-tests PROPERTIES
+            C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/linux")
+        add_test(NAME message-socket COMMAND portal-message-socket-tests)
+        set_tests_properties(message-socket PROPERTIES TIMEOUT 60)
         # The built module in batch Emacs: what it answers with no view, and
         # what it says of each part the backend lacks.
         add_test(NAME linux-module
