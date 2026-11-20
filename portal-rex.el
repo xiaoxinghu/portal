@@ -2545,7 +2545,29 @@ it made the session."
                      (format "Cannot rename Rex session %s"
                              (portal-rex--session-name connection session-id))
                      "session.set_label" (list :session_id session-id :label (or label "")))
+    ;; Its event usually comes before the answer, and the session has its
+    ;; label by now; if it has not, or the server chose the label, ask.
+    (unless (and label (not (string-empty-p (string-trim label)))
+                 (equal (portal-rex--session-label connection session-id) (string-trim label)))
+      (portal-rex--follow-session-label connection session-id))
     nil))
+
+(defun portal-rex--follow-session-label (connection session-id)
+  "Call the session SESSION-ID of CONNECTION what its server calls it now.
+The event of a new label may come after the answer to the call that set
+it, as a real server's sometimes does: this asks for the server's
+sessions, and renames the session's buffers as the event will.  A server
+that does not say changes nothing, and the event still comes."
+  (when-let* ((listed (condition-case nil
+                          (portal-rex-call connection "session.list")
+                        (portal-rex-error nil)))
+              (session (seq-find (lambda (known) (equal (plist-get known :session_id) session-id))
+                                 (plist-get listed :sessions)))
+              (label (plist-get session :label))
+              ((stringp label))
+              ((not (equal label (portal-rex--session-label connection session-id)))))
+    (portal-rex--label-session connection session-id label)
+    (mapc #'portal-rex--rename-buffer (portal-rex-buffers connection session-id))))
 
 ;;;###autoload
 (defun portal-rex-session-destroy (connection session-id &optional confirm)

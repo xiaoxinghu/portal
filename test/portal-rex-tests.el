@@ -1850,7 +1850,16 @@ It and those before it are taken: a later call finds only newer ones."
       (should (equal (cadr (should-error (portal-rex-session-rename connection "session:a"
                                                                     (make-string 129 ?x))
                                          :type 'user-error))
-                     "Cannot rename Rex session work: session.set_label: label must be at most 128 characters without control characters")))))
+                     "Cannot rename Rex session work: session.set_label: label must be at most 128 characters without control characters"))
+      ;; A label whose event is late, as a real server's sometimes is, is
+      ;; the session's all the same when the command returns: Emacs asks
+      ;; what the server calls it.  Here the event never comes.
+      (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "late")
+                                                 (:session_id "session:b" :label "games")])
+      (portal-fake-rex-command server :result "session.set_label" :payload '(:revision 9))
+      (portal-rex-session-rename connection "session:a" " late ")
+      (should (equal (portal-rex--session-label connection "session:a") "late"))
+      (should (equal (portal-rex-tests--names) '("*rex: games/shell*" "*rex: late/api*"))))))
 
 (ert-deftest portal-rex-session-destroy-asks-naming-the-blocks ()
   (portal-rex-tests--with (server)
