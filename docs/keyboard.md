@@ -22,7 +22,7 @@ reach Emacs:
 on pages that leave Control-X unused. Command-=, Command-- and Command-0 reach
 Emacs from inside a terminal too, where they zoom that terminal's text
 ([terminal commands](#terminal-commands)). Terminal programs get every Control and
-Option chord: tmux keeps `C-b`. Pages get first claim on chords, as in a browser.
+Option chord except `M-x`, which reaches Emacs; tmux keeps `C-b`. Pages get first claim on chords, as in a browser.
 Plain keys never reach Emacs while the app has the keyboard. Emacs, which
 also binds single keys, gets them once you return to it; see
 [Evil](#evil). Emacs handles splits, buffers and switching; views have no

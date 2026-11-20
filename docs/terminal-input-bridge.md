@@ -19,7 +19,7 @@ The core (`native/Core/input.c`) routes keys pressed in a view to the first take
 3. **The view's app.** Only chords can continue: character-typing keys with
    Control, Meta (Option) or Super (Command). Plain and Shift keys, and
    non-character keys (arrows, Return, Tab, function keys), always stay in the app.
-   - Terminal programs get every chord except Super's: tmux gets `C-b`, the
+   - Terminal programs get every chord except `M-x` and Super chords: tmux gets `C-b`, the
      shell `C-a` and `M-f`. macOS Ghostty sends programs nothing for Super
      unless they enable the kitty keyboard protocol; Portal gives those up.
    - Web pages are offered each chord and keep those they use.

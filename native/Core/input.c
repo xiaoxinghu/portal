@@ -14,7 +14,7 @@
    3. To the view's app.  Only a chord can go further: a key that types a
       character, pressed with Control, Meta or Super.  Plain and Shift keys,
       and keys that type no character, stay with the app.  A terminal's app
-      never uses a Super chord, and uses every other; a web view's page is
+      leaves M-x and Super chords unused; a web view's page is
       offered each chord, and the platform reports one it did not use
       (portal_input_unused).
    4. To the view's shortcuts: Super-C copies and Super-V pastes in every
@@ -320,7 +320,7 @@ static portal_key decide(struct portal_input *view, portal_chord key, portal_cho
         return PORTAL_KEY_PASS;
     if (view->kind == PORTAL_WEB)
         return PORTAL_KEY_OFFER;
-    if (!(key.modifiers & PORTAL_SUPER))
+    if (!(key.modifiers & PORTAL_SUPER) && !(key.modifiers == PORTAL_META && key.character == 'x'))
         return PORTAL_KEY_PASS;
     return unused(view, key, chord, repeat);
 }

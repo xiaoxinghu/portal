@@ -552,6 +552,18 @@ Rex blocks need Ghostty patches it does not apply"))
     (portal-linux-gui--type "z")
     (portal-linux-gui--wait (lambda () (equal (portal-linux-gui--get :text) "z")))))
 
+(ert-deftest portal-linux-gui-terminal-meta-x-reads-an-emacs-command ()
+  :tags '(:gui)
+  (portal-linux-gui--with-view 'terminal '(:directory "/")
+    (portal-linux-gui--focus)
+    (let ((portal-linux-gui--ran nil))
+      (portal-linux-gui--type "-M" "alt" "-k" "x" "-m" "alt"
+                              "portal-linux-gui--mark" "-k" "Return")
+      (portal-linux-gui--handoff)
+      (should portal-linux-gui--ran))
+    (portal-linux-gui--wait (lambda () (portal-linux-gui--get :focused)))
+    (should (equal (portal-linux-gui--get :text) ""))))
+
 (ert-deftest portal-linux-gui-page-keeps-the-chords-it-uses ()
   :tags '(:gui)
   "A web view's app is offered each chord, and keys wait for its answer."

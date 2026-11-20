@@ -220,20 +220,20 @@ static bool same_calls(struct portal_fake_calls a, struct portal_fake_calls b)
 static void test_a_terminal_chord_falls_through(void)
 {
     char *terminal = open_view("terminal", false);
-    /* The program gets typing, and every chord but Super's: tmux gets C-b.
+    /* The program gets typing, tmux's C-b and the shell's M-f.
        A key that types no character, here Tab, is the program's too. */
     press('x', 0);
     press('X', SHIFT);
     press('b', C);
-    press('x', M);
+    press('f', M);
     press('\t', S);
-    CHECK(went("%s x, %s S-X, %s C-b, %s M-x, %s s-\t", terminal, terminal, terminal, terminal,
+    CHECK(went("%s x, %s S-X, %s C-b, %s M-f, %s s-\t", terminal, terminal, terminal, terminal,
                terminal));
     CHECK(sent(""));
-    /* A Super chord goes to Emacs, as typed. */
-    press('x', S);
-    CHECK(went("held s-x"));
-    int64_t serial = key_record(terminal, 'x', S);
+    /* M-x goes through ordinary Emacs key lookup. */
+    press('x', M);
+    CHECK(went("held M-x"));
+    int64_t serial = key_record(terminal, 'x', M);
     CHECK(serial > 0);
     /* Emacs has the keyboard while it handles the handoff. */
     CHECK(!act(terminal, "focused", 0));

@@ -84,8 +84,8 @@ starts in the current local `default-directory`; interactive commands, Vim and
 other TUIs use the real protocol engine, not Emacs text, WebKit or Bun.
 
 - Click or press `RET` in the terminal buffer to focus it.
-- The shell gets typing and every Control/Option chord, including Escape,
-  `C-g`, `C-c` and tmux's `C-b`. Emacs runs Command chords in the terminal buffer,
+- The shell gets typing, Escape and Control/Option chords such as
+  `C-g`, `C-c` and tmux's `C-b`. Emacs handles `M-x` and Command chords in the terminal buffer,
   then returns focus.
 - `Command-period` (`⌘.`, configurable via `portal-input-escape-key`),
   Escape twice [once turned on](keyboard.md#escape-twice), or
@@ -490,7 +490,8 @@ What differs from macOS:
   (`portal-input-escape-key`). Copy and paste are Control-Shift-C and
   Control-Shift-V, as in other Linux terminals, and Control-Insert and
   Shift-Insert, as in Emacs; Ghostty's other Linux key bindings are off, so
-  Alt and Control chords reach the shell. Super chords go to Emacs, as
+  other Alt and Control chords reach the shell except `M-x` (Alt-X), which goes
+  to Emacs. Super chords go to Emacs, as
   Command chords do on macOS. Shift-Insert pastes the clipboard, as Emacs's
   `yank` does, not the primary selection; a middle click pastes that. Where
   the desktop takes Super-C and Super-V for itself, as Omarchy's universal
