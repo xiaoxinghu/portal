@@ -27,6 +27,22 @@ Messages arrive by the module's record, as between commands."
     (with-current-buffer (messages-buffer)
       (buffer-substring-no-properties start (point-max)))))
 
+(defun portal-rex-server-gui-tests--screens-p ()
+  "Return non-nil where Portal shows a block's screen.
+That is not yet on Linux, which has no fed terminals: the tests that need
+a block's view are skipped there."
+  (eq system-type 'darwin))
+
+(defun portal-rex-server-gui-tests-allowed-skips ()
+  "Return the tests that may skip on this system, for test/rex-server-gui.sh.
+They are those that need a block's screen, where Portal shows none."
+  (unless (portal-rex-server-gui-tests--screens-p)
+    '(portal-rex-server-gui-shows-a-block-and-types-in-it
+      portal-rex-server-gui-the-client-last-used-sizes-a-block
+      portal-rex-server-gui-a-blocks-details-reach-its-buffer
+      portal-rex-server-gui-reattaches-a-block-by-its-id
+      portal-rex-server-gui-a-flood-reaches-its-buffer-whole)))
+
 (defun portal-rex-server-gui-tests--new-session (server label)
   "Create a session called LABEL on SERVER with rex, and return its ID.
 Its one block runs cat, without a login shell."
@@ -246,6 +262,7 @@ Its one block runs cat, without a login shell."
 
 (ert-deftest portal-rex-server-gui-shows-a-block-and-types-in-it ()
   :tags '(:gui)
+  (skip-unless (portal-rex-server-gui-tests--screens-p))
   ;; What only a real server shows: its first paint of a block that ran
   ;; before Emacs came, typing at its shell, and its answers to a program's
   ;; queries, which the terminal leaves to it, so the program gets one.
@@ -327,6 +344,7 @@ Its one block runs cat, without a login shell."
 
 (ert-deftest portal-rex-server-gui-the-client-last-used-sizes-a-block ()
   :tags '(:gui)
+  (skip-unless (portal-rex-server-gui-tests--screens-p))
   ;; What only a real server shows: the grid it keeps as Emacs requests,
   ;; takes and resizes a block that rex itself also claims.  A block made
   ;; by `rex new' stays its maker's, a client that has gone, until another
@@ -405,6 +423,7 @@ Its one block runs cat, without a login shell."
 
 (ert-deftest portal-rex-server-gui-a-blocks-details-reach-its-buffer ()
   :tags '(:gui)
+  (skip-unless (portal-rex-server-gui-tests--screens-p))
   ;; What only a real server shows: the events its terminal sends as a
   ;; shell sets a title, changes directory and runs a program, reaching the
   ;; block's buffer as a terminal's details, and the block closing, and its
@@ -483,8 +502,8 @@ Its one block runs cat, without a login shell."
   ;; What only a real server shows: that its replies read as idle for a
   ;; shell at its prompt, so killing its buffer ends the block without a
   ;; question, and as busy while the shell runs a program, so it asks.
-  ;; The shells are the account's, started as Portal starts a terminal,
-  ;; under login.
+  ;; The shells are the account's, started as Portal starts a terminal:
+  ;; under login on macOS, the block's own child on Linux.
   (portal-real-rex-with (server)
     (let* ((home (expand-file-name "home" (portal-real-rex-directory server)))
            (connection (portal-rex-connect (portal-real-rex-socket server)))
@@ -540,6 +559,7 @@ Its one block runs cat, without a login shell."
 
 (ert-deftest portal-rex-server-gui-reattaches-a-block-by-its-id ()
   :tags '(:gui)
+  (skip-unless (portal-rex-server-gui-tests--screens-p))
   ;; A buffer finds its block again by ID once Emacs has disconnected and
   ;; connected again, as when it restarts with the desktop, and the
   ;; program in it ran on meanwhile, with no command given.
@@ -579,6 +599,7 @@ Its one block runs cat, without a login shell."
 
 (ert-deftest portal-rex-server-gui-a-flood-reaches-its-buffer-whole ()
   :tags '(:gui)
+  (skip-unless (portal-rex-server-gui-tests--screens-p))
   ;; What only a real server shows: a block's output, flooded while Emacs
   ;; reads slowly, reaching its terminal whole, whether the server held it
   ;; all or asked for a new stream; and C-c stopping a flood.

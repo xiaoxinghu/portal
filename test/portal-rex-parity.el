@@ -394,15 +394,21 @@ and the block closes on the server."
     ;; A line editor reads: raw input, with signals.
     (should (equal (list (plist-get mode :echo) (plist-get mode :canonical) (plist-get mode :signals))
                    '(:false :false t)))
-    ;; The shell is login's direct child.
+    ;; The shell is a login shell: login's direct child, as a server on
+    ;; macOS starts it and the fake does, or the block's own child, as a
+    ;; server on Linux does.
     (should (eq (plist-get process :last_exit) :null))
-    (should (equal (plist-get child :name) "login"))
-    (should (eql (plist-get child :user_id) 0))
     (should (integerp (plist-get foreground :pid)))
     (should (string-prefix-p "-" (plist-get foreground :argv0)))
-    (should (equal (mapcar (lambda (process) (plist-get process :pid))
-                           (plist-get process :ancestors))
-                   (list (plist-get child :pid))))
+    (if (equal (plist-get child :name) "login")
+        (progn
+          (should (eql (plist-get child :user_id) 0))
+          (should (equal (mapcar (lambda (process) (plist-get process :pid))
+                                 (plist-get process :ancestors))
+                         (list (plist-get child :pid)))))
+      (should (eq system-type 'gnu/linux))
+      (should (eql (plist-get foreground :pid) (plist-get child :pid)))
+      (should (zerop (length (plist-get process :ancestors)))))
     (should (equal (portal-rex--block-state connection session-id block-id)
                    (list :state 'idle :program (file-name-nondirectory
                                                 (substring (plist-get foreground :argv0) 1)))))
