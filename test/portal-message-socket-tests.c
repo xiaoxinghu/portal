@@ -12,6 +12,7 @@
 #include <dirent.h>
 #include <stdatomic.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 
 static int failures;
 /* How many checks ran: the program ends by printing it. */
