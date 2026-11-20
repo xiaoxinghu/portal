@@ -88,6 +88,10 @@ static void announce(void *data, struct wl_registry *registry, uint32_t name,
     /* Version 3 has the modifiers and the import without a round trip. */
     else if (!strcmp(interface, zwp_linux_dmabuf_v1_interface.name) && version >= 3)
         wayland->dmabuf = wl_registry_bind(registry, name, &zwp_linux_dmabuf_v1_interface, 3);
+    /* Hyprland announces protocols of its own; no other compositor names
+       one so. */
+    else if (!strncmp(interface, "hyprland_", strlen("hyprland_")))
+        wayland->crops_buffer = true;
 }
 
 /* The formats wl_shm takes, which it announces once it is bound.  DATA is
