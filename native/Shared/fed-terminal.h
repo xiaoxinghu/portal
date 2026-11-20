@@ -30,7 +30,7 @@
 
    Both backends use this file: native/Linux/terminal.c, and on macOS
    native/Terminal.swift, through the Swift package's C target
-   PortalShared, whose module.modulemap is this header. */
+   PortalShared, whose module.modulemap names this header. */
 #ifndef PORTAL_FED_TERMINAL_H
 #define PORTAL_FED_TERMINAL_H
 

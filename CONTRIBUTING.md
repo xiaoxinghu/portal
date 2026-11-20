@@ -28,8 +28,9 @@ cmake --build --preset dev
 
 On macOS, CMake locates Emacs, builds the Bun host, and invokes the native Swift package;
 [on Linux](#building-on-linux) it compiles a C module instead.
-`native/Package.swift` links two targets into one module: `PortalCore`,
-the portable C core, and `Portal`, the Swift backend containing the host, web, terminal and input code. There are no separate feature libraries
+`native/Package.swift` links three targets into one module: `PortalCore`,
+the portable C core; `PortalShared`, the C of `native/Shared`, the message socket and a fed
+terminal's rules; and `Portal`, the Swift backend containing the host, web, terminal and input code. There are no separate feature libraries
 or plugin builds. Ghostty comes through its Swift wrapper, libghostty-spm, which
 Portal patches; [the Ghostty dependency](#the-ghostty-dependency) says how it is
 pinned. Configuration writes the discovered header path to
@@ -141,7 +142,7 @@ how a view gets into a frame and how a terminal's frames reach it, and
 [where the sockets are](docs/architecture.md#rex-connections), in
 [`native/Shared`](native/Shared), which holds what a backend needs nothing
 of its platform for: the message sockets, and a fed terminal's rules, which
-the backend's fed terminals (a Rex block's screen) follow. A web view, the
+the fed terminals (a Rex block's screen) of both backends follow. A web view, the
 system-wide keys, the status panel and the launcher fail, saying what Linux
 lacks. A view can also show a test
 pattern, made with the option `:test-pattern`, which exists for the checks
@@ -187,9 +188,7 @@ sh test/linux-follow.sh fed
 
 CTest leaves out the suite of the macOS Ghostty wrapper, `libghostty-spm`,
 and of the macOS VM runner, and adds `linux-module`, which loads the built
-module in batch Emacs; `fed-terminal`, a
-[fed terminal's rules](docs/architecture.md#rex-connections) against a
-backend the test plays; and `shared-macos`, which compiles each C file of
+module in batch Emacs; and `shared-macos`, which compiles each C file of
 `native/Shared` for macOS with Zig's cross-compile, since nothing here runs
 them on a Mac. The Python tests skip those of Swift helpers and of
 the macOS Ghostty wrapper. `linux-gui.sh` runs the views, their input,
