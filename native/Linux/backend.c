@@ -26,7 +26,8 @@
    Portal lacks on Linux, and changes nothing.
 
    - Fed terminals, which show a Rex block.  Ghostty's library has the
-     host-managed surface they rest on; nothing here feeds one yet.
+     host-managed surface they rest on, and native/Shared/fed-terminal.c
+     their order, geometry and backlog; nothing here feeds one yet.
    - Web views, on WebKitGTK.  Without :test-pattern, creating one fails.
    - System-wide keys, posted keys and the status panel, which Wayland gives
      a client no direct way to do.
