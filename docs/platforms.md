@@ -9,8 +9,8 @@ separate claims.
 
 | Emacs | macOS | CPU | Terminal and web views | Launcher |
 | --- | --- | --- | --- | --- |
-| GNU Emacs 31.1 NS, revision `a360712c` | 27.0.1 | Apple Silicon | **Verified** | **Verified** |
-| Other GNU Emacs 31.1 NS builds | 27.0.1 | Apple Silicon | Unverified | Unsupported: refused |
+| GNU Emacs 31.1 NS, revision `a360712c` | 27.0.1, 27.2.1 | Apple Silicon | **Verified** | **Verified** |
+| Other GNU Emacs 31.1 NS builds | 27.0.1, 27.2.1 | Apple Silicon | Unverified | Unsupported: refused |
 | Later GNU Emacs NS releases | any | any | Unverified | Unsupported: refused |
 | GNU Emacs 31.1 NS | 13.0–26 | any | Unverified | Unverified |
 | GNU Emacs 31.1 NS | any | Intel | Unverified | Unverified |
@@ -125,6 +125,34 @@ Physical keys, Accessibility and manual checks are outside these claims too.
 Record each run below; older results are not evidence for later changes.
 
 ## Evidence
+
+Recorded 2026-11-20, the first run on a Mac since Linux gained views,
+terminals, Rex connections and blocks' screens, which changed Lisp, tests and
+CMake that the Mac shares. The full set ran with `PORTAL_TEST_EXPENSIVE=1`,
+at the commit that records it, on `main` at `26ab316`.
+
+| | Host | VM guest |
+| --- | --- | --- |
+| Machine | Apple M1 Pro, arm64 | Tart guest on that host, arm64 |
+| macOS | 27.2.1 (26B131) | 27.2.1 (26B131) |
+| Emacs | emacs-plus-app cask 31.1-406: GNU Emacs 31.1, revision `a360712c`, NS, modules, native compilation | same revision |
+| Xcode, Swift | Xcode 27.2 (27B52), Swift 6.4.2 | Xcode 27.2 (27B52) |
+| Bun, CMake | Bun 1.4.2, CMake 4.4.4 | Bun 1.3.14, CMake 4.0.3 |
+| Results | build; 35 of 35 CTest suites; Biome; TypeScript; 72 Python tests, 16 of them skipped: Ghostty's Linux build | see below |
+
+In the guest, through `sh test/gui-all.sh`:
+
+- `views-gui.sh`: 90 of 90 passed, no skips.
+- `input-gui.sh`: 17 of 17 passed, no skips.
+- `launcher-gui.sh`: 41 passed; 1 skipped,
+  `portal-launcher-gui-minibuffer-panel-stays-on-its-display`, which needs a
+  second display.
+- `terminal-shell-startup.sh`: 2 of 2 passed.
+- `rex-server-gui.sh`: 12 of 12 passed against Rex Server
+  0.1.0-preview.14, the VM recipe's pin.
+- `package-gui.sh`: passed.
+
+Built artifacts: `portal.dylib` and `portal-host` are arm64 only.
 
 Recorded 2026-10-11 at the commit introducing this page, on top of `main` at
 `1a21a1b`. The guest kept default macOS settings, including autocorrection.
