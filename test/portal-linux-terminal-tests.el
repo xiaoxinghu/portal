@@ -214,6 +214,66 @@ keyboard may then move on."
       (portal-linux-terminal--run target "echo AGAIN-$((3*3))")
       (portal-linux-terminal--shows target "AGAIN-9"))))
 
+(defun portal-linux-terminal--set-clipboard (text &optional primary)
+  "Put TEXT on the clipboard, or with PRIMARY the primary selection, with wl-copy.
+wl-copy keeps serving it from a process of its own; nil clears it."
+  (should (eql 0 (apply #'call-process (portal-linux-gui--tool "wl-copy") nil nil nil
+                        (append (and primary '("--primary"))
+                                (if text (list "--" text) '("--clear")))))))
+
+(defun portal-linux-terminal--clipboard ()
+  "The clipboard's text, read by wl-paste.
+Emacs may own the clipboard, so it goes on serving GTK while wl-paste reads."
+  (let* ((output (generate-new-buffer " *portal-wl-paste*"))
+         (process (make-process :name "portal-wl-paste" :buffer output :noquery t
+                                :command (list (portal-linux-gui--tool "wl-paste") "--no-newline")
+                                :stderr (get-buffer-create " *portal-wl-paste-errors*"))))
+    (unwind-protect
+        (progn
+          (portal-linux-terminal--until (lambda () (not (process-live-p process))) 5)
+          (with-current-buffer output (buffer-string)))
+      (kill-buffer output))))
+
+(ert-deftest portal-linux-gui-terminal-copies-and-pastes-with-insert ()
+  :tags '(:gui)
+  "Shift-Insert pastes the clipboard and Control-Insert copies to it, as in Emacs.
+The primary selection, which Shift-Insert pastes in Ghostty by default, is
+not what is pasted."
+  (portal-linux-terminal--with
+    (unwind-protect
+        (let ((target (portal-linux-terminal--open))
+              (window (selected-window))
+              (scale (portal-linux-gui--scale)))
+          (portal-linux-terminal--set-clipboard "PASTED-$((3*4))")
+          (portal-linux-terminal--set-clipboard "PRIMARY-$((1+1))" t)
+          (portal-linux-gui--type "echo ")
+          (portal-linux-gui--type "-M" "shift" "-k" "Insert" "-m" "shift")
+          ;; The clipboard is read on its own time: Return once it is in.
+          (portal-linux-terminal--shows target "echo PASTED-$((3*4))")
+          (portal-linux-gui--type "-k" "Return")
+          (portal-linux-terminal--shows target "PASTED-12")
+          (should-not (string-search "PRIMARY-2" (portal-linux-terminal--text target)))
+          ;; Select the whole pane with the pointer, then copy.
+          (portal-linux-terminal--run target "clear; echo COPIED-$((5+2))")
+          (portal-linux-terminal--shows target "COPIED-7")
+          (portal-linux-terminal--set-clipboard nil)
+          (pcase-let ((`(,left ,top ,right ,bottom)
+                       (mapcar (lambda (edge) (/ edge scale)) (portal-linux-gui--box window))))
+            ;; The pointer goes back to the middle, off the corners that the
+            ;; next test reads.
+            (portal-linux-gui--point 'move (+ left 4) (+ top 4) 'press
+                                     'move (/ (+ left right) 2) (/ (+ top bottom) 2)
+                                     'move (- right 4) (- bottom 4) 'release
+                                     'move (/ (+ left right) 2) (/ (+ top bottom) 2)))
+          (portal-linux-gui--pause 0.3)
+          (portal-linux-gui--type "-M" "ctrl" "-k" "Insert" "-m" "ctrl")
+          (portal-linux-terminal--until
+           (lambda () (string-search "COPIED-7" (portal-linux-terminal--clipboard))) 5)
+          ;; Neither key reached Emacs.
+          (should-not (read-event nil nil 0.2)))
+      (portal-linux-terminal--set-clipboard nil)
+      (portal-linux-terminal--set-clipboard nil t))))
+
 (ert-deftest portal-linux-gui-terminal-reports-the-button-clicked ()
   :tags '(:gui)
   "A program that asks for the mouse is told which button was pressed.

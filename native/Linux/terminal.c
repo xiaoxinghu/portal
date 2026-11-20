@@ -22,7 +22,11 @@
    dark preference, which the XDG desktop portal says (scheme_follow).  Ghostty's own key
    bindings are cleared, but Copy and Paste: on Linux they are Control and
    Alt chords, which would take keys from the shell, and Portal sizes the
-   text itself.
+   text itself.  Copy and Paste are Control-Shift-C and Control-Shift-V, as
+   in other Linux terminals, and Control-Insert and Shift-Insert, Emacs's
+   own, so that a desktop can send Emacs one key for each whatever its pane
+   shows.  Shift-Insert pastes the clipboard, not the primary selection as
+   Ghostty's default would; a middle click still pastes that.
 
    A terminal ends (views.c) by stopping: its clipboard requests denied,
    the presenter forgetting it, and the surface freed, which ends the
@@ -125,7 +129,9 @@ static char *config_text(const char *theme, double opacity, double points)
         "abnormal-command-exit-runtime = 0\n"
         "keybind = clear\n"
         "keybind = ctrl+shift+c=copy_to_clipboard\n"
-        "keybind = ctrl+shift+v=paste_from_clipboard\n",
+        "keybind = ctrl+shift+v=paste_from_clipboard\n"
+        "keybind = ctrl+insert=copy_to_clipboard\n"
+        "keybind = shift+insert=paste_from_clipboard\n",
         theme ? theme : app.scheme == GHOSTTY_COLOR_SCHEME_DARK ? "Afterglow" : "Alabaster", alpha,
         size, PADDING, PADDING);
 }
