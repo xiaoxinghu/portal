@@ -459,6 +459,25 @@ pkg-config's egl, such as libglvnd's")
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/linux")
         add_test(NAME message-socket COMMAND portal-message-socket-tests)
         set_tests_properties(message-socket PROPERTIES TIMEOUT 60)
+        # A fed terminal's rules, native/Shared, with a backend and a core
+        # the test plays: the order of output and grids, the pane's geometry
+        # and the backlog. No backend calls them yet, and the macOS module
+        # still has them in Swift, native/Terminal.swift.
+        add_executable(portal-fed-terminal-tests test/portal-fed-terminal-tests.c
+            native/Shared/fed-terminal.c)
+        target_include_directories(portal-fed-terminal-tests PRIVATE
+            native/Core/include native/Shared)
+        target_compile_options(portal-fed-terminal-tests PRIVATE -Wall -Wextra -Werror)
+        set_target_properties(portal-fed-terminal-tests PROPERTIES
+            C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/linux")
+        add_test(NAME fed-terminal COMMAND portal-fed-terminal-tests)
+        set_tests_properties(fed-terminal PROPERTIES TIMEOUT 30)
+        # What native/Shared holds is written for macOS too, which nothing
+        # here runs: each file compiles for it, with Zig's cross-compile.
+        add_test(NAME shared-macos
+            COMMAND sh "${CMAKE_SOURCE_DIR}/test/shared-macos.sh" "${ZIG}" "${CMAKE_SOURCE_DIR}")
+        set_tests_properties(shared-macos PROPERTIES TIMEOUT 60)
         # A fed terminal's surface, with the host-managed backend of Ghostty's
         # patched library, made, fed and read back with no window, drawn on
         # Mesa's surfaceless display. The link fails when the library lacks a
