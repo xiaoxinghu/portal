@@ -255,6 +255,17 @@
 			"note": "Built by tools/build-ghostty-linux.sh with native/patches/ghostty applied; its LICENSE is byte for byte the one the macOS revision has"
 		},
 		{
+			"id": "libghostty-spm-ghostty-patches",
+			"name": "libghostty-spm's patches to Ghostty: host-managed I/O and replay without replies",
+			"version": "2.2.2026110702 (1d84cf66fe29abd1f24f10b88dcfc25882cf68ee)",
+			"source": "https://github.com/Lakr233/libghostty-spm/tree/1d84cf66fe29abd1f24f10b88dcfc25882cf68ee/Patches/ghostty",
+			"license": "MIT",
+			"shipped": "ghostty-linux/lib/ghostty-internal.so",
+			"when": ["ghostty@v1.4.0"],
+			"texts": ["libghostty-spm/LICENSE"],
+			"note": "The package's 0002-host-managed-io.patch and what its 0011-replay-response-suppression.sh does, carried as native/patches/ghostty/0001 and 0002 and compiled into Portal's Linux build of Ghostty; on macOS they are in the package's prebuilt library. The LICENSE is the package's at that revision"
+		},
+		{
 			"id": "ghostty-shell-integration",
 			"name": "Ghostty bash and zsh integration (based on Kitty's)",
 			"version": "v1.4.0 (83fb95624b0439ee660c2679b43b38c8b63769cd)",

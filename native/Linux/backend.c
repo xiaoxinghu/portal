@@ -25,8 +25,8 @@
    What is not, and what each operation waits for: it fails, saying what
    Portal lacks on Linux, and changes nothing.
 
-   - Fed terminals, which show a Rex block: they need Ghostty patches of
-     libghostty-spm's that Portal's Linux build does not apply.
+   - Fed terminals, which show a Rex block.  Ghostty's library has the
+     host-managed surface they rest on; nothing here feeds one yet.
    - Web views, on WebKitGTK.  Without :test-pattern, creating one fails.
    - System-wide keys, posted keys and the status panel, which Wayland gives
      a client no direct way to do.

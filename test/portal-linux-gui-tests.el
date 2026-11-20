@@ -233,7 +233,7 @@ A position is in the desktop's own pixels, which are Emacs's."
   (portal-view--load)
   (should (equal (cadr (should-error (portal--open "terminal" '(:fed t)) :type 'error))
                  "Portal has no fed terminals on Linux yet: \
-Rex blocks need Ghostty patches it does not apply"))
+its backend does not feed a surface"))
   (should (equal (cadr (should-error (portal--open "web" nil) :type 'error))
                  "Portal has no web views on Linux yet"))
   ;; A failed open leaves nothing behind.
