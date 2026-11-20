@@ -571,7 +571,7 @@ graphical one too:
       test/portal-message-socket-tests.c -o build/message-socket-tsan
   build/message-socket-tsan
   ```
-- `fed-terminal`, on Linux, runs a fed terminal's rules,
+- `fed-terminal`, on both systems, runs a fed terminal's rules,
   `native/Shared/fed-terminal.c`, with no Emacs, no window and no surface
   ([portal-fed-terminal-tests.c](../test/portal-fed-terminal-tests.c)):
   a backend and a core the test plays write each call down, and each test

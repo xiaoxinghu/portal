@@ -4,6 +4,7 @@ import Darwin
 import GhosttyTerminal
 import GhosttyTheme
 import PortalCore
+import PortalShared
 
 /// Start programs through the same kind of shell as an ordinary terminal.
 /// The shell owns startup files, PATH and executable lookup; Lisp supplies argv.
@@ -95,11 +96,149 @@ private final class FedPane: NSView {
     }
 }
 
+/// A fed terminal's rules, native/Shared/fed-terminal.c, which the Linux
+/// backend follows too: the order of its output and grids, the geometry of
+/// its pane, and its backlog. What is the Mac's stays here: the package's
+/// in-memory session, which parses the output off the main thread, the
+/// timers, and the terminal's frame in its pane.
+@MainActor
+private final class FedRules {
+    /// Nil once closed.
+    private var rules: OpaquePointer?
+    let session: InMemoryTerminalSession
+    weak var terminal: HostedTerminal?
+    /// The rules' two timers, by portal_fed_timer.
+    private var timers: [Timer?] = [nil, nil]
+
+    /// The rules of the terminal TARGET, fed through SESSION.
+    init(target: String, session: InMemoryTerminalSession) throws {
+        self.session = session
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        rules = target.withCString {
+            portal_fed_terminal_new(portal_string(data: $0, length: target.utf8.count), Self.backend, context)
+        }
+        guard rules != nil else { throw NativeError.message("Portal is out of memory") }
+        // The session says when its unparsed output crosses the rules'
+        // marks, on whichever thread crossed one, after its lock is
+        // released: the rules read the count themselves, on the main thread.
+        session.setOutputBacklogHandler(highWater: Int(PORTAL_FED_HIGH_MARK),
+                                        lowWater: Int(PORTAL_FED_LOW_MARK)) { [weak self] _ in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.backlog() } }
+        }
+    }
+
+    /// Forget the rules, stopping their timers: nothing waiting is fed.
+    func close() {
+        guard let rules else { return }
+        portal_fed_terminal_free(rules)
+        self.rules = nil
+    }
+
+    // What the terminal hears, told to the rules.
+
+    func feed(_ output: Data) throws {
+        try call { rules, error in
+            output.withUnsafeBytes {
+                portal_fed_terminal_feed(rules, $0.bindMemory(to: CChar.self).baseAddress, $0.count, error)
+            }
+        }
+    }
+
+    func holdGrid(columns: UInt32, rows: UInt32) throws {
+        try call { portal_fed_terminal_hold_grid($0, columns, rows, $1) }
+    }
+
+    /// The package's session says its terminal has this grid now.
+    func tookGrid(columns: UInt32, rows: UInt32) {
+        if let rules { portal_fed_terminal_took_grid(rules, columns, rows) }
+    }
+
+    func pane(width: Double, height: Double, scale: Double) {
+        if let rules { portal_fed_terminal_pane(rules, width, height, scale) }
+    }
+
+    func cell(width: Double, height: Double) {
+        if let rules { portal_fed_terminal_cell(rules, width, height) }
+    }
+
+    private func backlog() {
+        if let rules { portal_fed_terminal_backlog(rules) }
+    }
+
+    /// BODY with the rules and a place for their error, which it throws.
+    private func call(_ body: (OpaquePointer, UnsafeMutablePointer<portal_text>) -> Bool) throws {
+        guard let rules else { throw NativeError.message("The terminal is closed") }
+        var error = portal_text(data: nil, length: 0)
+        guard !body(rules, &error) else { return }
+        defer { free(error.data) }
+        let message = error.data.map {
+            String(decoding: UnsafeRawBufferPointer(start: $0, count: error.length), as: UTF8.self)
+        }
+        throw NativeError.message(message ?? "Portal is out of memory")
+    }
+
+    // What the rules ask of the Mac, on the main thread.
+
+    private nonisolated static func of(_ context: UnsafeMutableRawPointer?) -> FedRules {
+        Unmanaged<FedRules>.fromOpaque(context!).takeUnretainedValue()
+    }
+
+    private static let backend: UnsafePointer<portal_fed_backend> = {
+        let table = UnsafeMutablePointer<portal_fed_backend>.allocate(capacity: 1)
+        table.initialize(to: portal_fed_backend(
+            feed: { context, bytes, length in
+                let rules = of(context), output = Data(bytes: bytes!, count: length)
+                MainActor.assumeIsolated { rules.session.receive(output) }
+            },
+            drain: { context in
+                let rules = of(context)
+                MainActor.assumeIsolated { _ = rules.session.waitForPendingOutput() }
+            },
+            pending: { context in
+                let rules = of(context)
+                return MainActor.assumeIsolated { max(0, rules.session.pendingOutputByteCount) }
+            },
+            start_timer: { context, timer, milliseconds in
+                let rules = of(context)
+                MainActor.assumeIsolated { rules.start(timer, milliseconds) }
+            },
+            stop_timer: { context, timer in
+                let rules = of(context)
+                MainActor.assumeIsolated { rules.stop(timer) }
+            },
+            place: { context, rect in
+                let rules = of(context)
+                let frame = CGRect(x: rect.x, y: rect.y, width: rect.width, height: rect.height)
+                MainActor.assumeIsolated {
+                    guard let terminal = rules.terminal, terminal.frame != frame else { return }
+                    terminal.frame = frame
+                }
+            }))
+        return UnsafePointer(table)
+    }()
+
+    private func start(_ timer: portal_fed_timer, _ milliseconds: UInt32) {
+        timers[Int(timer.rawValue)] = Timer.scheduledTimer(
+            withTimeInterval: Double(milliseconds) / 1000, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let rules = self.rules else { return }
+                self.timers[Int(timer.rawValue)] = nil
+                portal_fed_terminal_timer(rules, timer)
+            }
+        }
+    }
+
+    private func stop(_ timer: portal_fed_timer) {
+        timers[Int(timer.rawValue)]?.invalidate()
+        timers[Int(timer.rawValue)] = nil
+    }
+}
+
 /// Where a fed terminal's in-memory session reports the grid its terminal
-/// has taken, from Ghostty's thread.
+/// has taken, from Ghostty's thread: its rules, made after the session.
 @MainActor
 private final class GridWatch {
-    weak var terminal: HostedTerminal?
+    weak var rules: FedRules?
 }
 
 @MainActor
@@ -132,33 +271,26 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     /// A fed terminal's session: its output comes from the core and what it
     /// writes goes to the core. Nil for a terminal with its own pty.
     let fed: InMemoryTerminalSession?
+    /// A fed terminal's rules; nil for any other.
+    let rules: FedRules?
     /// A fed terminal's pane, which Portal places; nil for any other. The
     /// pane holds the terminal as its subview, and its session holds the
     /// pane, so the terminal's reference is weak: neither keeps the other.
     private weak var pane: FedPane?
     /// The padding Ghostty leaves inside a terminal on each side, in points,
-    /// set rather than left to Ghostty's default, as the grids below count on it.
-    private static let padding = 2.0
-    /// The grid the core gave a fed terminal, which it holds whatever its
-    /// pane's size; nil until the core gives one, while it fills its pane.
-    private var heldGrid: (columns: UInt32, rows: UInt32)?
-    /// The grid the in-memory session last said its terminal has.
-    private var takenGrid: (columns: UInt32, rows: UInt32)?
-    /// What the core gave a fed terminal, in order, that waits while it
-    /// takes a grid: output, and grids.
-    private enum Fed { case output(Data), grid(UInt32, UInt32) }
-    private var waiting: [Fed] = []
-    private var takingGrid: Timer?
-    /// The pane's grid and cell size, as last reported to the core.
-    private var reportedPane: [UInt32] = []
+    /// set rather than left to Ghostty's default, as a fed terminal's rules
+    /// count on it: theirs, for every terminal.
+    private static let padding = Int(PORTAL_FED_PADDING)
 
     init(directory: String?, command: String?, theme: TerminalTheme, points: Double, opacity: Double,
-         fed: InMemoryTerminalSession? = nil, pane: FedPane? = nil) {
+         fed: InMemoryTerminalSession? = nil, rules: FedRules? = nil, pane: FedPane? = nil) {
         self.fed = fed
+        self.rules = rules
         self.pane = pane
         super.init(frame: .zero)
         delegate = self
         if let fed, let pane {
+            rules?.terminal = self
             configuration = TerminalSurfaceOptions(backend: .inMemory(fed))
             pane.terminal = self
             pane.opacity = opacity
@@ -176,8 +308,8 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
             builder.withFontThicken(false)
             // Every exit takes that path: none counts as a failed launch.
             builder.withCustom("abnormal-command-exit-runtime", "0")
-            builder.withCustom("window-padding-x", "\(Int(Self.padding))")
-            builder.withCustom("window-padding-y", "\(Int(Self.padding))")
+            builder.withCustom("window-padding-x", "\(Self.padding)")
+            builder.withCustom("window-padding-y", "\(Self.padding)")
             builder.withCustom("window-padding-balance", "false")
             builder.withFontSize(Float(points))
             builder.withCustom("background-opacity", Self.configLiteral(Self.ownOpacity(opacity, fed: fed != nil)))
@@ -220,86 +352,14 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
         }
     }
 
-    // A fed terminal's grid and its pane's.
+    // A fed terminal's grid and its pane's, which its rules work out.
 
-    /// The size of a cell in pixels, and pixels per point, once known.
-    private var cell: (width: Double, height: Double, scale: Double)? {
-        guard let grid, grid.cellWidthPixels > 0, grid.cellHeightPixels > 0 else { return nil }
-        let scale = Double(convertToBacking(NSSize(width: 1, height: 1)).width)
-        guard scale > 0 else { return nil }
-        return (Double(grid.cellWidthPixels), Double(grid.cellHeightPixels), scale)
-    }
-
-    /// Size the terminal to the grid it holds, at its pane's bottom-left, or
-    /// to its pane until it holds one; then report the pane's grid.
+    /// The pane's size or scale changed: the rules size the terminal and
+    /// report the pane's grid.
     func fitInPane() {
         guard let pane else { return }
-        var frame = pane.bounds
-        if let held = heldGrid, let cell {
-            // The grid, Ghostty's padding, and half a cell to spare, so that
-            // rounding never loses a row or a column. Ghostty leaves the
-            // spare below the grid and to its right, so the view hangs that
-            // much below the pane: the grid's last row sits at the pane's
-            // bottom, and a grid that fits the pane is never clipped.
-            let padding = 2 * Self.padding * cell.scale
-            frame = CGRect(x: 0, y: -cell.height / 2 / cell.scale,
-                           width: (Double(held.columns) * cell.width + padding + cell.width / 2) / cell.scale,
-                           height: (Double(held.rows) * cell.height + padding + cell.height / 2) / cell.scale)
-        }
-        if self.frame != frame { self.frame = frame }
-        reportPane()
-    }
-
-    /// Tell the core the grid the pane would hold, whatever grid the
-    /// terminal holds: the size Emacs gives the block when it owns it.
-    private func reportPane() {
-        guard let pane, let cell, let target = session?.target else { return }
-        let padding = 2 * Self.padding * cell.scale
-        let columns = max(0, (Double(pane.bounds.width) * cell.scale - padding) / cell.width)
-        let rows = max(0, (Double(pane.bounds.height) * cell.scale - padding) / cell.height)
-        let values = [UInt32(columns), UInt32(rows), UInt32(cell.width), UInt32(cell.height)]
-        guard values[0] > 0, values[1] > 0, values != reportedPane else { return }
-        reportedPane = values
-        Core.terminalGrid(target, columns: values[0], rows: values[1],
-                          cellWidth: values[2], cellHeight: values[3])
-    }
-
-    /// The core's output and grids, in order: a grid waits for the output
-    /// before it to be parsed, and holds the output after it until the
-    /// terminal has taken it, for at most a quarter of a second.
-    private func flush() {
-        while takingGrid == nil, !waiting.isEmpty {
-            switch waiting.removeFirst() {
-            case let .output(data):
-                fed?.receive(data)
-            case let .grid(columns, rows):
-                fed?.waitForPendingOutput()
-                heldGrid = (columns, rows)
-                fitInPane()
-                if takenGrid.map({ $0 != (columns, rows) }) ?? true {
-                    takingGrid = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: false) { [weak self] _ in
-                        MainActor.assumeIsolated { self?.tookGrid() }
-                    }
-                }
-            }
-        }
-    }
-
-    private func tookGrid() {
-        takingGrid?.invalidate()
-        takingGrid = nil
-        flush()
-    }
-
-    /// The in-memory session says its terminal has this grid now.
-    func viewportResized(columns: UInt32, rows: UInt32) {
-        takenGrid = (columns, rows)
-        if takingGrid != nil, let held = heldGrid, held == (columns, rows) { tookGrid() }
-    }
-
-    func holdGrid(columns: UInt32, rows: UInt32) {
-        waiting.append(.grid(columns, rows))
-        flush()
+        rules?.pane(width: Double(pane.bounds.width), height: Double(pane.bounds.height),
+                    scale: Double(pane.convertToBacking(NSSize(width: 1, height: 1)).width))
     }
 
     @available(*, unavailable)
@@ -329,7 +389,7 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
         grid = size
         // A new cell size changes the frame that holds the grid, and the
         // pane's grid.
-        fitInPane()
+        rules?.cell(width: Double(size.cellWidthPixels), height: Double(size.cellHeightPixels))
     }
     func terminalDidAttachSurface(_ surface: TerminalSurface) {
         terminalSurface = surface
@@ -374,17 +434,6 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     func stopSamplingProgram() {
         programTimer?.invalidate()
         programTimer = nil
-        takingGrid?.invalidate()
-        takingGrid = nil
-    }
-
-    /// A fed terminal's output: parsed in order off the main thread, with
-    /// the replies to its queries dropped (the session's
-    /// suppressesTerminalResponses), and held until the surface exists, or
-    /// while the terminal takes a grid.
-    func feed(_ output: Data) {
-        waiting.append(.output(output))
-        flush()
     }
 
     /// Ghostty asks to close the surface when its process ends, at each key
@@ -432,47 +481,6 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     }
 }
 
-/// A fed terminal's backlog, told to the core on Emacs's thread. The
-/// session's handler only says when to look: it runs on whichever thread
-/// crossed a mark, after the session's lock is released, so two calls can
-/// arrive in the other order than their crossings. So the main thread reads
-/// how much is unparsed itself, and while the core is told to wait, reads
-/// again every 10 ms until it is down to the low mark: a crossing whose
-/// call came first can leave nothing waiting.
-@MainActor
-private final class FedBacklog {
-    private let target: String
-    private weak var session: InMemoryTerminalSession?
-    /// What the core was last told.
-    private var waiting = false
-    private var timer: Timer?
-
-    init(target: String, session: InMemoryTerminalSession) {
-        self.target = target
-        self.session = session
-    }
-
-    nonisolated func crossed() {
-        DispatchQueue.main.async { [self] in MainActor.assumeIsolated { look() } }
-    }
-
-    private func look() {
-        let pending = session?.pendingOutputByteCount ?? 0
-        let backlogged = pending > Int(PORTAL_TERMINAL_BACKLOG) / 4
-        if backlogged != waiting {
-            waiting = backlogged
-            Core.terminalBacklog(target, backlogged)
-        }
-        timer?.invalidate()
-        timer = nil
-        if backlogged {
-            timer = Timer.scheduledTimer(withTimeInterval: 0.01, repeats: false) { [weak self] _ in
-                MainActor.assumeIsolated { self?.look() }
-            }
-        }
-    }
-}
-
 /// The terminal view kind: one Ghostty session. Its shell starts in the parking
 /// window when the view opens, and keeps running while the view is hidden.
 /// The core owns Portal's terminal rules (native/Core/terminals.c): it checks
@@ -504,21 +512,16 @@ final class TerminalSession: PortalView {
                 resize: { viewport in
                     let columns = UInt32(viewport.columns), rows = UInt32(viewport.rows)
                     DispatchQueue.main.async {
-                        MainActor.assumeIsolated { watch.terminal?.viewportResized(columns: columns, rows: rows) }
+                        MainActor.assumeIsolated { watch.rules?.tookGrid(columns: columns, rows: rows) }
                     }
                 },
                 suppressesTerminalResponses: true)
-            // The core stops feeding it while it has too much to parse.
-            let backlog = FedBacklog(target: target, session: session)
-            session.setOutputBacklogHandler(highWater: Int(PORTAL_TERMINAL_BACKLOG),
-                                            lowWater: Int(PORTAL_TERMINAL_BACKLOG) / 4) { _ in
-                backlog.crossed()
-            }
+            let rules = try FedRules(target: target, session: session)
             let pane = FedPane()
             terminal = HostedTerminal(directory: directory, command: nil, theme: theme, points: points,
-                                      opacity: opacity, fed: session, pane: pane)
+                                      opacity: opacity, fed: session, rules: rules, pane: pane)
             self.pane = pane
-            watch.terminal = terminal
+            watch.rules = rules
             terminal.setBackground(try Terminals.background(named: options.string("theme")))
         } else {
             guard let directory else {
@@ -553,8 +556,13 @@ final class TerminalSession: PortalView {
     /// Parking keeps the last size, so hiding never resizes the shell's grid.
     func detaching() { terminal.setSurfaceVisible(false) }
 
-    /// Destroying the view ends its process; nothing is left sampling it.
-    func close() { terminal.stopSamplingProgram() }
+    /// Destroying the view ends its process; nothing is left sampling it,
+    /// and a fed terminal's rules, with their timers, go: what waits is
+    /// never fed. A surface Ghostty makes again keeps them.
+    func close() {
+        terminal.stopSamplingProgram()
+        terminal.rules?.close()
+    }
 
     func describe() -> [(String, ViewValue)] {
         // A fed terminal's program runs elsewhere: the core describes it.
@@ -577,17 +585,19 @@ final class TerminalSession: PortalView {
 
     // The terminal primitives of native/Core/include/portal.h.
 
+    // A fed terminal's output is parsed in order off the main thread, with
+    // the replies to its queries dropped (the session's
+    // suppressesTerminalResponses), and held until the surface exists, or
+    // while the terminal takes a grid: its rules say what the two do.
+
     func feed(_ output: Data) throws {
-        guard terminal.fed != nil else { throw NativeError.message("Only a fed terminal is fed its output") }
-        terminal.feed(output)
+        guard let rules = terminal.rules else { throw NativeError.message("Only a fed terminal is fed its output") }
+        try rules.feed(output)
     }
 
     func holdGrid(columns: UInt32, rows: UInt32) throws {
-        guard terminal.fed != nil else { throw NativeError.message("Only a fed terminal holds a grid") }
-        guard columns > 0, rows > 0, columns <= UInt32(UInt16.max), rows <= UInt32(UInt16.max) else {
-            throw NativeError.message("A terminal's grid has at least one cell each way")
-        }
-        terminal.holdGrid(columns: columns, rows: rows)
+        guard let rules = terminal.rules else { throw NativeError.message("Only a fed terminal holds a grid") }
+        try rules.holdGrid(columns: columns, rows: rows)
     }
 
     func applyTheme(_ name: String?) throws {

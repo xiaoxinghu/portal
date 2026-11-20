@@ -508,10 +508,13 @@ over plain values: it asks a backend to parse bytes, wait until they are
 parsed, say how many wait, keep two timers and put the terminal at a
 rectangle in its pane, and makes the core's two reports itself. The
 `fed-terminal` suite checks it against a backend and a core the test plays.
-The Linux backend uses it for its fed terminal; macOS still has the
-same rules, with the same numbers, in Swift in `native/Terminal.swift`
-(`flush`, `tookGrid`, `viewportResized`, `holdGrid`, `fitInPane`,
-`reportPane` and `FedBacklog`), until a Mac can build and run the switch.
+Both backends use it. On macOS, `FedRules` in `native/Terminal.swift`
+gives it the package's in-memory session to parse, `Timer`s, and the
+terminal's frame inside its clipping pane; the Swift package compiles the
+file as its C target `PortalShared`, whose `module.modulemap` is what Swift
+imports. The padding a terminal's configuration gives Ghostty is the
+file's `PORTAL_FED_PADDING`, on both systems and for every terminal, so a
+fed terminal's numbers are in that file alone.
 
 They stay beside the backends for now, as the message socket does. The
 better end is the core, as [ADR 0003](adr/0003-platform-interface-primitives.md)
@@ -519,10 +522,12 @@ has it: the rules in `native/Core`, tested against the fake platform, and
 `portal.h` asking a platform only to parse bytes, say how many wait and put
 the terminal at a rectangle, and telling the core the cell's size, the
 pane's size and the grid taken, in place of `portal_terminal_feed` and
-`portal_terminal_hold_grid` doing it all. That changes `portal.h` and the
-Swift together, which needs a Mac; once both backends call
-`fed-terminal.c`, the move is mostly its backend table becoming
-primitives.
+`portal_terminal_hold_grid` doing it all; its timers would be the core's
+`portal_timer_start`. With both backends calling `fed-terminal.c`, that
+move is the backend table becoming primitives, but it changes `portal.h`,
+the core, the fake platform and both backends at once, and needs both
+systems' graphical checks: it is a change of its own, not part of the
+Mac's switch.
 
 Lisp opens one in a block's buffer the first time a window shows the
 buffer, and calls `portal--rex-show` with the view's target, the

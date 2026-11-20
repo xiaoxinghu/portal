@@ -28,9 +28,9 @@
    AppKit's points or GTK's logical pixels; a cell's size is in pixels of
    the screen; the scale is pixels for each of the pane's units.
 
-   The Linux backend uses this file (native/Linux/terminal.c).  On macOS
-   these are still Swift, native/Terminal.swift, until a Mac can run the
-   change to this file. */
+   Both backends use this file: native/Linux/terminal.c, and on macOS
+   native/Terminal.swift, through the Swift package's C target
+   PortalShared, whose module.modulemap names this header. */
 #ifndef PORTAL_FED_TERMINAL_H
 #define PORTAL_FED_TERMINAL_H
 

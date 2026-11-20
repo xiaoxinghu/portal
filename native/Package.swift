@@ -35,10 +35,10 @@ let package = Package(
         .target(name: "PortalCore", path: "Core", exclude: ["CMakeLists.txt", "scripts"],
                 cSettings: [.unsafeFlags(["-I", emacsInclude, "-Wall", "-Wextra", "-Werror"])]),
         // What a backend needs nothing of its platform for, which the Linux
-        // backend shares: the message sockets. module.modulemap is what Swift
-        // imports.
+        // backend shares: the message sockets and a fed terminal's rules.
+        // module.modulemap is what Swift imports.
         .target(name: "PortalShared", dependencies: ["PortalCore"], path: "Shared",
-                sources: ["message-socket.c"], publicHeadersPath: ".",
+                sources: ["message-socket.c", "fed-terminal.c"], publicHeadersPath: ".",
                 cSettings: [.unsafeFlags(["-Wall", "-Wextra", "-Werror"])]),
         // The macOS backend; all Swift features share one target. Linux/ holds the
         // C backend that CMake builds there instead.

@@ -1,8 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* A fed terminal's rules (fed-terminal.h): the order of its output and
    grids, the geometry of its pane, and its backlog.  Plain C11 with no
-   platform in it; each number is the one native/Terminal.swift has, which
-   the macOS backend still runs. */
+   platform in it, and the numbers of a fed terminal on both systems. */
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
