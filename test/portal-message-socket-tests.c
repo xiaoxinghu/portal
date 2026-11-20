@@ -544,10 +544,19 @@ static void test_binary_and_its_bound(void)
             stalled_at = sent;
         }
         if (bounded || sent == (size_t) MESSAGE * MESSAGES) {
-            /* Not long: a message may be more than the two ends' buffers
-               hold, 16 KiB on macOS, and arrive only once this thread
-               writes the rest of it. */
-            struct taken more = take_within(2, 5);
+            /* Take what is there without waiting: a message may be more
+               than the two ends' buffers hold, 16 KiB on macOS, and arrive
+               only once this thread writes the rest of it, so a wait for a
+               message would pace the flood at one wait per buffer. */
+            struct taken more = take_within(2, 0);
+            if (!wrote && !more.count) {
+                /* Wait for what can move things on: room to write while
+                   there is more to send, a message once it is all sent. */
+                if (sent < (size_t) MESSAGE * MESSAGES)
+                    poll(&(struct pollfd) {.fd = server, .events = POLLOUT}, 1, 5);
+                else
+                    ready_within(2, 5);
+            }
             for (size_t i = 0; i < more.count; i++) {
                 size_t message = received / MESSAGE;
                 ordered = ordered && more.messages[i].length == MESSAGE
