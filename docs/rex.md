@@ -582,6 +582,44 @@ the blocks that wait first, the one that has waited longest at the top.
 With Consult, `w` narrows `consult-buffer` and the pickers to the blocks
 that wait.
 
+### In a list
+
+`M-x portal-rex-list-agents` shows `*Rex agents*`, a table of every block
+that has a status, one row each, as `list-processes` lists processes:
+
+```
+ Status       Block                 App          Since       Message
+ ✓ done       *rex: work/review*    claude-code  12 min ago
+ ● question   *rex: portal/claude*  claude-code  just now    Clean up the task now?
+ ◌ working    *rex: ken/claude*     claude-code  2 min ago   Reading slides.ts
+```
+
+Since is how long ago the block's latest report came. A plain shell, a
+program that is idle, and a finished block you have used have no status,
+and no row. The blocks that wait come first, the one that has waited
+longest at the top, then those at work, the most recently selected
+first: the pickers' order, with their marks and faces. Clicking a
+column's header, or `S` on it, sorts by that column, the Status column
+by urgency.
+
+Left open, the list keeps itself current, with no key pressed: a row
+changes as its block's status does, a block that starts to wait moves to
+the top, and point stays on its block's row. Since is redrawn once a
+minute while a window shows the list, and by `g`. `RET` selects the
+block on the line, as the pickers do; `o` selects it in another window.
+`q` quits the window.
+
+Where the list opens is `display-buffer`'s choice. To keep it in a side
+window:
+
+```elisp
+(add-to-list 'display-buffer-alist
+             '("\\`\\*Rex agents\\*\\'" display-buffer-in-side-window
+               (side . right) (window-width . 70)))
+```
+
+From a side window, `RET` selects the block in the window used last.
+
 ## Portal's terminal commands
 
 A block's buffer is a terminal to Portal's own terminal commands, from the

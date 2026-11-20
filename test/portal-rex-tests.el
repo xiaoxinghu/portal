@@ -3424,5 +3424,152 @@ whether a mode is on or not, before `:disconnected'."
       (funcall report :state "idle")
       (should (equal (portal-rex-tests--mark buffer) "")))))
 
+;;; The list of agents
+
+(require 'portal-rex-list)
+
+(defmacro portal-rex-tests--listing (&rest body)
+  "Run BODY with *Rex agents* shown in the selected window, then kill it.
+The windows are as they were after."
+  (declare (indent 0))
+  `(unwind-protect
+       (save-window-excursion
+         (delete-other-windows)
+         (portal-rex-list-agents)
+         (should (eq (window-buffer (selected-window)) (get-buffer "*Rex agents*")))
+         ,@body)
+     (when (get-buffer "*Rex agents*") (kill-buffer "*Rex agents*"))))
+
+(defun portal-rex-tests--listed ()
+  "Return the rows *Rex agents* shows, top down, each its cells as plain text."
+  (with-current-buffer "*Rex agents*"
+    (save-excursion
+      (goto-char (point-min))
+      (cl-loop until (eobp)
+               for entry = (tabulated-list-get-entry)
+               when entry collect (mapcar #'substring-no-properties entry)
+               do (forward-line 1)))))
+
+(defun portal-rex-tests--on-row (buffer)
+  "Move point in *Rex agents*, and its window's, to BUFFER's row."
+  (with-current-buffer "*Rex agents*"
+    (goto-char (point-min))
+    (while (not (eq (tabulated-list-get-id) buffer)) (forward-line 1))
+    (dolist (window (get-buffer-window-list nil nil t))
+      (set-window-point window (point)))))
+
+(ert-deftest portal-rex-list-shows-each-agent-in-the-pickers-order ()
+  ;; One agent finished a while ago, unseen; one asks; one failed; one
+  ;; works; a shell says nothing and has no row.
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "asking")
+                              (portal-rex-tests--block "2" "working")
+                              (portal-rex-tests--block "3" "done")
+                              (portal-rex-tests--block "4" "shell")
+                              (portal-rex-tests--block "5" "failed"))
+    (let ((connection (portal-rex-tests--connect server)))
+      (portal-rex-tests--settle connection)
+      (dolist (report '(("block:3" :state "done" :app "claude-code")
+                        ("block:1" :state "blocked" :kind "question" :app "claude-code"
+                         :msg "Clean up the task now?")
+                        ("block:5" :state "error" :app "codex" :msg "API error")
+                        ("block:2" :state "working" :app "claude-code"
+                         :msg "Reading slides.ts")))
+        (apply #'portal-rex-tests--report server (car report) "" (cdr report))
+        (portal-rex-tests--settle connection))
+      (portal-rex-tests--listing
+        (should (equal (portal-rex-tests--listed)
+                       '(("✓ done" "*rex: work/done*" "claude-code" "just now" "")
+                         ("● question" "*rex: work/asking*" "claude-code" "just now"
+                          "Clean up the task now?")
+                         ("✗ failed" "*rex: work/failed*" "codex" "just now" "API error")
+                         ("◌ working" "*rex: work/working*" "claude-code" "just now"
+                          "Reading slides.ts"))))
+        ;; The pickers' faces.
+        (with-current-buffer "*Rex agents*"
+          (should (equal (mapcar (lambda (entry) (get-text-property 0 'face (aref (cadr entry) 0)))
+                                 tabulated-list-entries)
+                         '(portal-terminal-status-done portal-terminal-status-blocked
+                           portal-terminal-status-error portal-terminal-status-working)))
+          ;; A column sorts as any table's: by state, most urgent first.
+          (goto-char (point-min))
+          (tabulated-list-sort 0)
+          (should (equal (mapcar #'car (portal-rex-tests--listed))
+                         '("● question" "✗ failed" "✓ done" "◌ working")))
+          ;; How long ago, redrawn by g.
+          (with-current-buffer "*rex: work/asking*"
+            (setq portal-terminal--status
+                  (plist-put (copy-sequence portal-terminal--status) :time
+                             (- (float-time) 300))))
+          (revert-buffer)
+          (should (equal (nth 3 (car (portal-rex-tests--listed))) "5 min ago")))))))
+
+(ert-deftest portal-rex-list-follows-the-blocks-with-no-key-pressed ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "claude")
+                              (portal-rex-tests--block "2" "codex"))
+    (let* ((connection (portal-rex-tests--connect server))
+           (claude (portal-rex-block-buffer connection "block:1"))
+           (codex (portal-rex-block-buffer connection "block:2"))
+           (report (lambda (block &rest record)
+                     (apply #'portal-rex-tests--report server block "" record)
+                     (portal-rex-tests--settle connection))))
+      (portal-rex-tests--settle connection)
+      (portal-rex-tests--listing
+        ;; Nothing reports yet: no rows.
+        (should-not (portal-rex-tests--listed))
+        (funcall report "block:1" :state "working" :msg "Reading slides.ts")
+        (funcall report "block:2" :state "working" :msg "make test")
+        ;; Those at work, the most recently selected first: neither has
+        ;; been, so Emacs's buffer list says.
+        (bury-buffer claude)
+        (revert-buffer)
+        (should (equal (mapcar #'cadr (portal-rex-tests--listed))
+                       (list (buffer-name codex) (buffer-name claude))))
+        (portal-rex-tests--on-row claude)
+        ;; An agent asks: its row changes and moves to the top, and point
+        ;; stays on it.
+        (funcall report "block:1" :state "blocked" :kind "question" :msg "Clean up?")
+        (should (equal (car (portal-rex-tests--listed))
+                       (list "● question" (buffer-name claude) "" "just now" "Clean up?")))
+        (with-current-buffer "*Rex agents*"
+          (should (eq (tabulated-list-get-id) claude))
+          (should (eq (save-excursion (goto-char (window-point (selected-window)))
+                                      (tabulated-list-get-id))
+                      claude)))
+        ;; One that stops reporting leaves the list, as does a block that
+        ;; closes.
+        (funcall report "block:2" :state "idle")
+        (should (equal (mapcar #'cadr (portal-rex-tests--listed)) (list (buffer-name claude))))
+        (portal-rex--kill-buffer connection "block:1")
+        (should-not (portal-rex-tests--listed))))))
+
+(ert-deftest portal-rex-list-visits-a-block ()
+  (portal-rex-tests--with (server)
+    (let* ((connection (portal-rex-tests--connect server))
+           (buffer (portal-rex-block-buffer connection "block:fake-1")))
+      (portal-rex-tests--settle connection)
+      (portal-rex-tests--report server "block:fake-1" "" :state "blocked" :kind "question")
+      (portal-rex-tests--settle connection)
+      (portal-rex-tests--listing
+        (let ((list (selected-window)))
+          (portal-rex-tests--on-row buffer)
+          ;; RET: in the list's window, as the pickers select a block.
+          (call-interactively (keymap-lookup portal-rex-list-mode-map "RET"))
+          (should (eq (selected-window) list))
+          (should (eq (window-buffer list) buffer))
+          (switch-to-buffer "*Rex agents*")
+          ;; o: in another window, selected.
+          (call-interactively (keymap-lookup portal-rex-list-mode-map "o"))
+          (should-not (eq (selected-window) list))
+          (should (eq (window-buffer (selected-window)) buffer))
+          (should (eq (window-buffer list) (get-buffer "*Rex agents*")))
+          ;; On no row, nothing is visited.
+          (select-window list)
+          (goto-char (point-max))
+          (should-error (portal-rex-list-visit) :type 'user-error))))))
+
 (provide 'portal-rex-tests)
 ;;; portal-rex-tests.el ends here
