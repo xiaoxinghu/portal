@@ -37,8 +37,10 @@
 
 enum {
     /* The padding the backend gives Ghostty inside a fed terminal, on each
-       side, in the pane's units, with window-padding-x and -y, and
-       window-padding-balance off: the geometry counts on it. */
+       side, in points, with window-padding-x and -y, and
+       window-padding-balance off: the geometry counts on it.  In pixels
+       it is what portal_fed_terminal_padding says, by default this many
+       of the pane's units, as on macOS. */
     PORTAL_FED_PADDING = 2,
     /* How long a grid holds the output after it while the terminal takes
        it, at most, in milliseconds. */
@@ -121,6 +123,13 @@ void portal_fed_terminal_pane(portal_fed_terminal *terminal, double width, doubl
 /* The terminal's cell is WIDTH by HEIGHT pixels now, or 0 by 0 until it
    knows. */
 void portal_fed_terminal_cell(portal_fed_terminal *terminal, double width, double height);
+/* Ghostty pads the terminal with PIXELS on each side now, its
+   PORTAL_FED_PADDING points as its fonts count them: on macOS a point is a
+   pixel at scale 1, which is the default, PORTAL_FED_PADDING times the
+   scale; on Linux Ghostty counts 96 pixels to the inch at scale 1 and
+   keeps whole ones, 5 for 2 points at scale 2.  0 goes back to the
+   default. */
+void portal_fed_terminal_padding(portal_fed_terminal *terminal, double pixels);
 
 /* Whether the bytes waiting to be parsed, going from BEFORE to AFTER, rose
    past the high mark or fell to the low one: a feeder that sees this calls
@@ -135,12 +144,15 @@ void portal_fed_terminal_timer(portal_fed_terminal *terminal, portal_fed_timer t
 
 /* The geometry alone.  Where a terminal that holds a grid of COLUMNS by
    ROWS goes in a pane of PANE_HEIGHT, with cells of CELL_WIDTH by
-   CELL_HEIGHT pixels at SCALE. */
+   CELL_HEIGHT pixels and PADDING pixels of Ghostty's on each side, at
+   SCALE. */
 portal_fed_rect portal_fed_grid_rect(uint32_t columns, uint32_t rows, double pane_height,
-                                     double cell_width, double cell_height, double scale);
-/* The grid a pane of WIDTH by HEIGHT would hold, with those cells, in
-   *COLUMNS and *ROWS: whole cells inside Ghostty's padding, at least 0. */
+                                     double cell_width, double cell_height, double padding,
+                                     double scale);
+/* The grid a pane of WIDTH by HEIGHT would hold, with those cells and that
+   padding, in *COLUMNS and *ROWS: whole cells inside Ghostty's padding, at
+   least 0. */
 void portal_fed_pane_grid(double width, double height, double cell_width, double cell_height,
-                          double scale, uint32_t *columns, uint32_t *rows);
+                          double padding, double scale, uint32_t *columns, uint32_t *rows);
 
 #endif

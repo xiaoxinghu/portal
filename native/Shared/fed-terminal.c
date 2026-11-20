@@ -33,8 +33,9 @@ struct portal_fed_terminal {
     uint32_t taken_columns, taken_rows;
     /* The timers that run, by bit. */
     unsigned timers;
-    /* The pane and the cell, 0 until known. */
-    double pane_width, pane_height, scale, cell_width, cell_height;
+    /* The pane and the cell, 0 until known; Ghostty's padding in pixels,
+       0 for the default. */
+    double pane_width, pane_height, scale, cell_width, cell_height, padding;
     /* Where the terminal was last put, once it has been. */
     bool placed;
     portal_fed_rect rect;
@@ -116,14 +117,15 @@ void portal_fed_terminal_free(portal_fed_terminal *terminal)
 
 /* The geometry. */
 
-/* Ghostty's padding on both sides of a row or a column, in pixels. */
-static double padding(double scale)
+/* Ghostty's padding on each side, in pixels, as TERMINAL knows it. */
+static double padding_of(const portal_fed_terminal *terminal)
 {
-    return 2 * PORTAL_FED_PADDING * scale;
+    return terminal->padding > 0 ? terminal->padding : PORTAL_FED_PADDING * terminal->scale;
 }
 
 portal_fed_rect portal_fed_grid_rect(uint32_t columns, uint32_t rows, double pane_height,
-                                     double cell_width, double cell_height, double scale)
+                                     double cell_width, double cell_height, double padding,
+                                     double scale)
 {
     /* The grid, Ghostty's padding, and half a cell to spare, so that
        rounding never loses a row or a column.  Ghostty leaves the spare
@@ -133,8 +135,8 @@ portal_fed_rect portal_fed_grid_rect(uint32_t columns, uint32_t rows, double pan
     portal_fed_rect rect = {
         .x = 0,
         .y = -cell_height / 2 / scale,
-        .width = ((double) columns * cell_width + padding(scale) + cell_width / 2) / scale,
-        .height = ((double) rows * cell_height + padding(scale) + cell_height / 2) / scale,
+        .width = ((double) columns * cell_width + 2 * padding + cell_width / 2) / scale,
+        .height = ((double) rows * cell_height + 2 * padding + cell_height / 2) / scale,
     };
     rect.top = pane_height - (rect.y + rect.height);
     return rect;
@@ -149,10 +151,10 @@ static uint32_t cells(double count)
 }
 
 void portal_fed_pane_grid(double width, double height, double cell_width, double cell_height,
-                          double scale, uint32_t *columns, uint32_t *rows)
+                          double padding, double scale, uint32_t *columns, uint32_t *rows)
 {
-    *columns = cells((width * scale - padding(scale)) / cell_width);
-    *rows = cells((height * scale - padding(scale)) / cell_height);
+    *columns = cells((width * scale - 2 * padding) / cell_width);
+    *rows = cells((height * scale - 2 * padding) / cell_height);
 }
 
 static bool knows_cell(const portal_fed_terminal *terminal)
@@ -168,7 +170,8 @@ static void report_pane(portal_fed_terminal *terminal)
         return;
     uint32_t values[4];
     portal_fed_pane_grid(terminal->pane_width, terminal->pane_height, terminal->cell_width,
-                         terminal->cell_height, terminal->scale, &values[0], &values[1]);
+                         terminal->cell_height, padding_of(terminal), terminal->scale, &values[0],
+                         &values[1]);
     values[2] = cells(terminal->cell_width);
     values[3] = cells(terminal->cell_height);
     if (!values[0] || !values[1]
@@ -194,7 +197,7 @@ static void fit(portal_fed_terminal *terminal)
     if (terminal->holds && knows_cell(terminal))
         rect = portal_fed_grid_rect(terminal->held_columns, terminal->held_rows,
                                     terminal->pane_height, terminal->cell_width,
-                                    terminal->cell_height, terminal->scale);
+                                    terminal->cell_height, padding_of(terminal), terminal->scale);
     if (!terminal->placed || !same_rect(rect, terminal->rect)) {
         terminal->placed = true;
         terminal->rect = rect;
@@ -216,6 +219,12 @@ void portal_fed_terminal_cell(portal_fed_terminal *terminal, double width, doubl
 {
     terminal->cell_width = width;
     terminal->cell_height = height;
+    fit(terminal);
+}
+
+void portal_fed_terminal_padding(portal_fed_terminal *terminal, double pixels)
+{
+    terminal->padding = pixels > 0 ? pixels : 0;
     fit(terminal);
 }
 
