@@ -790,6 +790,69 @@ static void test_refusals(void)
     free(error.data);
 }
 
+/* A server with no room for one more connection to accept: a dial waits
+   for room without holding anything up, a close ends the wait and frees
+   what the socket had, and room made lets the dial through. */
+static void test_a_server_with_no_room(void)
+{
+    enum { FILL = 64 };
+    int fill[FILL], filled = 0, listener = listen_at("full");
+    /* Fill its queue with connections nobody accepts, until one is turned
+       away: Linux says to try again, and a BSD refuses. */
+    struct sockaddr_un address = {.sun_family = AF_UNIX};
+    snprintf(address.sun_path, sizeof address.sun_path, "%s", path_of("full"));
+    bool full = false;
+    while (!full && filled < FILL) {
+        int one = socket(AF_UNIX, SOCK_STREAM, 0);
+        fcntl(one, F_SETFL, fcntl(one, F_GETFL) | O_NONBLOCK);
+        if (connect(one, (struct sockaddr *) &address, sizeof address) == 0) {
+            fill[filled++] = one;
+        } else {
+            full = true;
+            close(one);
+        }
+    }
+    CHECK(full);
+    int before = open_descriptors();
+    CHECK(open_socket(6, "full", "test.v1", false));
+    struct taken taken = {0};
+    if (!ready_within(6, 200)) {
+        /* Still dialing: a close ends it, and its thread lets go of the
+           connection and the pipe. */
+        CHECK(open_descriptors() == before + 3);
+        CHECK(close_socket(6));
+        EVENTUALLY(open_descriptors() == before);
+        /* And with room made, one that was waiting gets through. */
+        CHECK(open_socket(6, "full", "test.v1", false));
+        CHECK(send_text(6, "at last", 7));
+        CHECK(!ready_within(6, 100));
+        for (int i = 0; i < filled; i++) {
+            int accepted = accept_one(listener);
+            close(accepted);
+            close(fill[i]);
+        }
+        filled = 0;
+        char payload[64];
+        size_t length;
+        int server = server_upgrade(listener, "test.v1", NULL);
+        CHECK(server >= 0);
+        CHECK(client_frame(server, payload, sizeof payload, &length) == 0x81);
+        CHECK(!strcmp(payload, "at last"));
+        CHECK(close_socket(6));
+        close(server);
+    } else {
+        /* A system that refuses the dial at once says so. */
+        taken = take(6);
+        CHECK(is_end(&taken, "Nothing is listening on that socket", 0));
+        drop(&taken);
+        CHECK(close_socket(6));
+    }
+    for (int i = 0; i < filled; i++)
+        close(fill[i]);
+    close(listener);
+    EVENTUALLY(open_descriptors() == 0);
+}
+
 /* Several sockets at once, each its own connection, and what a socket
    leaves behind: no descriptor, and none a program Emacs starts inherits. */
 static void test_descriptors(void)
@@ -861,6 +924,7 @@ int main(void)
     test_binary_and_its_bound();
     test_broken_protocol();
     test_refusals();
+    test_a_server_with_no_room();
     test_descriptors();
 
     DIR *left = opendir(directory);

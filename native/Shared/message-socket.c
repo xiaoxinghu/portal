@@ -57,6 +57,9 @@ enum {
     /* How long a goodbye may take to go out: a server that has stopped
        reading would hold it forever. */
     GOODBYE_MILLISECONDS = 1000,
+    /* The longest pause between two tries to dial a server that has no
+       room for one more connection to accept. */
+    DIAL_PAUSE_MILLISECONDS = 64,
     /* The longest wait, an hour. */
     LONGEST_WAIT_MILLISECONDS = 3600000,
 };
@@ -633,26 +636,39 @@ static const char *dial(struct line *line, struct bytes *why)
 
     struct sockaddr_un address = {.sun_family = AF_UNIX};
     memcpy(address.sun_path, socket_->path, strlen(socket_->path) + 1);
-    /* A dial waits only for a server with no room for one more to accept,
-       and then a close waits for it too, in this thread alone. */
-    int dialed = connect(line->fd, (struct sockaddr *) &address, sizeof address);
-    if (dialed != 0 && errno == EINTR) {
-        /* The dial goes on by itself: wait for how it ends. */
-        struct pollfd wait = {.fd = line->fd, .events = POLLOUT};
-        socklen_t size = sizeof dialed;
-        while (poll(&wait, 1, -1) < 0 && errno == EINTR)
+    /* The dial never blocks, so that a close ends it too: a server with no
+       room for one more to accept would hold a blocking one, with this
+       thread and its descriptors, for as long as it accepts nothing. */
+    fcntl(line->fd, F_SETFL, fcntl(line->fd, F_GETFL) | O_NONBLOCK);
+    for (int pause = 1;; pause = pause < DIAL_PAUSE_MILLISECONDS ? pause * 2 : pause) {
+        if (connect(line->fd, (struct sockaddr *) &address, sizeof address) == 0)
+            break;
+        int failed = errno;
+        if (failed == EINPROGRESS || failed == EINTR) {
+            /* The dial goes on by itself: wait for how it ends. */
+            socklen_t size = sizeof failed;
+            while (!await(line, POLLOUT, -1))
+                if (closed(socket_))
+                    return "Closed";
+            if (getsockopt(line->fd, SOL_SOCKET, SO_ERROR, &failed, &size) != 0)
+                failed = errno;
+            if (!failed)
+                break;
+        }
+        if (failed == EAGAIN || failed == EWOULDBLOCK) {
+            /* Linux, of a server with no room: nothing tells when it has
+               some, so ask again in a moment, each a little longer. */
+            await(line, 0, pause);
+            if (closed(socket_))
+                return "Closed";
             continue;
-        if (getsockopt(line->fd, SOL_SOCKET, SO_ERROR, &dialed, &size) == 0 && dialed)
-            errno = dialed;
-    }
-    if (dialed != 0) {
-        if (errno == ENOENT || errno == ECONNREFUSED)
+        }
+        if (failed == ENOENT || failed == ECONNREFUSED)
             return "Nothing is listening on that socket";
         put_text(why, "Cannot connect: ");
-        put_text(why, error_text(errno, text, sizeof text));
+        put_text(why, error_text(failed, text, sizeof text));
         return why->data;
     }
-    fcntl(line->fd, F_SETFL, fcntl(line->fd, F_GETFL) | O_NONBLOCK);
 
     unsigned char drawn[16];
     for (size_t i = 0; i < sizeof drawn; i += 8) {
