@@ -550,7 +550,7 @@ graphical one too:
   anywhere, typing in order and the reports it drops; a backlog holding the
   stream unread, a resume, a refused one and a new stream; and a lost
   connection's tries, coming back as the same client and as a new one.
-- `message-socket`, on Linux, runs the portable message socket,
+- `message-socket` runs the message socket of both backends,
   `native/Shared/message-socket.c`, with no Emacs and no backend, against a
   server the test plays on real Unix sockets
   ([portal-message-socket-tests.c](../test/portal-message-socket-tests.c)):
@@ -560,8 +560,17 @@ graphical one too:
   socket, and the descriptors a socket leaves. It includes the file to
   reach its SHA-1, base64 and UTF-8, which it checks against published
   values. Build it with `-fsanitize=thread`, and with
-  `-fsanitize=address,undefined`, after changing the socket: its threads
-  share a lock, a pipe and a count.
+  `-fsanitize=address,undefined`, after changing the socket, on macOS and
+  on Linux: its threads share a lock, a pipe and a count, and the two
+  systems' sockets differ, macOS's buffering 16 KiB between the ends where
+  Linux's holds hundreds. Each is one command:
+
+  ```sh
+  cc -std=c11 -Wall -Wextra -Werror -fsanitize=thread -g \
+      -I native/Core/include -I native/Shared \
+      test/portal-message-socket-tests.c -o build/message-socket-tsan
+  build/message-socket-tsan
+  ```
 - `fed-terminal`, on Linux, runs a fed terminal's rules,
   `native/Shared/fed-terminal.c`, with no Emacs, no window and no surface
   ([portal-fed-terminal-tests.c](../test/portal-fed-terminal-tests.c)):
@@ -718,14 +727,16 @@ for core in channel views input terminals web shortcuts status rex json; do
   xcrun clang -std=c11 -Wall -Wextra -Werror -I native/Core/include \
     -c native/Core/$core.c -o build/$core.o
 done
+xcrun clang -std=c11 -Wall -Wextra -Werror -I native/Core/include \
+  -c native/Shared/message-socket.c -o build/message-socket.o
 xcrun swiftc -swift-version 6 -warnings-as-errors \
-  -I native/Core/include -import-objc-header test/native-core.h \
+  -I native/Core/include -I native/Shared -import-objc-header test/native-core.h \
   native/Backend.swift native/CoreCalls.swift native/NativeHost.swift native/NativeInput.swift \
   native/Launcher.swift native/Hotkeys.swift native/KeyPost.swift native/StatusPanel.swift \
-  native/MessageSocket.swift native/Views.swift native/WebView.swift \
+  native/Views.swift native/WebView.swift \
   test/native-checks.swift test/native-terminal-stub.swift test/native-views.swift \
   test/native-focus.swift build/channel.o build/views.o build/input.o build/terminals.o \
-  build/web.o build/shortcuts.o build/status.o build/rex.o build/json.o \
+  build/web.o build/shortcuts.o build/status.o build/rex.o build/json.o build/message-socket.o \
   -framework AppKit -framework WebKit -framework Carbon -o build/check-focus
 build/check-focus
 '

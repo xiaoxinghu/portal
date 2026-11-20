@@ -349,28 +349,25 @@ messages to and from a server on a Unix socket, as a WebSocket. It opens one
 for a path, a resource and a subprotocol, queues a message to send, hands
 over the messages that arrived, waits a bounded time for one, and closes;
 it reports that a socket has something to read with `portal_socket_ready`.
-On macOS, `native/MessageSocket.swift` frames WebSocket by hand, because
-neither system client reaches a Unix socket: `URLSessionWebSocketTask`
-cannot name one, and Network.framework's WebSocket aborts on a `.unix`
-endpoint. Each socket has a thread that dials, upgrades and reads, and a
-serial queue that writes, so a slow or silent server never holds Emacs's
-thread. The platform checks the upgrade (the status, the accept key, the
-subprotocol), answers pings and a server's close, joins fragments, and ends
-a connection whose server breaks the framing, with a reason for people.
-
-On Linux the socket is `native/Shared/message-socket.c`: the same socket
-in portable C, on POSIX sockets, `poll` and threads, with no toolkit and no
-event loop, written to take the Swift one's place on macOS too. It has the
-five operations as `portal.h` words them and asks a backend for one thing,
-a function it calls off the module thread when a socket that had nothing to
-read has something, which the backend turns into `portal_socket_ready` on
-the module thread: the Linux backend through GLib's main loop. Each socket
-has one thread, which waits in `poll` for the server, for something to
-send and for the module thread, which wakes it through a pipe. It ends a
-connection with the Swift socket's reasons, word for word, which the tests
-of both name. `native/Shared` is for such code: a platform's duty that
-needs nothing of the platform, so that backends share it and do not each
-write it.
+Both backends' socket is `native/Shared/message-socket.c`, which frames
+WebSocket by hand in portable C, on POSIX sockets, `poll` and threads, with
+no toolkit and no event loop. Neither of macOS's clients reaches a Unix
+socket: `URLSessionWebSocketTask` cannot name one, and Network.framework's
+WebSocket aborts on a `.unix` endpoint. Each socket has one thread, which
+dials, upgrades, reads and writes, waiting in `poll` for the server, for
+something to send and for the module thread, which wakes it through a
+pipe, so a slow or silent server never holds Emacs's thread. It checks the
+upgrade (the status, the accept key, the subprotocol), answers pings and a
+server's close, joins fragments, and ends a connection whose server breaks
+the framing, with a reason for people. It has the five operations as
+`portal.h` words them and asks a backend for one thing, a function it calls
+off the module thread when a socket that had nothing to read has
+something, which the backend turns into `portal_socket_ready` on the module
+thread: the Linux backend through GLib's main loop, the macOS one through
+the main queue, which Emacs's run loop drains. The Swift package builds the
+file as its `PortalShared` target, whose module map is what Swift imports.
+`native/Shared` is for such code: a platform's duty that needs nothing of
+the platform, so that backends share it and do not each write it.
 
 **The core owns the connection** (`native/Core/rex.c`): its ID, never
 reused, which is also its first socket's name; the endpoint it asks for,
