@@ -448,6 +448,14 @@ static portal_text because(const char *why)
 
 static const char gone[] = "The connection to the server was lost";
 
+/* What ERROR, an errno, means, at TEXT: strerror is not for threads. */
+static const char *error_text(int error, char *text, size_t size)
+{
+    if (strerror_r(error, text, size) != 0)
+        snprintf(text, size, "error %d", error);
+    return text;
+}
+
 static int64_t now_milliseconds(void)
 {
     struct timespec now;
@@ -603,6 +611,7 @@ static void goodbye(struct line *line, const unsigned char *payload, size_t leng
 static const char *dial(struct line *line, struct bytes *why)
 {
     struct message_socket *socket_ = line->socket;
+    char text[128];
 #ifdef SOCK_CLOEXEC
     line->fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
 #else
@@ -612,7 +621,7 @@ static const char *dial(struct line *line, struct bytes *why)
 #endif
     if (line->fd < 0) {
         put_text(why, "Cannot make a socket: ");
-        put_text(why, strerror(errno));
+        put_text(why, error_text(errno, text, sizeof text));
         return why->data;
     }
 #ifdef SO_NOSIGPIPE
@@ -624,6 +633,8 @@ static const char *dial(struct line *line, struct bytes *why)
 
     struct sockaddr_un address = {.sun_family = AF_UNIX};
     memcpy(address.sun_path, socket_->path, strlen(socket_->path) + 1);
+    /* A dial waits only for a server with no room for one more to accept,
+       and then a close waits for it too, in this thread alone. */
     int dialed = connect(line->fd, (struct sockaddr *) &address, sizeof address);
     if (dialed != 0 && errno == EINTR) {
         /* The dial goes on by itself: wait for how it ends. */
@@ -638,7 +649,7 @@ static const char *dial(struct line *line, struct bytes *why)
         if (errno == ENOENT || errno == ECONNREFUSED)
             return "Nothing is listening on that socket";
         put_text(why, "Cannot connect: ");
-        put_text(why, strerror(errno));
+        put_text(why, error_text(errno, text, sizeof text));
         return why->data;
     }
     fcntl(line->fd, F_SETFL, fcntl(line->fd, F_GETFL) | O_NONBLOCK);
@@ -1002,6 +1013,46 @@ static void *run(void *argument)
 
 /* The module thread. */
 
+/* A wait for SOCKET's CHANGED that ends after MILLISECONDS by a clock no
+   one sets: the time of day may be put back while a wait runs.  POSIX
+   chooses a condition's clock when it is made; macOS has no such choice,
+   and a wait that takes a duration instead. */
+#ifdef __APPLE__
+static void changed_init(pthread_cond_t *changed)
+{
+    pthread_cond_init(changed, NULL);
+}
+
+static void changed_wait(struct message_socket *socket, int64_t milliseconds)
+{
+    struct timespec left = {.tv_sec = (time_t) (milliseconds / 1000),
+                            .tv_nsec = (long) (milliseconds % 1000) * 1000000};
+    pthread_cond_timedwait_relative_np(&socket->changed, &socket->lock, &left);
+}
+#else
+static void changed_init(pthread_cond_t *changed)
+{
+    pthread_condattr_t monotonic;
+    pthread_condattr_init(&monotonic);
+    pthread_condattr_setclock(&monotonic, CLOCK_MONOTONIC);
+    pthread_cond_init(changed, &monotonic);
+    pthread_condattr_destroy(&monotonic);
+}
+
+static void changed_wait(struct message_socket *socket, int64_t milliseconds)
+{
+    struct timespec until;
+    clock_gettime(CLOCK_MONOTONIC, &until);
+    until.tv_sec += (time_t) (milliseconds / 1000);
+    until.tv_nsec += (long) (milliseconds % 1000) * 1000000;
+    if (until.tv_nsec >= 1000000000) {
+        until.tv_sec++;
+        until.tv_nsec -= 1000000000;
+    }
+    pthread_cond_timedwait(&socket->changed, &socket->lock, &until);
+}
+#endif
+
 static char *copy_string(portal_string string)
 {
     char *copy = malloc(string.length + 1);
@@ -1055,7 +1106,7 @@ bool portal_message_socket_open(uint64_t id, portal_string path, portal_string r
     pthread_attr_t detached;
     if (!failed && !(failed = pthread_attr_init(&detached))) {
         pthread_mutex_init(&socket->lock, NULL);
-        pthread_cond_init(&socket->changed, NULL);
+        changed_init(&socket->changed);
         /* What no server can guess; without it, what few can. */
         if (getentropy(&socket->module_random, sizeof socket->module_random) != 0)
             socket->module_random = (uint64_t) now_milliseconds() ^ (uintptr_t) socket;
@@ -1085,7 +1136,9 @@ bool portal_message_socket_open(uint64_t id, portal_string path, portal_string r
         free(socket->resource);
         free(socket->protocol);
         free(socket);
-        return fail(error, "Cannot start a message socket: %s", strerror(failed));
+        char text[128];
+        return fail(error, "Cannot start a message socket: %s",
+                    error_text(failed, text, sizeof text));
     }
     socket->next = sockets;
     sockets = socket;
@@ -1157,18 +1210,14 @@ bool portal_message_socket_wait(uint64_t id, uint64_t milliseconds, bool *ready,
         return false;
     if (milliseconds > LONGEST_WAIT_MILLISECONDS)
         milliseconds = LONGEST_WAIT_MILLISECONDS;
-    struct timespec deadline;
-    clock_gettime(CLOCK_REALTIME, &deadline);
-    deadline.tv_sec += (time_t) (milliseconds / 1000);
-    deadline.tv_nsec += (long) (milliseconds % 1000) * 1000000;
-    if (deadline.tv_nsec >= 1000000000) {
-        deadline.tv_sec++;
-        deadline.tv_nsec -= 1000000000;
-    }
+    int64_t deadline = now_milliseconds() + (int64_t) milliseconds;
     pthread_mutex_lock(&socket->lock);
-    while (!socket->arrived && socket->phase != ENDED)
-        if (pthread_cond_timedwait(&socket->changed, &socket->lock, &deadline) == ETIMEDOUT)
+    while (!socket->arrived && socket->phase != ENDED) {
+        int64_t left = deadline - now_milliseconds();
+        if (left <= 0)
             break;
+        changed_wait(socket, left);
+    }
     *ready = socket->arrived || socket->phase == ENDED;
     pthread_mutex_unlock(&socket->lock);
     return true;

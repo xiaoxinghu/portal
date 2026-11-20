@@ -2286,8 +2286,9 @@ This Mac's server too, when `portal-rex-connect-at-startup' says so."
 ;;;###autoload
 (progn
   (defun portal-rex-at-startup ()
-    "Connect to this machine's Rex server, if `portal-rex-connect-at-startup' says so.
-On `emacs-startup-hook'.  Emacs does not wait for the server."
+    "Connect to this machine's Rex server, if the user asked for that.
+The option is `portal-rex-connect-at-startup'.  On `emacs-startup-hook'.
+Emacs does not wait for the server."
     (when (bound-and-true-p portal-rex-connect-at-startup)
       (require 'portal-rex)
       (portal-rex--restore-soon)))
