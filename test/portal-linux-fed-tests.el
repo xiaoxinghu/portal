@@ -153,6 +153,40 @@ Returns once TARGET holds that grid and its frame shows the paint."
                                                 (list 0 0 (car screen) (cadr screen)))))
           (portal-linux-fed--outside screen (list left top right bottom)))))))
 
+(ert-deftest portal-linux-gui-fed-keeps-the-bottom-left-as-its-pane-changes ()
+  :tags '(:gui)
+  ;; The grid stays the app's while its pane shrinks and grows, with no
+  ;; output meanwhile, so its frames keep their size: the view still moves
+  ;; it to the pane's new bottom-left corner, and cuts it to the pane.
+  (portal-fake-rex-with (server)
+    (portal-linux-fed--showing server
+      (portal-linux-fed--hold server target 20 5)
+      (let ((below (split-window-below)))
+        (set-window-buffer below (get-buffer-create "*scratch*"))
+        (with-current-buffer "*scratch*"
+          (face-remap-add-relative 'default :background "#ffff00"))
+        (dolist (change (list #'ignore (lambda () (delete-window below))))
+          (funcall change)
+          (redisplay t)
+          (portal-linux-gui--wait
+           (lambda () (pcase-let ((`(,left ,top ,right ,bottom) (window-inside-pixel-edges)))
+                        (equal (plist-get (portal--inspect target) :edges)
+                               (list left top right bottom)))))
+          ;; Sooner than the cursor blinks, which would draw a frame anyway.
+          (portal-linux-gui--pause 0.15)
+          (pcase-let* ((screen (portal-linux-gui--screen))
+                       (`(,left ,top ,right ,bottom) (portal-linux-gui--box (selected-window)))
+                       (`(,width ,height) (portal-linux-fed--cell target))
+                       (padding (portal-linux-fed--padding))
+                       (at (lambda (x y) (portal-linux-gui--pixel screen x y))))
+            (ert-info ((format "Pane %S, %S" (list left top right bottom)
+                               (portal--inspect target)))
+              (should (portal-linux-fed--red-p (funcall at (+ left padding (/ width 2))
+                                                        (- bottom padding (/ height 2)))))
+              (dolist (corner `((,left ,top) (,(1- right) ,top) (,(1- right) ,(1- bottom))))
+                (should (portal-linux-terminal--orange-p (apply at corner))))
+              (portal-linux-fed--outside screen (list left top right bottom)))))))))
+
 (ert-deftest portal-linux-gui-fed-clips-a-large-grid-at-the-top-and-right ()
   :tags '(:gui)
   (portal-fake-rex-with (server)
