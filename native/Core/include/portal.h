@@ -395,7 +395,9 @@ typedef struct portal_pane_rect {
    background, at the terminal's opacity, wherever the pane shows no
    terminal.  The core gives either the pane itself or a rectangle sized to
    a grid of the terminal's and hung from the pane's bottom-left corner, so
-   a shell's prompt and cursor stay in view. */
+   a shell's prompt and cursor stay in view.  Until the core first places
+   it, which it does once the view is created, a fed terminal fills its
+   pane, as an engine may need a size to start. */
 bool portal_terminal_place(portal_view *terminal, portal_pane_rect rect, portal_text *error);
 /* The size of a terminal's text, in points: the one it starts at without
    :points, and the smallest and largest it is shown at; and two numbers of

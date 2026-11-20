@@ -128,6 +128,10 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     /// A fed terminal's target, which what it tells the core's rules for it
     /// names; nil for any other terminal.
     private let fedTarget: String?
+    /// The core has placed a fed terminal in its pane. Until then it fills
+    /// the pane: Ghostty makes no surface for a view of no size, and the
+    /// core places it only once the view is created.
+    var placed = false
     /// A fed terminal's pane, which Portal places; nil for any other. The
     /// pane holds the terminal as its subview, and its session holds the
     /// pane, so the terminal's reference is weak: neither keeps the other.
@@ -214,6 +218,7 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     /// so its padding is the padding's points times the scale, in pixels.
     func fitInPane() {
         guard let pane, let fedTarget else { return }
+        if !placed { frame = pane.bounds }
         let scale = Double(pane.convertToBacking(NSSize(width: 1, height: 1)).width)
         Core.terminalPane(fedTarget, width: Double(pane.bounds.width), height: Double(pane.bounds.height),
                           scale: scale, padding: Double(Self.padding) * scale)
@@ -467,6 +472,7 @@ final class TerminalSession: PortalView {
     /// The terminal's frame in its clipping pane.
     func place(_ frame: CGRect) throws {
         _ = try fedSession()
+        terminal.placed = true
         if terminal.frame != frame { terminal.frame = frame }
     }
 
