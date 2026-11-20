@@ -437,7 +437,7 @@ server, which watches the block's program, not from Emacs:
 | Detail | What it is |
 | --- | --- |
 | `:title` | The title a program set last. |
-| `:directory` | The directory the block's program last reported from this Mac, as a shell with Ghostty's integration does at each prompt (OSC 7). Until it reports one, the working directory of the program in the foreground, which follows a plain `cd` too. A directory reported from another machine, such as by a shell reached with ssh inside the block, changes nothing. |
+| `:directory` | The directory the block's program last reported from this machine, as a shell with Ghostty's integration does at each prompt (OSC 7). Until it reports one, the working directory of the program in the foreground, which follows a plain `cd` too. A directory reported from another machine, such as by a shell reached with ssh inside the block, changes nothing. |
 | `:program` | The program in the foreground, named as Rex names one: the script an interpreter runs, else the name it was started under, else its executable's, a login shell's without its leading `-`. So it is `zsh`, `vim` or `/opt/tool/cli.js`, not always a path as for a local terminal. |
 | `:exited` | Whether the block's program has ended and the block stayed. |
 
@@ -460,8 +460,8 @@ with `C-c C-k` forgets the title, program and exit until the view opens
 again; the directory stays.
 
 `portal-rex-block-directory` holds the block's directory as a path on its
-server's machine. Every server Portal connects to is on this Mac, so it is
-also the buffer's `default-directory`. Portal never makes a TRAMP
+server's machine. Every server Portal connects to is on this machine, so it
+is also the buffer's `default-directory`. Portal never makes a TRAMP
 directory of it.
 
 ## What a block's program is doing
@@ -642,7 +642,7 @@ Then Emacs says once, in the echo area, what it could not restore:
 | --- | --- |
 | The block has closed | Is killed: the block's ID is never used again. |
 | The server is not running, or does not answer within `portal-rex-timeout` seconds | Waits, and says why. `M-x portal-rex-connect` restores it once the server is up. |
-| The record names a server on another machine | Waits: Portal connects only to the server on this Mac. |
+| The record names a server on another machine | Waits: Portal connects only to the server on this machine. |
 
 A desktop read while Emacs is connected to the server gives the blocks'
 buffers themselves. Placeholders are saved as their blocks' buffers are,
@@ -671,7 +671,7 @@ is what comes back for files:
 
 ### Connect at startup
 
-Set `portal-rex-connect-at-startup` to connect to this Mac's server once
+Set `portal-rex-connect-at-startup` to connect to this machine's server once
 Emacs has started, as a desktop with Rex buffers does whatever it says. It
 is off by default. Emacs does not wait for the server here either, and
 says once why it could not connect.
@@ -845,9 +845,11 @@ connecting, and `portal-rex-connect` connects afresh.
 ## Ghostty versions
 
 A Rex server runs each block's program in a terminal of its own Ghostty.
-Portal is to draw a block's screen by feeding the same output to its own
-Ghostty, the one in the [libghostty-spm](terminals.md#native-ghostty-terminal)
-release Portal pins. The two are seldom the same Ghostty, and nothing checks
+Portal draws a block's screen by feeding the same output to its own
+Ghostty: on macOS the one in the
+[libghostty-spm](terminals.md#native-ghostty-terminal) release Portal pins,
+on Linux Portal's own build of the Ghostty that `native/ghostty.json` pins,
+with the same two patches for a surface fed by its host. The two are seldom the same Ghostty, and nothing checks
 them: Portal connects to any server whose API it speaks, whatever its Ghostty.
 
 While they agree on every sequence a program sends, the screens match. When
@@ -865,22 +867,27 @@ tools/ghostty-version.py
 
 It prints Portal's Ghostty, that of the newest libghostty-spm release and that
 of the Rex server installed on this Mac, how many of the server's commits each
-lacks, and whether a newer release would help. It is the only check there is;
+lacks, and whether a newer release would help. It knows the macOS pin alone,
+and cannot read the Ghostty of the Linux server, whose program does not name
+its commit. It is the only check there is;
 [Contributing](../CONTRIBUTING.md#the-ghostty-dependency) says how to bump the
 pin when it would.
 
 ## On Linux
 
-On Linux Emacs connects to a Rex server and does everything here but show
-a block's screen. Each block has its buffer, which follows the server; the
-commands make, rename and destroy sessions, start terminals and end
-blocks; a block's program says what it is doing, in the mode line, the
-echo area and the pickers; and bookmarks and the desktop restore the
-blocks' buffers. A window that shows a block's buffer shows its text, which
-says which block it is, and the echo area says why there is no more:
-"Portal has no fed terminals on Linux yet". So a block's title, directory
-and program, which Emacs learns once a window shows its screen, stay
-unknown there too.
+On Linux, in Emacs built with pgtk on Wayland, everything here works as
+on macOS: a window shows a block's screen, typed into, at its pane's size
+or another client's, from the pane's bottom-left corner, and the rest
+follows from it, the block's title, directory and program included.
+[The terminal guide](terminals.md#on-linux) says what a terminal there
+does differently, which a block's does too.
+
+One thing differs with the server, not with Portal. A block whose client
+has gone, as one made by `rex new` once the command returns, stays that
+client's on Rex 0.1.0 for macOS until another client takes it, so a pane
+not in use draws it at that client's size and says `:sized elsewhere`.
+The Linux server of November 2026 lets such a block go, and a pane that
+shows it, in use or not, takes it at the pane's size.
 
 Rex's package for Linux is one program, `rex`, the server and its command
 line, with no application. `systemctl --user enable --now rex.socket` has
@@ -894,5 +901,4 @@ machines.
 
 Portal's Rex client is being built in steps. Not built yet:
 
-- A block's screen on Linux, as [above](#on-linux).
 - Servers on other machines.

@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Run via: sh test/linux-follow.sh [fill|terminal]
+# Run via: sh test/linux-follow.sh [fill|terminal|fed]
 # Record a view following its pane and check every frame of the recording:
 # after ./build.sh, on the desktop of test/linux-desktop.sh. A fresh Emacs
 # opens a test pattern in a pane and changes that pane, one command every
@@ -16,7 +16,10 @@
 # frame at the new size, which are counted apart. With "fill", the pattern is a single pixel
 # stretched over the pane. With "terminal", the view is a terminal whose shell
 # prints blank lines all the while, so that its renderer makes frames as the
-# pane changes, each one its theme's orange background.
+# pane changes, each one its theme's orange background. With "fed", a Rex
+# block's terminal of the fake Rex server's, fed blank lines all the while:
+# it holds the block's grid, which follows the pane a moment later, with the
+# theme's background beside it, so the pane is that orange throughout too.
 #
 # It exits 0 when no frame is out of place, 1 when one is, naming each, and
 # 77 where the desktop cannot start. The recording stays in
@@ -76,7 +79,7 @@ recorder=
 kill -KILL "$emacs" 2>/dev/null || :
 wait "$emacs" 2>/dev/null || :
 emacs=
-if [ "$PORTAL_FOLLOW_PATTERN" = terminal ]; then
+if [ "$PORTAL_FOLLOW_PATTERN" = terminal ] || [ "$PORTAL_FOLLOW_PATTERN" = fed ]; then
     # Great Pumpkin's background (test/portal-linux-follow.el).
     python3 -B "$root/test/linux-recording.py" "$logs/follow.mkv" f98128
 else

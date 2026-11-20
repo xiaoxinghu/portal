@@ -7,8 +7,9 @@
               surface over a pane, and when each change reaches the screen.
    input.c    a view's keyboard and pointer: the invisible widget in the
               frame, who gets each key, the input method.
-   terminal.c a terminal: a content that is a Ghostty surface, and Ghostty's
-              app, which every terminal shares.
+   terminal.c a terminal: a content that is a Ghostty surface, running a
+              shell or fed a Rex block's output, and Ghostty's app, which
+              every terminal shares.
    presenter.c the thread that shows every terminal's frames.
    pattern.c  the other kind of content, a test pattern for the checks.
 
@@ -51,6 +52,11 @@ struct portal_wayland {
     /* Version 3, or NULL for a compositor that takes no DMABUFs: a
        terminal's frames then come in memory. */
     struct zwp_linux_dmabuf_v1 *dmabuf;
+    /* The compositor crops a surface's buffer with the viewport's source
+       rectangle before it applies the buffer's transform, which the
+       viewporter protocol has the other way round: Hyprland, as of 0.56.2,
+       for a buffer turned over (views.c, clip). */
+    bool crops_buffer;
 };
 /* The display and its globals, bound at the first call.  Fails for an Emacs
    with no display, for a display that is not Wayland, and for a compositor
@@ -128,6 +134,16 @@ struct portal_geometry {
     bool shown;
 };
 
+/* Where a content's frames go in its pane, when they are not the pane's
+   size: a frame WIDTH by HEIGHT device pixels whose top left is X and Y
+   device pixels from the pane's, either of which may be negative, and
+   clipped to the pane.  A fed terminal that holds a grid of its own is so
+   (terminal.c).  Unplaced, a frame is shown from the pane's top left. */
+struct portal_placement {
+    bool placed;
+    int32_t x, y, width, height;
+};
+
 /* A view, as the core holds it from portal_view_create to
    portal_view_destroy. */
 struct portal_view {
@@ -141,6 +157,10 @@ struct portal_view {
     /* The content's frames are bottom-up, its first row the bottom one:
        set when it is made, for every frame it presents. */
     bool flipped;
+    /* The view has a backdrop, a colour over all of its pane under the
+       content's frames, for a content whose frames may leave part of the
+       pane bare: set when it is made.  Its colour: portal_linux_view_backdrop. */
+    bool backdrop;
     const struct portal_wayland *wayland;
     /* The content's threads' queue, the view's from create to destroy. */
     struct wl_event_queue *queue;
@@ -154,9 +174,22 @@ struct portal_view {
     portal_rect rect;
     int32_t scale;   /* As the content was last told. */
     /* Where the subsurface was last put in the window's surface, if
-       POSITIONED. */
+       POSITIONED; and the backdrop's. */
     bool positioned;
     int32_t position_x, position_y;
+    bool under_positioned;
+    int32_t under_x, under_y;
+    /* The backdrop, the main thread's alone: its subsurface, below the
+       view's, and the colour it shows, premultiplied ARGB, which is
+       COLOUR once applied.  UNDER_SHOWING: it shows UNDER_WIDTH by
+       UNDER_HEIGHT of Emacs's pixels of it. */
+    struct wl_surface *under;
+    struct wl_subsurface *under_subsurface;
+    struct wp_viewport *under_viewport;
+    struct wl_buffer *under_buffer, *under_spent; /* The colour's; the one before it. */
+    uint32_t colour, under_colour;
+    bool under_showing;
+    int32_t under_width, under_height;
 
     /* Input (input.c). */
     GtkWidget *widget;   /* The input widget, a reference of the view's. */
@@ -188,8 +221,10 @@ struct portal_view {
     struct wl_callback *callback; /* The frame callback asked for, or NULL. */
     int32_t surface_scale;        /* Device pixels to one of Emacs's. */
     /* Where Emacs wants the view, and what the screen has: the main thread
-       makes the second the first after GTK paints. */
+       makes the second the first after GTK paints.  The same for where the
+       content's frames go in the pane. */
     struct portal_geometry wanted, applied;
+    struct portal_placement wanted_place, applied_place;
     /* The frame attached to the surface, if SHOWING, in device pixels; 0
        by 0 for one that fills the pane. */
     bool showing;
@@ -240,6 +275,16 @@ struct portal_view *portal_linux_view_find(uint64_t serial);
 uint64_t *portal_linux_serial(uint64_t serial);
 /* Have GTK paint in VIEW's frame soon, which applies what waits. */
 void portal_linux_view_repaint(struct portal_view *view);
+/* VIEW's content puts its frames at PLACEMENT in the pane from now on: a
+   change of the view as a change of its pane is, which the screen takes
+   with the first frame presented for it, the content's frames being of
+   PLACEMENT's size; unplaced, of the pane's.  On the module thread. */
+void portal_linux_view_place(struct portal_view *view, struct portal_placement placement);
+/* VIEW, which has a backdrop, shows it in RED, GREEN and BLUE, from 0 to
+   255, at ALPHA from 0 to 1, from the next paint on.  On the module
+   thread. */
+void portal_linux_view_backdrop(struct portal_view *view, uint8_t red, uint8_t green,
+                                uint8_t blue, double alpha);
 
 /* What became of a frame given to portal_linux_present. */
 enum portal_presented {
@@ -250,13 +295,14 @@ enum portal_presented {
 /* Show BUFFER on VIEW's surface, a frame WIDTH by HEIGHT device pixels, or
    0 by 0 for a frame that fills the pane whatever its size, as a single
    pixel does.  From any thread.  A sized frame is shown from the pane's top
-   left, one buffer pixel to a device pixel, and clipped to the pane.
+   left, or where the view's placement puts it, one buffer pixel to a device
+   pixel, and clipped to the pane.
 
    DAMAGE, if not NULL, is the x, y, width and height of what changed in
    the buffer since the frame before it; otherwise all of it did.
 
-   A frame for the size Emacs wants the pane to have, which the screen does
-   not have yet, is held: the main thread commits it with the pane's new
+   A frame for the size Emacs wants the pane to have, or the placement, which
+   the screen does not have yet, is held: the main thread commits it with the pane's new
    place, after GTK paints.  So is a frame for a view about to be shown.
    A frame held is given up for the next one presented, held or shown:
    *UNUSED is then its buffer, which was never attached and is the caller's

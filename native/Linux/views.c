@@ -53,6 +53,11 @@
      serves several views, as a terminal's presenter does.
    - A content whose frames are bottom-up has the surface turned over
      (`flipped'), from the surface's first commit.
+   - A content whose frames are not the pane's size says where they go in
+     it (portal_linux_view_place), which changes the view as a new size of
+     its pane does; and a view made with a backdrop has a second surface
+     just below its own, the main thread's alone, which shows a colour over
+     the pane while the view shows.
 
    A subsurface cannot change its parent, so a view that moves to another
    frame gets a new surface there.  The content never sees a surface: it
@@ -64,10 +69,12 @@
    content then frees is on the screen; the content destroys its buffers;
    the queue is round-tripped, which delivers what was still on its way,
    and destroyed; then the input method and the widget. */
-#define _POSIX_C_SOURCE 200809L
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 #include <gdk/gdkwayland.h>
 
@@ -159,21 +166,104 @@ static void freeze(struct portal_frame *frame, bool settled)
     thaw_within(frame, settled ? UNDRAWN : UNSETTLED);
 }
 
+/* Placing a frame. */
+
+/* N rounded down, or up, to a multiple of SCALE. */
+static int32_t floor_to(int32_t n, int32_t scale)
+{
+    int32_t whole = n / scale;
+    if (n % scale && n < 0)
+        whole--;
+    return whole * scale;
+}
+
+static int32_t ceil_to(int32_t n, int32_t scale)
+{
+    return -floor_to(-n, scale);
+}
+
+static bool same_place(struct portal_placement a, struct portal_placement b)
+{
+    return a.placed == b.placed
+        && (!a.placed
+            || (a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height));
+}
+
+/* What shows of a placed frame, and where.  A subsurface sits on whole
+   pixels of Emacs's, and a viewport's source and destination are one
+   buffer pixel to a device pixel only for a whole number of Emacs's: so
+   what shows starts and ends on such a pixel, inside the pane and the
+   frame, which loses less than one of Emacs's pixels at each edge, of the
+   frame's padding.  LEFT and TOP are where the subsurface goes, from the
+   pane's top left, in Emacs's pixels; X, Y, WIDTH and HEIGHT, the part of
+   the buffer shown, in its pixels; COLUMNS and ROWS, the size it is shown
+   at, in Emacs's pixels. */
+struct cut {
+    int32_t left, top;
+    int32_t x, y, width, height;
+    int32_t columns, rows;
+};
+
+/* The cut of a frame BUFFER_WIDTH by BUFFER_HEIGHT placed at PLACE in a
+   pane PANE_WIDTH by PANE_HEIGHT of Emacs's pixels at SCALE.  A frame of
+   another size than PLACE's, drawn before or after it, hangs from the
+   same bottom-left corner. */
+static struct cut cut_of(struct portal_placement place, int32_t pane_width, int32_t pane_height,
+                         int32_t scale, int32_t buffer_width, int32_t buffer_height)
+{
+    int32_t left = ceil_to(MAX(place.x, 0), scale), top = ceil_to(MAX(place.y, 0), scale);
+    int32_t right = floor_to(MIN(place.x + place.width, pane_width * scale), scale);
+    int32_t bottom = floor_to(MIN(place.y + place.height, pane_height * scale), scale);
+    int32_t frame_x = place.x, frame_y = place.y + place.height - buffer_height;
+    struct cut cut = {.left = left / scale, .top = top / scale};
+    cut.x = MAX(left - frame_x, 0);
+    cut.y = MAX(top - frame_y, 0);
+    cut.width = MIN(right - left, buffer_width - cut.x);
+    cut.height = MIN(bottom - top, buffer_height - cut.y);
+    /* Nothing of it in the pane, as in a pane smaller than a pixel of
+       Emacs's: a corner, which a viewport can show. */
+    if (cut.width < 1 || cut.height < 1) {
+        cut.x = cut.y = 0;
+        cut.width = MIN(buffer_width, scale);
+        cut.height = MIN(buffer_height, scale);
+    }
+    cut.columns = (cut.width + scale - 1) / scale;
+    cut.rows = (cut.height + scale - 1) / scale;
+    return cut;
+}
+
+/* Whether VIEW's frames go at a new place in its pane: a new size of the
+   pane or of the frames.  The caller holds the lock. */
+static bool resizing(const struct portal_view *view)
+{
+    return view->wanted.width != view->applied.width || view->wanted.height != view->applied.height
+        || !same_place(view->wanted_place, view->applied_place);
+}
+
+/* Whether a frame WIDTH by HEIGHT is the one VIEW's content draws for
+   where Emacs wants it.  The caller holds the lock. */
+static bool for_wanted(const struct portal_view *view, int32_t width, int32_t height)
+{
+    int32_t scale = view->surface_scale > 0 ? view->surface_scale : 1;
+    /* A frame that fills is for any size. */
+    if (!width && !height)
+        return true;
+    if (view->wanted_place.placed)
+        return width == view->wanted_place.width && height == view->wanted_place.height;
+    return width == view->wanted.width * scale && height == view->wanted.height * scale;
+}
+
 /* Whether VIEW has what its change needs: a frame to show, if it is to be
    shown or has a new size.  A frame that fills needs another for a new
    size too: Hyprland applies a surface's new size only with a buffer. */
 static bool ready(struct portal_view *view)
 {
     pthread_mutex_lock(&view->lock);
-    bool resized = view->wanted.width != view->applied.width
-                || view->wanted.height != view->applied.height;
-    int32_t scale = view->surface_scale > 0 ? view->surface_scale : 1;
+    bool resized = resizing(view);
     /* A frame held since before the view was last hidden is not one the
        content drew for this change. */
     bool has = view->held_buffer && !view->held_stale
-            && ((!view->held_width && !view->held_height)
-                || (view->held_width == view->wanted.width * scale
-                    && view->held_height == view->wanted.height * scale));
+            && for_wanted(view, view->held_width, view->held_height);
     bool needs = view->surface && view->wanted.shown && !has
               && (!view->applied.shown || resized);
     pthread_mutex_unlock(&view->lock);
@@ -213,9 +303,22 @@ static void frame_done(void *data, struct wl_callback *callback, uint32_t time)
 
 static const struct wl_callback_listener frame_listener = {frame_done};
 
+/* The source rectangle's top for ROWS of the frame shown on VIEW from its
+   row Y, as the frame is seen.  The protocol has the rectangle in the
+   frame's own orientation, after the buffer's transform; a compositor that
+   crops the buffer first (portal_wayland's crops_buffer) has it in the
+   buffer's, which a flipped view's turns over. */
+static int32_t source_y(const struct portal_view *view, int32_t y, int32_t rows)
+{
+    if (view->flipped && view->wayland->crops_buffer)
+        return view->shown_height - y - rows;
+    return y;
+}
+
 /* Cut the frame attached to VIEW's surface to the pane the screen has: all
-   of a frame that fills, and otherwise its top left, one buffer pixel to a
-   device pixel.  The caller holds the lock, and commits. */
+   of a frame that fills; what of a placed frame is in the pane (cut_of);
+   and otherwise its top left, one buffer pixel to a device pixel.  The
+   caller holds the lock, and commits. */
 static void clip(struct portal_view *view)
 {
     int32_t scale = view->surface_scale > 0 ? view->surface_scale : 1;
@@ -226,11 +329,20 @@ static void clip(struct portal_view *view)
         wp_viewport_set_destination(view->viewport, width, height);
         return;
     }
+    if (view->applied_place.placed) {
+        struct cut cut = cut_of(view->applied_place, width, height, scale, view->shown_width,
+                                view->shown_height);
+        wp_viewport_set_source(view->viewport, wl_fixed_from_int(cut.x),
+                               wl_fixed_from_int(source_y(view, cut.y, cut.height)),
+                               wl_fixed_from_int(cut.width), wl_fixed_from_int(cut.height));
+        wp_viewport_set_destination(view->viewport, cut.columns, cut.rows);
+        return;
+    }
     /* Never past the buffer's edge, which is a protocol error. */
     int32_t columns = MIN(view->shown_width, width * scale);
     int32_t rows = MIN(view->shown_height, height * scale);
-    wp_viewport_set_source(view->viewport, 0, 0, wl_fixed_from_int(columns),
-                           wl_fixed_from_int(rows));
+    wp_viewport_set_source(view->viewport, 0, wl_fixed_from_int(source_y(view, 0, rows)),
+                           wl_fixed_from_int(columns), wl_fixed_from_int(rows));
     wp_viewport_set_destination(view->viewport, (columns + scale - 1) / scale,
                                 (rows + scale - 1) / scale);
 }
@@ -295,15 +407,9 @@ enum portal_presented portal_linux_present(struct portal_view *view, struct wl_b
     enum portal_presented result;
     *unused = NULL;
     pthread_mutex_lock(&view->lock);
-    int32_t scale = view->surface_scale > 0 ? view->surface_scale : 1;
-    bool resizing = view->wanted.width != view->applied.width
-                 || view->wanted.height != view->applied.height;
-    /* A frame that fills is for any size. */
-    bool for_wanted = (!width && !height)
-                   || (width == view->wanted.width * scale && height == view->wanted.height * scale);
     if (!view->surface || !view->wanted.shown) {
         result = PORTAL_REFUSED;
-    } else if (!view->applied.shown || (resizing && for_wanted)) {
+    } else if (!view->applied.shown || (resizing(view) && for_wanted(view, width, height))) {
         if (view->held_buffer && view->held_buffer != buffer)
             *unused = view->held_buffer;
         view->held_buffer = buffer;
@@ -361,10 +467,28 @@ static void surface_make(struct portal_view *view)
         wl_surface_set_buffer_transform(view->surface, WL_OUTPUT_TRANSFORM_FLIPPED_180);
     wl_surface_commit(view->surface);
     view->applied = (struct portal_geometry) {0};
+    view->applied_place = (struct portal_placement) {0};
     view->showing = false;
     view->sequential = false;
     view->positioned = false;
     pthread_mutex_unlock(&view->lock);
+    /* The backdrop: a surface of the main thread's, just below the view's,
+       which shows one pixel of its colour stretched over the pane. */
+    if (view->backdrop) {
+        view->under = wl_compositor_create_surface(wayland->compositor);
+        nowhere = wl_compositor_create_region(wayland->compositor);
+        wl_surface_set_input_region(view->under, nowhere);
+        wl_region_destroy(nowhere);
+        view->under_subsurface = wl_subcompositor_get_subsurface(wayland->subcompositor, view->under,
+                                                                 view->frame->parent);
+        wl_subsurface_set_desync(view->under_subsurface);
+        wl_subsurface_place_below(view->under_subsurface, view->surface);
+        view->under_viewport = wp_viewporter_get_viewport(wayland->viewporter, view->under);
+        wl_surface_commit(view->under);
+        view->under_showing = false;
+        view->under_positioned = false;
+        view->under_colour = 0;
+    }
 }
 
 /* Destroy VIEW's surface, if it has one.  A frame held for it stays held:
@@ -385,9 +509,19 @@ static void surface_destroy(struct portal_view *view)
         view->subsurface = NULL;
         view->surface = NULL;
         view->applied = (struct portal_geometry) {0};
+        view->applied_place = (struct portal_placement) {0};
         view->showing = false;
     }
     pthread_mutex_unlock(&view->lock);
+    if (view->under) {
+        wp_viewport_destroy(view->under_viewport);
+        wl_subsurface_destroy(view->under_subsurface);
+        wl_surface_destroy(view->under);
+        view->under_viewport = NULL;
+        view->under_subsurface = NULL;
+        view->under = NULL;
+        view->under_showing = false;
+    }
 }
 
 /* Note where Emacs wants VIEW and whether it is to show, tell its content
@@ -555,14 +689,66 @@ static void position(struct portal_frame *frame)
     gtk_widget_translate_coordinates(frame->fixed, GTK_WIDGET(frame->window), 0, 0, &left, &top);
     for (struct portal_view *view = frame->views; view; view = view->next) {
         int32_t x = (int32_t) view->rect.x + left, y = (int32_t) view->rect.y + top;
-        if (!view->surface || !view->attached || view->occluded
-            || (view->positioned && x == view->position_x && y == view->position_y))
+        if (!view->surface || !view->attached || view->occluded)
+            continue;
+        if (view->under && (!view->under_positioned || x != view->under_x || y != view->under_y)) {
+            wl_subsurface_set_position(view->under_subsurface, x, y);
+            view->under_positioned = true;
+            view->under_x = x;
+            view->under_y = y;
+        }
+        /* A placed frame's subsurface is where what shows of it starts. */
+        if (view->wanted_place.placed) {
+            int32_t scale = view->surface_scale > 0 ? view->surface_scale : 1;
+            struct cut cut = cut_of(view->wanted_place, view->wanted.width, view->wanted.height,
+                                    scale, view->wanted_place.width, view->wanted_place.height);
+            x += cut.left;
+            y += cut.top;
+        }
+        if (view->positioned && x == view->position_x && y == view->position_y)
             continue;
         wl_subsurface_set_position(view->subsurface, x, y);
         view->positioned = true;
         view->position_x = x;
         view->position_y = y;
     }
+}
+
+/* Show VIEW's backdrop as the view is now, after GTK paints: its colour
+   over the pane while the view shows, and nothing otherwise. */
+static void backdrop_apply(struct portal_view *view)
+{
+    if (!view->under)
+        return;
+    bool shown = view->applied.shown && view->under_buffer;
+    if (!shown) {
+        if (view->under_showing) {
+            wl_surface_attach(view->under, NULL, 0, 0);
+            wl_surface_commit(view->under);
+            view->under_showing = false;
+        }
+        return;
+    }
+    bool fresh = !view->under_showing || view->under_colour != view->colour;
+    bool sized = !view->under_showing || view->under_width != view->applied.width
+              || view->under_height != view->applied.height;
+    if (!fresh && !sized)
+        return;
+    /* The pixel again for a new size too: Hyprland applies a surface's new
+       size only with a buffer. */
+    wl_surface_attach(view->under, view->under_buffer, 0, 0);
+    wl_surface_damage_buffer(view->under, 0, 0, 1, 1);
+    view->under_colour = view->colour;
+    wp_viewport_set_destination(view->under_viewport, view->applied.width, view->applied.height);
+    wl_surface_commit(view->under);
+    /* The colour before, which the surface no longer shows. */
+    if (fresh && view->under_spent) {
+        wl_buffer_destroy(view->under_spent);
+        view->under_spent = NULL;
+    }
+    view->under_showing = true;
+    view->under_width = view->applied.width;
+    view->under_height = view->applied.height;
 }
 
 /* GTK draws Emacs's widget, in a paint of a window that is not frozen:
@@ -604,9 +790,9 @@ static void after_paint(GdkFrameClock *clock, gpointer data)
             want(view, false);
         pthread_mutex_lock(&view->lock);
         if (view->surface) {
-            bool resized = view->wanted.width != view->applied.width
-                        || view->wanted.height != view->applied.height;
+            bool resized = resizing(view);
             view->applied = view->wanted;
+            view->applied_place = view->wanted_place;
             if (!view->wanted.shown) {
                 conceal(view);
                 view->held_stale = true;
@@ -620,6 +806,7 @@ static void after_paint(GdkFrameClock *clock, gpointer data)
             }
         }
         pthread_mutex_unlock(&view->lock);
+        backdrop_apply(view);
     }
     if (frame->parent)
         wl_display_flush(wl_proxy_get_display((struct wl_proxy *) frame->parent));
@@ -744,6 +931,55 @@ static struct portal_frame *frame_titled(portal_string title, portal_text *error
 
 /* The primitives of portal.h. */
 
+void portal_linux_view_place(struct portal_view *view, struct portal_placement placement)
+{
+    if (!placement.placed)
+        placement = (struct portal_placement) {0};
+    pthread_mutex_lock(&view->lock);
+    bool changed = !same_place(placement, view->wanted_place);
+    view->wanted_place = placement;
+    pthread_mutex_unlock(&view->lock);
+    if (!changed)
+        return;
+    /* Emacs draws nothing for it: the window waits for the view's frame
+       alone. */
+    if (view->frame && view->attached)
+        freeze(view->frame, true);
+    portal_linux_view_repaint(view);
+}
+
+void portal_linux_view_backdrop(struct portal_view *view, uint8_t red, uint8_t green,
+                                uint8_t blue, double alpha)
+{
+    double opacity = alpha < 0 ? 0 : alpha > 1 ? 1 : alpha;
+    uint32_t a = (uint32_t) (opacity * 255 + 0.5);
+    /* Premultiplied, as wl_shm's ARGB8888 is. */
+    uint32_t colour = a << 24 | (red * a + 127) / 255 << 16 | (green * a + 127) / 255 << 8
+                    | (blue * a + 127) / 255;
+    if (view->under_buffer && colour == view->colour)
+        return;
+    int memory = memfd_create("portal-backdrop", MFD_CLOEXEC);
+    if (memory < 0)
+        return;
+    if (write(memory, &colour, sizeof colour) != (ssize_t) sizeof colour) {
+        close(memory);
+        return;
+    }
+    struct wl_shm_pool *pool = wl_shm_create_pool(view->wayland->shm, memory, sizeof colour);
+    struct wl_buffer *buffer = wl_shm_pool_create_buffer(pool, 0, 1, 1, 4, WL_SHM_FORMAT_ARGB8888);
+    wl_shm_pool_destroy(pool);
+    close(memory);
+    /* A colour never shown goes at once; one shown, once another is. */
+    if (view->under_buffer && view->under_spent) {
+        wl_buffer_destroy(view->under_buffer);
+    } else if (view->under_buffer) {
+        view->under_spent = view->under_buffer;
+    }
+    view->under_buffer = buffer;
+    view->colour = colour;
+    portal_linux_view_repaint(view);
+}
+
 bool portal_view_create(portal_kind kind, portal_string target, const portal_option *options,
                         size_t count, portal_view **created, portal_text *error)
 {
@@ -798,6 +1034,10 @@ bool portal_view_destroy(portal_view *view, portal_text *error)
         view->class->stop(view->content);
     surface_destroy(view);
     view->class->destroy(view->content);
+    if (view->under_buffer)
+        wl_buffer_destroy(view->under_buffer);
+    if (view->under_spent)
+        wl_buffer_destroy(view->under_spent);
     wl_display_roundtrip_queue(view->wayland->display, view->queue);
     wl_event_queue_destroy(view->queue);
     portal_linux_input_close(view);
@@ -869,16 +1109,36 @@ bool portal_view_describe(portal_view *view, portal_text *state, portal_text *er
     struct json json = {0};
     pthread_mutex_lock(&view->lock);
     bool showing = view->showing;
+    struct portal_placement place = view->applied_place;
+    int32_t shown_width = view->shown_width, shown_height = view->shown_height;
     pthread_mutex_unlock(&view->lock);
     put(&json, "{", 1);
     view->class->describe(view->content, &json);
     char facts[192];
+    /* "placement": where the frames shown go in the pane, in device pixels,
+       when they are not the pane's size; "frame", the size of the one
+       shown; "backdrop", the size the backdrop shows at, in Emacs's
+       pixels, while it does. */
+    int length = 0;
+    if (place.placed) {
+        length = snprintf(facts, sizeof facts, "\"placement\":[%d,%d,%d,%d],", (int) place.x,
+                          (int) place.y, (int) place.width, (int) place.height);
+        put(&json, facts, (size_t) length);
+    }
+    length = snprintf(facts, sizeof facts, "\"frame\":[%d,%d],", (int) shown_width,
+                      (int) shown_height);
+    put(&json, facts, (size_t) length);
+    if (view->under_showing) {
+        length = snprintf(facts, sizeof facts, "\"backdrop\":[%d,%d],", (int) view->under_width,
+                          (int) view->under_height);
+        put(&json, facts, (size_t) length);
+    }
     /* "focused": its window's keys go to it, whether or not the window has
        the keyboard, which is "active".  "showing": a frame of the content's
        is on the screen.  "occluded": the view is hidden while a child frame
        of Emacs's is over its pane. */
     bool active = view->frame && gtk_window_has_toplevel_focus(view->frame->window);
-    int length = snprintf(facts, sizeof facts,
+    length = snprintf(facts, sizeof facts,
                           "\"focused\":%s,\"active\":%s,\"showing\":%s,\"occluded\":%s,"
                           "\"scale\":%d}",
                           portal_linux_input_focused(view) ? "true" : "false",

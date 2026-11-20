@@ -388,7 +388,7 @@ pkg-config's egl, such as libglvnd's")
     add_library(portal-module MODULE native/Core/emacs.c ${PORTAL_CORE_SOURCES}
         native/Linux/backend.c native/Linux/views.c native/Linux/input.c
         native/Linux/terminal.c native/Linux/presenter.c native/Linux/pattern.c
-        native/Shared/message-socket.c
+        native/Shared/message-socket.c native/Shared/fed-terminal.c
         ${protocol_sources})
     target_include_directories(portal-module PRIVATE
         native/Core/include native/Core native/Shared "${EMACS_INCLUDE}"

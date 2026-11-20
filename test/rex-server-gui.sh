@@ -10,8 +10,7 @@
 # /Applications/Rex Server.app or the one Rex's Mac app keeps, or on Linux the
 # rex on PATH, which is the server too. Elsewhere it says it did not run and
 # exits 77, which test/gui-all.sh reports as not run. On Linux it runs on a
-# desktop of its own, as test/linux-gui.sh does, and the tests that need a
-# block's screen are skipped: Portal has no fed terminals there yet.
+# desktop of its own, as test/linux-gui.sh does.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$root/test/gui-desktop.sh"
@@ -44,8 +43,7 @@ PORTAL_TEST_REX=$rex PORTAL_TEST_REX_DIRECTORY=$servers PORTAL_REX_SERVER_SELECT
     --eval '(portal-gui-ert-start
              (list (quote and) "^portal-rex-server-gui-"
                    (let ((focus (getenv "PORTAL_REX_SERVER_SELECTOR")))
-                     (if (equal focus "") t focus)))
-             (portal-rex-server-gui-tests-allowed-skips))' || status=$?
+                     (if (equal focus "") t focus))))' || status=$?
 left=$(pgrep -f "$servers/" || :)
 if [ -n "$left" ]; then
     echo "Rex servers left running, now killed:" >&2

@@ -334,42 +334,80 @@ static void test_rect_at_both_scales(void)
 {
     /* Cells of 8 by 16 pixels at scale 1, and the same cells at scale 2,
        16 by 32 pixels: the rectangle is the same in the pane's units. */
-    portal_fed_rect one = portal_fed_grid_rect(80, 24, 300, 8, 16, 1);
-    portal_fed_rect two = portal_fed_grid_rect(80, 24, 300, 16, 32, 2);
+    portal_fed_rect one = portal_fed_grid_rect(80, 24, 300, 8, 16, 2, 1);
+    portal_fed_rect two = portal_fed_grid_rect(80, 24, 300, 16, 32, 4, 2);
     CHECK(one.x == 0 && one.y == -8 && one.width == 648 && one.height == 396);
     CHECK(one.top == -88);
     CHECK(two.x == 0 && two.y == -8 && two.width == 648 && two.height == 396);
     CHECK(two.top == -88);
     /* A grid smaller than the pane: its last row at the pane's bottom, the
        rest of the pane above it.  10 * 9 + 4 + 4.5 by 5 * 18 + 4 + 9. */
-    portal_fed_rect small = portal_fed_grid_rect(10, 5, 300, 9, 18, 1);
+    portal_fed_rect small = portal_fed_grid_rect(10, 5, 300, 9, 18, 2, 1);
     CHECK(small.y == -9 && small.width == 98.5 && small.height == 103);
     CHECK(small.top == 206);
     /* At scale 2 with odd pixels: (10 * 9 + 8 + 4.5) / 2 by
        (5 * 19 + 8 + 9.5) / 2, hanging 4.75 below. */
-    portal_fed_rect odd = portal_fed_grid_rect(10, 5, 100, 9, 19, 2);
+    portal_fed_rect odd = portal_fed_grid_rect(10, 5, 100, 9, 19, 4, 2);
     CHECK(odd.y == -4.75 && odd.width == 51.25 && odd.height == 56.25);
     CHECK(odd.top == 48.5);
+    /* Ghostty's padding on Linux, 5 pixels at scale 2:
+       (80 * 16 + 10 + 8) / 2 by (24 * 32 + 10 + 16) / 2. */
+    portal_fed_rect linux = portal_fed_grid_rect(80, 24, 300, 16, 32, 5, 2);
+    CHECK(linux.y == -8 && linux.width == 649 && linux.height == 397);
+    CHECK(linux.top == -89);
 }
 
 static void test_pane_grid_at_both_scales(void)
 {
     uint32_t columns, rows;
-    portal_fed_pane_grid(400, 300, 8, 16, 1, &columns, &rows);
+    portal_fed_pane_grid(400, 300, 8, 16, 2, 1, &columns, &rows);
     CHECK(columns == 49 && rows == 18);
-    portal_fed_pane_grid(400, 300, 16, 32, 2, &columns, &rows);
+    portal_fed_pane_grid(400, 300, 16, 32, 4, 2, &columns, &rows);
     CHECK(columns == 49 && rows == 18);
     /* Exactly whole: (804 - 4) / 8 and (324 - 4) / 16. */
-    portal_fed_pane_grid(804, 324, 8, 16, 1, &columns, &rows);
+    portal_fed_pane_grid(804, 324, 8, 16, 2, 1, &columns, &rows);
     CHECK(columns == 100 && rows == 20);
     /* At scale 2 the padding is 8 pixels: (402 * 2 - 8) / 16. */
-    portal_fed_pane_grid(402, 162, 16, 32, 2, &columns, &rows);
+    portal_fed_pane_grid(402, 162, 16, 32, 4, 2, &columns, &rows);
     CHECK(columns == 49 && rows == 9);
+    /* With Linux's 5 pixels, a pane that holds a column more at 4 does not:
+       (402 * 2 - 10) / 16 is 49.6, and (404 * 2 - 8) / 16 is 50. */
+    portal_fed_pane_grid(404, 162, 16, 32, 4, 2, &columns, &rows);
+    CHECK(columns == 50);
+    portal_fed_pane_grid(404, 162, 16, 32, 5, 2, &columns, &rows);
+    CHECK(columns == 49);
     /* Smaller than the padding, or nothing. */
-    portal_fed_pane_grid(3, 3, 8, 16, 1, &columns, &rows);
+    portal_fed_pane_grid(3, 3, 8, 16, 2, 1, &columns, &rows);
     CHECK(columns == 0 && rows == 0);
-    portal_fed_pane_grid(0, 0, 8, 16, 2, &columns, &rows);
+    portal_fed_pane_grid(0, 0, 8, 16, 4, 2, &columns, &rows);
     CHECK(columns == 0 && rows == 0);
+}
+
+/* Ghostty's padding as the backend says it, as Linux's Ghostty has it:
+   whole pixels at 96 to the inch, 5 for 2 points at scale 2. */
+static void test_padding_told(void)
+{
+    portal_fed_terminal *terminal = make();
+    portal_fed_terminal_pane(terminal, 404, 300, 2);
+    portal_fed_terminal_cell(terminal, 16, 32);
+    /* At the default 4: (808 - 8) / 16 and (600 - 8) / 32. */
+    HAPPENED("place x 0 y 0 width 404 height 300 top 0\n"
+             "core t1 grid 50x18 cell 16x32\n");
+    /* At 5, a column fewer: (808 - 10) / 16. */
+    portal_fed_terminal_padding(terminal, 5);
+    HAPPENED("core t1 grid 49x18 cell 16x32\n");
+    /* A held grid is that much larger: (80 * 16 + 10 + 8) / 2 by
+       (24 * 32 + 10 + 16) / 2, hanging 8 below. */
+    CHECK(hold(terminal, 80, 24));
+    HAPPENED("drain\n"
+             "place x 0 y -8 width 649 height 397 top -89\n"
+             "start take-grid 250 ms\n");
+    /* Back to the default. */
+    portal_fed_terminal_padding(terminal, 0);
+    HAPPENED("place x 0 y -8 width 648 height 396 top -88\n"
+             "core t1 grid 50x18 cell 16x32\n");
+    portal_fed_terminal_free(terminal);
+    HAPPENED("stop take-grid\n");
 }
 
 static void test_pane_reports(void)
@@ -548,6 +586,7 @@ int main(void)
     test_rect_at_both_scales();
     test_pane_grid_at_both_scales();
     test_pane_reports();
+    test_padding_told();
     test_held_grid_follows_the_pane();
     test_backlog_crossings();
     test_backlog_across_both_marks();

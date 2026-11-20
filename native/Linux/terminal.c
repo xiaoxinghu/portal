@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Terminals on Linux: a view's content that is a Ghostty surface running a
-   local shell, and Ghostty's app, which every terminal shares.
+   local shell, or fed a Rex block's output (a fed terminal, below), and
+   Ghostty's app, which every terminal shares.
 
    Ghostty draws: its renderer has a thread of its own for each surface, and
    the presenter (presenter.c) shows the frames it makes.  Portal gives the
@@ -34,7 +35,9 @@
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <limits.h>
+#include <math.h>
 #include <pwd.h>
+#include <signal.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,18 +51,23 @@
 #include <gdk/gdkwayland.h>
 #include <ghostty.h>
 
+#include "fed-terminal.h"
 #include "json.h"
 #include "linux.h"
 
 /* The padding Ghostty leaves inside a terminal on each side, in points, as
-   on macOS. */
-enum { PADDING = 2 };
+   on macOS: a fed terminal's rules count on it, and so every terminal has
+   theirs. */
+enum { PADDING = PORTAL_FED_PADDING };
+
+struct fed;
 
 struct terminal {
     struct terminal *next; /* Every terminal there is. */
     struct portal_view *view;
     struct portal_stage *stage;
     ghostty_surface_t surface; /* NULL once freed. */
+    struct fed *fed;           /* A fed terminal's, or NULL. */
     /* Its configuration: a theme Ghostty lists, or NULL for the default;
        the background's opacity; the text's size. */
     char *theme;
@@ -74,6 +82,8 @@ struct terminal {
     guint16 down[16];
     size_t down_count;
 };
+
+static void fed_cell(struct terminal *terminal);
 
 /* A clipboard read Ghostty asked for, which GTK answers later. */
 struct request {
@@ -169,11 +179,36 @@ static ghostty_config_t config_make(const char *theme, double opacity, double po
     return config;
 }
 
+/* The opacity Ghostty draws TERMINAL's background at.  Below 1, a fed
+   terminal's backdrop alone draws it, at the terminal's opacity, over the
+   whole pane, and Ghostty's own is clear: drawn by both, the grid would
+   show as a darker box, as on macOS. */
+static double own_opacity(const struct terminal *terminal)
+{
+    return terminal->fed && terminal->opacity < 1 ? 0 : terminal->opacity;
+}
+
+/* TERMINAL's configuration, for its theme, its opacity and its text size;
+   and for a fed terminal, its view's backdrop in the theme's background. */
+static ghostty_config_t terminal_config(struct terminal *terminal, portal_text *error)
+{
+    ghostty_config_t config = config_make(terminal->theme, own_opacity(terminal),
+                                          terminal->points, error);
+    if (config && terminal->fed) {
+        static const char key[] = "background";
+        ghostty_config_color_s background = {0};
+        if (!ghostty_config_get(config, &background, key, sizeof key - 1))
+            background = (ghostty_config_color_s) {0, 0, 0};
+        portal_linux_view_backdrop(terminal->view, background.r, background.g, background.b,
+                                   terminal->opacity);
+    }
+    return config;
+}
+
 /* Apply TERMINAL's configuration to its surface. */
 static bool reconfigure(struct terminal *terminal, portal_text *error)
 {
-    ghostty_config_t config = config_make(terminal->theme, terminal->opacity, terminal->points,
-                                          error);
+    ghostty_config_t config = terminal_config(terminal, error);
     if (!config)
         return false;
     if (terminal->surface)
@@ -380,7 +415,8 @@ static bool act(ghostty_app_t ghostty, ghostty_target_s target, ghostty_action_s
     switch (action.tag) {
     case GHOSTTY_ACTION_SET_TITLE: {
         const char *title = action.action.set_title.title;
-        if (terminal && title && set_text(&terminal->title, title, strlen(title))) {
+        if (terminal && !terminal->fed && title
+            && set_text(&terminal->title, title, strlen(title))) {
             sample_program(terminal);
             changed(terminal);
         }
@@ -388,7 +424,7 @@ static bool act(ghostty_app_t ghostty, ghostty_target_s target, ghostty_action_s
     }
     case GHOSTTY_ACTION_PWD: {
         const char *pwd = action.action.pwd.pwd;
-        if (terminal && pwd && set_text(&terminal->pwd, pwd, strlen(pwd))) {
+        if (terminal && !terminal->fed && pwd && set_text(&terminal->pwd, pwd, strlen(pwd))) {
             sample_program(terminal);
             changed(terminal);
         }
@@ -403,7 +439,8 @@ static bool act(ghostty_app_t ghostty, ghostty_target_s target, ghostty_action_s
         return true;
     }
     case GHOSTTY_ACTION_SHOW_CHILD_EXITED:
-        if (terminal)
+        /* A fed terminal never exits by itself. */
+        if (terminal && !terminal->fed)
             ended(terminal);
         return true;
     case GHOSTTY_ACTION_MOUSE_SHAPE:
@@ -421,9 +458,14 @@ static bool act(ghostty_app_t ghostty, ghostty_target_s target, ghostty_action_s
                 free(error.data);
         }
         return true;
+    case GHOSTTY_ACTION_CELL_SIZE:
+        /* A new text size or scale: a held grid's place changes, and the
+           grid the pane would hold. */
+        if (terminal)
+            fed_cell(terminal);
+        return true;
     case GHOSTTY_ACTION_RENDERER_HEALTH:
     case GHOSTTY_ACTION_COLOR_CHANGE:
-    case GHOSTTY_ACTION_CELL_SIZE:
     case GHOSTTY_ACTION_MOUSE_OVER_LINK:
     case GHOSTTY_ACTION_MOUSE_VISIBILITY:
     case GHOSTTY_ACTION_CONFIG_CHANGE:
@@ -691,6 +733,413 @@ static char *argv_command(portal_string json, const char *directory, portal_text
     return command;
 }
 
+/* A fed terminal.  Its surface runs no program: Ghostty's host-managed
+   backend (native/patches/ghostty, 0001) hands what the terminal would
+   write to a pty to fed_written, and each grid it takes to fed_resized,
+   both on Ghostty's IO thread, and they reach the core on the main thread,
+   in order.  Its output is parsed by a thread of the terminal's own, the
+   feeder, with ghostty_surface_write_buffer_replay (0002), which answers
+   no query in it: on macOS the package's in-memory session does this, here
+   Portal does.  The order of output and grids, where the terminal goes in
+   its pane, and when the core hears of a backlog are the rules of
+   native/Shared/fed-terminal.c, for which this is the backend: the feeder,
+   two of GLib's timers, and the view's placement (views.c), which shows a
+   grid that is not the pane's from the pane's bottom-left corner, over the
+   view's backdrop, the theme's background at the terminal's opacity.
+
+   A fed terminal's title, directory and program are the core's to
+   describe, from what its program reports (rex.h): none is sampled here. */
+
+/* Output waiting for the feeder, oldest first. */
+struct chunk {
+    struct chunk *next;
+    size_t length, done;
+    char bytes[];
+};
+
+/* The most the feeder parses at once: a call holds the terminal's lock,
+   which the renderer takes to draw. */
+enum { SLICE = 1 << 16 };
+
+struct fed {
+    portal_fed_terminal *rules;
+    uint64_t serial; /* The view's, for work on the main loop. */
+    struct terminal *terminal;
+    /* The feeder's surface: set before it starts, which is joined before
+       the surface is freed. */
+    ghostty_surface_t surface;
+    pthread_t feeder;
+    bool feeding; /* The feeder runs. */
+
+    /* Under LOCK: the output waiting and how many of its bytes are not
+       parsed yet; whether the feeder is to end; and what the surface
+       wrote, which the core has not been given yet. */
+    pthread_mutex_t lock;
+    pthread_cond_t work, drained;
+    struct chunk *first, *last;
+    size_t pending;
+    bool ending;
+    GByteArray *written;
+    bool writing; /* An idle source will give the core WRITTEN. */
+
+    atomic_bool looking;          /* An idle source will look at the backlog. */
+    atomic_uint_fast32_t taken;   /* The grid the surface took last, packed. */
+    atomic_bool telling;          /* An idle source will tell the rules of it. */
+
+    /* The rules' two timers, GLib's sources or 0, and what each is told. */
+    guint timers[2];
+    struct tick {
+        struct fed *fed;
+        portal_fed_timer timer;
+    } ticks[2];
+
+    /* The pane as the rules were last told, in Emacs's pixels; and where
+       they put the terminal in it, and the surface's size for that, in
+       device pixels. */
+    double width, height, scale;
+    portal_fed_rect rect;
+    bool placed;
+    uint32_t surface_width, surface_height;
+};
+
+/* The fed terminal of the view SERIAL, on the main thread, or NULL once it
+   has ended. */
+static struct fed *fed_find(uint64_t serial)
+{
+    struct portal_view *view = portal_linux_view_find(serial);
+    struct terminal *terminal = view ? view->content : NULL;
+    return terminal ? terminal->fed : NULL;
+}
+
+static gboolean fed_look(gpointer data)
+{
+    struct fed *fed = fed_find(*(uint64_t *) data);
+    if (fed) {
+        atomic_store(&fed->looking, false);
+        portal_fed_terminal_backlog(fed->rules);
+    }
+    return G_SOURCE_REMOVE;
+}
+
+/* The backlog crossed a mark: the rules look at it, on the main thread.
+   From any thread. */
+static void fed_crossed(struct fed *fed)
+{
+    if (!atomic_exchange(&fed->looking, true))
+        g_idle_add_full(G_PRIORITY_DEFAULT, fed_look, portal_linux_serial(fed->serial), g_free);
+}
+
+static void *feeder(void *data)
+{
+    struct fed *fed = data;
+    pthread_mutex_lock(&fed->lock);
+    for (;;) {
+        while (!fed->first && !fed->ending)
+            pthread_cond_wait(&fed->work, &fed->lock);
+        if (fed->ending)
+            break;
+        /* Only this thread takes a chunk off the list, and the main thread
+           frees what is left once it has joined it. */
+        struct chunk *chunk = fed->first;
+        size_t length = MIN(chunk->length - chunk->done, (size_t) SLICE);
+        const char *bytes = chunk->bytes + chunk->done;
+        pthread_mutex_unlock(&fed->lock);
+        ghostty_surface_write_buffer_replay(fed->surface, (const uint8_t *) bytes, length);
+        pthread_mutex_lock(&fed->lock);
+        chunk->done += length;
+        if (chunk->done == chunk->length) {
+            fed->first = chunk->next;
+            if (!fed->first)
+                fed->last = NULL;
+            free(chunk);
+        }
+        size_t before = fed->pending;
+        fed->pending -= length;
+        if (!fed->pending)
+            pthread_cond_broadcast(&fed->drained);
+        if (portal_fed_backlog_crossed(before, fed->pending))
+            fed_crossed(fed);
+    }
+    pthread_mutex_unlock(&fed->lock);
+    return NULL;
+}
+
+/* The backend of the rules (fed-terminal.h), on the main thread. */
+
+static void fed_feed(void *context, const char *bytes, size_t length)
+{
+    struct fed *fed = context;
+    struct chunk *chunk = malloc(sizeof *chunk + length);
+    if (!chunk) {
+        fprintf(stderr, "Portal: out of memory, %zu bytes of a fed terminal's output lost\n",
+                length);
+        return;
+    }
+    chunk->next = NULL;
+    chunk->length = length;
+    chunk->done = 0;
+    memcpy(chunk->bytes, bytes, length);
+    pthread_mutex_lock(&fed->lock);
+    if (fed->last)
+        fed->last->next = chunk;
+    else
+        fed->first = chunk;
+    fed->last = chunk;
+    size_t before = fed->pending;
+    fed->pending += length;
+    pthread_cond_signal(&fed->work);
+    pthread_mutex_unlock(&fed->lock);
+    /* Not now: the rules are calling. */
+    if (portal_fed_backlog_crossed(before, before + length))
+        fed_crossed(fed);
+}
+
+static void fed_drain(void *context)
+{
+    struct fed *fed = context;
+    pthread_mutex_lock(&fed->lock);
+    while (fed->pending && fed->feeding)
+        pthread_cond_wait(&fed->drained, &fed->lock);
+    pthread_mutex_unlock(&fed->lock);
+}
+
+static size_t fed_pending(void *context)
+{
+    struct fed *fed = context;
+    pthread_mutex_lock(&fed->lock);
+    size_t pending = fed->pending;
+    pthread_mutex_unlock(&fed->lock);
+    return pending;
+}
+
+static gboolean fed_timer_ran(gpointer data)
+{
+    struct tick *tick = data;
+    tick->fed->timers[tick->timer] = 0;
+    portal_fed_terminal_timer(tick->fed->rules, tick->timer);
+    return G_SOURCE_REMOVE;
+}
+
+static void fed_start_timer(void *context, portal_fed_timer timer, uint32_t milliseconds)
+{
+    struct fed *fed = context;
+    fed->ticks[timer] = (struct tick) {fed, timer};
+    fed->timers[timer] = g_timeout_add(milliseconds, fed_timer_ran, &fed->ticks[timer]);
+}
+
+static void fed_stop_timer(void *context, portal_fed_timer timer)
+{
+    struct fed *fed = context;
+    if (fed->timers[timer])
+        g_source_remove(fed->timers[timer]);
+    fed->timers[timer] = 0;
+}
+
+/* Put the terminal at RECT in its pane: its surface sized to it, in device
+   pixels, and its frames shown there.  A terminal that fills its pane is
+   shown as any other is. */
+static void fed_place(void *context, portal_fed_rect rect)
+{
+    struct fed *fed = context;
+    struct terminal *terminal = fed->terminal;
+    double scale = fed->scale > 0 ? fed->scale : 1;
+    uint32_t width = (uint32_t) ceil(rect.width * scale - 1e-6);
+    uint32_t height = (uint32_t) ceil(rect.height * scale - 1e-6);
+    fed->rect = rect;
+    fed->placed = true;
+    if (!width || !height)
+        return;
+    if (terminal->surface && (width != fed->surface_width || height != fed->surface_height))
+        ghostty_surface_set_size(terminal->surface, width, height);
+    fed->surface_width = width;
+    fed->surface_height = height;
+    bool fills = rect.x == 0 && rect.top == 0 && rect.width == fed->width
+              && rect.height == fed->height;
+    portal_linux_view_place(terminal->view,
+                            (struct portal_placement) {.placed = !fills,
+                                                       .x = (int32_t) lround(rect.x * scale),
+                                                       .y = (int32_t) lround(rect.top * scale),
+                                                       .width = (int32_t) width,
+                                                       .height = (int32_t) height});
+}
+
+static const portal_fed_backend fed_backend = {
+    .feed = fed_feed,
+    .drain = fed_drain,
+    .pending = fed_pending,
+    .start_timer = fed_start_timer,
+    .stop_timer = fed_stop_timer,
+    .place = fed_place,
+};
+
+/* What the surface tells, on Ghostty's IO thread. */
+
+static gboolean fed_hand_over(gpointer data)
+{
+    struct fed *fed = fed_find(*(uint64_t *) data);
+    if (!fed)
+        return G_SOURCE_REMOVE;
+    pthread_mutex_lock(&fed->lock);
+    GByteArray *written = fed->written;
+    fed->written = g_byte_array_new();
+    fed->writing = false;
+    pthread_mutex_unlock(&fed->lock);
+    struct portal_view *view = fed->terminal->view;
+    if (written->len)
+        portal_terminal_input((portal_string) {view->target, view->target_length},
+                              (const char *) written->data, written->len);
+    g_byte_array_unref(written);
+    return G_SOURCE_REMOVE;
+}
+
+/* The terminal wrote BYTES, keys it encoded, a paste or a report, for its
+   program: they go to the core, in order. */
+static void fed_written(void *data, const uint8_t *bytes, size_t length)
+{
+    struct fed *fed = data;
+    pthread_mutex_lock(&fed->lock);
+    g_byte_array_append(fed->written, bytes, (guint) length);
+    bool idle = !fed->writing;
+    fed->writing = true;
+    pthread_mutex_unlock(&fed->lock);
+    if (idle)
+        g_idle_add_full(G_PRIORITY_DEFAULT, fed_hand_over, portal_linux_serial(fed->serial),
+                        g_free);
+}
+
+static gboolean fed_tell(gpointer data)
+{
+    struct fed *fed = fed_find(*(uint64_t *) data);
+    if (!fed)
+        return G_SOURCE_REMOVE;
+    atomic_store(&fed->telling, false);
+    uint32_t taken = (uint32_t) atomic_load(&fed->taken);
+    portal_fed_terminal_took_grid(fed->rules, taken >> 16, taken & 0xffff);
+    return G_SOURCE_REMOVE;
+}
+
+/* The terminal has a grid of COLUMNS by ROWS now. */
+static void fed_resized(void *data, uint16_t columns, uint16_t rows, uint32_t width,
+                        uint32_t height)
+{
+    (void) width, (void) height;
+    struct fed *fed = data;
+    atomic_store(&fed->taken, (uint_fast32_t) columns << 16 | rows);
+    if (!atomic_exchange(&fed->telling, true))
+        g_idle_add_full(G_PRIORITY_DEFAULT, fed_tell, portal_linux_serial(fed->serial), g_free);
+}
+
+/* The rules hear of the terminal's cell, in device pixels. */
+static void fed_cell(struct terminal *terminal)
+{
+    if (!terminal->fed || !terminal->surface)
+        return;
+    ghostty_surface_size_s size = ghostty_surface_size(terminal->surface);
+    portal_fed_terminal_cell(terminal->fed->rules, size.cell_width_px, size.cell_height_px);
+}
+
+/* The padding Ghostty leaves on each side at SCALE, in device pixels: its
+   PADDING points as it counts them on Linux, 96 pixels to the inch at
+   scale 1, in whole pixels
+   (github.com/ghostty-org/ghostty:src/Surface.zig#scaledPadding and
+   src/font/face.zig#default_dpi), 5 at scale 2 where macOS has 4. */
+static double ghostty_padding(double scale)
+{
+    return floor(PADDING * 96.0 * scale / 72.0);
+}
+
+/* The pane is WIDTH by HEIGHT of Emacs's pixels, at SCALE. */
+static void fed_pane(struct terminal *terminal, double width, double height, double scale)
+{
+    struct fed *fed = terminal->fed;
+    fed->width = width;
+    fed->height = height;
+    fed->scale = scale;
+    portal_fed_terminal_padding(fed->rules, ghostty_padding(scale));
+    portal_fed_terminal_pane(fed->rules, width, height, scale);
+}
+
+/* The scale of Emacs's frames, as far as can be told before a terminal is
+   in one: so that a grid held before it is shown is held at its size. */
+static int32_t scale_guess(void)
+{
+    int32_t scale = 1;
+    GList *windows = gtk_window_list_toplevels();
+    for (GList *item = windows; item; item = item->next)
+        if (gtk_widget_get_mapped(item->data)) {
+            scale = gtk_widget_get_scale_factor(item->data);
+            break;
+        }
+    g_list_free(windows);
+    return scale > 0 ? scale : 1;
+}
+
+static struct fed *fed_new(struct terminal *terminal)
+{
+    struct fed *fed = calloc(1, sizeof *fed);
+    if (!fed)
+        return NULL;
+    struct portal_view *view = terminal->view;
+    fed->rules = portal_fed_terminal_new((portal_string) {view->target, view->target_length},
+                                         &fed_backend, fed);
+    if (!fed->rules) {
+        free(fed);
+        return NULL;
+    }
+    fed->terminal = terminal;
+    fed->serial = view->serial;
+    pthread_mutex_init(&fed->lock, NULL);
+    pthread_cond_init(&fed->work, NULL);
+    pthread_cond_init(&fed->drained, NULL);
+    fed->written = g_byte_array_new();
+    return fed;
+}
+
+/* Start the feeder on SURFACE, with none of Emacs's signals. */
+static bool fed_start(struct fed *fed, ghostty_surface_t surface)
+{
+    fed->surface = surface;
+    sigset_t all, before;
+    sigfillset(&all);
+    pthread_sigmask(SIG_SETMASK, &all, &before);
+    fed->feeding = !pthread_create(&fed->feeder, NULL, feeder, fed);
+    pthread_sigmask(SIG_SETMASK, &before, NULL);
+    return fed->feeding;
+}
+
+/* Before the surface is freed: the rules forget their timers, and the
+   feeder ends, leaving what waits unparsed. */
+static void fed_stop(struct fed *fed)
+{
+    portal_fed_terminal_free(fed->rules);
+    fed->rules = NULL;
+    if (!fed->feeding)
+        return;
+    pthread_mutex_lock(&fed->lock);
+    fed->ending = true;
+    pthread_cond_signal(&fed->work);
+    pthread_mutex_unlock(&fed->lock);
+    pthread_join(fed->feeder, NULL);
+    fed->feeding = false;
+}
+
+/* Once the surface is freed, and Ghostty's threads with it. */
+static void fed_free(struct fed *fed)
+{
+    if (!fed)
+        return;
+    portal_fed_terminal_free(fed->rules);
+    for (struct chunk *chunk = fed->first, *next; chunk; chunk = next) {
+        next = chunk->next;
+        free(chunk);
+    }
+    g_byte_array_unref(fed->written);
+    pthread_cond_destroy(&fed->drained);
+    pthread_cond_destroy(&fed->work);
+    pthread_mutex_destroy(&fed->lock);
+    free(fed);
+}
+
 /* The content's class. */
 
 static struct terminal *terminal_of(portal_view *view, portal_text *error);
@@ -702,9 +1151,12 @@ static void terminal_stop(void *content)
         g_source_remove(terminal->sampler);
     terminal->sampler = 0;
     requests_deny(terminal);
-    /* In this order: the presenter and the shower forget the surface; then
-       it is freed, which ends the shell and stops its renderer, after which
-       Ghostty announces no frame. */
+    /* In this order: a fed terminal's feeder ends, and its timers; the
+       presenter and the shower forget the surface; then it is freed, which
+       ends the shell, or a fed terminal's IO thread, and stops its
+       renderer, after which Ghostty announces no frame and writes nothing. */
+    if (terminal->fed)
+        fed_stop(terminal->fed);
     portal_linux_stage_stop(terminal->stage);
     ghostty_surface_t surface = terminal->surface;
     terminal->surface = NULL;
@@ -723,6 +1175,7 @@ static void terminal_destroy(void *content)
     /* The frames still shown go with their buffers, the view's surface
        being gone. */
     portal_linux_stage_free(terminal->stage);
+    fed_free(terminal->fed);
     g_free(terminal->theme);
     g_free(terminal->title);
     g_free(terminal->pwd);
@@ -735,7 +1188,16 @@ static void terminal_configure(void *content, int32_t width, int32_t height, int
                                bool shown)
 {
     struct terminal *terminal = content;
-    if (terminal->surface && width > 0 && height > 0 && scale > 0) {
+    if (terminal->fed && terminal->surface && width > 0 && height > 0 && scale > 0) {
+        /* The rules size the surface, to the pane or to the grid it holds. */
+        if (scale != terminal->scale)
+            ghostty_surface_set_content_scale(terminal->surface, scale, scale);
+        terminal->width = width;
+        terminal->height = height;
+        terminal->scale = scale;
+        fed_pane(terminal, width, height, scale);
+        fed_cell(terminal);
+    } else if (terminal->surface && width > 0 && height > 0 && scale > 0) {
         if (scale != terminal->scale)
             ghostty_surface_set_content_scale(terminal->surface, scale, scale);
         if (scale != terminal->scale || width != terminal->width || height != terminal->height)
@@ -965,6 +1427,11 @@ static void terminal_pointer(void *content, const GdkEvent *event)
         return;
     gdk_event_get_state(event, &state);
     bool placed = gdk_event_get_coords(event, &x, &y);
+    /* A fed terminal's surface is where the rules put it in the pane. */
+    if (terminal->fed && terminal->fed->placed) {
+        x -= terminal->fed->rect.x;
+        y -= terminal->fed->rect.top;
+    }
     ghostty_input_mods_e mods = mods_of(state);
     switch (event->type) {
     case GDK_BUTTON_PRESS:
@@ -1036,17 +1503,33 @@ static void terminal_describe(void *content, struct json *description)
         size = ghostty_surface_size(terminal->surface);
     char facts[256];
     int length = snprintf(facts, sizeof facts,
-                          "\"ready\":%s,\"exited\":%s,\"columns\":%u,\"rows\":%u,"
+                          "\"ready\":%s,%s\"columns\":%u,\"rows\":%u,"
                           "\"points\":%.2f,\"cell\":[%u,%u],",
                           terminal->surface ? "true" : "false",
-                          terminal->exited ? "true" : "false", size.columns, size.rows,
-                          terminal->points, size.cell_width_px, size.cell_height_px);
+                          terminal->fed ? ""
+                          : terminal->exited ? "\"exited\":true," : "\"exited\":false,",
+                          size.columns, size.rows, terminal->points, size.cell_width_px,
+                          size.cell_height_px);
     put(description, facts, (size_t) length);
-    describe_text(description, "title", terminal->title);
-    describe_text(description, "pwd", terminal->pwd);
-    describe_text(description, "program", terminal->program);
+    /* A fed terminal's program runs elsewhere: the core describes it. */
+    if (!terminal->fed) {
+        describe_text(description, "title", terminal->title);
+        describe_text(description, "pwd", terminal->pwd);
+        describe_text(description, "program", terminal->program);
+    }
     describe_text(description, "progress", terminal->progress);
     describe_text(description, "theme", terminal->theme);
+    /* The opacities the background is drawn at: Ghostty's, and a fed
+       terminal's backdrop's. */
+    length = snprintf(facts, sizeof facts, "\"ghostty-opacity\":%.3f,", own_opacity(terminal));
+    put(description, facts, (size_t) length);
+    if (terminal->fed) {
+        portal_fed_rect rect = terminal->fed->rect;
+        length = snprintf(facts, sizeof facts,
+                          "\"pane-opacity\":%.3f,\"placed\":[%.2f,%.2f,%.2f,%.2f],",
+                          terminal->opacity, rect.x, rect.top, rect.width, rect.height);
+        put(description, facts, (size_t) length);
+    }
     portal_linux_stage_describe(terminal->stage, description);
 }
 
@@ -1103,14 +1586,14 @@ bool portal_linux_terminal_create(struct portal_view *view, const portal_option 
                                   size_t count, portal_text *error)
 {
     const portal_option *fed = option(options, count, "fed");
-    if (fed && fed->flag)
-        return portal_linux_fail(error, "Portal has no fed terminals on Linux yet: "
-                                        "its backend does not feed a surface");
+    bool feeding = fed && fed->flag;
     if (!app_start(view->wayland, error))
         return false;
-    char *directory = string_option(options, count, "directory");
-    char *command = string_option(options, count, "command");
-    const portal_option *argv = option(options, count, "argv");
+    /* A fed terminal runs nothing here: the core has checked that it is
+       given no command. */
+    char *directory = feeding ? NULL : string_option(options, count, "directory");
+    char *command = feeding ? NULL : string_option(options, count, "command");
+    const portal_option *argv = feeding ? NULL : option(options, count, "argv");
     if (argv && argv->is_string) {
         g_free(command);
         command = argv_command(argv->string, directory ? directory : "/", error);
@@ -1123,20 +1606,29 @@ bool portal_linux_terminal_create(struct portal_view *view, const portal_option 
     const portal_option *opacity = option(options, count, "opacity");
     struct terminal *terminal = calloc(1, sizeof *terminal);
     struct portal_stage *stage = terminal ? portal_linux_stage_new(view) : NULL;
-    if (!stage) {
+    if (terminal) {
+        terminal->view = view;
+        terminal->fed = stage && feeding ? fed_new(terminal) : NULL;
+    }
+    if (!stage || (feeding && !terminal->fed)) {
+        if (stage) {
+            portal_linux_stage_stop(stage);
+            portal_linux_stage_free(stage);
+        }
         free(terminal);
         g_free(directory);
         free(command);
         return portal_linux_fail(error, "Portal is out of memory");
     }
-    terminal->view = view;
     terminal->stage = stage;
+    /* A fed terminal may leave part of its pane bare: the theme's
+       background shows there, under it. */
+    view->backdrop = feeding;
     terminal->theme = string_option(options, count, "theme");
     terminal->points = portal_terminal_points(points && points->is_number ? points->number
                                                                           : PORTAL_TERMINAL_POINTS);
     terminal->opacity = opacity && opacity->is_number ? opacity->number : 1;
-    ghostty_config_t config =
-        config_make(terminal->theme, terminal->opacity, terminal->points, error);
+    ghostty_config_t config = terminal_config(terminal, error);
     if (config) {
         ghostty_env_var_s environment[] = {{"INSIDE_EMACS", "portal-ghostty"}};
         ghostty_surface_config_s surface = ghostty_surface_config_new();
@@ -1147,13 +1639,26 @@ bool portal_linux_terminal_create(struct portal_view *view, const portal_option 
         surface.userdata = terminal;
         surface.scale_factor = 1;
         surface.font_size = (float) terminal->points;
-        surface.working_directory = directory;
-        surface.command = command;
-        surface.env_vars = environment;
-        surface.env_var_count = G_N_ELEMENTS(environment);
-        /* Ghostty then reports the exit at once, as a close request, which
-           leaves the view and its last output. */
-        surface.wait_after_command = false;
+        if (feeding) {
+            /* What it would write to a pty, and each grid it takes, come
+               to the fed terminal; and it starts at the scale it will
+               likely have, so that a grid held before it is shown is held
+               at its size. */
+            surface.backend = GHOSTTY_SURFACE_IO_BACKEND_HOST_MANAGED;
+            surface.receive_userdata = terminal->fed;
+            surface.receive_buffer = fed_written;
+            surface.receive_resize = fed_resized;
+            terminal->scale = scale_guess();
+            surface.scale_factor = terminal->scale;
+        } else {
+            surface.working_directory = directory;
+            surface.command = command;
+            surface.env_vars = environment;
+            surface.env_var_count = G_N_ELEMENTS(environment);
+            /* Ghostty then reports the exit at once, as a close request,
+               which leaves the view and its last output. */
+            surface.wait_after_command = false;
+        }
         terminal->surface = ghostty_surface_new(app.app, &surface);
         if (terminal->surface) {
             ghostty_surface_update_config(terminal->surface, config);
@@ -1164,13 +1669,27 @@ bool portal_linux_terminal_create(struct portal_view *view, const portal_option 
     }
     g_free(directory);
     free(command);
+    if (terminal->surface && feeding && !fed_start(terminal->fed, terminal->surface)) {
+        portal_linux_fail(error, "Portal could not start the thread that feeds a terminal");
+        ghostty_surface_free(terminal->surface);
+        terminal->surface = NULL;
+    }
     if (terminal->surface && !portal_linux_stage_start(stage, terminal->surface, error)) {
+        if (terminal->fed)
+            fed_stop(terminal->fed);
         ghostty_surface_free(terminal->surface);
         terminal->surface = NULL;
     }
     if (!terminal->surface) {
         portal_linux_stage_stop(stage);
         portal_linux_stage_free(stage);
+        fed_free(terminal->fed);
+        /* The backdrop's colour, made for a view that is not to be. */
+        if (view->under_buffer)
+            wl_buffer_destroy(view->under_buffer);
+        if (view->under_spent)
+            wl_buffer_destroy(view->under_spent);
+        view->under_buffer = view->under_spent = NULL;
         g_free(terminal->theme);
         free(terminal);
         return false;
@@ -1180,7 +1699,13 @@ bool portal_linux_terminal_create(struct portal_view *view, const portal_option 
     view->flipped = true;
     view->class = &terminal_class;
     view->content = terminal;
-    terminal->sampler = g_timeout_add_seconds(1, sampled, terminal);
+    if (terminal->fed) {
+        /* No pane yet, but its scale, and its cell. */
+        fed_pane(terminal, 0, 0, terminal->scale);
+        fed_cell(terminal);
+    } else {
+        terminal->sampler = g_timeout_add_seconds(1, sampled, terminal);
+    }
     terminal->next = app.terminals;
     app.terminals = terminal;
     return true;
@@ -1327,13 +1852,21 @@ bool portal_terminal_read_text(portal_view *view, portal_text *text, portal_text
 
 bool portal_terminal_feed(portal_view *view, const char *bytes, size_t length, portal_text *error)
 {
-    (void) view, (void) bytes, (void) length;
-    return portal_linux_fail(error, "Portal has no fed terminals on Linux yet");
+    struct terminal *terminal = terminal_of(view, error);
+    if (!terminal)
+        return false;
+    if (!terminal->fed)
+        return portal_linux_fail(error, "Only a fed terminal is fed its output");
+    return portal_fed_terminal_feed(terminal->fed->rules, bytes, length, error);
 }
 
 bool portal_terminal_hold_grid(portal_view *view, uint32_t columns, uint32_t rows,
                                portal_text *error)
 {
-    (void) view, (void) columns, (void) rows;
-    return portal_linux_fail(error, "Portal has no fed terminals on Linux yet");
+    struct terminal *terminal = terminal_of(view, error);
+    if (!terminal)
+        return false;
+    if (!terminal->fed)
+        return portal_linux_fail(error, "Only a fed terminal holds a grid");
+    return portal_fed_terminal_hold_grid(terminal->fed->rules, columns, rows, error);
 }

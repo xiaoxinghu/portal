@@ -125,8 +125,8 @@ with the pin already moved, it checks the patches and resolves again.
 
 ### Building on Linux
 
-Portal's module builds and loads on Linux, and has views there and
-terminals with a local shell, but no web views yet. `./build.sh` makes `build/portal.so` in place of
+Portal's module builds and loads on Linux, and has views there,
+terminals with a local shell and Rex blocks' screens, but no web views yet. `./build.sh` makes `build/portal.so` in place of
 `build/portal.bundle`, with `build/ghostty-linux` beside it and
 `build/portal-host` and `build/licenses` as on macOS. CMake compiles the
 module itself: the C bindings and core with the backend in
@@ -140,7 +140,8 @@ sockets: [the architecture notes](docs/architecture.md#views-on-linux) say
 how a view gets into a frame and how a terminal's frames reach it, and
 [where the sockets are](docs/architecture.md#rex-connections), in
 [`native/Shared`](native/Shared), which holds what a backend needs nothing
-of its platform for. A web view, a fed terminal (a Rex block's screen), the
+of its platform for: the message sockets, and a fed terminal's rules, which
+the backend's fed terminals (a Rex block's screen) follow. A web view, the
 system-wide keys, the status panel and the launcher fail, saying what Linux
 lacks. A view can also show a test
 pattern, made with the option `:test-pattern`, which exists for the checks
@@ -181,6 +182,7 @@ graphical ones in place of the macOS suites:
 sh test/linux-gui.sh
 sh test/linux-follow.sh
 sh test/linux-follow.sh terminal
+sh test/linux-follow.sh fed
 ```
 
 CTest leaves out the suite of the macOS Ghostty wrapper, `libghostty-spm`,
@@ -192,10 +194,11 @@ server the test plays; `fed-terminal`, a
 backend the test plays; and `shared-macos`, which compiles each C file of
 `native/Shared` for macOS with Zig's cross-compile, since nothing here runs
 them on a Mac. The Python tests skip those of Swift helpers and of
-the macOS Ghostty wrapper. `linux-gui.sh` runs the views, their input and
-terminals in a graphical Emacs, and `linux-follow.sh` records a view
-following its pane and checks every frame, and with `terminal` does so for a
-terminal under output; both are in the default loop for a change to
+the macOS Ghostty wrapper. `linux-gui.sh` runs the views, their input,
+terminals and Rex blocks' screens in a graphical Emacs, and
+`linux-follow.sh` records a view following its pane and checks every frame,
+and with `terminal` does so for a terminal under output, and with `fed` for
+a Rex block's; both are in the default loop for a change to
 `native/Linux` or `portal-view.el`, and `sh test/gui-all.sh` runs both, and
 the [real-server tier](docs/testing.md#against-a-real-rex-server) where
 `rex` is installed.

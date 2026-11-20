@@ -16,7 +16,7 @@ separate claims.
 | GNU Emacs 31.1 NS | any | Intel | Unverified | Unverified |
 | x86_64 Emacs under Rosetta | any | Apple Silicon | Unsupported | Unsupported |
 | GNU Emacs 30 or earlier | any | any | Unsupported: refused | Unsupported: refused |
-| GNU Emacs 31.1 pgtk on Linux, Wayland | — | any | Terminals and Rex connections unverified, run on one machine; no web views and no Rex block's screen yet. See [Linux](#linux) | Unsupported: refused |
+| GNU Emacs 31.1 pgtk on Linux, Wayland | — | any | Terminals, Rex connections and blocks' screens unverified, run on one machine; no web views yet. See [Linux](#linux) | Unsupported: refused |
 | Text frames, terminal-only builds, non-NS builds on macOS, other systems | — | — | Unsupported: refused | Unsupported: refused |
 
 Revision `a360712c9d272d950d8d8255ef74570f7e90b7d9` is the `emacs-31.1` release
@@ -49,10 +49,9 @@ On Linux Portal has terminals and no web views yet. Its native module
 builds there and loads into an Emacs 31.1 built with pgtk, and a terminal
 runs your login shell in a pane of a frame on Wayland, drawn by
 [Portal's own build of Ghostty](../CONTRIBUTING.md#ghostty-on-linux).
-Emacs [connects to a Rex server](rex.md#on-linux) there, and its blocks have
-buffers. Opening a page fails with "Portal has no web views on Linux yet",
-and showing a Rex block's screen, a fed terminal, with "Portal has no fed
-terminals on Linux yet".
+Emacs [connects to a Rex server](rex.md#on-linux) there, and a window that
+shows a block's buffer shows the block's screen. Opening a page fails with
+"Portal has no web views on Linux yet".
 Other frames are refused before any native code loads, with the reason: an
 Emacs built without pgtk, a text terminal, or a pgtk frame that GDK put on
 X11. [Building on Linux](../CONTRIBUTING.md#building-on-linux) says what a
@@ -75,6 +74,14 @@ with no torn frame, and Emacs quitting with a terminal printing; and
 `sh test/linux-follow.sh terminal` found no frame out of place in a
 recording of 1,198 frames of a terminal under output. No other GPU driver
 has drawn one.
+
+Rex blocks' screens were run on 2026-11-20 on the same machine and test
+desktop, against the fake server and against Arch's `rex`
+0.0.1795116584: `sh test/linux-gui.sh` passed, 50 tests, among them the
+fake server's 21 and a held grid read from the screen to the pixel;
+`sh test/rex-server-gui.sh` passed all 12 tests against the real server,
+none skipped; and `sh test/linux-follow.sh fed` found no frame out of place
+in recordings of a block fed all the while, about 1,195 frames each.
 
 ## Requirements
 

@@ -23,12 +23,12 @@ if [ "$(uname -s)" = Darwin ]; then
         terminal-shell-startup:terminal-shell-startup rex-server:rex-server-gui
         package:package-gui"
 else
-    # Linux has the views, terminals and Rex connections: its suite, the
-    # recordings of a view, and of a terminal under output, following its
-    # pane, and the real-server tier. Each makes a desktop of its own. A
-    # script's argument follows a plus.
+    # Linux has the views, terminals and Rex blocks: its suite, the
+    # recordings of a view, of a terminal under output and of a Rex block's
+    # fed terminal following its pane, and the real-server tier. Each makes
+    # a desktop of its own. A script's argument follows a plus.
     suites="linux:linux-gui linux-follow:linux-follow linux-follow-terminal:linux-follow+terminal
-        rex-server:rex-server-gui"
+        linux-follow-fed:linux-follow+fed rex-server:rex-server-gui"
 fi
 for suite in $suites; do
     run=${suite#*:}

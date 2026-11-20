@@ -14,6 +14,9 @@
      Portal shows its frames.  ghostty_start starts the library with the
      resources installed beside this module, and portal_terminal_engine
      describes it.
+   - Fed terminals, which show a Rex block (terminal.c): Ghostty's
+     host-managed surface, fed by a thread of Portal's, with the order,
+     geometry and backlog of native/Shared/fed-terminal.c.
    - A test pattern (pattern.c), the content of a view made with the option
      :test-pattern, of either kind, which the checks of the view machinery
      use.
@@ -25,9 +28,6 @@
    What is not, and what each operation waits for: it fails, saying what
    Portal lacks on Linux, and changes nothing.
 
-   - Fed terminals, which show a Rex block.  Ghostty's library has the
-     host-managed surface they rest on, and native/Shared/fed-terminal.c
-     their order, geometry and backlog; nothing here feeds one yet.
    - Web views, on WebKitGTK.  Without :test-pattern, creating one fails.
    - System-wide keys, posted keys and the status panel, which Wayland gives
      a client no direct way to do.
@@ -88,6 +88,10 @@ static void announce(void *data, struct wl_registry *registry, uint32_t name,
     /* Version 3 has the modifiers and the import without a round trip. */
     else if (!strcmp(interface, zwp_linux_dmabuf_v1_interface.name) && version >= 3)
         wayland->dmabuf = wl_registry_bind(registry, name, &zwp_linux_dmabuf_v1_interface, 3);
+    /* Hyprland announces protocols of its own; no other compositor names
+       one so. */
+    else if (!strncmp(interface, "hyprland_", strlen("hyprland_")))
+        wayland->crops_buffer = true;
 }
 
 /* The formats wl_shm takes, which it announces once it is bound.  DATA is
