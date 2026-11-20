@@ -11,10 +11,13 @@
    written with ghostty_surface_write_buffer is answered, and one written
    with ghostty_surface_write_buffer_replay is not.
 
-   Exits 77, skipped, when the surface cannot be made here: no EGL that
-   renders without a display server. */
+   Exits 77, skipped, when this machine has no EGL that renders without a
+   display server, which it asks EGL itself as Ghostty's renderer would;
+   with one, a surface that cannot be made fails. */
 #define _POSIX_C_SOURCE 200809L
 
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
 #include <ghostty.h>
 
 #include <pthread.h>
@@ -126,6 +129,44 @@ static bool gridded(ghostty_surface_t surface)
     return same;
 }
 
+/* Whether Mesa's surfaceless display can be had and renders OpenGL, asked
+   as Ghostty's renderer asks for it when given no display (its
+   renderer/opengl/Device.zig).  The display is left initialized: it is the
+   one the renderer gets. */
+static bool headless_egl(void)
+{
+    EGLDisplay display =
+        eglGetPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, NULL);
+    EGLint major, minor, count = 0;
+    if (display == EGL_NO_DISPLAY || !eglInitialize(display, &major, &minor))
+        return false;
+    const EGLint wanted[] = {EGL_SURFACE_TYPE, 0, EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
+                             EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8,
+                             EGL_ALPHA_SIZE, 8, EGL_NONE};
+    EGLConfig config;
+    return eglChooseConfig(display, wanted, &config, 1, &count) && count > 0;
+}
+
+/* The next frame of WIDTH by HEIGHT, waiting up to five seconds, or NULL.
+   Frames of another size, drawn before the surface's size reached the
+   renderer, are freed, and another frame asked for. */
+static ghostty_frame_s *frame_of(ghostty_surface_t surface, uint32_t width, uint32_t height)
+{
+    ghostty_surface_draw(surface);
+    for (int tries = 0; tries < 5000; tries++) {
+        tick();
+        ghostty_frame_s *frame = ghostty_surface_take_frame(surface);
+        if (frame && frame->width == width && frame->height == height)
+            return frame;
+        if (frame) {
+            ghostty_frame_free(frame);
+            ghostty_surface_draw(surface);
+        }
+        nanosleep(&(struct timespec) {.tv_nsec = 1000000}, NULL);
+    }
+    return NULL;
+}
+
 static void frame_ready(void *data)
 {
     (void) data;
@@ -225,6 +266,13 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    if (!headless_egl()) {
+        fprintf(stderr, "skipped: no EGL here renders with no display server "
+                        "(Mesa's surfaceless platform), which a surface with no window needs\n");
+        ghostty_app_free(app);
+        return 77;
+    }
+
     ghostty_surface_config_s settings = ghostty_surface_config_new();
     settings.platform_tag = GHOSTTY_PLATFORM_LINUX;
     settings.platform.linux_.egl_display = NULL;
@@ -235,10 +283,10 @@ int main(int argc, char **argv)
     settings.scale_factor = 1;
     ghostty_surface_t surface = ghostty_surface_new(app, &settings);
     if (!surface) {
-        fprintf(stderr, "skipped: Ghostty could not make a surface here, "
-                        "which needs an EGL that renders with no display server\n");
+        fprintf(stderr, "%s:%d: FAIL: Ghostty could not make a host-managed surface\n",
+                __FILE__, __LINE__);
         ghostty_app_free(app);
-        return 77;
+        return 1;
     }
 
     /* A grid for a size, handed to the host as a pty's would be: the last
@@ -289,14 +337,12 @@ int main(int argc, char **argv)
     replay(surface, "\x1b[2Jreplayed history\r\n");
     CHECK(shows(surface, "replayed history"));
 
-    /* And drawn, with no window to draw for. */
-    ghostty_surface_draw(surface);
-    EVENTUALLY(atomic_load(&frames) > 0);
-    ghostty_frame_s *frame = ghostty_surface_take_frame(surface);
-    if (CHECK(frame != NULL)) {
-        CHECK(frame->width == 800 && frame->height == 480);
+    /* And drawn, with no window to draw for, at the surface's size, each
+       frame announced by the callback. */
+    ghostty_frame_s *frame = frame_of(surface, 800, 480);
+    if (CHECK(frame != NULL))
         ghostty_frame_free(frame);
-    }
+    CHECK(atomic_load(&frames) > 0);
 
     ghostty_surface_free(surface);
     ghostty_app_free(app);

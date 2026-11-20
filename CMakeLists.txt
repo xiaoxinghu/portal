@@ -462,10 +462,12 @@ pkg-config's egl, such as libglvnd's")
         # A fed terminal's surface, with the host-managed backend of Ghostty's
         # patched library, made, fed and read back with no window, drawn on
         # Mesa's surfaceless display. The link fails when the library lacks a
-        # call; the test exits 77, skipped, where no EGL renders headless.
+        # call; the test exits 77, skipped, where EGL itself says it cannot
+        # render headless, and fails if the surface still cannot be made.
         add_executable(portal-ghostty-fed-tests test/portal-ghostty-fed-tests.c)
         target_include_directories(portal-ghostty-fed-tests PRIVATE "${ghostty_prefix}/include")
-        target_link_libraries(portal-ghostty-fed-tests PRIVATE ghostty Threads::Threads)
+        target_link_libraries(portal-ghostty-fed-tests PRIVATE ghostty PkgConfig::ghostty_egl
+            Threads::Threads)
         add_dependencies(portal-ghostty-fed-tests ghostty-linux)
         target_compile_options(portal-ghostty-fed-tests PRIVATE -Wall -Wextra -Werror)
         set_target_properties(portal-ghostty-fed-tests PROPERTIES
