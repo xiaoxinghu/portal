@@ -32,7 +32,7 @@ struct CheckFocus {
         web.addSubview(input)
         // A chord such as C-g is the page's only if it uses it (portal-input-gui-tests.el).
         for (code, flags, characters) in [(UInt16(53), NSEvent.ModifierFlags(), "\u{1b}"),
-                                          (UInt16(47), .command, ".")] {
+                                          (UInt16(50), .control, "`")] {
             check(window.makeFirstResponder(input))
             app.updateWindows()
             check(Views.owner(target) == PORTAL_OWNER_VIEW, "Focused content is still marked inactive")
@@ -42,8 +42,8 @@ struct CheckFocus {
                                         characters: characters, charactersIgnoringModifiers: characters,
                                         isARepeat: false, keyCode: code))
             app.sendEvent(event)
-            if flags == .command {
-                check(window.firstResponder === editor, "Command-period did not return focus")
+            if flags == .control {
+                check(window.firstResponder === editor, "Control-backtick did not return focus")
                 check(Views.owner(target) == PORTAL_OWNER_EMACS, "Escaped content is still marked active")
             } else {
                 check(window.firstResponder === input, "Guest key unexpectedly left the app")

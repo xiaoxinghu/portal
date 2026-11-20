@@ -14,7 +14,7 @@ reach Emacs:
 | A chord (Control, Option or Command with a key that types a character) the app uses | The app |
 | Command-C, Command-V | Copy and paste, in every view |
 | Any other chord | Emacs, as if typed in the view's buffer; Emacs reads the rest of its key sequence |
-| Command-period (`⌘.`, configurable) | Return to Emacs and stay there |
+| Control-backtick (configurable) | Return to Emacs and stay there |
 | Escape twice, quickly, once [turned on](#escape-twice) | Return to Emacs; the app gets the first |
 | `RET`, or a click, while Emacs owns a Portal buffer | Enter the app |
 
@@ -93,9 +93,8 @@ and mood-line, show it without configuration. A hand-built
 ## The escape key
 
 `portal-input-escape-key` reserves one chord across all native views, before
-an app can claim it. The default is `"s-."` (Command-period) on macOS. On
-Linux it is `"C-<escape>"` (Control-Escape): Super is the desktop's modifier
-there, and a compositor takes the chords it binds before Emacs sees them.
+an app can claim it. The default is Control-backtick on both macOS and Linux.
+Plain Escape stays with the app.
 Change it live with Customize or, for example:
 
 ```elisp

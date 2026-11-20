@@ -3,7 +3,7 @@
    its trigger to the end of its command.  Emacs is the system and the view
    an app in it, as a page is in a browser.  A key goes, in order:
 
-   1. With the configured escape (Super-period by default), back to Emacs,
+   1. With the configured escape (Control-backtick by default), back to Emacs,
       which keeps the keyboard. The platform checks portal_input_is_escape
       before holding events and returns focus itself (portal_input_focus),
       without waiting for Lisp or the app.  When double escape is on, a
@@ -59,7 +59,7 @@ static struct {
 
 /* C-g, which cancels the key sequence Emacs is reading. */
 static const portal_chord cancel = {'g', PORTAL_CONTROL};
-static portal_chord escape = {'.', PORTAL_SUPER};
+static portal_chord escape = {'`', PORTAL_CONTROL};
 
 /* CHORD as the core compares chords: only the known modifiers, a letter in
    lower case, and no Shift on another printable ASCII character, which

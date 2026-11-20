@@ -221,7 +221,7 @@ from that thread."
      (lambda () (equal (portal-excalidraw-gui--js "return document.querySelector('input').value")
                        "a")))))
 
-(ert-deftest portal-input-gui-web-command-period-returns-to-emacs ()
+(ert-deftest portal-input-gui-web-control-backtick-returns-to-emacs ()
   :tags '(:gui)
   (portal-input-gui--page
     ;; The mode line renders who has the keyboard, and follows each change:
@@ -231,7 +231,7 @@ from that thread."
       (portal-terminal-test--wait (lambda () (eq (tag-face) 'portal-mode-line-app)))
       (should (equal (tag) " ● "))
       (should (assq 'mode-line-active face-remapping-alist))
-      (portal-test-native-key 47 portal-input-gui--command ".")
+      (portal-test-native-key 50 portal-input-gui--control "`")
       (should-not (portal-input--action "focused"))
       (should-not (portal-input--action "pending"))
       (portal-terminal-test--wait (lambda () (eq (tag-face) 'portal-mode-line-emacs)))
@@ -256,7 +256,7 @@ from that thread."
     (portal-test-native-key 40 portal-input-gui--control "\C-k")
     (portal-input-gui--settled 1)
     (should (portal-input--action "focused"))
-    (portal-test-native-key 47 portal-input-gui--command ".")
+    (portal-test-native-key 50 portal-input-gui--control "`")
     (should-not (portal-input--action "focused"))))
 
 (ert-deftest portal-input-gui-web-double-escape-returns-to-emacs ()
@@ -465,7 +465,7 @@ would spend the click that asked for fullscreen."
       (should (portal-input--action "focused"))
       (portal-test-native-key 11 0 "b")
       (portal-input-gui--typed "b")
-      (portal-test-native-key 47 portal-input-gui--command ".")
+      (portal-test-native-key 50 portal-input-gui--control "`")
       (should-not (portal-input--action "focused"))
       (portal-integration-test--emacs-input))))
 

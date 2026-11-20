@@ -321,7 +321,7 @@ scripts, styles and images. JavaScript is enabled by default.
   `ns-appearance`. Setting `portal-web-appearance` to `light` or `dark`
   overrides every web view, open or new.
 - With page focus, unused chords reach Emacs and the configured escape
-  (Command-period by default) returns control to Emacs. Clicking
+  (Control-backtick by default) returns control to Emacs. Clicking
   to enter sends `select TARGET`; Emacs selects the view's pane.
 - A page's `alert`, `confirm` and `prompt`, and the question a page with a
   `beforeunload` handler asks before it is left or reloaded, show as a sheet

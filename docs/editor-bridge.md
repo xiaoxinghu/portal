@@ -211,7 +211,7 @@ drawing buffer. The page still owns the keyboard, so saving first focuses Emacs
 for any filename prompt, then refocuses the page. The drawing leaves Control-X
 unused, so `C-x C-s` reaches Emacs, runs its normal save command with mode
 remapping, and restores focus after saving and any filename prompt.
-The configured escape (Command-period by default) leaves Emacs in control;
+The configured escape (Control-backtick by default) leaves Emacs in control;
 Escape and drawing-used chords stay
 with the page.
 

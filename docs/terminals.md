@@ -87,7 +87,7 @@ other TUIs use the real protocol engine, not Emacs text, WebKit or Bun.
 - The shell gets typing, Escape and Control/Option chords such as
   `C-g`, `C-c` and tmux's `C-b`. Emacs handles `M-x` and Command chords in the terminal buffer,
   then returns focus.
-- `Command-period` (`⌘.`, configurable via `portal-input-escape-key`),
+- Control-backtick (configurable via `portal-input-escape-key`),
   Escape twice [once turned on](keyboard.md#escape-twice), or
   **Return to Emacs** leaves Emacs in control. Use normal
   bindings, then `RET` to re-enter Ghostty.
@@ -486,8 +486,7 @@ built by Portal from source with its own patches
 surface of its own over the pane ([how](architecture.md#terminals-on-linux)).
 What differs from macOS:
 
-- **Keys.** The escape back to Emacs is Control-Escape
-  (`portal-input-escape-key`). Copy and paste are Control-Shift-C and
+- **Keys.** Copy and paste are Control-Shift-C and
   Control-Shift-V, as in other Linux terminals, and Control-Insert and
   Shift-Insert, as in Emacs; Ghostty's other Linux key bindings are off, so
   other Alt and Control chords reach the shell except `M-x` (Alt-X), which goes

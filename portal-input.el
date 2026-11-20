@@ -7,7 +7,7 @@
 ;; sequence with the view's buffer's keymaps and runs the command, then gives
 ;; the view the keyboard back, unless Emacs still waits for keys: a prefix
 ;; argument, a transient keymap, or keys typed meanwhile.
-;; The configured escape (Command-period by default) returns to Emacs, as
+;; The configured escape (Control-backtick by default) returns to Emacs, as
 ;; can Escape typed twice, with `portal-input-double-escape';
 ;; RET in the buffer re-enters the view.  The buffer's mode line has a
 ;; light after the major mode's name, a dot lit (●) while the view has the
@@ -31,13 +31,8 @@
 (defvar portal-input--origin nil)
 (defvar portal-input--serial nil)
 
-(defconst portal-input--default-escape-key
-  (if (eq system-type 'darwin) "s-." "C-<escape>")
-  "The return-to-Emacs key until the user sets one.
-Command-period on macOS.  Elsewhere Super is the desktop's modifier, which
-a compositor such as Hyprland takes before Emacs sees a key, so the default
-there is Control-Escape, which neither a terminal's programs nor web pages
-are sent.")
+(defconst portal-input--default-escape-key "C-`"
+  "The return-to-Emacs key until the user sets one.")
 
 (defvar portal-input-mode-map
   (let ((map (make-sparse-keymap)))
@@ -110,8 +105,7 @@ reads it: a character and a sum of `portal-input--modifiers' values."
   "Key that returns from any native view to Emacs and stays there.
 This key is reserved before the embedded app or terminal sees it, even
 while a command handoff is pending.  RET enters the view again.
-The default is \"s-.\" on macOS and \"C-<escape>\" on Linux, where the
-desktop keeps Super for itself.
+The default is Control-backtick on both macOS and Linux.
 Use one modified printable ASCII key or <escape>, with Control, Meta
 or Super: for example \"s-.\", \"C-s-g\" or \"C-<escape>\".
 Use resulting punctuation, such as \"s-!\", not \"s-S-1\".

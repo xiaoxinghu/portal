@@ -643,7 +643,7 @@ typedef struct portal_chord {
     uint32_t modifiers;
 } portal_chord;
 
-/* Whether CHORD is the configured return-to-Emacs key (Super-period until
+/* Whether CHORD is the configured return-to-Emacs key (Control-backtick until
    Lisp configures its own, as it does when the module loads). Check
    key-downs before holding or offering events, including
    during a handoff. On a match return focus and report portal_input_focus

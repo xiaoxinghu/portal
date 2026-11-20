@@ -527,8 +527,8 @@ A position is in the desktop's own pixels, which are Emacs's."
     (portal-linux-gui--focus)
     (portal-linux-gui--type "a")
     (portal-linux-gui--wait (lambda () (equal (portal-linux-gui--get :text) "a")))
-    ;; Control-Escape is the default off macOS.
-    (portal-linux-gui--type "-M" "ctrl" "-k" "Escape" "-m" "ctrl")
+    ;; Control-backtick returns focus without sending Escape to the view.
+    (portal-linux-gui--type "-M" "ctrl" "-k" "grave" "-m" "ctrl")
     (portal-linux-gui--wait (lambda () (not (portal-linux-gui--get :focused))))
     (portal-linux-gui--wait (lambda () (not (portal-input-focused-p))))
     (portal-linux-gui--type "x")

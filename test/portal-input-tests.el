@@ -328,9 +328,8 @@ A lit light is the lit character, and a dimmed one the dimmed character."
         (should-not (keymap-lookup portal-input-mode-map "C-s-g"))
         (should-error (customize-set-variable 'portal-input-escape-key "a"))
         (should (equal portal-input-escape-key "M-<escape>")))
-      ;; Back to the system's default: Command-period, or Control-Escape.
-      (should (equal (car sent)
-                     (if (eq system-type 'darwin) '("." 8) '("\e" 2))))
+      ;; Both platforms restore Control-backtick.
+      (should (equal (car sent) '("`" 2)))
       (should-not (keymap-lookup portal-input-mode-map "M-<escape>"))
       (should (eq (keymap-lookup portal-input-mode-map portal-input--default-escape-key)
                   #'portal-input-unfocus)))))
@@ -376,7 +375,7 @@ A lit light is the lit character, and a dimmed one the dimmed character."
         (should (equal portal-input-escape-key before))
         (should (equal portal-input--escape-installed "s-<escape>"))
         (should (eq (keymap-lookup portal-input-mode-map "s-<escape>") #'portal-input-unfocus))
-        (should-not (keymap-lookup portal-input-mode-map "s-."))
+        (should-not (keymap-lookup portal-input-mode-map portal-input--default-escape-key))
         (should-not (keymap-lookup portal-input-mode-map "C-s-g"))))))
 
 (ert-deftest portal-input-escape-can-be-configured-before-module-load ()

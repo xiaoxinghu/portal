@@ -9,7 +9,7 @@ sequences. Runtime Elisp bindings need no rebuild or restart.
 
 The core (`native/Core/input.c`) routes keys pressed in a view to the first taker:
 
-1. **The configured escape**, Command-period (`⌘.`) by default, returns and
+1. **The configured escape**, Control-backtick by default, returns and
    leaves the keyboard with Emacs. `RET` in the view's buffer or a view click
    returns it to the view. Set `portal-input-escape-key` to change this reserved
    chord live; it is the last resort when an app uses needed keys. With

@@ -73,7 +73,7 @@ bool portal_input_bindings(const portal_binding *regular, size_t regular_count,
                            const portal_binding *quick, size_t quick_count,
                            portal_text *error);
 
-/* Set the reserved return-to-Emacs chord, initially Super-period. Accept one
+/* Set the reserved return-to-Emacs chord, initially Control-backtick. Accept one
    printable ASCII character or Escape (27), with Control, Meta or Super.
    Invalid chords leave the previous choice intact. */
 bool portal_input_set_escape(portal_chord chord, portal_text *error);

@@ -517,10 +517,10 @@
             (portal-terminal-test--paste "printf '\\nPORTAL_INTERRUPT_OK\\n'" t)
             (portal-terminal-test--wait
              (lambda () (string-match-p "^PORTAL_INTERRUPT_OK" (portal-terminal-test--text))))
-            ;; Escape remains terminal input. Command-period returns focus.
+            ;; Escape remains terminal input. Control-backtick returns focus.
             (should (portal-test-native-key 53 0 "\e"))
             (should (plist-get (portal-terminal-test--state) :focused))
-            (should (portal-test-native-key 47 (ash 1 20) "."))
+            (should (portal-test-native-key 50 (ash 1 18) "`"))
             (should-not (plist-get (portal-terminal-test--state) :focused))
             (portal-terminal-focus)
             (should (plist-get (portal-terminal-test--state) :focused)))
@@ -533,7 +533,7 @@
     (select-frame-set-input-focus (selected-frame))
     (portal-terminal-focus)
     ;; AppKit may route keys through the key window without event.window.
-    (should (portal-test-native-key 47 (ash 1 20) "." t))
+    (should (portal-test-native-key 50 (ash 1 18) "`" t))
     (should-not (plist-get (portal-terminal-test--state) :focused))
     ;; Pump the real Emacs event loop: checking firstResponder alone misses
     ;; broken handoffs that still prevent Emacs commands from receiving keys.
@@ -673,7 +673,7 @@ The terminal does not use TRIGGER, so Emacs reads it, and STROKES after it."
           ;; C-g cancels a sequence Emacs is reading.
           (portal-terminal-test--chord (list 16 super "y") (list 5 (ash 1 18) "\C-g"))
           (should (plist-get (portal-terminal-test--state) :focused))
-          (portal-test-native-key 47 super ".")
+          (portal-test-native-key 50 (ash 1 18) "`")
           (should-not (plist-get (portal-terminal-test--state) :focused))
           (portal-test-native-post-key 7 (ash 1 18) "\C-x")
           (portal-test-native-post-key 11 0 "b")

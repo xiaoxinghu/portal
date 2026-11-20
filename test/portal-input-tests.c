@@ -737,16 +737,17 @@ static void test_keys_after_a_whole_command_stay_with_emacs(void)
 static void test_configurable_escape(void)
 {
     portal_text error = {0};
-    CHECK(portal_input_is_escape((portal_chord) {'.', S}));
-    CHECK(!portal_input_is_escape((portal_chord) {27, S}));
+    CHECK(portal_input_is_escape((portal_chord) {'`', C}));
+    CHECK(!portal_input_is_escape((portal_chord) {'.', S}));
+    CHECK(!portal_input_is_escape((portal_chord) {27, C}));
     char *terminal = open_view("terminal", false);
-    press('.', S);
+    press('`', C);
     CHECK(!act(terminal, "focused", 0));
     CHECK(sent(""));
     CHECK(went(""));
 
     CHECK(portal_input_set_escape((portal_chord) {'G', C | S}, &error));
-    CHECK(!portal_input_is_escape((portal_chord) {'.', S}));
+    CHECK(!portal_input_is_escape((portal_chord) {'`', C}));
     CHECK(portal_input_is_escape((portal_chord) {'g', C | S}));
     CHECK(!portal_input_is_escape((portal_chord) {'g', C | S | SHIFT}));
     const portal_chord bad[] = {{'g', 0}, {'g', SHIFT}, {0, S}, {'g', 128}, {27, 0}};
@@ -757,7 +758,9 @@ static void test_configurable_escape(void)
         CHECK(portal_input_is_escape((portal_chord) {'g', C | S}));
     }
     CHECK(act(terminal, "focus", 0));
-    press('.', S); /* The old escape is now an ordinary Emacs chord. */
+    press('`', C); /* The former escape now reaches the terminal. */
+    CHECK(went("%s C-`", terminal));
+    press('.', S); /* Start a handoff. */
     int64_t serial = key_record(terminal, '.', S);
     press('x', 0);
     press('g', C | S); /* Escape before Lisp acknowledges: drop held keys. */
@@ -771,10 +774,10 @@ static void test_configurable_escape(void)
     CHECK(portal_input_is_escape((portal_chord) {27, C}));
     CHECK(portal_input_set_escape((portal_chord) {'!', S}, &error));
     CHECK(portal_input_is_escape((portal_chord) {'!', S | SHIFT}));
-    CHECK(portal_input_set_escape((portal_chord) {'.', S}, &error));
+    CHECK(portal_input_set_escape((portal_chord) {'`', C}, &error));
     char *web = open_view("web", false);
     press('k', C); /* Escape must not wait for the app's answer either. */
-    press('.', S);
+    press('`', C);
     CHECK(!act(web, "focused", 0));
     CHECK(went("offered C-k"));
     CHECK(sent(""));

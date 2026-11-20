@@ -84,7 +84,7 @@ emacs -Q -l "$PWD/portal.el" --eval '(portal-hello)'
 The build produces `build/portal.bundle` and the standalone `build/portal-host`.
 Either way, Emacs should then show **Hello World in a native web view**; its app host
 starts automatically. Click the page or press `RET` to enter it, and press
-Command-period (`⌘.`) to return to Emacs. The light in the mode line says who
+Control-backtick to return to Emacs. The light in the mode line says who
 has the keyboard: `●` while the page does, `○` after; `RET`
 re-enters it. Customize `portal-input-escape-key` to change the escape chord,
 or `portal-input-double-escape` to leave with Escape typed twice.

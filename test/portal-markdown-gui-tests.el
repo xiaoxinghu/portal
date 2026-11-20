@@ -197,8 +197,8 @@ The folder is `portal-markdown-gui--directory'."
         (should (eq (selected-window) origin))
         (should (portal-input--action "focused" target))
         (should (= (portal-markdown-gui--scroll) scroll))
-        ;; Command-period still returns to Emacs.
-        (portal-test-native-key 47 (ash 1 20) ".")
+        ;; Control-backtick still returns to Emacs.
+        (portal-test-native-key 50 (ash 1 18) "`")
         (should-not (portal-input--action "focused" target))
         (portal-integration-test--emacs-input)
         ;; Return from among other source buffers, without reloading.
@@ -210,8 +210,8 @@ The folder is `portal-markdown-gui--directory'."
         (should (portal-input--action "focused" target))
         (should (= (portal-markdown-gui--scroll) scroll))
         (should (equal (portal-excalidraw-gui--js "return window.marker;") "kept"))
-        ;; RET re-enters after Command-period.
-        (portal-test-native-key 47 (ash 1 20) ".")
+        ;; RET re-enters after Control-backtick.
+        (portal-test-native-key 50 (ash 1 18) "`")
         (should-not (portal-input--action "focused" target))
         (call-interactively (key-binding (kbd "RET")))
         (should (portal-input--action "focused" target))
