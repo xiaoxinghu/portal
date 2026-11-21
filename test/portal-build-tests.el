@@ -14,9 +14,11 @@
 (defmacro portal-build-test--with-root (&rest body)
   "Run BODY with `portal-build-root' a new source tree, then delete it.
 The tree's name contains a space.  It has native and host sources, a
-stand-in build.sh, Lisp and a node_modules directory.  No build is running."
+stand-in build.sh, Lisp and a node_modules directory.  No build is running,
+and no ZIG names the Zig, which would hide the tests' stand-ins."
   (declare (indent 0))
   `(let* ((portal-build-root (file-name-as-directory (make-temp-file "portal build " t)))
+          (process-environment (cons "ZIG" process-environment))
           (portal-build-directory nil)
           (portal-build--ready nil)
           (portal-build--loaded nil)
@@ -213,8 +215,7 @@ version the tree's pin names.  The stand-in pkg-config finds everything."
   ;; searches Homebrew's and MacPorts' directories, where a Mac may have a
   ;; Zig of its own: the stand-ins alone are searched here.
   (portal-build-test--with-root
-    (let ((process-environment (cons "ZIG" process-environment))
-          (portal-build--tool-directories nil))
+    (let ((portal-build--tool-directories nil))
       (dolist (version '("9.8.7" "9.8.10" "9.8.7-dev.3+abc"))
         (let ((exec-path (portal-build-test--tools version)))
           (should-not (portal-build--ghostty-problem))))
