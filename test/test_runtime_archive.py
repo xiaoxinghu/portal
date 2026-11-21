@@ -48,7 +48,7 @@ def macho(cpu=0x0100000C, minos=(13, 0), loads=("/usr/lib/libSystem.B.dylib",),
 
 
 def elf(machine=62, kind=3, needed=("libc.so.6",), soname=None, runpath=(), rpath=(),
-        versions=(("libc.so.6", ("GLIBC_2.2.5", "GLIBC_2.34")),)):
+        versions=(("libc.so.6", ("GLIBC_2.2.5", "GLIBC_2.34")),), x86_isa=None):
     """A 64-bit little-endian ELF file with these dynamic entries and
 needed symbol versions in its sections, and no code."""
     strings = bytearray(b"\0")
@@ -70,20 +70,29 @@ needed symbol versions in its sections, and no code."""
                        for number, name in enumerate(names))
         following = 16 + len(aux) if index < len(versions) - 1 else 0
         verneed += struct.pack("<HHIII", 1, len(names), string(file), 16, following) + aux
-    strings = bytes(strings)
-    offsets = [64, 64 + len(strings), 64 + len(strings) + len(dynamic)]
-    shoff = offsets[2] + len(verneed)
+    strings = bytes(strings).ljust((len(strings) + 7) // 8 * 8, b"\0")
+    # A GNU property note, as GCC writes it, with the x86 ISA level needed
+    # and another property before it.
+    note = b""
+    if x86_isa is not None:
+        properties = (struct.pack("<II", 0xC0000002, 4) + struct.pack("<I", 3).ljust(8, b"\0")
+                      + struct.pack("<II", 0xC0008002, 4) + struct.pack("<I", x86_isa).ljust(8, b"\0"))
+        note = struct.pack("<III", 4, len(properties), 5) + b"GNU\0" + properties
+    offsets = [64, 64 + len(strings), 64 + len(strings) + len(dynamic),
+               64 + len(strings) + len(dynamic) + len(verneed)]
+    shoff = offsets[3] + len(note)
 
     def section(kind_, offset, size, link=0, info=0):
         return struct.pack("<IIQQQQIIQQ", 0, kind_, 0, 0, offset, size, link, info, 8, 0)
 
     sections = (section(0, 0, 0) + section(3, offsets[0], len(strings))
                 + section(6, offsets[1], len(dynamic), link=1)
-                + section(0x6FFFFFFE, offsets[2], len(verneed), link=1, info=len(versions)))
+                + section(0x6FFFFFFE, offsets[2], len(verneed), link=1, info=len(versions))
+                + section(7, offsets[3], len(note)))
     header = (b"\x7fELF" + bytes([2, 1, 1, 0]) + bytes(8)
               + struct.pack("<HHIQQQIHHHHHH", kind, machine, 1, 0, 0, shoff, 0, 64, 56, 0,
-                            64, 4, 0))
-    return header + strings + dynamic + verneed + sections
+                            64, 5, 0))
+    return header + strings + dynamic + verneed + note + sections
 
 
 class RuntimeArchiveTests(unittest.TestCase):
@@ -362,7 +371,7 @@ beside the module, the system's libraries by name."""
     def module(**changes):
         fields = {"needed": ("libghostty.so", "libgtk-3.so.0", "libwayland-client.so.0",
                              "libc.so.6"),
-                  "runpath": ("$ORIGIN/ghostty-linux/lib",)}
+                  "runpath": ("$ORIGIN/ghostty-linux/lib",), "x86_isa": 1}
         return elf(**{**fields, **changes})
 
     @staticmethod
@@ -411,11 +420,12 @@ beside the module, the system's libraries by name."""
         self.assertEqual(os.readlink(destination / "ghostty-linux/lib/libghostty.so"),
                          "ghostty-internal.so")
         report = out.getvalue()
-        self.assertIn("portal.so: x86_64, GLIBC_2.34 at most; system libraries libgtk-3.so.0, "
+        self.assertIn("portal.so: x86_64, x86-64 baseline, GLIBC_2.34 at most; system libraries libgtk-3.so.0, "
                       "libwayland-client.so.0, libc.so.6; libghostty.so from the runtime's "
                       "ghostty-linux/lib/libghostty.so by its runpath $ORIGIN/ghostty-linux/lib",
                       report)
-        self.assertIn(f"{self.LIBRARY}: x86_64, GLIBC_2.43 at most; system libraries "
+        self.assertIn(f"{self.LIBRARY}: x86_64, no x86-64 level marked, GLIBC_2.43 at most; "
+                      "system libraries "
                       "libEGL.so.1, libm.so.6, libc.so.6", report)
 
     def test_one_archive_a_cpu(self):
@@ -440,6 +450,9 @@ beside the module, the system's libraries by name."""
                 ("portal.so", self.module(runpath=(f"{self.build}/ghostty-linux/lib",)),
                  "not a place beside it"),
                 ("portal.so", self.module(runpath=("$ORIGIN/../..",)), "outside the runtime"),
+                ("portal.so", self.module(x86_isa=1 | 4),
+                 "needs x86-64-v3, a newer CPU than the baseline"),
+                ("portal.so", self.module(x86_isa=2), "needs x86-64-v2"),
                 ("portal.so", b"#!/bin/sh\n" + bytes(64), "not an ELF binary")):
             with self.subTest(pattern):
                 original = (self.build / name).read_bytes()

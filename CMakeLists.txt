@@ -383,8 +383,9 @@ pkg-config's egl, such as libglvnd's")
     # Zig builds Ghostty's library for this machine's CPU and C library unless
     # told otherwise. A release archive names both, such as
     # -DPORTAL_GHOSTTY_TARGET=x86_64-linux-gnu.2.43 -DPORTAL_GHOSTTY_CPU=baseline,
-    # for every machine of its floor; the module itself is compiled with the
-    # compiler's defaults, never for this CPU alone.
+    # for every machine of its floor. The module follows CMAKE_C_FLAGS, as a
+    # release names its CPU there too, -march=x86-64 or -march=armv8-a: a
+    # compiler's default may be newer than the distribution's.
     set(PORTAL_GHOSTTY_TARGET "" CACHE STRING
         "Zig's target for Ghostty's library, such as x86_64-linux-gnu.2.43; empty for this machine")
     set(PORTAL_GHOSTTY_CPU "" CACHE STRING

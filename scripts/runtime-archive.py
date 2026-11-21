@@ -16,8 +16,9 @@ after the build's version and the commit, and its manifest has no tag.
 would land outside DESTINATION, unpacks it there, a new or empty directory,
 and checks what it unpacked: the files of the runtime and nothing else, the
 build record the manifest names, and each binary's CPU, oldest system and
-libraries.  On Linux that is each ELF binary's machine, the newest glibc
-symbol version it needs, its libraries and where it looks for them: those
+libraries.  On Linux that is each ELF binary's machine, on x86-64 the CPU
+level its GNU property note says it needs, the newest glibc symbol
+version it needs, its libraries and where it looks for them: those
 of the system by name, Ghostty's from the runtime through the module's
 $ORIGIN runpath.  Run on a machine of the archive's CPU, it also asks the
 system's loader, ldd, where each library is found.  It does not load the
@@ -250,7 +251,12 @@ system TARGET claims."""
 # where they are looked for, the soname, and the symbol versions needed.
 
 MACHINES = {62: "x86_64", 183: "aarch64"}
-ET_DYN, SHT_DYNAMIC, SHT_GNU_VERNEED = 3, 6, 0x6FFFFFFE
+ET_DYN, SHT_DYNAMIC, SHT_NOTE, SHT_GNU_VERNEED = 3, 6, 7, 0x6FFFFFFE
+# The x86-64 levels a binary says it needs, in its GNU property note, which
+# GCC and binutils write and glibc's loader enforces: x86-64 itself, then
+# v2, v3 (Haswell's AVX2) and v4 (AVX-512).
+NT_GNU_PROPERTY_TYPE_0, GNU_PROPERTY_X86_ISA_1_NEEDED = 5, 0xC0008002
+X86_LEVELS = [(1, "x86-64"), (2, "x86-64-v2"), (4, "x86-64-v3"), (8, "x86-64-v4")]
 DT_NEEDED, DT_SONAME, DT_RPATH, DT_RUNPATH = 1, 14, 15, 29
 
 # Libraries a Linux binary may load by name from the system: glibc's, and
@@ -279,7 +285,7 @@ symbol versions of a 64-bit little-endian ELF file."""
     shoff, = struct.unpack_from("<Q", data, 40)
     shentsize, shnum = struct.unpack_from("<HH", data, 58)
     found = {"machine": MACHINES.get(machine, str(machine)), "type": kind, "needed": [],
-             "soname": None, "rpath": [], "runpath": [], "versions": {}}
+             "soname": None, "rpath": [], "runpath": [], "versions": {}, "x86_isa": None}
     if shentsize != 64 or shoff + shnum * 64 > len(data):
         raise Refusal(f"{path} has damaged section headers")
     sections = [struct.unpack_from("<IIQQQQIIQQ", data, shoff + index * 64)
@@ -313,6 +319,23 @@ symbol versions of a 64-bit little-endian ELF file."""
                 elif tag in (DT_RPATH, DT_RUNPATH):
                     key = "rpath" if tag == DT_RPATH else "runpath"
                     found[key] += [part for part in string(strings, value).split(":") if part]
+        elif header[1] == SHT_NOTE:
+            offset, size, _, _ = section(index)
+            align = max(4, header[8])
+            at, end = offset, offset + size
+            while at + 12 <= end:
+                namesz, descsz, kind_ = struct.unpack_from("<III", data, at)
+                name = data[at + 12:at + 12 + namesz]
+                desc = at + (12 + namesz + align - 1) // align * align
+                if name == b"GNU\0" and kind_ == NT_GNU_PROPERTY_TYPE_0:
+                    there = desc
+                    while there + 8 <= desc + descsz:
+                        property_, datasz = struct.unpack_from("<II", data, there)
+                        if property_ == GNU_PROPERTY_X86_ISA_1_NEEDED and datasz >= 4:
+                            found["x86_isa"] = (found["x86_isa"] or 0) | \
+                                struct.unpack_from("<I", data, there + 8)[0]
+                        there += 8 + (datasz + 7) // 8 * 8
+                at = desc + (descsz + align - 1) // align * align
         elif header[1] == SHT_GNU_VERNEED:
             offset, size, strings, count = section(index)
             at = offset
@@ -358,6 +381,13 @@ def check_elf(root: Path, name: str, target: str) -> str:
     if found["rpath"]:
         raise Refusal(f"{name} has an RPATH, {':'.join(found['rpath'])}, which overrides "
                       "the user's library path; a runpath is what it needs")
+    level = ""
+    if found["machine"] == "x86_64":
+        marked = found["x86_isa"]
+        newer = [name for bit, name in X86_LEVELS[1:] if marked and marked & bit]
+        if newer:
+            raise Refusal(f"{name} needs {newer[-1]}, a newer CPU than the baseline, x86-64")
+        level = ", x86-64 baseline" if marked else ", no x86-64 level marked"
     floor = spec["floor"]["glibc"]
     newest, others = None, []
     for library, names in sorted(found["versions"].items()):
@@ -386,7 +416,7 @@ def check_elf(root: Path, name: str, target: str) -> str:
             raise Refusal(f"{name} needs {library}, which is neither the system's nor "
                           "the runtime's")
     found_by_loader = check_loader(root, name, own, spec["cpu"])
-    return (f"{name}: {found['machine']}, {newest or 'no glibc versions'} at most"
+    return (f"{name}: {found['machine']}{level}, {newest or 'no glibc versions'} at most"
             f"{', also ' + ', '.join(others) if others else ''}; "
             f"system libraries {', '.join(system) or 'none'}"
             + "".join(f"; {library} from the runtime's "
