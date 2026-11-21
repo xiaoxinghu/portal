@@ -433,8 +433,12 @@ echo \"TOOLS=$PORTAL_TOOLS_DIR\"\nmkdir -p build\n")
                                   (process-list)))))))))
 
 (ert-deftest portal-build-server-offers-a-build-for-its-own-host ()
+  ;; A build that makes a host, as the Mac's does, on any platform.
   (portal-build-test--with-root
-    (let ((portal-server-program nil) checked)
+    (let ((portal-build--host "portal-host")
+          (portal-build--artifacts (cl-adjoin "portal-host" portal-build--artifacts
+                                              :test #'equal))
+          (portal-server-program nil) checked)
       ;; Tests and callers find the host to run without reading the option.
       (should (equal (portal-server-program-file) (portal-build-file "portal-host")))
       (let ((portal-server-program "/supplied/host"))
