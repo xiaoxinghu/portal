@@ -44,7 +44,8 @@ export type Notice = Pick<
 	Component,
 	"name" | "version" | "license" | "shipped"
 > &
-	Pick<Component, "credit" | "note" | "blocker"> & {
+	Pick<Component, "credit" | "note" | "blocker"> &
+	Partial<Pick<Component, "source">> & {
 		npm: boolean;
 		// FROM is the source file; TO its path in the staged directory.
 		files: { from: string; to: string }[];
@@ -330,6 +331,61 @@ export function inspect(build: string): {
 	return { notices, problems, bun };
 }
 
+// Where the source of what the build ships is: Portal's repository at the
+// release tag, which pins the rest, and each MPL-2.0 component's own source,
+// as MPL-2.0 section 3.2(a) asks. See docs/licenses.md.
+export function sourceSection(components: Notice[]): string[] {
+	const repository = /^;; URL: (\S+)$/m.exec(
+		read(join(root, "portal.el")),
+	)?.[1];
+	const pin = (
+		file: string,
+	): { url: string; version: string; revision: string } =>
+		JSON.parse(read(join(root, "native", file)));
+	const pinned = swift
+		? (() => {
+				const spm = pin("libghostty-spm.json");
+				return [
+					`libghostty-spm ${spm.version}, ${spm.url} at ${spm.revision}, with`,
+					"Portal's patches in `native/patches/libghostty-spm`. The Ghostty revision",
+					"and the Zig packages its prebuilt library is built from are named in that",
+					"revision's `Ghostty.ref`, `Patches/` and `Script/`, and in Ghostty's",
+					"`build.zig.zon` files at that revision.",
+				];
+			})()
+		: (() => {
+				const ghostty = pin("ghostty.json");
+				return [
+					`Ghostty ${ghostty.version}, ${ghostty.url} at ${ghostty.revision}, with`,
+					"Portal's patches in `native/patches/ghostty`, built by",
+					"`tools/build-ghostty-linux.sh`, and the Zig packages Ghostty's",
+					"`build.zig.zon` files pin at that revision.",
+				];
+			})();
+	const mpl = components.filter(
+		(notice) => notice.license.startsWith("MPL-2.0") && notice.source,
+	);
+	return [
+		"## Source",
+		"",
+		`This build is made from Portal's source, ${repository}, at the release tag`,
+		"it comes from. That tag holds Portal's code, build scripts and patches, and",
+		"pins what else the native module is built from:",
+		...pinned,
+		"",
+		...(mpl.length
+			? [
+					"The source of the MPL-2.0 components:",
+					"",
+					...mpl.map(
+						(notice) => `- ${notice.name} ${notice.version}: ${notice.source}`,
+					),
+					"",
+				]
+			: []),
+	];
+}
+
 function index(notices: Notice[], bun?: string): string {
 	const cell = (text: string) =>
 		text.replaceAll("|", "\\|").replaceAll("\n", " ");
@@ -356,6 +412,7 @@ function index(notices: Notice[], bun?: string): string {
 			...blockers.map((notice) => `- ${notice.name}: ${notice.blocker}`),
 			"",
 		);
+	lines.push(...sourceSection(components));
 	const credits = components.filter((notice) => notice.credit);
 	if (credits.length)
 		lines.push(

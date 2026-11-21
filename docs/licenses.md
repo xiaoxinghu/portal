@@ -31,9 +31,9 @@ Distribute these together; the notices are part of the release:
 revision each inventory entry cites, and `.gitattributes` keeps Git from
 normalizing them.
 
-A binary release also needs the corresponding source described under
-[unresolved before a binary release](#unresolved-before-a-binary-release).
-A list of dependency names is not that source.
+A binary release also says where its source is. The generated index's
+**Source** section does that; [where the source is](#where-the-source-is)
+explains why that is enough for the native module.
 
 ## What the build ships
 
@@ -136,6 +136,40 @@ use licenses that GPL-3.0 accepts: MIT, BSD, ISC, Zlib, libpng-2.0, Apache-2.0,
 - The OFL-1.1 and MIT fonts may ship with software when their copyright and
   license accompany them, which the staged notices do. Two fonts remain open.
 
+## Where the source is
+
+The index that `build/licenses/README.md` generates has a **Source** section.
+It names:
+
+- Portal's repository at the release tag the build comes from;
+- what that tag pins: on macOS, libghostty-spm's release, whose `Ghostty.ref`,
+  `Patches/` and `Script/` build the prebuilt Ghostty library; on Linux,
+  Ghostty's release, with Portal's patches and `tools/build-ghostty-linux.sh`;
+- the source archive of each MPL-2.0 component.
+
+The `licenses` CTest suite checks that the section is there. The owner decided
+on 2026-11-21 that this is how the native module's source is supplied: as
+pointers, with nothing attached to a release. The reasons:
+
+- Nearly all of Portal's GPL-3.0 code is the owner's own, and the GPL places
+  conditions on others who redistribute it, not on its author. Code that others
+  contribute is covered by GPL-3.0 section 6(d): source offered from the same
+  place as the binary, here the tagged repository on GitHub.
+- The MIT, BSD and similar components ask for their notices, which the build
+  stages, not for their source.
+- z2d (MPL-2.0) is the only third-party code in the module whose license asks
+  for its source. Section 3.2(a) asks that recipients be told how to obtain it
+  "by reasonable means", which the section's link does. z2d cannot be removed
+  with reasonable effort: Ghostty's sprite renderer draws every cursor,
+  underline and box-drawing glyph with it.
+- Comparable Emacs packages ship binaries the same way. Ghostel v0.66.0, which
+  is GPL-3.0 with libghostty-vt compiled in, and emacs-zmq v1.0.2, which links
+  libzmq, publish their binaries with the tagged repository, whose build files
+  pin their dependencies, as the only source pointer.
+
+This holds while the upstreams stay available. If one disappears, a release
+needs another way to provide what it held.
+
 ## Unresolved before a binary release
 
 The generated index repeats the per-component items.
@@ -151,9 +185,11 @@ The generated index repeats the per-component items.
    release tag, with oven-sh/WebKit at the commit Bun pins and the libraries Bun's
    build scripts pin; and the npm packages at the lockfile versions. Statically
    linked LGPL code, such as JavaScriptCore in Bun, also needs a way to relink
-   with a modified library; complete build sources and scripts provide that. No
-   release mechanism provides any of this yet; task 5's release automation
-   should attach it.
+   with a modified library; complete build sources and scripts provide that.
+   The native module's part is settled: see
+   [where the source is](#where-the-source-is). Bun's and the npm packages'
+   part stays open while the app host is compiled into `portal-host`, and
+   leaves with it when the host runs from source.
 2. **Bun's notices.** Only Bun's LICENSE.md is staged. Bun publishes no license
    texts for the roughly 25 libraries it links statically, the Rust crates behind
    lol-html and argon2, or WebKit's per-file notices. Portal does not pin Bun yet

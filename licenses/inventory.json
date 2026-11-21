@@ -173,8 +173,7 @@
 			"license": "MPL-2.0 (with code adapted from Cairo under MPL-1.1, redistributed under MPL-2.0)",
 			"shipped": "portal.dylib (in libghostty.a)",
 			"when": ["swift:libghostty-spm@2.2.2026110702"],
-			"texts": ["z2d/LICENSE", "z2d/COPYING"],
-			"blocker": "MPL-2.0 code in executable form: a binary release must tell recipients how to obtain this source (docs/licenses.md)"
+			"texts": ["z2d/LICENSE", "z2d/COPYING"]
 		},
 		{
 			"id": "zig-objc",
@@ -321,8 +320,7 @@
 			"shipped": "ghostty-linux/lib/ghostty-internal.so",
 			"when": ["ghostty@v1.4.0"],
 			"texts": ["z2d/LICENSE", "z2d/COPYING"],
-			"note": "Both texts are byte for byte the same in 0.13.0 and 0.13.2",
-			"blocker": "MPL-2.0 code in executable form: a binary release must tell recipients how to obtain this source (docs/licenses.md)"
+			"note": "Both texts are byte for byte the same in 0.13.0 and 0.13.2"
 		},
 		{
 			"id": "zig",
