@@ -295,7 +295,9 @@ def pack(build: Path, out: Path, commit: str, tag: str | None, target: str) -> P
         return info
 
     partial = archive.with_name(archive.name + ".partial")
-    with tarfile.open(partial, "w:gz", format=tarfile.PAX_FORMAT) as tar:
+    # Named as the archive, so that gzip's header names the tar in it.
+    with partial.open("wb") as stream, \
+            tarfile.open(archive.name, "w:gz", fileobj=stream, format=tarfile.PAX_FORMAT) as tar:
         for path in paths:
             tar.add(build / path, arcname=path.as_posix(), recursive=False, filter=normal)
     partial.replace(archive)
