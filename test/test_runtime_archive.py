@@ -142,6 +142,50 @@ class RuntimeArchiveTests(unittest.TestCase):
         (self.build / "portal.bundle/Contents/Resources/escape").symlink_to("../../../../etc")
         self.refused("links outside the runtime", self.pack)
 
+    def test_follows_chained_links_to_see_where_they_lead(self):
+        # Inside: a chain to a file of the runtime, as a soname link is.
+        (self.build / "licenses" / "texts").mkdir()
+        (self.build / "licenses" / "texts" / "zlib").write_text("zlib")
+        (self.build / "licenses" / "current").symlink_to("texts")
+        (self.build / "licenses" / "zlib").symlink_to("current/zlib")
+        archive.unpack(self.pack(), self.root / "inside")
+        self.assertEqual((self.root / "inside" / "licenses" / "zlib").read_text(), "zlib")
+        # Outside: each step counts as inside, the chain leads to the parent.
+        (self.build / "licenses" / "a").symlink_to(".")
+        (self.build / "licenses" / "b").symlink_to("a/../..")
+        self.refused("licenses/b links outside the runtime", self.pack)
+        # Links that loop lead nowhere.
+        (self.build / "licenses" / "b").unlink()
+        (self.build / "licenses" / "c").symlink_to("d")
+        (self.build / "licenses" / "d").symlink_to("c")
+        self.refused("links outside the runtime", self.pack)
+
+    def test_unpack_follows_the_archives_own_links(self):
+        for members, pattern in (
+                ([("licenses/a", "."), ("licenses/b", "a/../..")], "links licenses/b outside"),
+                ([("licenses/up", ".."), ("licenses/up/up", ".."), ("licenses/up/up/x", None)],
+                 "links licenses/up/up outside"),
+                ([("licenses/up", ".."), ("licenses/up/Makefile", None)],
+                 "'licenses/up/Makefile', which a link takes outside")):
+            with self.subTest(pattern):
+                written = self.pack()
+                manifest = json.loads(written.read_text())
+                tarball = self.out / manifest["archives"][0]["name"]
+                with tarfile.open(tarball, "w:gz") as tar:
+                    for name, link in members:
+                        info = tarfile.TarInfo(name)
+                        if link is None:
+                            info.size = 1
+                            tar.addfile(info, io.BytesIO(b"x"))
+                        else:
+                            info.type, info.linkname = tarfile.SYMTYPE, link
+                            tar.addfile(info)
+                manifest["archives"][0]["size"] = tarball.stat().st_size
+                manifest["archives"][0]["sha256"] = archive.sha256(tarball)
+                written.write_text(json.dumps(manifest))
+                self.refused(pattern, archive.unpack, written, self.root / "unpacked")
+                self.assertFalse((self.root / "unpacked").exists())
+
     def test_a_binary_may_name_the_build_in_its_debug_map(self):
         self.binary(MODULE, macho() + str(self.build / "Backend.o").encode())
         archive.unpack(self.pack(), self.root / "elsewhere")

@@ -234,16 +234,39 @@ def files_under(root: Path, entries: list) -> list:
     return sorted(set(paths), key=lambda path: path.as_posix())
 
 
-def inside(name: str, link: str) -> bool:
-    """Whether a link at NAME to LINK stays inside the archive."""
-    if link.startswith("/"):
-        return False
-    depth = len(Path(name).parts) - 1
-    for part in Path(link).parts:
-        depth += -1 if part == ".." else 0 if part == "." else 1
-        if depth < 0:
-            return False
-    return True
+def resolve(path: str, links: dict) -> list | None:
+    """PATH's components inside the runtime, following LINKS, or None.
+LINKS maps each link's name in the runtime to its target.  None means
+that PATH, or a link it goes through, leads outside the runtime, or that
+its links loop."""
+    if path.startswith("/"):
+        return None
+    pending = [part for part in path.split("/") if part not in ("", ".")]
+    resolved = []
+    followed = 0
+    while pending:
+        part = pending.pop(0)
+        if part == "..":
+            if not resolved:
+                return None
+            resolved.pop()
+            continue
+        resolved.append(part)
+        target = links.get("/".join(resolved))
+        if target is not None:
+            followed += 1
+            if target.startswith("/") or followed > 40:
+                return None
+            # A link stands for its target, read from the link's directory.
+            resolved.pop()
+            pending = [part for part in target.split("/") if part not in ("", ".")] + pending
+    return resolved
+
+
+def inside(name: str, link: str, links: dict) -> bool:
+    """Whether a link at NAME to LINK stays inside the runtime, through LINKS."""
+    parent = "/".join(Path(name).parts[:-1])
+    return resolve(f"{parent}/{link}" if parent else link, links) is not None
 
 
 def pack(build: Path, out: Path, commit: str, tag: str | None, target: str) -> Path:
@@ -263,11 +286,13 @@ def pack(build: Path, out: Path, commit: str, tag: str | None, target: str) -> P
     places = sorted({str(place).encode() for directory in (given, build)
                      for place in (directory, directory.parent)}, key=len, reverse=True)
     paths = files_under(build, spec["entries"])
+    links = {path.as_posix(): os.readlink(build / path) for path in paths
+             if (build / path).is_symlink()}
     for path in paths:
         full = build / path
         mode = full.lstat().st_mode
         if stat.S_ISLNK(mode):
-            if not inside(path.as_posix(), os.readlink(full)):
+            if not inside(path.as_posix(), links[path.as_posix()], links):
                 raise Refusal(f"{path} links outside the runtime, to {os.readlink(full)}")
         elif stat.S_ISREG(mode):
             if path.as_posix() in spec["binaries"]:
@@ -339,6 +364,7 @@ def unpack(manifest_path: Path, destination: Path) -> None:
 
     with tarfile.open(archive, "r:gz") as tar:
         members = tar.getmembers()
+        links = {member.name: member.linkname for member in members if member.issym()}
         for member in members:
             name = member.name
             parts = Path(name).parts
@@ -346,10 +372,16 @@ def unpack(manifest_path: Path, destination: Path) -> None:
                 raise Refusal(f"{archive.name} holds {name!r}, which is outside the runtime")
             if parts[0] not in spec["entries"]:
                 raise Refusal(f"{archive.name} holds {name!r}, which is not of the runtime")
+            # Through the archive's own links, which extraction follows.
             if member.issym():
-                if not inside(name, member.linkname):
+                if not inside(name, member.linkname, links):
                     raise Refusal(f"{archive.name} links {name} outside the runtime")
-            elif not (member.isfile() or member.isdir()):
+            else:
+                where = resolve(name, links)
+                if not where or where[0] not in spec["entries"]:
+                    raise Refusal(f"{archive.name} holds {name!r}, which a link takes outside "
+                                  "the runtime")
+            if not (member.issym() or member.isfile() or member.isdir()):
                 raise Refusal(f"{archive.name} holds {name!r}, neither a file, a directory "
                               "nor a link")
         destination.mkdir(parents=True, exist_ok=True)
