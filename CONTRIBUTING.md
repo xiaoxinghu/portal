@@ -445,7 +445,9 @@ host),
 to where the build outputs are; the host needs no adjacent web assets. Without
 `native/`, Portal accepts only a record from the same `Version:` as `portal.el`. Keep the
 bundle intact, including its terminfo and shell integration resources.
-`build/licenses` holds Portal's license and the third-party notices, copied
+`sh test/render-smoke.sh DIRECTORY` checks that a terminal draws and takes
+input from such a directory; [Testing Portal](docs/testing.md#rendering-smoke-test)
+says how. `build/licenses` holds Portal's license and the third-party notices, copied
 from `licenses/`; see [Licenses and third-party notices](docs/licenses.md). Restart
 Emacs when upgrading from the former separate web and terminal modules, or after
 rebuilding a loaded native module.

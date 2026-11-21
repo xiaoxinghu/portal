@@ -205,6 +205,20 @@ jobs:
           mkdir -p "$PORTAL_TEST_LOGS"
           sh test/input-gui.sh 2>&1 | tee "$PORTAL_TEST_LOGS/test.log"
 
+      # The runtime's short check, on the checkout's build. Whether a runner
+      # may capture Emacs's own window is the runner's: when it may not,
+      # the test exits 77, which is a warning here, not a pass.
+      - name: Rendering smoke (graphical)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          status=0
+          sh test/render-smoke.sh || status=$?
+          if [ "$status" = 77 ]; then
+            echo "::warning::The rendering smoke test could not run on this runner; render-smoke.log says why"
+            exit 0
+          fi
+          exit "$status"
+
       - name: Launcher (graphical)
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
