@@ -312,9 +312,10 @@ jobs:
     # modules (Ubuntu packages 30.2), built here with pgtk and cached; Zig at
     # Ghostty's pin; and a target for Ghostty's library, which Zig would
     # otherwise build for the runner's CPU: here it is the floor's glibc and a
-    # baseline CPU. The module is compiled with GCC's defaults, which are those
-    # of the distribution, not of this CPU. No graphical checks: Linux renders
-    # are not checked here, and there is no app host on Linux.
+    # baseline CPU. The module and Emacs are compiled for that CPU by name too,
+    # not with GCC's defaults: the x86-64 image's GCC assumes x86-64-v3. No
+    # graphical checks: Linux renders are not checked here, and there is no
+    # app host on Linux.
     strategy:
       fail-fast: false
       matrix:
@@ -322,6 +323,7 @@ jobs:
           - runner: ubuntu-26.04
             target: linux-x86_64-gnu
             ghostty-target: x86_64-linux-gnu.2.43
+            march: x86-64
             zig: zig-x86_64-linux
             # ziglang.org/download/index.json, for the pin's Zig.
             zig-sha256: 1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026
@@ -331,6 +333,7 @@ jobs:
           - runner: ubuntu-26.04-arm
             target: linux-aarch64-gnu
             ghostty-target: aarch64-linux-gnu.2.43
+            march: armv8-a
             zig: zig-aarch64-linux
             zig-sha256: 9e8d11661d4ae3bd57702a3832781e23ad151dde5798e16a5ccd503f65234ff8
             # Armv8.0-A, with none of the later atomics, SVE or the like.
@@ -382,7 +385,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/logs"
           echo "image=$ImageOS-$ImageVersion" >>"$GITHUB_OUTPUT"
           echo "zig=$(sed -n 's/.*"zig": *"\([^"]*\)".*/\1/p' native/ghostty.json)" >>"$GITHUB_OUTPUT"
-          echo "emacs=$(echo "$EMACS_SHA256 $EMACS_CONFIGURE" | sha256sum | cut -c1-16)" >>"$GITHUB_OUTPUT"
+          echo "emacs=$(echo "$EMACS_SHA256 $EMACS_CONFIGURE ${{ matrix.march }}" | sha256sum | cut -c1-16)" >>"$GITHUB_OUTPUT"
           {
             echo "USE_CACHE=$USE_CACHE"
             echo "Runner image $ImageOS $ImageVersion"
@@ -421,7 +424,8 @@ jobs:
           tar -xJf "$source.tar.xz" -C "$source" --strip-components=1
           cd "$source"
           # shellcheck disable=SC2086 # the options are words
-          ./configure -q --prefix="$RUNNER_TEMP/emacs" $EMACS_CONFIGURE >"$PORTAL_TEST_LOGS/emacs-build.log" 2>&1 ||
+          ./configure -q --prefix="$RUNNER_TEMP/emacs" $EMACS_CONFIGURE \
+              CFLAGS="-O2 -g -march=${{ matrix.march }}" >"$PORTAL_TEST_LOGS/emacs-build.log" 2>&1 ||
               { tail -50 "$PORTAL_TEST_LOGS/emacs-build.log"; exit 1; }
           make -j"$(nproc)" >>"$PORTAL_TEST_LOGS/emacs-build.log" 2>&1 ||
               { tail -50 "$PORTAL_TEST_LOGS/emacs-build.log"; exit 1; }
@@ -480,7 +484,7 @@ jobs:
         id: build
         run: |
           ./build.sh -DPORTAL_GHOSTTY_TARGET=${{ matrix.ghostty-target }} -DPORTAL_GHOSTTY_CPU=baseline \
-              2>&1 | tee "$PORTAL_TEST_LOGS/build.log"
+              "-DCMAKE_C_FLAGS=-march=${{ matrix.march }}" 2>&1 | tee "$PORTAL_TEST_LOGS/build.log"
           # The module must build against the header of the Emacs that loads it.
           header=$(sed -n 's/^EMACS_INCLUDE:PATH=//p' build/CMakeCache.txt)
           echo "emacs-module.h from $header" | tee -a "$PORTAL_TEST_LOGS/environment.log"
@@ -552,6 +556,7 @@ jobs:
               sha256sum "$unpacked/$binary"
               readelf --file-header "$unpacked/$binary" | grep -E 'Class|Machine|Type'
               readelf --dynamic "$unpacked/$binary" | grep -E 'NEEDED|SONAME|RPATH|RUNPATH'
+              readelf --notes "$unpacked/$binary" | grep -E 'x86 ISA|feature' || :
               readelf --version-info "$unpacked/$binary" | sed -n '/Version needs/,$p'
               ldd "$unpacked/$binary"
             } >>"$PORTAL_TEST_LOGS/abi.log" 2>&1
