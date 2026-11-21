@@ -147,6 +147,16 @@ if(BUILD_TESTING)
             -l "${CMAKE_SOURCE_DIR}/test/portal-build-tests.el"
             ${ert_batch})
     set_tests_properties(build PROPERTIES TIMEOUT 60)
+    # Installing a runtime from releases served over HTTPS on 127.0.0.1,
+    # each a fixture whose module is the test module; and, among the
+    # expensive tests, this build itself.
+    add_test(NAME runtime
+        COMMAND "${CMAKE_COMMAND}" -E env "PORTAL_TEST_BUILD=${CMAKE_BINARY_DIR}"
+            "PORTAL_TEST_MODULE=$<TARGET_FILE:portal-test-module>"
+            ${test_emacs} -L "${CMAKE_SOURCE_DIR}" -L "${CMAKE_SOURCE_DIR}/test"
+            -l "${CMAKE_SOURCE_DIR}/test/portal-runtime-tests.el"
+            ${ert_batch})
+    set_tests_properties(runtime PROPERTIES TIMEOUT 180)
     # The runner of graphical checks in a macOS VM is written for macOS on
     # both ends: lockf, chflags, APFS clones.
     if(APPLE)

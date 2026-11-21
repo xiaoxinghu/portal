@@ -749,6 +749,19 @@ archives. Neither builds native code nor downloads anything.
 [release script](releasing.md#making-a-release), a bare repository standing in
 for GitHub and a script for `gh`.
 
+The `runtime` CTest suite installs downloaded runtimes, as
+[the installation guide](install.md#downloaded-runtimes) describes, from
+fixture releases. Each is packed by `scripts/runtime-archive.py` from the C
+core's test module and a stand-in host, and served over HTTPS on 127.0.0.1 by
+`test/runtime-assets.py` with a certificate authority made for the run. The
+script also serves a self-signed certificate, one for another name and one
+that only Emacs's Network Security Manager objects to, misbehaving
+responses, and archives changed to escape the runtime. Nothing reaches the
+network. It needs Python 3 and openssl, and skips the installs on a system
+with no runtime to download. Its `:expensive` test installs the build
+CTest runs in, packed as Checks packs it, and compares the result with the
+script's own unpacking.
+
 For first use in graphical Emacs (the offered build, then a terminal and a web
 view in a fresh Emacs), run:
 
