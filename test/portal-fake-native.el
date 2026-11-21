@@ -361,7 +361,10 @@ module does."
     (portal-fake-native-send (format "launcher-blur %d\n" portal-fake-native--launcher-session))))
 
 (defun portal--terminal-bindings (_json) t)
-(defun portal--terminal-theme (_theme) t)
+(defun portal--terminal-theme (theme &optional dark)
+  "Show every terminal in THEME, or in THEME and DARK: the call is logged."
+  (portal-fake-native--call 'portal--terminal-theme theme dark)
+  t)
 (defun portal--terminal-opacity (opacity)
   "Show every terminal at OPACITY: the call is logged."
   (portal-fake-native--call 'portal--terminal-opacity opacity)

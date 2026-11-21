@@ -665,15 +665,19 @@ LISP_FUNCTION(Fchannel)
 
 LISP_FUNCTION(Fterminal_theme)
 {
-    portal_text name = {0}, error = {0};
+    portal_text light = {0}, dark = {0}, error = {0};
     emacs_value result = NULL;
     bool named = env->is_not_nil(env, args[0]);
-    if (!named || read_text(env, args[0], &name)) {
-        portal_string borrowed = borrow(name);
-        result =
-            done(env, portal_terminals_theme(named ? &borrowed : NULL, &error), &error);
+    bool paired = nargs > 1 && env->is_not_nil(env, args[1]);
+    if ((!named || read_text(env, args[0], &light)) && (!paired || read_text(env, args[1], &dark))) {
+        portal_string borrowed_light = borrow(light), borrowed_dark = borrow(dark);
+        result = done(env,
+                      portal_terminals_theme(named ? &borrowed_light : NULL,
+                                             paired ? &borrowed_dark : NULL, &error),
+                      &error);
     }
-    free(name.data);
+    free(light.data);
+    free(dark.data);
     return result;
 }
 
@@ -971,8 +975,9 @@ static const struct export {
      "Show every web view in APPEARANCE, \"light\" or \"dark\"; nil follows the system's."},
     {"portal--web-opacity", 1, 1, Fweb_opacity, NULL,
      "Show the pages' background at OPACITY, from 0 to 1, in every web view opened with one."},
-    {"portal--terminal-theme", 1, 1, Fterminal_theme, NULL,
-     "Apply named THEME to all terminals; nil restores system appearance defaults."},
+    {"portal--terminal-theme", 1, 2, Fterminal_theme, NULL,
+     "Apply THEME to all terminals, or THEME in light appearance and DARK in dark; "
+     "nil restores system appearance defaults."},
     {"portal--terminal-opacity", 1, 1, Fterminal_opacity, NULL,
      "Show every terminal's background at OPACITY, a number from 0 to 1."},
     {"portal--terminal-text-size", 2, 2, Fterminal_text_size, NULL,

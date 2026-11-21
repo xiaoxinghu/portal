@@ -19,8 +19,9 @@
    Configuration.  As on macOS, no file of an installed Ghostty is read.
    Each terminal has a configuration of its own, made from its theme, its
    opacity and its text size (config_text), applied when it is made and
-   again at each change.  Without a theme, it follows the desktop's light or
-   dark preference, which the XDG desktop portal says (scheme_follow).  Ghostty's own key
+   again at each change.  Without a theme, or with a light and a dark one,
+   it follows the desktop's light or dark preference, which the XDG desktop
+   portal says (scheme_follow).  Ghostty's own key
    bindings are cleared, but Copy and Paste: on Linux they are Control and
    Alt chords, which would take keys from the shell, and Portal sizes the
    text itself.  Copy and Paste are Control-Shift-C and Control-Shift-V, as
@@ -67,9 +68,10 @@ struct terminal {
     struct portal_stage *stage;
     ghostty_surface_t surface; /* NULL once freed. */
     struct fed *fed;           /* A fed terminal's, or NULL. */
-    /* Its configuration: a theme Ghostty lists, or NULL for the default;
-       the background's opacity; the text's size. */
-    char *theme;
+    /* Its configuration: a theme Ghostty lists for the light desktop and
+       one for the dark, the same for a fixed theme, or both NULL for the
+       default; the background's opacity; the text's size. */
+    char *theme, *dark_theme;
     double opacity, points;
     /* What it describes. */
     char *title, *pwd, *program, *progress;
@@ -116,14 +118,17 @@ static void format_number(char *text, size_t size, double number)
     snprintf(text, size, "%.3f", number);
 }
 
-/* The configuration of a terminal with THEME, OPACITY and POINTS, as the
-   text of a file, allocated with g_malloc.  Without a theme, Alabaster or
-   Afterglow, as the desktop is light or dark: Portal chooses, and not
-   Ghostty with a theme of the form light:...,dark:..., since Ghostty then
-   reads such a configuration anew from its lines for the dark, and the
-   command and directory a surface was made with are not among them. */
-static char *config_text(const char *theme, double opacity, double points)
+/* The configuration of a terminal with the themes LIGHT and DARK, OPACITY
+   and POINTS, as the text of a file, allocated with g_malloc.  LIGHT or
+   DARK as the desktop is light or dark, and without them Alabaster or
+   Afterglow: Portal chooses, and not Ghostty with a theme of the form
+   light:...,dark:..., since Ghostty then reads such a configuration anew
+   from its lines for the dark, and the command and directory a surface was
+   made with are not among them. */
+static char *config_text(const char *light, const char *dark, double opacity, double points)
 {
+    bool dim = app.scheme == GHOSTTY_COLOR_SCHEME_DARK;
+    const char *theme = light ? (dim && dark ? dark : light) : dim ? "Afterglow" : "Alabaster";
     char alpha[32], size[32];
     format_number(alpha, sizeof alpha, opacity);
     format_number(size, sizeof size, points);
@@ -141,17 +146,16 @@ static char *config_text(const char *theme, double opacity, double points)
         "keybind = ctrl+shift+v=paste_from_clipboard\n"
         "keybind = ctrl+insert=copy_to_clipboard\n"
         "keybind = shift+insert=paste_from_clipboard\n",
-        theme ? theme : app.scheme == GHOSTTY_COLOR_SCHEME_DARK ? "Afterglow" : "Alabaster", alpha,
-        size, PADDING, PADDING);
+        theme, alpha, size, PADDING, PADDING);
 }
 
-/* Ghostty's configuration for THEME, OPACITY and POINTS, or NULL with
-   *ERROR set.  Ghostty reads configuration only from files: this one is in
-   memory, read through its descriptor's name. */
-static ghostty_config_t config_make(const char *theme, double opacity, double points,
-                                    portal_text *error)
+/* Ghostty's configuration for the themes LIGHT and DARK, OPACITY and
+   POINTS, or NULL with *ERROR set.  Ghostty reads configuration only from
+   files: this one is in memory, read through its descriptor's name. */
+static ghostty_config_t config_make(const char *light, const char *dark, double opacity,
+                                    double points, portal_text *error)
 {
-    char *text = config_text(theme, opacity, points);
+    char *text = config_text(light, dark, opacity, points);
     size_t length = strlen(text);
     int file = memfd_create("portal-terminal-config", MFD_CLOEXEC);
     bool written = file >= 0 && write(file, text, length) == (ssize_t) length;
@@ -191,8 +195,8 @@ static double own_opacity(const struct terminal *terminal)
    and for a fed terminal, its view's backdrop in the theme's background. */
 static ghostty_config_t terminal_config(struct terminal *terminal, portal_text *error)
 {
-    ghostty_config_t config = config_make(terminal->theme, own_opacity(terminal),
-                                          terminal->points, error);
+    ghostty_config_t config = config_make(terminal->theme, terminal->dark_theme,
+                                          own_opacity(terminal), terminal->points, error);
     if (config && terminal->fed) {
         static const char key[] = "background";
         ghostty_config_color_s background = {0};
@@ -233,8 +237,15 @@ static ghostty_color_scheme_e scheme_of(GVariant *value)
     return dark ? GHOSTTY_COLOR_SCHEME_DARK : GHOSTTY_COLOR_SCHEME_LIGHT;
 }
 
-/* The desktop is light or dark now: each terminal of the default theme
-   takes the one for it. */
+/* Whether TERMINAL's theme changes with the desktop's preference: the
+   default's does, and a pair's. */
+static bool follows(const struct terminal *terminal)
+{
+    return !terminal->theme || g_strcmp0(terminal->theme, terminal->dark_theme);
+}
+
+/* The desktop is light or dark now: each terminal of the default theme or
+   of a pair takes the one for it. */
 static void scheme_apply(ghostty_color_scheme_e scheme)
 {
     if (scheme == app.scheme)
@@ -242,7 +253,7 @@ static void scheme_apply(ghostty_color_scheme_e scheme)
     app.scheme = scheme;
     for (struct terminal *terminal = app.terminals; terminal; terminal = terminal->next) {
         portal_text error = {0};
-        if (!terminal->theme && !reconfigure(terminal, &error))
+        if (follows(terminal) && !reconfigure(terminal, &error))
             free(error.data);
     }
 }
@@ -1129,6 +1140,7 @@ static void terminal_destroy(void *content)
     portal_linux_stage_free(terminal->stage);
     fed_free(terminal->fed);
     g_free(terminal->theme);
+    g_free(terminal->dark_theme);
     g_free(terminal->title);
     g_free(terminal->pwd);
     g_free(terminal->program);
@@ -1471,6 +1483,7 @@ static void terminal_describe(void *content, struct json *description)
     }
     describe_text(description, "progress", terminal->progress);
     describe_text(description, "theme", terminal->theme);
+    describe_text(description, "dark-theme", terminal->dark_theme);
     /* The opacities the background is drawn at: Ghostty's, and a fed
        terminal's backdrop's. */
     length = snprintf(facts, sizeof facts, "\"ghostty-opacity\":%.3f,", own_opacity(terminal));
@@ -1576,7 +1589,11 @@ bool portal_linux_terminal_create(struct portal_view *view, const portal_option 
     /* A fed terminal may leave part of its pane bare: the theme's
        background shows there, under it. */
     view->backdrop = feeding;
+    /* A dark theme comes only with a light one (portal.h). */
     terminal->theme = string_option(options, count, "theme");
+    terminal->dark_theme = string_option(options, count, "dark-theme");
+    if (terminal->theme && !terminal->dark_theme)
+        terminal->dark_theme = g_strdup(terminal->theme);
     terminal->points = portal_terminal_points(points && points->is_number ? points->number
                                                                           : PORTAL_TERMINAL_POINTS);
     terminal->opacity = opacity && opacity->is_number ? opacity->number : 1;
@@ -1643,6 +1660,7 @@ bool portal_linux_terminal_create(struct portal_view *view, const portal_option 
             wl_buffer_destroy(view->under_spent);
         view->under_buffer = view->under_spent = NULL;
         g_free(terminal->theme);
+        g_free(terminal->dark_theme);
         free(terminal);
         return false;
     }
@@ -1711,19 +1729,24 @@ bool portal_terminal_list_themes(portal_text **names, size_t *count, portal_text
 #define RECONFIGURE(terminal, change, error)                                                     \
     do {                                                                                         \
         char *was_theme = g_strdup((terminal)->theme);                                           \
+        char *was_dark_theme = g_strdup((terminal)->dark_theme);                                 \
         double was_opacity = (terminal)->opacity, was_points = (terminal)->points;               \
         change;                                                                                  \
         if (!reconfigure((terminal), (error))) {                                                 \
             g_free((terminal)->theme);                                                           \
+            g_free((terminal)->dark_theme);                                                      \
             (terminal)->theme = was_theme;                                                       \
+            (terminal)->dark_theme = was_dark_theme;                                             \
             (terminal)->opacity = was_opacity;                                                   \
             (terminal)->points = was_points;                                                     \
             return false;                                                                        \
         }                                                                                        \
         g_free(was_theme);                                                                       \
+        g_free(was_dark_theme);                                                                  \
     } while (0)
 
-bool portal_terminal_apply_theme(portal_view *view, const portal_string *name, portal_text *error)
+bool portal_terminal_apply_theme(portal_view *view, const portal_string *light,
+                                 const portal_string *dark, portal_text *error)
 {
     struct terminal *terminal = terminal_of(view, error);
     if (!terminal)
@@ -1731,7 +1754,9 @@ bool portal_terminal_apply_theme(portal_view *view, const portal_string *name, p
     RECONFIGURE(terminal,
                 {
                     g_free(terminal->theme);
-                    terminal->theme = name ? g_strndup(name->data, name->length) : NULL;
+                    g_free(terminal->dark_theme);
+                    terminal->theme = light ? g_strndup(light->data, light->length) : NULL;
+                    terminal->dark_theme = dark ? g_strndup(dark->data, dark->length) : NULL;
                 },
                 error);
     return true;

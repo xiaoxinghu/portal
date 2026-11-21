@@ -26,11 +26,14 @@ bool portal_terminals_fed(const portal_option *options, size_t count);
 /* The platform's theme names as a sorted JSON array of strings. */
 bool portal_terminals_themes(portal_text *json, portal_text *error);
 
-/* Apply the theme NAME, or the default for a null NAME, to every open
-   terminal, oldest first.  An unknown NAME changes none.  If a terminal
-   rejects the theme, the error is its own, the terminals before it keep the
-   new theme, and it and those after it keep their old one. */
-bool portal_terminals_theme(const portal_string *name, portal_text *error);
+/* Apply the theme LIGHT, or LIGHT in the light appearance and DARK in the
+   dark one, or the default for a null LIGHT, to every open terminal, oldest
+   first.  A DARK needs a LIGHT.  An unknown name changes none, and the
+   error names it.  If a terminal rejects the theme, the error is its own,
+   the terminals before it keep the new theme, and it and those after it
+   keep their old one. */
+bool portal_terminals_theme(const portal_string *light, const portal_string *dark,
+                            portal_text *error);
 
 /* Whether OPACITY is a terminal's opacity: a number from 0 to 1, not NaN;
    if not, set *ERROR. */

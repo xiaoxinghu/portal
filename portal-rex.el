@@ -976,9 +976,10 @@ window change hook."
                   (portal-terminal--text-size buffer (window-frame window)))
             (portal-view-placard "terminal" "This block's terminal has closed; the block runs on.")
             (setq target (portal-view-open 'terminal
-                                           (list :fed t :theme portal-terminal-theme
-                                                 :opacity portal-terminal-opacity
-                                                 :points portal-terminal--points)))
+                                           (append (list :fed t)
+                                                   (portal-terminal--theme-options)
+                                                   (list :opacity portal-terminal-opacity
+                                                         :points portal-terminal--points))))
             (portal--rex-show (portal-rex-connection-id connection) target
                               portal-rex-session-id portal-rex-block-id)
             (setq portal-rex--show-failure nil)

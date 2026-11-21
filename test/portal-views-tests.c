@@ -118,12 +118,12 @@ static void test_operations_check_the_kind(void)
 
     /* Themes reach every terminal, and only terminals. */
     portal_string beta = text("Beta"), gamma = text("Gamma");
-    CHECK(portal_terminals_theme(&beta, &error));
+    CHECK(portal_terminals_theme(&beta, NULL, &error));
     CHECK(shows(terminal, "\"theme\":\"Beta\"", NULL));
     char *state = inspect(web);
     CHECK(state && !strstr(state, "\"theme\":\"Beta\","));
     free(state);
-    CHECK(!portal_terminals_theme(&gamma, &error));
+    CHECK(!portal_terminals_theme(&gamma, NULL, &error));
     CHECK(says(&error, "Unknown terminal theme: Gamma"));
     CHECK(shows(terminal, "\"theme\":\"Beta\"", NULL));
     close_view(web);
@@ -141,7 +141,7 @@ static void test_the_registry_survives_closes_in_any_order(void)
     close_view(third);
     char *fourth = open_view("terminal", &error, "directory", "/", NULL);
     portal_string alpha = text("Alpha");
-    CHECK(portal_terminals_theme(&alpha, &error));
+    CHECK(portal_terminals_theme(&alpha, NULL, &error));
     CHECK(shows(first, "\"theme\":\"Alpha\"", NULL));
     CHECK(shows(fourth, "\"theme\":\"Alpha\"", NULL));
     close_view(first);

@@ -283,6 +283,9 @@ bool portal_web_print(portal_view *web, const portal_string *file, portal_text *
    program name or path and literal arguments to run through the user's
    interactive login shell, a string or false, mutually exclusive with
    :command; :theme, a name the platform lists, or false for the default;
+   :dark-theme, a name the platform lists, shown in place of :theme while
+   the terminal's appearance is dark, or false for :theme's in both, given
+   only with a :theme;
    :points, the size of its text, a number, which the platform passes
    through portal_terminal_points, or false for PORTAL_TERMINAL_POINTS;
    :opacity, that of its background, a number from 0 to 1, or false for 1,
@@ -340,10 +343,14 @@ bool portal_terminal_list_themes(portal_text **names, size_t *count, portal_text
    PORTAL_TERMINAL_ENGINE is defined, as the Linux module's build does.  The
    macOS module's Ghostty is the libghostty-spm release its pin names. */
 bool portal_terminal_engine(portal_text *json, portal_text *error);
-/* Apply the theme NAME, which the platform listed, or the default theme for a
-   null NAME, to TERMINAL.  The default may follow the system's appearance. */
-bool portal_terminal_apply_theme(portal_view *terminal, const portal_string *name,
-                                 portal_text *error);
+/* Apply to TERMINAL the theme LIGHT while its appearance is light and DARK
+   while it is dark, both names the platform listed, and the same name for a
+   theme fixed in both; or, with both null, the default theme, which may
+   follow the appearance too.  A terminal's appearance is the system's, or
+   what the platform's window for it says, and the terminal follows its
+   changes by itself. */
+bool portal_terminal_apply_theme(portal_view *terminal, const portal_string *light,
+                                 const portal_string *dark, portal_text *error);
 /* Show TERMINAL's background at OPACITY, from 0 to 1, which the core has
    checked, from now on, whatever theme or text size it is given later: the
    theme's background at that opacity, so that what is behind the view shows

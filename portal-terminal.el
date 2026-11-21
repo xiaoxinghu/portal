@@ -13,7 +13,7 @@
 (require 'portal-input)
 (require 'portal-project)
 
-(declare-function portal--terminal-theme "portal-terminal" (theme))
+(declare-function portal--terminal-theme "portal-terminal" (theme &optional dark))
 (declare-function portal--terminal-opacity "portal-terminal" (opacity))
 (declare-function portal--terminal-text-size "portal-terminal" (target points))
 (declare-function portal--terminal-themes "portal-terminal" ())
@@ -58,23 +58,47 @@ the plist `portal--inspect' returned.")
 (declare-function portal-terminal-quick--window "portal-terminal-quick" ())
 (declare-function portal-terminal-quick-dismiss "portal-terminal-quick" ())
 
+(defun portal-terminal--theme-names (theme)
+  "Return THEME, a `portal-terminal-theme' value, as a list (LIGHT DARK).
+LIGHT is nil for the default, and DARK nil for a single name."
+  (cond ((null theme) (list nil nil))
+        ((stringp theme) (list theme nil))
+        ((and (consp theme) (stringp (car theme)) (stringp (cdr theme)))
+         (list (car theme) (cdr theme)))
+        (t (error "Terminal theme must be a theme name, a pair of them (LIGHT . DARK), or nil"))))
+
+(defun portal-terminal--theme-options ()
+  "Return the options that give a new terminal `portal-terminal-theme'."
+  (pcase-let ((`(,light ,dark) (portal-terminal--theme-names portal-terminal-theme)))
+    (list :theme light :dark-theme dark)))
+
 (defun portal-terminal--theme-changed (_symbol value operation _where)
   "Validate and apply theme VALUE to running terminals on OPERATION."
   (when (eq operation 'set)
-    (unless (or (null value) (stringp value))
-      (error "Terminal theme must be a theme name or nil"))
-    (when (fboundp 'portal--terminal-theme)
-      (portal--terminal-theme value))))
+    (let ((names (portal-terminal--theme-names value)))
+      (when (fboundp 'portal--terminal-theme)
+        (apply #'portal--terminal-theme names)))))
 
 (defcustom portal-terminal-theme nil
   "Color theme for all Portal terminals.
 Use an exact, case-sensitive name from `portal-terminal-themes', such as
-\"Dracula\".  Nil follows native system appearance, using Alabaster in light
-mode and Afterglow in dark mode.  Named themes stay fixed in both modes.
+\"Dracula\", or a pair of them, light first, such as
+\(\"Catppuccin Latte\" . \"Catppuccin Mocha\").  A pair shows its first
+theme while a terminal's appearance is light and its second while it is
+dark, and switches as the appearance does.  Nil does the same with
+Alabaster and Afterglow.  A single name stays fixed in both.
+
+A terminal's appearance is the system's: on macOS that of the Emacs frame
+showing it, which is the system's unless the frame sets `ns-appearance';
+on Linux the desktop's light or dark preference.
+
 Changes with `setq' or Customize apply to running and future terminals
 without restarting their shells.  May be set before loading Portal;
-the name is validated when the native module is available."
-  :type '(choice (const :tag "System appearance" nil) string)
+the names are validated when the native module is available."
+  :type '(choice (const :tag "System appearance" nil)
+                 (string :tag "One theme")
+                 (cons :tag "A light and a dark theme"
+                       (string :tag "Light") (string :tag "Dark")))
   :group 'portal-terminal)
 (add-variable-watcher 'portal-terminal-theme #'portal-terminal--theme-changed)
 
@@ -423,13 +447,14 @@ QUICK-ROOT, or to the project of `default-directory', where it starts."
             ;; A change made while the view opened sent no record, having no
             ;; target yet, so read the facts once; later changes send records.
             (portal-terminal--changed
-             (portal-view-open 'terminal (list :directory directory
-                                               :command command
-                                               :argv argv
-                                               :theme portal-terminal-theme
-                                               :opacity portal-terminal-opacity
-                                               :points portal-terminal--points
-                                               :quick (and quick-root t))))
+             (portal-view-open 'terminal
+                               (append (list :directory directory
+                                             :command command
+                                             :argv argv)
+                                       (portal-terminal--theme-options)
+                                       (list :opacity portal-terminal-opacity
+                                             :points portal-terminal--points
+                                             :quick (and quick-root t)))))
             (add-hook 'window-state-change-functions #'portal-terminal--resize-shown 90)
             (portal-terminal-focus))
           (setq ready t))

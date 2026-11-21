@@ -158,6 +158,98 @@
                                 '("f7f7f7" "212121")))))))
       (setq portal-terminal-theme original))))
 
+;; A pair of themes follows the terminal's appearance, which is that of the
+;; Emacs frame showing it: the frame's `ns-appearance' sets it here, as the
+;; system's appearance would.  Alabaster's background is f7f7f7, Dracula's
+;; 282a36.
+(defun portal-terminal-test--background-becomes (target hex)
+  "Wait until TARGET's shell sees HEX as its terminal's background."
+  (let ((deadline (+ (float-time) 10)) seen)
+    (while (and (not (equal (setq seen (plist-get (portal-terminal-test--colors target) :background))
+                            hex))
+                (< (float-time) deadline))
+      (sit-for 0.1))
+    (should (equal seen hex))))
+
+(defmacro portal-terminal-test--appearance (appearance &rest body)
+  "Run BODY with the selected frame in APPEARANCE, `light' or `dark'.
+Restore the frame's appearance and `portal-terminal-theme' after."
+  (declare (indent 1))
+  `(let ((frame (selected-frame))
+         (was (frame-parameter nil 'ns-appearance))
+         (theme portal-terminal-theme))
+     (unwind-protect
+         (progn (set-frame-parameter frame 'ns-appearance ,appearance)
+                (redisplay t)
+                ,@body)
+       (setq portal-terminal-theme theme)
+       (set-frame-parameter frame 'ns-appearance was))))
+
+(ert-deftest portal-terminal-theme-pair-follows-the-appearance ()
+  :tags '(:gui)
+  (skip-unless (eq window-system 'ns))
+  (portal-terminal-test--appearance 'light
+    (portal-terminal-test--session
+      (let* ((first (portal-view-target))
+             (first-buffer (current-buffer))
+             (pid (plist-get (portal-terminal-test--colors first) :pid)))
+        ;; A running terminal takes the pair, and shows its light theme.
+        (setq portal-terminal-theme '("Alabaster" . "Dracula"))
+        (portal-terminal-test--background-becomes first "f7f7f7")
+        ;; It switches as the appearance does, without restarting its shell.
+        (set-frame-parameter nil 'ns-appearance 'dark)
+        (portal-terminal-test--background-becomes first "282a36")
+        ;; A new terminal opens in the theme for the appearance.
+        (portal-terminal-new)
+        (portal-terminal-test--background-becomes (portal-view-target) "282a36")
+        (switch-to-buffer first-buffer)
+        (redisplay t)
+        (should (equal (portal-view-target) first))
+        (set-frame-parameter nil 'ns-appearance 'light)
+        (portal-terminal-test--background-becomes first "f7f7f7")
+        (should (equal (plist-get (portal-terminal-test--colors first) :pid) pid))
+        ;; A single name stays fixed in both.
+        (setq portal-terminal-theme "Dracula")
+        (portal-terminal-test--background-becomes first "282a36")
+        (set-frame-parameter nil 'ns-appearance 'dark)
+        (redisplay t)
+        (sit-for 0.3)
+        (portal-terminal-test--background-becomes first "282a36")
+        ;; An unknown name in a pair is refused, naming it, and changes nothing.
+        (should (equal (cadr (should-error
+                              (setq portal-terminal-theme '("Alabaster" . "No such Portal theme"))))
+                       "Unknown terminal theme: No such Portal theme"))
+        (should (equal portal-terminal-theme "Dracula"))
+        (portal-terminal-test--background-becomes first "282a36")))))
+
+(ert-deftest portal-terminal-theme-pair-colors-a-fed-pane ()
+  :tags '(:gui)
+  (skip-unless (eq window-system 'ns))
+  ;; A fed terminal, a Rex block's, fills its pane beside its grid with the
+  ;; theme's background: that follows the appearance too.  It needs no
+  ;; program to be fed for that.
+  (portal-terminal-test--appearance 'light
+    (let ((buffer (generate-new-buffer "*portal-fed-theme*")))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (switch-to-buffer buffer)
+            (redisplay t)
+            (setq portal-terminal-theme '("Alabaster" . "Dracula"))
+            (let ((target (portal-view-open 'terminal
+                                            (append '(:fed t) (portal-terminal--theme-options)))))
+              (redisplay t)
+              (portal-terminal-test--wait
+               (lambda () (equal (plist-get (portal--inspect target) :pane-background) "f7f7f7")))
+              (set-frame-parameter nil 'ns-appearance 'dark)
+              (portal-terminal-test--wait
+               (lambda () (equal (plist-get (portal--inspect target) :pane-background) "282a36")))
+              ;; A running fed terminal takes a new pair.
+              (setq portal-terminal-theme '("Dracula" . "Alabaster"))
+              (portal-terminal-test--wait
+               (lambda () (equal (plist-get (portal--inspect target) :pane-background) "f7f7f7")))))
+        (kill-buffer buffer)))))
+
 (defun portal-terminal-test--opacity-p (target opacity)
   "Whether Ghostty draws TARGET's own background at OPACITY."
   (let ((shown (plist-get (portal-terminal-test--state target) :ghostty-opacity)))
