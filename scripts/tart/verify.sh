@@ -3,7 +3,7 @@
 # Run as the desktop user, over SSH or inside the VM. No GUI Emacs is started.
 set -euo pipefail
 root=${1:-$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)}
-# shellcheck source=tools/tart/recipe.conf
+# shellcheck source=scripts/tart/recipe.conf
 . "$root/recipe.conf"
 [[ $(sysctl -n kern.hv_vmm_present) == 1 ]]
 [[ $(stat -f %Su /dev/console) == "$(id -un)" ]]

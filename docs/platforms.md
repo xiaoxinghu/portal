@@ -51,7 +51,8 @@ runs your login shell in a pane of a frame on Wayland, drawn by
 [Portal's own build of Ghostty](../CONTRIBUTING.md#ghostty-on-linux).
 Emacs [connects to a Rex server](rex.md#on-linux) there, and a window that
 shows a block's buffer shows the block's screen. Opening a page fails with
-"Portal has no web views on Linux yet".
+"Portal has no web views on Linux yet", so the build makes no app host and
+needs no Bun.
 Other frames are refused before any native code loads, with the reason: an
 Emacs built without pgtk, a text terminal, or a pgtk frame that GDK put on
 X11. [Building on Linux](../CONTRIBUTING.md#building-on-linux) says what a
@@ -91,7 +92,10 @@ Building Portal on macOS needs:
 - Xcode with Swift 6.2 or newer and Clang. The Ghostty wrapper's
   `swift-tools-version` sets the Swift minimum;
 - CMake 3.29 or newer (`cmake_minimum_required`) and Ninja;
-- Bun with `Bun.markdown.html`, which CMake checks;
+- Bun, to compile the app host: Portal's pinned Bun, which the build
+  downloads, or one named with `BUN` or `portal-build-bun` that has
+  `Bun.markdown.html` and is the pinned version or newer. A `bun` on `PATH`
+  is not used. See [Bun](install.md#bun);
 - network access for the first build's locked downloads.
 
 Running Portal needs only the Emacs it was built for and the build outputs.

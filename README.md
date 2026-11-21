@@ -38,13 +38,16 @@ enabling it.
 You need graphical macOS Emacs 31.1 or newer with module support and its
 matching `emacs-module.h`, Apple's Swift 6.2 or newer and Clang (Xcode), CMake
 3.29 or newer, and Ninja. Install CMake and Ninja with `brew install cmake ninja`
-or your tool manager. Bun is optional: without a compatible one, the build
-downloads and verifies Portal's pinned Bun (1.3.14). The first build downloads
+or your tool manager. Bun is optional: the build compiles the app host with
+Portal's pinned Bun (1.3.14), which it downloads and verifies, unless `BUN` or
+`portal-build-bun` names another; it never takes a `bun` from `PATH`. The first build downloads
 the app host's locked dependencies, the pinned GhosttyKit binary (about 77 MB)
 and its Swift wrapper; a build with tests, as from a clone, also downloads Emacs
 packages for them. Bun and SwiftPM keep about 400 MB of these downloads in
 their caches, outside Portal: see [disk use](docs/install.md#disk-use-and-removal).
-No Zig installation is needed.
+No Zig installation is needed. On Linux, which has terminals and no web views
+yet, the build makes no app host and needs no Bun: see
+[building on Linux](CONTRIBUTING.md#building-on-linux).
 
 Graphical Emacs started from the Dock does not see your shell's `PATH`. Portal's
 build looks for CMake and Ninja on Emacs's `exec-path`, then where Homebrew and

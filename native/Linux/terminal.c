@@ -642,7 +642,7 @@ static bool app_start(const struct portal_wayland *wayland, portal_text *error)
     if (!portal_linux_ghostty_start(&app.resources, error))
         return false;
     scheme_follow();
-    ghostty_config_t config = config_make(NULL, 1, PORTAL_TERMINAL_POINTS, error);
+    ghostty_config_t config = config_make(NULL, NULL, 1, PORTAL_TERMINAL_POINTS, error);
     if (!config)
         return false;
     ghostty_runtime_config_s runtime = {

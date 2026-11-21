@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 cmake_minimum_required(VERSION 3.29)
 
-# CMake orchestrates the native module, Bun host and integration tests.
+# CMake orchestrates the native module, the Mac's Bun host and integration tests.
 project(portal LANGUAGES C)
 
 if(NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -17,49 +17,95 @@ include(CTest)
 # emacs-module.h for the rest of the build.
 add_subdirectory(native/Core)
 
+# The app host's sources: the Mac compiles them into the host, and the host's
+# tests read them.
+set(host_sources host/server.ts host/app.ts host/hello.html host/dialogs.html host/about.ts
+    host/about.html host/sign-in.ts
+    host/markdown.ts host/markdown.css
+    host/icons/portal-32.png host/icons/portal-64.png host/icons/portal-256.png
+    host/package.json host/bun.lock host/tsconfig.json host/build-editor.ts
+    host/editor-bootstrap.ts host/excalidraw.tsx host/excalidraw.html host/excalidraw.css host/slides.ts
+    host/audience.ts host/audience.html host/present.ts)
 # Record Bun's absolute path so the Bun validated here is the one the build and
-# tests run. Search again if the recorded executable was removed or moved.
-if(DEFINED CACHE{BUN} AND NOT EXISTS "${BUN}")
-    message(STATUS "Recorded Bun ${BUN} no longer exists; searching PATH again")
+# tests run. Choose again if the recorded executable was removed or moved.
+if(DEFINED CACHE{BUN} AND BUN AND NOT EXISTS "${BUN}")
+    message(STATUS "Recorded Bun ${BUN} no longer exists; choosing again")
     unset(BUN CACHE)
 endif()
-find_program(BUN NAMES bun REQUIRED)
-execute_process(COMMAND "${BUN}" -e
-    "if (typeof Bun.markdown?.html !== 'function') process.exit(1)"
-    RESULT_VARIABLE bun_markdown_status)
-if(NOT bun_markdown_status EQUAL 0)
-    message(FATAL_ERROR "Bun must support Bun.markdown.html (tested with Bun 1.3.14)")
+if(APPLE)
+    # The Bun that compiles the host is the one it ships: BUN, or Portal's
+    # pinned Bun, never a bun found on PATH. build.sh passes the one
+    # tools/resolve-bun.sh chose; plain cmake asks it here.
+    if(NOT DEFINED CACHE{BUN})
+        execute_process(COMMAND sh "${CMAKE_SOURCE_DIR}/tools/resolve-bun.sh"
+            OUTPUT_VARIABLE resolved_bun OUTPUT_STRIP_TRAILING_WHITESPACE
+            COMMAND_ERROR_IS_FATAL ANY)
+        set(BUN "${resolved_bun}" CACHE FILEPATH "The Bun that compiles Portal's app host")
+    endif()
+else()
+    # Linux has no web views yet, so it builds no host and needs no Bun. The
+    # host's tests run with BUN or a bun on PATH, and are skipped without one.
+    if(DEFINED ENV{BUN} AND NOT DEFINED CACHE{BUN})
+        set(BUN "$ENV{BUN}" CACHE FILEPATH "The Bun that runs the app host's tests")
+    endif()
+    find_program(BUN NAMES bun)
 endif()
-# The executable includes Bun and all UI assets; Bun is only a build dependency.
-# Publish atomically so a running host can survive a rebuild.
-add_custom_command(
-    OUTPUT "${CMAKE_BINARY_DIR}/portal-host"
-    COMMAND "${BUN}" install --cwd "${CMAKE_SOURCE_DIR}/host" --frozen-lockfile
-    COMMAND "${BUN}" run "${CMAKE_SOURCE_DIR}/host/build-editor.ts"
-    # Bun 1.4 leaves a copy of its runtime in the working directory: keep it
-    # in the build directory, which --prune clears, not in the sources.
-    COMMAND "${CMAKE_COMMAND}" -E chdir "${CMAKE_BINARY_DIR}"
-        "${BUN}" build "${CMAKE_SOURCE_DIR}/host/server.ts"
-        --compile --minify --sourcemap
-        --no-compile-autoload-dotenv --no-compile-autoload-bunfig
-        --metafile=${CMAKE_BINARY_DIR}/portal-host.meta.json
-        --outfile "${CMAKE_BINARY_DIR}/.portal-host"
-    COMMAND "${CMAKE_COMMAND}" -E rename
-        "${CMAKE_BINARY_DIR}/.portal-host" "${CMAKE_BINARY_DIR}/portal-host"
-    BYPRODUCTS "${CMAKE_BINARY_DIR}/portal-host.meta.json"
-        "${CMAKE_SOURCE_DIR}/host/.generated/editor-inputs.json"
-    DEPENDS host/server.ts host/app.ts host/hello.html host/dialogs.html host/about.ts host/about.html
-        host/sign-in.ts
-        host/markdown.ts host/markdown.css
-        host/icons/portal-32.png host/icons/portal-64.png host/icons/portal-256.png
-        host/package.json host/bun.lock host/tsconfig.json host/build-editor.ts
-        host/editor-bootstrap.ts host/excalidraw.tsx host/excalidraw.html host/excalidraw.css host/slides.ts
-        host/audience.ts host/audience.html host/present.ts
-        "${BUN}"
-    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-    COMMENT "Compiling the standalone Bun UI host"
-    VERBATIM)
-add_custom_target(portal-ui-host ALL DEPENDS "${CMAKE_BINARY_DIR}/portal-host")
+set(host_bun_missing "")
+if(NOT BUN)
+    set(host_bun_missing "no Bun: set BUN or put bun on PATH to run it")
+else()
+    execute_process(COMMAND "${BUN}" -e
+        "if (typeof Bun.markdown?.html !== 'function') process.exit(1)"
+        RESULT_VARIABLE bun_markdown_status)
+    if(NOT bun_markdown_status EQUAL 0)
+        if(APPLE)
+            message(FATAL_ERROR "Bun must support Bun.markdown.html (tested with Bun 1.3.14)")
+        endif()
+        set(host_bun_missing "${BUN} lacks Bun.markdown.html (tested with Bun 1.3.14)")
+    endif()
+endif()
+if(host_bun_missing)
+    message(STATUS "The app host's tests are skipped: ${host_bun_missing}")
+endif()
+if(APPLE)
+    # The executable includes Bun and all UI assets; Bun is only a build dependency.
+    # Publish atomically so a running host can survive a rebuild.
+    add_custom_command(
+        OUTPUT "${CMAKE_BINARY_DIR}/portal-host"
+        COMMAND "${BUN}" install --cwd "${CMAKE_SOURCE_DIR}/host" --frozen-lockfile
+        COMMAND "${BUN}" run "${CMAKE_SOURCE_DIR}/host/build-editor.ts"
+        # Bun 1.4 leaves a copy of its runtime in the working directory: keep it
+        # in the build directory, which --prune clears, not in the sources.
+        COMMAND "${CMAKE_COMMAND}" -E chdir "${CMAKE_BINARY_DIR}"
+            "${BUN}" build "${CMAKE_SOURCE_DIR}/host/server.ts"
+            --compile --minify --sourcemap
+            --no-compile-autoload-dotenv --no-compile-autoload-bunfig
+            --metafile=${CMAKE_BINARY_DIR}/portal-host.meta.json
+            --outfile "${CMAKE_BINARY_DIR}/.portal-host"
+        COMMAND "${CMAKE_COMMAND}" -E rename
+            "${CMAKE_BINARY_DIR}/.portal-host" "${CMAKE_BINARY_DIR}/portal-host"
+        BYPRODUCTS "${CMAKE_BINARY_DIR}/portal-host.meta.json"
+            "${CMAKE_SOURCE_DIR}/host/.generated/editor-inputs.json"
+        DEPENDS ${host_sources} "${BUN}"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        COMMENT "Compiling the standalone Bun UI host"
+        VERBATIM)
+    add_custom_target(portal-ui-host ALL DEPENDS "${CMAKE_BINARY_DIR}/portal-host")
+elseif(BUILD_TESTING AND NOT host_bun_missing)
+    # The host's tests read its packages and generated assets, which the Mac
+    # makes on the way to the host.
+    add_custom_command(
+        OUTPUT "${CMAKE_BINARY_DIR}/host-assets.stamp"
+        COMMAND "${BUN}" install --cwd "${CMAKE_SOURCE_DIR}/host" --frozen-lockfile
+        COMMAND "${BUN}" run "${CMAKE_SOURCE_DIR}/host/build-editor.ts"
+        COMMAND "${CMAKE_COMMAND}" -E touch "${CMAKE_BINARY_DIR}/host-assets.stamp"
+        BYPRODUCTS "${CMAKE_SOURCE_DIR}/host/.generated/editor-inputs.json"
+        DEPENDS ${host_sources} "${BUN}"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        COMMENT "Preparing the app host's packages and assets for its tests"
+        VERBATIM)
+    add_custom_target(portal-host-assets ALL DEPENDS "${CMAKE_BINARY_DIR}/host-assets.stamp")
+endif()
 
 if(BUILD_TESTING)
     # Batch Emacs for tests. -Q skips init files, but Emacs still saves state
@@ -109,27 +155,42 @@ if(BUILD_TESTING)
         add_test(NAME vm-retention COMMAND "${BUN}" test "${CMAKE_SOURCE_DIR}/test/vm-retention.test.ts")
         set_tests_properties(vm-retention PROPERTIES TIMEOUT 30)
     endif()
-    add_test(NAME gui-runner COMMAND "${BUN}" test "${CMAKE_SOURCE_DIR}/test/gui-ert.test.ts")
+    # Where no Bun runs them, the suites that need one report themselves
+    # skipped, saying why, rather than leaving the list.
+    function(portal_bun_test name)
+        if(host_bun_missing)
+            add_test(NAME ${name} COMMAND sh -c "echo \"$1\"; exit 77" sh
+                "${name} skipped: ${host_bun_missing}")
+            set_tests_properties(${name} PROPERTIES SKIP_RETURN_CODE 77)
+        else()
+            add_test(NAME ${name} ${ARGN})
+        endif()
+    endfunction()
+    portal_bun_test(gui-runner COMMAND "${BUN}" test "${CMAKE_SOURCE_DIR}/test/gui-ert.test.ts")
     set_tests_properties(gui-runner PROPERTIES TIMEOUT 30)
     add_test(NAME gui-verdict
         COMMAND ${test_emacs} -L "${CMAKE_SOURCE_DIR}/test"
             -l "${CMAKE_SOURCE_DIR}/test/portal-gui-ert-tests.el"
             ${ert_batch})
     set_tests_properties(gui-verdict PROPERTIES TIMEOUT 30)
-    # What the app host serves, tested in Bun beside its sources.
-    add_test(NAME app-host
+    # What the app host serves, tested in Bun beside its sources; on the Mac,
+    # the compiled host too.
+    portal_bun_test(app-host
         COMMAND "${CMAKE_COMMAND}" -E env "PORTAL_BUILD=${CMAKE_BINARY_DIR}"
             "${BUN}" test
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/host")
     set_tests_properties(app-host PROPERTIES TIMEOUT 30)
-    # How Emacs starts, handshakes with and restarts it.
-    add_test(NAME app-host-seam
-        COMMAND "${CMAKE_COMMAND}" -E env
-            "PORTAL_TEST_HOST=${CMAKE_BINARY_DIR}/portal-host"
-            ${test_emacs} -L "${CMAKE_SOURCE_DIR}"
-            -l "${CMAKE_SOURCE_DIR}/test/portal-server-tests.el"
-            ${ert_batch})
-    set_tests_properties(app-host-seam PROPERTIES TIMEOUT 30)
+    if(APPLE)
+        # How Emacs starts, handshakes with and restarts the compiled host,
+        # which Linux does not build.
+        add_test(NAME app-host-seam
+            COMMAND "${CMAKE_COMMAND}" -E env
+                "PORTAL_TEST_HOST=${CMAKE_BINARY_DIR}/portal-host"
+                ${test_emacs} -L "${CMAKE_SOURCE_DIR}"
+                -l "${CMAKE_SOURCE_DIR}/test/portal-server-tests.el"
+                ${ert_batch})
+        set_tests_properties(app-host-seam PROPERTIES TIMEOUT 30)
+    endif()
     add_test(NAME quick-terminal
         COMMAND ${test_emacs} -L "${CMAKE_SOURCE_DIR}"
             -l "${CMAKE_SOURCE_DIR}/test/portal-terminal-quick-tests.el"
@@ -521,7 +582,9 @@ add_custom_target(portal-build-start
         -f portal-build--start-batch "${CMAKE_BINARY_DIR}"
     VERBATIM)
 add_dependencies(portal portal-build-start)
-add_dependencies(portal-ui-host portal-build-start)
+if(TARGET portal-ui-host)
+    add_dependencies(portal-ui-host portal-build-start)
+endif()
 if(TARGET portal-module)
     add_dependencies(portal-module portal-build-start)
 endif()
@@ -533,4 +596,7 @@ add_custom_target(portal-build-record ALL
         -f portal-build--finish-batch "${CMAKE_BINARY_DIR}"
     COMMENT "Checking the Portal build"
     VERBATIM)
-add_dependencies(portal-build-record portal portal-ui-host portal-licenses)
+add_dependencies(portal-build-record portal portal-licenses)
+if(TARGET portal-ui-host)
+    add_dependencies(portal-build-record portal-ui-host)
+endif()

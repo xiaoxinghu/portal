@@ -108,19 +108,31 @@ class ResolveBunTests(unittest.TestCase):
                 self.assertIn(message, result.stderr)
         self.assertEqual(self.cache_entries(), [])
 
-    def test_compatible_bun_on_path(self):
-        installed = fake_bun(self.bin / "bun", version="1.4.2")
-        self.assert_chose(self.resolve(), installed, "found on PATH")
-        self.assertEqual(self.cache_entries(), [])
+    def test_bun_on_path_is_never_taken(self):
+        # The compiled host contains its Bun: the one shipped is the pinned one,
+        # even with a newer bun on PATH, or an older one.
+        for version, compatible in (("1.4.2", True), ("1.0.0", False)):
+            with self.subTest(version=version):
+                installed = fake_bun(self.bin / "bun", version=version, compatible=compatible)
+                result = self.resolve()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                chosen = Path(result.stdout.strip())
+                self.assertNotEqual(chosen, installed)
+                self.assertTrue(chosen.is_relative_to(self.tools / "bun" / PINNED))
+                self.assertNotIn(str(installed), result.stderr)
 
-    def test_incompatible_bun_on_path_falls_back_to_download(self):
-        fake_bun(self.bin / "bun", version="1.0.0", compatible=False)
-        result = self.resolve()
+    @unittest.skipUnless(sys.platform == "darwin", "the Mac's hardware is read with sysctl")
+    def test_platform_without_sbin_on_path(self):
+        # GUI Emacs inherits launchd's PATH, which has /usr/sbin; a shell's may not.
+        arm64 = subprocess.run(["/usr/sbin/sysctl", "-n", "hw.optional.arm64"],
+                               capture_output=True, text=True).stdout.strip() == "1"
+        result = self.resolve(PATH=f"{self.bin}:/usr/bin:/bin")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(Path(result.stdout.strip()).is_relative_to(self.tools / "bun" / PINNED))
-        self.assertIn("(downloaded)", result.stderr)
-        self.assertIn(f"ignoring {self.bin / 'bun'} (1.0.0)", result.stderr)
-        self.assertIn(f"downloading Bun {PINNED}", result.stderr)
+        platform = Path(result.stdout.strip()).parent.name
+        if arm64:
+            self.assertEqual(platform, "darwin-aarch64")
+        else:
+            self.assertIn(platform, ("darwin-x64", "darwin-x64-baseline"))
 
     def test_download_populates_the_cache_once(self):
         first = self.resolve()
@@ -179,6 +191,7 @@ class ResolveBunTests(unittest.TestCase):
 
 
 class BuildScriptTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "darwin", "only the Mac builds the app host")
     def test_bun_argument_is_the_explicit_choice(self):
         with tempfile.TemporaryDirectory(prefix="portal build ") as directory:
             checkout = Path(directory)
@@ -208,6 +221,31 @@ class BuildScriptTests(unittest.TestCase):
                                     env=env, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 1)
             self.assertIn("not an executable file", result.stderr)
+
+    @unittest.skipIf(sys.platform == "darwin", "the Mac builds the app host")
+    def test_linux_builds_without_bun(self):
+        with tempfile.TemporaryDirectory(prefix="portal build ") as directory:
+            checkout = Path(directory)
+            shutil.copy(ROOT / "build.sh", checkout / "build.sh")
+            shutil.copytree(ROOT / "tools", checkout / "tools")
+            bin_directory = checkout / "bin"
+            bin_directory.mkdir()
+            cmake = bin_directory / "cmake"
+            cmake.write_text('#!/bin/sh\necho "cmake $*" >> "$(dirname "$0")/calls"\n')
+            cmake.chmod(0o755)
+            # Neither Bun nor a way to download one: build.sh asks for none.
+            env = {
+                "HOME": directory,
+                "PATH": f"{bin_directory}:/usr/bin:/bin:/usr/sbin:/sbin",
+                "PORTAL_BUN_DOWNLOAD": "0",
+                "PORTAL_TOOLS_DIR": str(checkout / "no tools"),
+            }
+            result = subprocess.run(["/bin/sh", str(checkout / "build.sh")],
+                                    env=env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("resolve-bun", result.stderr)
+            self.assertNotIn("-DBUN", (bin_directory / "calls").read_text())
+            self.assertFalse((checkout / "no tools").exists())
 
 
 class BuildLockTests(unittest.TestCase):

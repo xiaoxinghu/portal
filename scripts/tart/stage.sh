@@ -1,12 +1,12 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Snapshot locally installed, licensed tools; no private keys or passwords.
-# Usage: bash tools/tart/stage.sh [--rex-only] NEW_OUTPUT_DIRECTORY
+# Usage: bash scripts/tart/stage.sh [--rex-only] NEW_OUTPUT_DIRECTORY
 # --rex-only stages the recipe and Rex Server alone, to move Rex's pin in a
 # prepared guest with install-rex.sh.
 set -euo pipefail
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-. "$root/tools/tart/recipe.conf"
+. "$root/scripts/tart/recipe.conf"
 rex_only=
 if [[ ${1:-} == --rex-only ]]; then rex_only=1; shift; fi
 [[ $# == 1 && ! -e $1 ]] || { echo 'Pass a new output directory.' >&2; exit 1; }
@@ -25,7 +25,7 @@ for candidate in "${rex_candidates[@]}"; do
     if [[ -d $candidate && $(rex_build_of "$candidate") == "$REX_BUILD" ]]; then rex_server=$candidate; break; fi
 done
 if [[ -z $rex_server ]]; then
-    printf 'Rex Server build %s, which tools/tart/recipe.conf pins, is not on this Mac.\n' "$REX_BUILD" >&2
+    printf 'Rex Server build %s, which scripts/tart/recipe.conf pins, is not on this Mac.\n' "$REX_BUILD" >&2
     current="$HOME/Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app"
     for candidate in "$current" "${rex_candidates[@]:1}"; do
         [[ -d $candidate ]] || continue
@@ -51,12 +51,12 @@ if [[ -z $rex_only ]]; then
     while IFS= read -r package; do
         [[ -d /opt/homebrew/Cellar/$package ]] || { echo "Missing pinned tool: $package" >&2; exit 1; }
         paths+=("Cellar/$package")
-    done < "$root/tools/tart/cellar.txt"
+    done < "$root/scripts/tart/cellar.txt"
 fi
 mkdir -p -- "$1"
 out=$(cd -- "$1" && pwd)
 files=(recipe.conf cellar.txt provision.sh install-rex.sh verify.sh bun.manifest rex.tar)
-cp "$root"/tools/tart/{recipe.conf,cellar.txt,provision.sh,install-rex.sh,verify.sh} "$out/"
+cp "$root"/scripts/tart/{recipe.conf,cellar.txt,provision.sh,install-rex.sh,verify.sh} "$out/"
 cp "$root/tools/bun.manifest" "$out/"
 # The archive holds the bundle as Rex Server.app, whichever copy it came from.
 tar --no-xattrs -cf "$out/rex.tar" -s ",^${rex_server##*/},Rex Server.app," \

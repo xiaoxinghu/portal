@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""tools/ghostty-version.py: its parsing, on fixtures taken from libghostty-spm
+"""scripts/ghostty-version.py: its parsing, on fixtures taken from libghostty-spm
 2.2.2026110702, Rex 0.1.0-preview.14 and the Linux Rex 0.0.1795116584-ga086db,
 and its report and bump against local stand-ins for the package, Ghostty and a
 Rex server, offline, for macOS and Linux on either."""
@@ -14,7 +14,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
-SCRIPT = ROOT / "tools" / "ghostty-version.py"
+SCRIPT = ROOT / "scripts" / "ghostty-version.py"
 FIXTURES = ROOT / "test" / "fixtures" / "ghostty-version"
 GIT_ENV = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
            "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@invalid",

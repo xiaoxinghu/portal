@@ -4,11 +4,12 @@
 #
 # Tried in order:
 #   1. BUN, an explicit choice: if it is unusable, fail instead of replacing it.
-#   2. bun on PATH, when it is compatible.
-#   3. Portal's pinned Bun (bun.manifest), cached in PORTAL_TOOLS_DIR.
-#   4. The pinned Bun downloaded from its official release, verified against
+#   2. Portal's pinned Bun (bun.manifest), cached in PORTAL_TOOLS_DIR.
+#   3. The pinned Bun downloaded from its official release, verified against
 #      the manifest's digest before it runs, then cached.  PORTAL_BUN_DOWNLOAD=0
 #      turns downloads off.
+# A bun on PATH is never taken: the host compiles Bun into itself, and the
+# Bun it ships is the one the release's manifest names.
 # A compatible Bun has Bun.markdown.html and is at least the pinned version.
 # Nothing global changes: no shell configuration, no installed Bun.  The
 # choice and any fallback are reported on standard error.
@@ -46,17 +47,14 @@ if [ -n "${BUN:-}" ]; then
     use "$BUN" "BUN"
 fi
 
-if found=$(command -v bun 2>/dev/null) && [ -f "$found" ]; then
-    if compatible "$found"; then use "$found" "found on PATH"; fi
-    say "ignoring $found ($(describe "$found")): Portal needs Bun.markdown.html and Bun $version or newer"
-fi
-
 case $(uname -s) in
 Darwin)
     # The hardware's architecture, even when this shell runs under Rosetta.
-    if [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then
+    # By its full name: a PATH without /usr/sbin would miss it, and choose
+    # an x64 Bun on Apple Silicon.
+    if [ "$(/usr/sbin/sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then
         platform=darwin-aarch64
-    elif [ "$(sysctl -n hw.optional.avx2_0 2>/dev/null)" = 1 ]; then
+    elif [ "$(/usr/sbin/sysctl -n hw.optional.avx2_0 2>/dev/null)" = 1 ]; then
         platform=darwin-x64
     else
         platform=darwin-x64-baseline

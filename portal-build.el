@@ -1,8 +1,8 @@
 ;;; portal-build.el --- Build and check Portal's native installation -*- lexical-binding: t; -*-
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
-;; Portal's native module and app host are built from this package's sources
-;; by build.sh, which `portal-build' runs in the background.  Before Portal
+;; Portal's native module, and on macOS its app host, are built from this
+;; package's sources by build.sh, which `portal-build' runs in the background.  Before Portal
 ;; loads its module, `portal-build-ensure' checks that the build is complete
 ;; and comes from the current sources, and offers to build it when it is not.
 ;; Loading this file, compiling it and generating autoloads need no native
@@ -10,8 +10,9 @@
 ;;
 ;; Each build starts by removing the record of the last one and noting the
 ;; identity of its sources: a hash of the files it reads.  It ends by loading
-;; the new module and starting the new host in a disposable batch Emacs, then
-;; records that identity, unless the sources changed meanwhile.  So a failed,
+;; the new module and starting the new host, where there is one, in a
+;; disposable batch Emacs, then records that identity, unless the sources
+;; changed meanwhile.  So a failed,
 ;; partial or overtaken build never looks ready.
 
 (require 'cl-lib)
@@ -52,10 +53,12 @@ reports it.  Batch Emacs never builds or asks."
 
 (defcustom portal-build-bun nil
   "Absolute file name of the Bun that builds Portal's app host, or nil.
-nil uses a compatible bun where the build finds its other tools, then
-Portal's pinned Bun, cached in `portal-build-tools-directory'.  A Bun
-named here that is missing or incompatible fails the build rather than
-being replaced."
+nil uses Portal's pinned Bun, the one tools/bun.manifest names, cached in
+`portal-build-tools-directory': the host contains the Bun that compiled
+it, and a bun on `exec-path' is not used.  A Bun named here that is
+missing or incompatible fails the build rather than being replaced.
+Only macOS builds the host: a Linux build, which has no web views yet,
+needs no Bun."
   :type '(choice (const :tag "Find or download" nil) file))
 
 (defcustom portal-build-download-bun t
@@ -87,12 +90,15 @@ Keep this list the same as build.sh's.")
     '("portal.so"
       "ghostty-linux/lib/libghostty.so"
       "ghostty-linux/share/ghostty/shell-integration"
-      "ghostty-linux/share/terminfo/x/xterm-ghostty"
-      "portal-host"))
+      "ghostty-linux/share/terminfo/x/xterm-ghostty"))
   "Files of a complete build, relative to the build directory.
-macOS builds a bundle that holds the module and Ghostty's resources;
-Linux builds the module and keeps Ghostty's library and resources in
-ghostty-linux beside it.")
+macOS builds a bundle that holds the module and Ghostty's resources, and
+the app host; Linux builds the module and keeps Ghostty's library and
+resources in ghostty-linux beside it, and no host, having no web views.")
+
+(defconst portal-build--host
+  (and (member "portal-host" portal-build--artifacts) "portal-host")
+  "The app host in the build directory, or nil where the build makes none.")
 
 (defconst portal-build--module
   (if (eq system-type 'darwin) "portal.bundle/Contents/MacOS/portal.dylib" "portal.so")
@@ -271,7 +277,9 @@ from another version of Portal is stale."
 (defun portal-build--describe (problem)
   "Return a sentence about PROBLEM, a value of `portal-build-problem'."
   (pcase problem
-    ('missing "Portal's native module and app host are not built")
+    ('missing (if portal-build--host
+                  "Portal's native module and app host are not built"
+                "Portal's native module is not built"))
     ('stale "Portal's native build is older than its sources")
     ('restart "Portal's native module changed after Emacs loaded it")))
 
@@ -360,12 +368,12 @@ with the development files of GTK 3 and Wayland")))
 
 ;;;###autoload
 (defun portal-build ()
-  "Build Portal's native module and app host in the background.
+  "Build Portal's native module, and on macOS its app host, in the background.
 The build shows its progress in *portal-build*, uses this Emacs and its
 module header, and finds tools on `exec-path', then where Homebrew and
-MacPorts install them.  The first build downloads dependencies, and
-Portal's pinned Bun when it finds no compatible one: see
-`portal-build-bun'.  The build keeps only what Portal runs and deletes
+MacPorts install them.  The first build downloads dependencies, and on
+macOS Portal's pinned Bun, unless `portal-build-bun' names another.  The
+build keeps only what Portal runs and deletes
 its intermediate files, so the next build starts afresh.  A finished
 build's log is also kept in portal-build.log in the build directory.
 When this Emacs has already loaded Portal's module, restart Emacs to use
@@ -502,7 +510,8 @@ could replace one that Emacs already uses."
     ;; the resources beside it.
     (when (fboundp 'portal--terminal-engine)
       (portal--terminal-engine))
-    (portal-build--probe-host (portal-build-file "portal-host"))
+    (when portal-build--host
+      (portal-build--probe-host (portal-build-file portal-build--host)))
     (portal-build--record-identity)
     (message "The Portal build is complete")))
 

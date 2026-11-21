@@ -12,7 +12,7 @@ user=$2
 home=/Users/$user
 [[ -d $home ]] || exit 1
 (cd "$share" && shasum -a 256 -c SHA256SUMS)
-# shellcheck source=tools/tart/recipe.conf
+# shellcheck source=scripts/tart/recipe.conf
 . "$share/recipe.conf"
 [[ $(sw_vers -productVersion) == "$MACOS_VERSION" && $(sw_vers -buildVersion) == "$MACOS_BUILD" ]] || { echo 'Guest OS does not match recipe.conf.' >&2; exit 1; }
 # Extract into an empty directory; copying over an existing Xcode can leave

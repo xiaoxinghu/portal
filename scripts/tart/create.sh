@@ -1,9 +1,9 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Usage: bash tools/tart/create.sh NEW_VM_NAME LOCAL_IPSW
+# Usage: bash scripts/tart/create.sh NEW_VM_NAME LOCAL_IPSW
 set -euo pipefail
 root=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-# shellcheck source=tools/tart/recipe.conf
+# shellcheck source=scripts/tart/recipe.conf
 . "$root/recipe.conf"
 [[ $# == 2 && -f $2 ]] || { echo 'Usage: create.sh NEW_VM_NAME LOCAL_IPSW' >&2; exit 1; }
 [[ $(tart --version) == "$TART_VERSION" ]] || { echo "Expected Tart $TART_VERSION" >&2; exit 1; }
