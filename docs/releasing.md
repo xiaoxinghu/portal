@@ -149,10 +149,11 @@ glibc, never by distribution or desktop: its floor, in the manifest, is
 glibc 2.43, Ubuntu 26.04's, on which it is built with the runner's own
 compiler and libraries. Ghostty's library is built for that glibc and the
 CPU's baseline, `-DPORTAL_GHOSTTY_TARGET=x86_64-linux-gnu.2.43` (or
-`aarch64-…`) `-DPORTAL_GHOSTTY_CPU=baseline`, and the module, and the
-Emacs that checks it, for the same CPU by name, `-march=x86-64` or
-`-march=armv8-a`: the x86-64 image's GCC would otherwise assume
-x86-64-v3. Unpacking checks each ELF binary's machine, that it needs no glibc
+`aarch64-…`) `-DPORTAL_GHOSTTY_CPU=baseline`, and the module for the same
+CPU by name, `-march=x86-64` or `-march=armv8-a`: the x86-64 image's GCC
+would otherwise assume x86-64-v3. Its glibc is built for that too, and
+marks every executable linked there as needing it, so the jobs' Emacs 31.1
+is built in a stock `ubuntu:26.04` container, with pgtk, and cached. Unpacking checks each ELF binary's machine, that it needs no glibc
 symbol version newer than the floor, nor, on x86-64, a CPU level above the
 baseline in the note GCC writes, that it loads only GTK 3, Wayland,
 EGL and glibc from the system and Ghostty's library from the runtime

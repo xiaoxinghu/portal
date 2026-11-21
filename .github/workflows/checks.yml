@@ -312,8 +312,9 @@ jobs:
     # modules (Ubuntu packages 30.2), built here with pgtk and cached; Zig at
     # Ghostty's pin; and a target for Ghostty's library, which Zig would
     # otherwise build for the runner's CPU: here it is the floor's glibc and a
-    # baseline CPU. The module and Emacs are compiled for that CPU by name too,
-    # not with GCC's defaults: the x86-64 image's GCC assumes x86-64-v3. No
+    # baseline CPU. The module is compiled for that CPU by name too, not with
+    # GCC's defaults: the x86-64 image's GCC assumes x86-64-v3, and its glibc
+    # is built for it, so Emacs is built in a stock Ubuntu container. No
     # graphical checks: Linux renders are not checked here, and there is no
     # app host on Linux.
     strategy:
@@ -355,6 +356,9 @@ jobs:
         --with-xpm=ifavailable --with-jpeg=ifavailable --with-gif=ifavailable
         --with-tiff=ifavailable --with-png=ifavailable
       DEBIAN_FRONTEND: noninteractive
+      # Stock Ubuntu 26.04, the archives' floor, where the runner's own image
+      # is not: Emacs is built there, and the archive run there.
+      UBUNTU_IMAGE: ubuntu:26.04
       USE_CACHE: ${{ github.event_name != 'workflow_dispatch' || inputs.cache }}
       PORTAL_TEST_EXPENSIVE: 1
       EMACS_TEST_VERBOSE: 1
@@ -385,7 +389,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/logs"
           echo "image=$ImageOS-$ImageVersion" >>"$GITHUB_OUTPUT"
           echo "zig=$(sed -n 's/.*"zig": *"\([^"]*\)".*/\1/p' native/ghostty.json)" >>"$GITHUB_OUTPUT"
-          echo "emacs=$(echo "$EMACS_SHA256 $EMACS_CONFIGURE ${{ matrix.march }}" | sha256sum | cut -c1-16)" >>"$GITHUB_OUTPUT"
+          echo "emacs=$(echo "$UBUNTU_IMAGE $EMACS_SHA256 $EMACS_CONFIGURE ${{ matrix.march }}" | sha256sum | cut -c1-16)" >>"$GITHUB_OUTPUT"
           {
             echo "USE_CACHE=$USE_CACHE"
             echo "Runner image $ImageOS $ImageVersion"
@@ -413,23 +417,39 @@ jobs:
           path: ${{ runner.temp }}/emacs
           key: emacs-${{ env.EMACS_VERSION }}-${{ steps.env.outputs.image }}-${{ runner.arch }}-${{ steps.env.outputs.emacs }}
 
+      # Built on stock Ubuntu 26.04, in a container, for the CPU's baseline:
+      # it is the Emacs that runs the archive on an emulated baseline CPU
+      # too, and an executable the runner links takes its glibc's start
+      # file, which the x86-64 image marks as needing x86-64-v3.
       - name: Build Emacs
         if: steps.emacs-cache.outputs.cache-hit != 'true'
+        env:
+          MARCH: ${{ matrix.march }}
         run: |
-          source=$RUNNER_TEMP/emacs-source
-          mkdir -p "$source"
-          curl -fsSL --retry 3 -o "$source.tar.xz" \
-              "https://ftpmirror.gnu.org/gnu/emacs/emacs-$EMACS_VERSION.tar.xz"
-          echo "$EMACS_SHA256  $source.tar.xz" | sha256sum -c -
-          tar -xJf "$source.tar.xz" -C "$source" --strip-components=1
-          cd "$source"
-          # shellcheck disable=SC2086 # the options are words
-          ./configure -q --prefix="$RUNNER_TEMP/emacs" $EMACS_CONFIGURE \
-              CFLAGS="-O2 -g -march=${{ matrix.march }}" >"$PORTAL_TEST_LOGS/emacs-build.log" 2>&1 ||
-              { tail -50 "$PORTAL_TEST_LOGS/emacs-build.log"; exit 1; }
-          make -j"$(nproc)" >>"$PORTAL_TEST_LOGS/emacs-build.log" 2>&1 ||
-              { tail -50 "$PORTAL_TEST_LOGS/emacs-build.log"; exit 1; }
-          make install >>"$PORTAL_TEST_LOGS/emacs-build.log" 2>&1
+          docker run --rm -v "$RUNNER_TEMP:$RUNNER_TEMP" -e RUNNER_TEMP -e MARCH \
+              -e EMACS_VERSION -e EMACS_SHA256 -e EMACS_CONFIGURE -e PORTAL_TEST_LOGS \
+              "$UBUNTU_IMAGE" bash -euo pipefail -c '
+            export DEBIAN_FRONTEND=noninteractive
+            log=$PORTAL_TEST_LOGS/emacs-build.log
+            apt-get update -q >/dev/null
+            apt-get install -y -q --no-install-recommends build-essential pkg-config curl \
+                ca-certificates xz-utils libgtk-3-dev libgnutls28-dev libncurses-dev >/dev/null
+            gcc -Q --help=target | grep -E "^ +-march=" >"$log"
+            source=$RUNNER_TEMP/emacs-source
+            mkdir -p "$source"
+            curl -fsSL --retry 3 -o "$source.tar.xz" \
+                "https://ftpmirror.gnu.org/gnu/emacs/emacs-$EMACS_VERSION.tar.xz"
+            echo "$EMACS_SHA256  $source.tar.xz" | sha256sum -c -
+            tar -xJf "$source.tar.xz" -C "$source" --strip-components=1
+            cd "$source"
+            # The options are words.
+            ./configure -q --prefix="$RUNNER_TEMP/emacs" $EMACS_CONFIGURE \
+                CFLAGS="-O2 -g -march=$MARCH" >>"$log" 2>&1 || { tail -50 "$log"; exit 1; }
+            make -j"$(nproc)" >>"$log" 2>&1 || { tail -50 "$log"; exit 1; }
+            make install >>"$log" 2>&1
+          '
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/emacs" "$PORTAL_TEST_LOGS"
+          readelf --notes "$RUNNER_TEMP/emacs/bin/emacs" | grep -E 'x86 ISA|feature' || :
 
       - name: Save Emacs
         if: steps.emacs-cache.outcome == 'success' && steps.emacs-cache.outputs.cache-hit != 'true'
@@ -581,7 +601,6 @@ jobs:
       # has: the emulated CPU must refuse it. It needs no C library.
       - name: Run the unpacked runtime on the floor's system and baseline CPU
         env:
-          IMAGE: ubuntu:26.04
           QEMU: ${{ matrix.qemu }}
           QEMU_CPU: ${{ matrix.qemu-cpu }}
         run: |
@@ -608,13 +627,13 @@ jobs:
           EOF
           cc -O1 -static -nostdlib -o "$RUNNER_TEMP/newer" "$RUNNER_TEMP/newer.c"
           "$RUNNER_TEMP/newer"
-          docker pull -q "$IMAGE"
-          docker image inspect --format 'Image {{index .RepoDigests 0}}' "$IMAGE" |
+          docker pull -q "$UBUNTU_IMAGE"
+          docker image inspect --format 'Image {{index .RepoDigests 0}}' "$UBUNTU_IMAGE" |
               tee -a "$PORTAL_TEST_LOGS/runtime.log"
           # Emacs's libraries come from Ubuntu's pgtk Emacs, as a user's would.
           docker run --rm -v "$RUNNER_TEMP:$RUNNER_TEMP" -v "$PWD:$PWD" -w "$PWD" \
               -e EMACS -e QEMU -e QEMU_CPU -e unpacked="$unpacked" -e newer="$RUNNER_TEMP/newer" \
-              "$IMAGE" bash -euo pipefail -c '
+              "$UBUNTU_IMAGE" bash -euo pipefail -c '
             export DEBIAN_FRONTEND=noninteractive
             apt-get update -q >/dev/null
             apt-get install -y -q --no-install-recommends emacs-pgtk libegl1 libegl-mesa0 \
