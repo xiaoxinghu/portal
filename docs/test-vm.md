@@ -1,7 +1,7 @@
 # Rebuilding the macOS test VM
 
 Keep the recipe in Git and the large binary artifacts in backup storage. The
-scripts in `tools/tart/` capture the setup used for Portal's Tart guest:
+scripts in `scripts/tart/` capture the setup used for Portal's Tart guest:
 
 - `recipe.conf`: tested OS and IPSW checksum, Tart, Xcode, Emacs revision, Rex Server build and virtual hardware.
 - `cellar.txt`: the exact compiler libraries and build tools copied from the host.
@@ -28,7 +28,7 @@ the listed Homebrew kegs under `/opt/homebrew/Cellar`, and Rex's Mac app
 with the pinned [Rex Server](#rex-server):
 
 ```sh
-bash tools/tart/stage.sh .cache/tart-toolchain-v1
+bash scripts/tart/stage.sh .cache/tart-toolchain-v1
 ```
 
 The output directory must be new. It contains the app archives, compiler kegs,
@@ -79,7 +79,7 @@ Rex's preview changes every few days. To follow it, update Rex's Mac app on
 this Mac, then:
 
 ```sh
-bash tools/tart/stage.sh --rex-only .cache/tart-rex
+bash scripts/tart/stage.sh --rex-only .cache/tart-rex
 ```
 
 It fails, printing the new `REX_` lines; put them in `recipe.conf`. Stage
@@ -87,7 +87,7 @@ again, now with the new pin, and install it in the guest, here `portal-vm`.
 The test user is an administrator, so this needs no root:
 
 ```sh
-bash tools/tart/stage.sh --rex-only .cache/tart-rex-1925
+bash scripts/tart/stage.sh --rex-only .cache/tart-rex-1925
 rsync -a --delete .cache/tart-rex-1925/ portal-vm:rex-stage/
 ssh portal-vm 'bash rex-stage/install-rex.sh rex-stage && bash rex-stage/verify.sh rex-stage'
 ```
@@ -103,7 +103,7 @@ Install the recorded Tart version. Obtain Apple's restore IPSW for the exact
 OS build in `recipe.conf`, then create a new name (existing VMs are never replaced):
 
 ```sh
-bash tools/tart/create.sh portal-base-v2 /path/to/UniversalMac_27.2.1_26B131_Restore.ipsw
+bash scripts/tart/create.sh portal-base-v2 /path/to/UniversalMac_27.2.1_26B131_Restore.ipsw
 # Record the IPSW SHA-256 printed by the command with the staging artifacts.
 tart run --dir="setup:$PWD/.cache/tart-toolchain-v1:ro" portal-base-v2
 ```

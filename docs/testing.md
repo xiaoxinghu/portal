@@ -245,7 +245,7 @@ the guest, still less to what the host gets back.
 
 ### Managing the Tart guest
 
-For a rebuild, use the [versioned VM recipe](test-vm.md) in `tools/tart/`.
+For a rebuild, use the [versioned VM recipe](test-vm.md) in `scripts/tart/`.
 It stages the matching toolchain, creates a new guest, provisions its settings
 and checks native compilation. Keep images and staged binaries outside Git.
 
@@ -514,6 +514,10 @@ does.
 The `app-host` CTest suite runs `bun test` in `host/`, and `app-host-seam` runs
 the Emacs side. Both need a build: the Bun tests read the generated editor
 bundle and start the compiled `build/portal-host` (or `$PORTAL_BUILD/portal-host`).
+On Linux, which builds no host, `app-host-seam` is not registered, the test of
+the compiled host is skipped, and `app-host` runs where CMake found a Bun
+(`BUN`, or `bun` on `PATH`), whose build then installs the host's packages and
+generates the bundle; without one, CTest reports it skipped.
 After `./build.sh`, run them directly:
 
 ```sh

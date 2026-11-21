@@ -63,7 +63,7 @@ stand-in build.sh, Lisp and a node_modules directory.  No build is running."
     (portal-build-test--complete)
     (should-not (portal-build-problem))
     ;; Each part of the build is required, not just the module.
-    (delete-file (portal-build-file "portal-host"))
+    (delete-file (portal-build-file (car (last portal-build--artifacts))))
     (should (eq (portal-build-problem) 'missing))
     (portal-build-test--complete)
     (delete-file (portal-build-file "portal-build.eld"))
@@ -85,6 +85,12 @@ stand-in build.sh, Lisp and a node_modules directory.  No build is running."
       (portal-build-test--write "portal.el" ";; Version: 1.0\n;; changed\n")
       (portal-build-test--write "host/node_modules/dependency/index.js" "changed")
       (portal-build-test--write "host/.generated/asset.js" "changed")
+      (should (equal (portal-build-source-identity) identity))
+      ;; Nor do scripts the build never reads, such as the Ghostty version
+      ;; report and the test VM's recipes, or the tests.
+      (portal-build-test--write "scripts/ghostty-version.py" "changed")
+      (portal-build-test--write "scripts/tart/recipe.conf" "changed")
+      (portal-build-test--write "test/test_tools.py" "changed")
       (should (equal (portal-build-source-identity) identity))
       (portal-build-test--write "tools/bun.manifest" "changed")
       (should-not (equal (portal-build-source-identity) identity)))
@@ -449,6 +455,29 @@ echo \"TOOLS=$PORTAL_TOOLS_DIR\"\nmkdir -p build\n")
         (cl-letf (((symbol-function 'portal-build-ensure) (lambda () (setq checked t))))
           (should-error (portal-start-server) :type 'user-error)))
       (should-not checked))))
+
+(ert-deftest portal-build-linux-has-no-host-to-offer ()
+  ;; Linux builds no host: the module alone is a complete build, and the
+  ;; host's absence is told as the want of web views, not as a build to make.
+  (should (eq (null portal-build--host) (not (eq system-type 'darwin))))
+  (portal-build-test--with-root
+    (let ((portal-build--host nil)
+          (portal-build--artifacts (remove "portal-host" portal-build--artifacts))
+          (portal-server-program nil))
+      (portal-build-test--complete)
+      (should-not (portal-build-problem))
+      (should-not (file-exists-p (portal-build-file "portal-host")))
+      (cl-letf (((symbol-function 'portal-build-ensure) (lambda () (ert-fail "Ensured")))
+                ((symbol-function 'make-process) (lambda (&rest _) (ert-fail "Started"))))
+        (should (string-match-p "no web views on .* yet, so it has no app host"
+                                (cadr (should-error (portal-start-server)
+                                                    :type 'user-error)))))
+      (should (equal (portal-build--describe 'missing) "Portal's native module is not built"))
+      ;; A host the user names still runs.
+      (let ((portal-server-program "/missing/host"))
+        (should (string-match-p "M-x portal-build: /missing/host"
+                                (cadr (should-error (portal-start-server)
+                                                    :type 'user-error))))))))
 
 (ert-deftest portal-build-root-resolves-linked-packages ()
   ;; As straight.el and Elpaca do, link the Lisp into a separate directory.

@@ -13,8 +13,8 @@ package installation test runs them. Keep their markers when editing them.
   [supported platforms](platforms.md) for what has been verified.
 - Xcode with Swift 6.2 or newer, CMake 3.29 or newer and Ninja. Install CMake
   and Ninja with `brew install cmake ninja` or your tool manager.
-- Bun is optional. A build uses a compatible Bun where it finds its other tools;
-  otherwise it downloads Portal's pinned Bun once (see [Bun](#bun)).
+- Bun is optional. A build compiles the app host with Portal's pinned Bun,
+  which it downloads once, unless you name another (see [Bun](#bun)).
 
 Graphical Emacs started from the Dock or Finder does not see your shell's `PATH`.
 The build searches Emacs's `exec-path`, then the directories where Homebrew
@@ -102,8 +102,8 @@ it is past the release, and its branch, such as `Portal 0.2.0 (stable)`.
 
 The first build takes several minutes and needs the network. It downloads the
 app host's locked dependencies, the pinned GhosttyKit binary (about 77 MB),
-the source of its Swift wrapper, which it patches, and Portal's pinned Bun if Emacs finds no compatible one
-(see [Bun](#bun)). Emacs stays usable while it builds.
+the source of its Swift wrapper, which it patches, and Portal's pinned Bun
+unless it is cached or you name another (see [Bun](#bun)). Emacs stays usable while it builds.
 
 When it succeeds, the build keeps only what Portal runs, about 100 MB, and
 deletes its intermediate files and the app host's packages, about 750 MB more.
@@ -197,8 +197,8 @@ next section explains how Portal tells.
 
 ## What Portal checks
 
-Each successful build loads the new module and starts the new app host in a
-separate batch Emacs. It then records a hash of the native sources it was built
+Each successful build loads the new module and, on macOS, starts the new app
+host in a separate batch Emacs. It then records a hash of the native sources it was built
 from in `build/portal-build.eld`. A build removes that record before replacing
 anything, and records nothing if its sources changed while it ran, so a failed,
 interrupted or overtaken build is never taken as ready.
@@ -216,24 +216,26 @@ last one started from Emacs.
 
 ## Bun
 
-Bun compiles the app host; the built host includes its own runtime. A build
-uses, in order:
+Bun compiles the app host, and the built host includes that Bun as its
+runtime. So a build uses Portal's pinned Bun, the version
+[tools/bun.manifest](../tools/bun.manifest) names, and never a `bun` it finds
+on `exec-path` or `PATH`, however new. In order:
 
 1. The Bun you name: `portal-build-bun` in Emacs, or `BUN` for `./build.sh`.
    The build fails if this Bun is missing or incompatible.
-2. A compatible `bun` where the build finds CMake and Ninja (the shell's `PATH`
-   for `./build.sh`).
-   An incompatible one is reported and skipped.
-3. Portal's pinned Bun, cached in `portal-build-tools-directory`
+2. Portal's pinned Bun, cached in `portal-build-tools-directory`
    (`~/.emacs.d/portal/tools/` by default; `PORTAL_TOOLS_DIR` or `build/tools/`
    for `./build.sh`). The cache is outside the package, so upgrades reuse it.
-4. Portal's pinned Bun, downloaded from Bun's official release. Its SHA-256
+3. Portal's pinned Bun, downloaded from Bun's official release. Its SHA-256
    digest is checked against [tools/bun.manifest](../tools/bun.manifest)
    before it runs, and it reaches the cache in one atomic step.
 
 A compatible Bun has `Bun.markdown.html` and is at least the pinned version.
 Set `portal-build-download-bun` to nil, or `PORTAL_BUN_DOWNLOAD=0`, to never
 download. Portal never changes your shell configuration or installed Bun.
+
+On Linux, which has no web views yet, the build makes no app host and needs
+no Bun: see [building on Linux](../CONTRIBUTING.md#building-on-linux).
 
 ## Disk use and removal
 
@@ -255,7 +257,8 @@ downloads again what is missing.
 
 Portal looks for its native part in `build/` beside its sources. To use one
 built elsewhere, for example by a distribution, set `portal-build-directory` to
-the directory holding `portal.bundle`, `portal-host` and `portal-build.eld`.
+the directory holding `portal.bundle`, `portal-host` and `portal-build.eld`
+(on Linux, `portal.so`, `ghostty-linux` and `portal-build.eld`).
 Portal then reports a missing or stale build instead of offering to build.
 Without the native sources beside the Lisp, Portal cannot hash them, so it
 accepts only a build recorded by the same Portal version (the `Version:` in
@@ -308,7 +311,7 @@ download" and SHA-256 mismatches concern Bun; failures fetching Ghostty or
 packages come from SwiftPM or `bun install`. Check the network or proxy and run
 `M-x portal-build` again. Without network access to Bun's releases, install
 Bun (the version in [tools/bun.manifest](../tools/bun.manifest) or newer) and
-set `portal-build-bun`. The first build still needs the other downloads.
+set `portal-build-bun`: the host then contains that Bun. The first build still needs the other downloads.
 
 **"Portal cannot build in … it is not writable".** Portal builds beside its
 sources. Install it where you can write, or build it elsewhere and set

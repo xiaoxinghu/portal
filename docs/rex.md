@@ -900,7 +900,7 @@ moves only when its pin does.
 To see how far apart they are, run the report from a checkout of Portal:
 
 ```sh
-tools/ghostty-version.py
+scripts/ghostty-version.py
 ```
 
 It prints Portal's Ghostty, that of the newest release and that of the

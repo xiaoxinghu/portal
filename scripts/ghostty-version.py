@@ -3,8 +3,8 @@
 """How far Portal's Ghostty is from a Rex server's, and a bump of the pin.
 
 Usage:
-  tools/ghostty-version.py [report] [--offline] [--package DIR] [--ghostty DIR] [--rex PATH]
-  tools/ghostty-version.py bump [VERSION] [--offline] [--package DIR]
+  scripts/ghostty-version.py [report] [--offline] [--package DIR] [--ghostty DIR] [--rex PATH]
+  scripts/ghostty-version.py bump [VERSION] [--offline] [--package DIR]
 
 report prints Portal's Ghostty, the newest release, the installed Rex
 server's Ghostty and how far each release's Ghostty is from the server's, then
@@ -784,12 +784,12 @@ def bump(args):
             "write the set back: rm native/patches/libghostty-spm/*.patch; "
             f"git -C {REPAIR} format-patch --zero-commit --no-signature "
             f"-o \"$PWD/native/patches/libghostty-spm\" {revision}",
-            f"tools/ghostty-version.py bump {version}, to check they apply",
+            f"scripts/ghostty-version.py bump {version}, to check they apply",
         ]
     steps += [
         "./build.sh, which configures and remakes the patched copy",
         "update the release and Ghostty versions in docs/terminals.md",
-        "tools/ghostty-version.py, to see where the new pin stands",
+        "scripts/ghostty-version.py, to see where the new pin stands",
         "the default loop in CONTRIBUTING.md, then the full set before merging",
     ]
     for number, step in enumerate(steps, 1):

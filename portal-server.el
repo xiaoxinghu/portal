@@ -96,8 +96,13 @@ The ready hook runs after the server has bound its HTTP listener."
   (unless (and portal--server-process (process-live-p portal--server-process))
     (let* ((program (portal-server-program-file))
            (default-directory (file-name-directory program)))
-      ;; Portal's own host is usable only as part of a complete, current build.
-      (unless portal-server-program (portal-build-ensure))
+      (unless portal-server-program
+        ;; Linux has no web views yet, so its build makes no host to offer.
+        (unless portal-build--host
+          (user-error "Portal has no web views on %s yet, so it has no app host"
+                      (if (eq system-type 'gnu/linux) "Linux" system-type)))
+        ;; Portal's own host is usable only as part of a complete, current build.
+        (portal-build-ensure))
       (unless (file-executable-p program)
         (user-error "Build the Portal UI host with M-x portal-build: %s" program))
       (setq portal--server-process

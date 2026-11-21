@@ -10,7 +10,7 @@ set -euo pipefail
 [[ $# == 1 ]] || { echo 'Usage: bash install-rex.sh STAGED_DIRECTORY' >&2; exit 1; }
 [[ $(sysctl -n kern.hv_vmm_present) == 1 ]] || { echo 'Refusing to install Rex on a physical Mac.' >&2; exit 1; }
 share=$(cd -- "$1" && pwd)
-# shellcheck source=tools/tart/recipe.conf
+# shellcheck source=scripts/tart/recipe.conf
 . "$share/recipe.conf"
 (cd "$share" && grep -E '  (rex\.tar|recipe\.conf)$' SHA256SUMS | shasum -a 256 -c -)
 app="/Applications/Rex Server.app"

@@ -1,17 +1,24 @@
 # Bun build and distribution options
 
-Recorded: 2026-09-17. Updated: 2026-10-11. Status: source builds download a
-pinned Bun when needed; prebuilt hosts remain deferred.
+Recorded: 2026-09-17. Updated: 2026-11-21. Status: Mac builds compile the host
+with the pinned Bun, downloaded when needed; Linux builds no host; prebuilt
+hosts remain deferred.
 
 ## Current behaviour
 
-`./build.sh` uses CMake to build the native Emacs module and compile the TypeScript
-server into `build/portal-host`. It selects Bun with `tools/resolve-bun.sh`: an
-explicit `BUN`, a compatible `bun` on `PATH`, a cached copy of the pinned Bun in
+On macOS, `./build.sh` uses CMake to build the native Emacs module and compile
+the TypeScript server into `build/portal-host`. It selects Bun with
+`tools/resolve-bun.sh`: an explicit `BUN`, a cached copy of the pinned Bun in
 `tools/bun.manifest`, or that Bun downloaded from its official release and
-checked against the manifest's digest. `M-x portal-build` runs the same script
-with Emacs's `exec-path` and a cache under `user-emacs-directory`, so package
-upgrades reuse it. See [Bun in the installation guide](install.md#bun).
+checked against the manifest's digest. A `bun` on `PATH` is never used, however
+new: the host contains the Bun that compiled it, so the one a release ships is
+the one its tag's manifest names. `M-x portal-build` runs the same script with
+a cache under `user-emacs-directory`, so package upgrades reuse it. See
+[Bun in the installation guide](install.md#bun).
+
+On Linux, which has no web views yet, the build makes no host and needs no
+Bun. CMake runs the host's Bun tests with `BUN` or a `bun` on `PATH`, and
+reports them skipped without one.
 This follows the native package installation research, which preferred an
 Emacs-owned persistent cache to a per-checkout directory.
 
@@ -19,8 +26,9 @@ Bun is a **build dependency**, not a runtime installation requirement: the host
 contains the Bun runtime, server code, and Hello World assets. See
 [Bun's standalone executable documentation](https://bun.com/docs/bundler/executables).
 
-Source builds still require graphical macOS Emacs and its module header, Apple's
-Swift/Clang toolchain, CMake, and Ninja, even without a Bun installation step.
+Source builds on macOS still require graphical macOS Emacs and its module
+header, Apple's Swift/Clang toolchain, CMake, and Ninja, even without a Bun
+installation step.
 
 ## Options
 
@@ -34,14 +42,16 @@ Swift/Clang toolchain, CMake, and Ninja, even without a Bun installation step.
 
 Implemented by `tools/resolve-bun.sh`:
 
-- Pin a Bun version and archive checksum per supported Mac architecture.
+- Pin a Bun version and archive checksum per supported Mac architecture, and
+  for Linux with glibc, which only the host's tests could use today.
 - Download and extract into a private cache: `build/tools/` for `./build.sh`,
   `~/.emacs.d/portal/tools/` for `M-x portal-build`.
 - Verify the checksum before extraction and execution.
 - Invoke the executable directly; leave `PATH`, shell configuration, and global
   Bun installations unchanged.
 - Cache for subsequent builds; retain the explicit `BUN` path override for
-  development and offline builds.
+  development and offline builds. Take no `bun` from `PATH`: what is compiled
+  into the host is the pinned Bun, unless someone names another.
 
 Bun offers direct macOS Apple Silicon and Intel downloads; see the
 [installation documentation](https://bun.com/docs/installation).
@@ -86,4 +96,6 @@ when establishing releases. Both can coexist: contributors build from source,
 release users receive compiled hosts.
 
 Automatic download is implemented for source builds; prebuilt distribution
-remains a proposal.
+remains a proposal. The runtime downloads' Mac archive will carry the compiled
+host as the build makes it, and the Linux archive none, until Linux has web
+views.

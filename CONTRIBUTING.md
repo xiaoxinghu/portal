@@ -12,7 +12,8 @@ the project's checks pass, push it, and open a PR against `main` with
 
 Besides the [build prerequisites](README.md#build-and-run), the
 [checks](#checks) need Bun on `PATH` for the host checks
-(the pinned version in `tools/bun.manifest` or newer) and Python 3, which Xcode
+(the pinned version in `tools/bun.manifest` or newer; `sh tools/resolve-bun.sh`
+prints the pinned one, downloading it if need be) and Python 3, which Xcode
 includes. Opening a PR from the command line uses the GitHub CLI, `gh`.
 
 ## Build and editor setup
@@ -27,7 +28,7 @@ cmake --build --preset dev
 ```
 
 On macOS, CMake locates Emacs, builds the Bun host, and invokes the native Swift package;
-[on Linux](#building-on-linux) it compiles a C module instead.
+[on Linux](#building-on-linux) it compiles a C module instead, and no host.
 `native/Package.swift` links three targets into one module: `PortalCore`,
 the portable C core, a fed terminal's rules among them; `PortalShared`, the C of `native/Shared`, the message socket; and `Portal`, the Swift backend containing the host, web, terminal and input code. There are no separate feature libraries
 or plugin builds. Ghostty comes through its Swift wrapper, libghostty-spm, which
@@ -86,7 +87,7 @@ the server's knows a sequence Portal's does not, the two screens differ;
 [the Rex guide](docs/rex.md#ghostty-versions) says what that looks like. Run the report before working on the Rex client and after Rex updates:
 
 ```sh
-tools/ghostty-version.py
+scripts/ghostty-version.py
 ```
 
 It prints the pinned release, the newest release and the installed Rex
@@ -116,8 +117,8 @@ verdict is unknown.
 To move to a new release, bump the pin:
 
 ```sh
-tools/ghostty-version.py bump                  # the newest release
-tools/ghostty-version.py bump 2.2.2026110702   # a named one
+scripts/ghostty-version.py bump                  # the newest release
+scripts/ghostty-version.py bump 2.2.2026110702   # a named one
 ```
 
 It writes the release's tag and revision to `native/libghostty-spm.json`,
@@ -136,7 +137,8 @@ with the pin already moved, it checks the patches and resolves again.
 Portal's module builds and loads on Linux, and has views there,
 terminals with a local shell and Rex blocks' screens, but no web views yet. `./build.sh` makes `build/portal.so` in place of
 `build/portal.bundle`, with `build/ghostty-linux` beside it and
-`build/portal-host` and `build/licenses` as on macOS. CMake compiles the
+`build/licenses` as on macOS, and no `build/portal-host`: with no web views,
+Linux has no use for the app host, so it does not build one. CMake compiles the
 module itself: the C bindings and core with the backend in
 [`native/Linux`](native/Linux), for an Emacs built with pgtk, linked against
 GTK 3, `wayland-client` and Ghostty's library, which
@@ -173,9 +175,10 @@ A build needs:
 - for Ghostty's library, Zig at the version `native/ghostty.json` names or a
   later patch release of it, as `zig` on `PATH` or in `ZIG`, ncurses' `tic`
   and Git;
-- Bun, chosen [as on macOS](#build-outputs-and-distribution): the pinned
-  release has glibc builds for aarch64 and x64. Only one build runs per
-  checkout at a time there too, with `flock` for the lock.
+- no Bun. CMake runs the host's Bun tests, `app-host` and `gui-runner`,
+  with `BUN` or a `bun` on `PATH`, the pinned version or newer, installing
+  the host's packages for them; without one it reports them skipped. Only one
+  build runs per checkout at a time there too, with `flock` for the lock.
 
 `M-x portal-build` checks for each of them before it starts, and names what
 is missing. A first build takes three to four minutes on ten cores, most of
@@ -195,7 +198,8 @@ sh test/linux-follow.sh fed
 ```
 
 CTest leaves out the suite of the macOS Ghostty wrapper, `libghostty-spm`,
-and of the macOS VM runner, and adds `linux-module`, which loads the built
+of the macOS VM runner, and `app-host-seam`, which starts the compiled host,
+and adds `linux-module`, which loads the built
 module in batch Emacs; and `shared-macos`, which compiles each C file of
 `native/Shared` for macOS with Zig's cross-compile, since nothing here runs
 them on a Mac. The Python tests skip those of Swift helpers and of
@@ -343,7 +347,7 @@ run the script for changes made in the copy alone: run it yourself, and
 `./build.sh` then builds the module against the library it made. To move the pin, apply the
 patches to the new tag in a clone of Ghostty with `git am`, repair those that
 stop, write them back the same way and change `native/ghostty.json`, its Zig
-too; `tools/ghostty-version.py bump` knows only the macOS wrapper, though its
+too; `scripts/ghostty-version.py bump` knows only the macOS wrapper, though its
 report reads this pin on Linux. The `test_build_ghostty_linux.py` tests run the script against a
 stand-in for Ghostty and for Zig.
 
@@ -393,7 +397,7 @@ does not hot-reload that library.
 
 The single build command produces `build/portal.bundle`,
 `build/portal-host` and `build/licenses`; a [Linux build](#building-on-linux)
-has `build/portal.so` and `build/ghostty-linux` for the bundle. The bundle contains the one native Emacs module at
+has `build/portal.so` and `build/ghostty-linux` for the bundle, and no host. The bundle contains the one native Emacs module at
 `Contents/MacOS/portal.dylib` and Ghostty's resources. CMake recompiles the host when its TypeScript entry point
 or HTML changes. Both binaries are built for the current Mac's CPU
 architecture and macOS 13 or later; see [supported platforms](docs/platforms.md)
@@ -411,19 +415,32 @@ the library and the resources, and deletes Ghostty's source copy and Zig's
 cache for it, over 1 GB more. Its next build starts afresh. Build without
 `--prune` for development.
 
-`./build.sh` chooses Bun with `tools/resolve-bun.sh`: the `BUN` environment
-variable, then a compatible `bun` on `PATH`, then Portal's pinned Bun cached in
-`build/tools/` (or `PORTAL_TOOLS_DIR`), downloaded and verified when missing.
-`PORTAL_BUN_DOWNLOAD=0` disables the download. The manifest pins the release's
-builds for macOS and for Linux with glibc. A `-DBUN=/absolute/path/to/bun`
-argument is an explicit choice, like `BUN`. Plain `cmake` records the `bun` found on `PATH`
-and searches again if that file disappears; run `cmake --fresh --preset dev`
-to rediscover every tool. Update the pinned version, its asset URLs and
-digests together in `tools/bun.manifest`, and test the build with it.
+On macOS `./build.sh` chooses the Bun that compiles the host with
+`tools/resolve-bun.sh`: the `BUN` environment variable, then Portal's pinned
+Bun cached in `build/tools/` (or `PORTAL_TOOLS_DIR`), downloaded and verified
+when missing. It never takes a `bun` from `PATH`, however new: the host
+contains the Bun that compiled it, so a release ships the Bun its tag's
+manifest names. `PORTAL_BUN_DOWNLOAD=0` disables the download. A
+`-DBUN=/absolute/path/to/bun` argument is an explicit choice, like `BUN`.
+Plain `cmake` asks `tools/resolve-bun.sh` too, records its choice, and
+chooses again if that file disappears; run `cmake --fresh --preset dev` to
+rediscover every tool. The manifest pins the release's builds for macOS and
+for Linux with glibc, which a Linux checkout can fetch for the host checks.
+Update the pinned version, its asset URLs and digests together in
+`tools/bun.manifest`, and test the build with it.
+
+`tools/` holds only what the build reads: `portal-build-source-identity`
+hashes every file in it, with `host/` and `native/`, so a file there that the
+build never reads would make every build look stale when it changed. Scripts
+the build does not run go in `scripts/`, such as the Ghostty version report
+and the test VM's recipes; the `test_tools.py` check fails on a file in
+`tools/` that neither `CMakeLists.txt`, `build.sh` nor a tool they name
+names.
 
 To distribute this layout, include `LICENSE` and all `portal*.el` files at the
 package root, `build/portal-host`, the complete `build/portal.bundle` (on Linux,
-`build/portal.so` and `build/ghostty-linux` as `--prune` leaves it),
+`build/portal.so` and `build/ghostty-linux` as `--prune` leaves it, and no
+host),
 `build/licenses` and `build/portal-build.eld`, or set `portal-build-directory`
 to where the build outputs are; the host needs no adjacent web assets. Without
 `native/`, Portal accepts only a record from the same `Version:` as `portal.el`. Keep the
