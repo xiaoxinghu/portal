@@ -417,6 +417,17 @@ as packed is kept aside, so that the next variant starts from it too."
           (should (equal (portal-runtime-test--runtimes)
                          (sort (seq-take identities 2) #'string<))))))))
 
+(ert-deftest portal-runtime-a-slow-download-is-not-a-stalled-one ()
+  ;; Half the archive in tiny chunks, whose framing decoding removes, then
+  ;; the rest slowly but never idle for as long as the limit allows.
+  (skip-unless (portal-runtime-test--can-install))
+  (portal-runtime-test--with-world
+    (portal-runtime-test--release)
+    (let ((portal-runtime--idle-timeout 2))
+      (should (string-match-p "is installed"
+                              (portal-runtime-test--install
+                               (concat (portal-runtime-test--serve) "burst/")))))))
+
 (ert-deftest portal-runtime-follows-redirects-over-https-only ()
   (skip-unless (portal-runtime-test--can-install))
   (portal-runtime-test--with-world
@@ -526,6 +537,8 @@ as packed is kept aside, so that the next variant starts from it too."
                        ("duplicate" . "licenses/LICENSE twice")
                        ("link-out" . "links licenses/out to \\.\\./\\.\\./\\.\\./outside, outside")
                        ("link-absolute" . "links licenses/out to /etc, outside")
+                       ("reenter" . "links licenses/again to \\.\\./\\.\\./runtime/licenses/LICENSE, outside")
+                       ("reenter-through-link" . "links licenses/sub/again to up/.*, outside")
                        ("through-link" . "licenses/via")
                        ("hardlink" . "licenses/hard, which is neither")
                        ("fifo" . "licenses/fifo, which is neither")

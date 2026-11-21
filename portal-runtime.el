@@ -233,7 +233,7 @@ buffer, if the server sends more than LIMIT bytes of body, or nothing for
          ;; A failed handshake kills its process buffer; do not ask about it.
          (kill-buffer-query-functions nil)
          (read-process-output-max (* 1024 1024))
-         (done nil) process)
+         (done nil) (arrived 0) process)
     (with-current-buffer buffer (set-buffer-multibyte nil))
     (unwind-protect
         (progn
@@ -251,6 +251,14 @@ refused its certificate or connection" host))
           (set-process-query-on-exit-flag process nil)
           ;; The default sentinel would write the connection's end into the body.
           (set-process-sentinel process #'ignore)
+          ;; Count what arrives: decoding chunks shrinks the buffer, so its
+          ;; size does not say whether the download is still moving.
+          (set-process-filter process
+                              (lambda (process output)
+                                (with-current-buffer (process-buffer process)
+                                  (goto-char (point-max))
+                                  (insert output))
+                                (setq arrived (+ arrived (length output)))))
           (process-send-string
            process
            (concat "GET " path " HTTP/1.1\r\n"
@@ -290,8 +298,8 @@ refused its certificate or connection" host))
               (while (process-live-p process)
                 (accept-process-output process 1)
                 (let ((size (buffer-size buffer)) (now (float-time)))
-                  (if (> size received)
-                      (setq received size heard now)
+                  (if (> arrived received)
+                      (setq received arrived heard now)
                     (when (> (- now heard) portal-runtime--idle-timeout)
                       (error "The download of %s from %s stopped" what host)))
                   (step)
@@ -559,6 +567,30 @@ there."
         (error "The archive's %s is already there, under that name or another" name)))
     path))
 
+(defun portal-runtime--walk (root place target depth)
+  "Follow TARGET from PLACE in ROOT; return where it leads.
+PLACE and the result are the parts of a path in ROOT, innermost first.
+Throw `outside' when a step climbs above ROOT or links nest too deep."
+  (when (or (string-prefix-p "/" target) (> depth 32))
+    (throw 'outside nil))
+  (dolist (part (split-string target "/") place)
+    (pcase part
+      ((or "" ".") nil)
+      (".." (if place (setq place (cdr place)) (throw 'outside nil)))
+      (_ (let* ((there (cons part place))
+                (link (file-symlink-p (concat root "/" (string-join (reverse there) "/")))))
+           (setq place (if link (portal-runtime--walk root place link (1+ depth)) there)))))))
+
+(defun portal-runtime--resolve (root directory target)
+  "Return where TARGET, a link's target in DIRECTORY of ROOT, leads, or nil.
+DIRECTORY and the result are lists of the parts of a path in ROOT.  Each
+part is followed as the system would, a link on disk by its own target.
+nil means that a step climbs above ROOT, even to come back in by ROOT's
+name, which would break once ROOT is renamed; that the links nest more
+than 32 deep; or that TARGET leads to ROOT itself."
+  (catch 'outside
+    (reverse (portal-runtime--walk root (reverse directory) target 0))))
+
 (defun portal-runtime--extract (members root)
   "Write MEMBERS, from the archive in the current buffer, into ROOT.
 ROOT is an existing directory's true name.  Files and directories go
@@ -585,9 +617,11 @@ scripts/runtime-archive.py's `extract'."
         (make-symbolic-link link (portal-runtime--place root name))))
     (pcase-dolist (`(,name ,type ,_mode ,_start ,_size ,link) members)
       (when (eq type 'link)
-        (let ((path (concat root "/" name)))
-          (unless (and (file-exists-p path)
-                       (string-prefix-p (concat root "/") (file-truename path)))
+        (let ((parts (portal-runtime--resolve root (butlast (split-string name "/")) link)))
+          (unless (and parts
+                       (file-exists-p (concat root "/" (string-join parts "/")))
+                       (string-prefix-p (concat root "/")
+                                        (file-truename (concat root "/" name))))
             (error "The archive links %s to %s, outside the runtime or to nothing"
                    name link)))))
     ;; Deepest first.  The owner keeps every right, so that Portal can

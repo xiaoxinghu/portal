@@ -21,6 +21,8 @@ JSON object a line.  A path's first part may ask for a misbehaving server:
     /plain-redirect/REST      302 to http://127.0.0.1:N/REST
     /chunked/REST             REST with chunked transfer encoding
     /tiny-chunks/REST         the same in chunks of 4 bytes, framing more than data
+    /burst/REST               an archive's first half in chunks of 4 bytes at once,
+                              then the rest 4096 bytes every half second
     /truncate/REST            half of REST if an archive, then the connection closes
     /stall/REST               half of REST if an archive, then nothing
 
@@ -123,13 +125,29 @@ class Assets(http.server.BaseHTTPRequestHandler):
         if mode == "plain-redirect":
             return self.answer(302, [("Location", f"http://127.0.0.1:{port}/{rest}"),
                                      ("Content-Length", "0")])
-        if mode not in ("chunked", "tiny-chunks", "truncate", "stall"):
+        if mode not in ("chunked", "tiny-chunks", "burst", "truncate", "stall"):
             mode, rest = "", self.path.lstrip("/")
         path = (self.root / rest).resolve()
         if self.root not in path.parents or not path.is_file():
             return self.answer(404, [("Content-Length", "0")])
         data = path.read_bytes()
-        if mode in ("chunked", "tiny-chunks"):
+        if mode == "burst" and rest.endswith(".tar.gz"):
+            self.send_response(200)
+            self.send_header("Transfer-Encoding", "chunked")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            half = len(data) // 2
+            self.wfile.write(b"".join(b"%x\r\n%s\r\n" % (len(data[at:at + 4]), data[at:at + 4])
+                                      for at in range(0, half, 4)))
+            self.wfile.flush()
+            for at in range(half, len(data), 4096):
+                time.sleep(0.5)
+                self.wfile.write(b"%x\r\n%s\r\n" % (len(data[at:at + 4096]), data[at:at + 4096]))
+                self.wfile.flush()
+            self.wfile.write(b"0\r\n\r\n")
+            self.close_connection = True
+            return
+        if mode in ("chunked", "tiny-chunks", "burst"):
             size = 4096 if mode == "chunked" else 4
             body = b"".join(b"%x\r\n%s\r\n" % (len(data[at:at + size]), data[at:at + size])
                             for at in range(0, len(data), size)) + b"0\r\n\r\n"
@@ -181,6 +199,15 @@ VARIANTS = {
     # Escapes by link: out of the runtime, absolute, or to write through.
     "link-out": lambda: [member("licenses/out", kind=tarfile.SYMTYPE, link="../../../outside")],
     "link-absolute": lambda: [member("licenses/out", kind=tarfile.SYMTYPE, link="/etc")],
+    # Out and back in by the name of the directory it is unpacked in, which
+    # resolves while it is there and breaks once it is renamed: directly,
+    # and through a link that climbs.
+    "reenter": lambda: [member("licenses/again", kind=tarfile.SYMTYPE,
+                               link="../../runtime/licenses/LICENSE")],
+    "reenter-through-link": lambda: [
+        member("licenses/sub/up", kind=tarfile.SYMTYPE, link=".."),
+        member("licenses/sub/again", kind=tarfile.SYMTYPE,
+               link="up/../../runtime/licenses/LICENSE")],
     "through-link": lambda: [member("licenses/via", kind=tarfile.SYMTYPE, link=".."),
                              member("licenses/via/escaped", b"out")],
     # What no runtime holds.
