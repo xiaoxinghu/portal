@@ -20,6 +20,7 @@ import {
 	machO,
 	plan,
 	required,
+	sourceIdentity,
 	stage,
 	zonDependencies,
 } from "../licenses/source";
@@ -36,6 +37,9 @@ const clean: Checkout = {
 	tags: ["v9.9.9"],
 	changes: [],
 };
+const identity = "a".repeat(64);
+// A clean checkout whose sources are the ones the fake build recorded.
+const ok = { portal: clean, identity };
 
 let scratch: string | undefined;
 afterEach(() => {
@@ -72,6 +76,10 @@ function fakeBuild(options: { cpu?: number; omit?: string } = {}): string {
 		header(options.cpu ?? 0x0100000c),
 	);
 	mkdirSync(join(dir, "licenses"));
+	writeFileSync(
+		join(dir, "portal-build.eld"),
+		`(:identity "${identity}" :version "0.2.0")`,
+	);
 	const rows = required(root, inventory)
 		.filter((component) => component.id !== options.omit)
 		.map(
@@ -100,7 +108,7 @@ function fakeBuild(options: { cpu?: number; omit?: string } = {}): string {
 test("a clean staging run writes pointers for every component the module ships", () => {
 	const dir = fakeBuild();
 	const out = join(scratch as string, "source");
-	expect(stage(dir, out, { portal: clean })).toEqual([]);
+	expect(stage(dir, out, ok)).toEqual([]);
 	const manifest = JSON.parse(readFileSync(join(out, "source.json"), "utf8"));
 	expect(manifest.platform).toEqual({
 		os: "macos",
@@ -110,6 +118,7 @@ test("a clean staging run writes pointers for every component the module ships",
 	expect(manifest.portal).toEqual({
 		revision: clean.revision,
 		tags: clean.tags,
+		identity,
 	});
 	const ids = required(root, inventory).map((component) => component.id);
 	expect(Object.keys(manifest.components).sort()).toEqual(ids.sort());
@@ -141,19 +150,21 @@ test("an input missing from licenses/source.json fails, staging nothing", () => 
 	damaged.archives = damaged.archives.filter(
 		(archive) => archive.name !== "z2d",
 	);
-	const problems = stage(dir, out, { portal: clean, lock: damaged });
-	expect(problems).toHaveLength(1);
-	expect(problems[0]).toContain("z2d 8787d71bac42d9aab00428ccb37a4fd453418761");
-	expect(problems[0]).toContain("no input holds its source");
+	const problems = stage(dir, out, { ...ok, lock: damaged });
+	// Both as a component the module ships and as an archive Ghostty pins.
+	expect(problems).toHaveLength(2);
+	expect(problems[0]).toContain("Ghostty pins z2d-0.13.2");
+	expect(problems[1]).toContain("z2d 8787d71bac42d9aab00428ccb37a4fd453418761");
+	expect(problems[1]).toContain("no input holds its source");
 	expect(existsSync(out)).toBe(false);
 });
 
 test("an input without a digest fails", () => {
 	const damaged = lock();
 	damaged["libghostty-spm"].xcframework.sha256 = "";
-	expect(
-		plan({ build: fakeBuild(), portal: clean, lock: damaged }).problems,
-	).toEqual(["input ghosttykit-xcframework has no URL, revision or digest"]);
+	expect(plan({ build: fakeBuild(), ...ok, lock: damaged }).problems).toEqual([
+		"input ghosttykit-xcframework has no URL, revision or digest",
+	]);
 });
 
 test("a lock read from another libghostty-spm fails", () => {
@@ -161,7 +172,7 @@ test("a lock read from another libghostty-spm fails", () => {
 	damaged["libghostty-spm"].revision = "0".repeat(40);
 	const [problem] = plan({
 		build: fakeBuild(),
-		portal: clean,
+		...ok,
 		lock: damaged,
 	}).problems;
 	expect(problem).toContain("run bun licenses/source.ts refresh");
@@ -169,7 +180,7 @@ test("a lock read from another libghostty-spm fails", () => {
 
 test("an Intel module fails", () => {
 	expect(
-		plan({ build: fakeBuild({ cpu: 0x01000007 }), portal: clean }).problems,
+		plan({ build: fakeBuild({ cpu: 0x01000007 }), ...ok }).problems,
 	).toEqual([
 		"portal.bundle/Contents/MacOS/portal.dylib is x86_64, not an Apple Silicon (arm64) build",
 	]);
@@ -178,6 +189,7 @@ test("an Intel module fails", () => {
 test("a checkout with changes fails", () => {
 	const [problem] = plan({
 		build: fakeBuild(),
+		identity,
 		portal: { ...clean, changes: [" M native/Views.swift"] },
 	}).problems;
 	expect(problem).toContain("has changes no revision holds");
@@ -185,9 +197,7 @@ test("a checkout with changes fails", () => {
 });
 
 test("notices of another build fail", () => {
-	expect(
-		plan({ build: fakeBuild({ omit: "z2d" }), portal: clean }).problems,
-	).toEqual([
+	expect(plan({ build: fakeBuild({ omit: "z2d" }), ...ok }).problems).toEqual([
 		"the build's notices lack z2d 8787d71bac42d9aab00428ccb37a4fd453418761 (0.13.2), which this checkout's pins require: the build is not of this checkout",
 	]);
 });
@@ -195,7 +205,7 @@ test("notices of another build fail", () => {
 test("a build without the module or notices fails", () => {
 	const empty = mkdtempSync(join(tmpdir(), "portal-source-"));
 	scratch = empty;
-	const problems = plan({ build: empty, portal: clean }).problems;
+	const problems = plan({ build: empty, ...ok }).problems;
 	expect(problems.some((p) => p.includes("has no portal.bundle"))).toBe(true);
 	expect(problems.some((p) => p.includes("has no licenses/README.md"))).toBe(
 		true,
@@ -208,7 +218,65 @@ test("the build's own notices are covered", () => {
 		!existsSync(join(build, "licenses", "README.md"))
 	)
 		return;
-	expect(plan({ build, portal: clean }).problems).toEqual([]);
+	// Whether the build is current is the identity tests' concern.
+	const recorded = /:identity "([0-9a-f]+)"/.exec(
+		readFileSync(join(build, "portal-build.eld"), "utf8"),
+	)?.[1];
+	expect(plan({ build, portal: clean, identity: recorded }).problems).toEqual(
+		[],
+	);
+});
+
+test("a build of other sources fails", () => {
+	const [problem] = plan({
+		build: fakeBuild(),
+		portal: clean,
+		identity: "b".repeat(64),
+	}).problems;
+	expect(problem).toContain("the build is of other sources");
+});
+
+test("a build without its record fails", () => {
+	const dir = fakeBuild();
+	rmSync(join(dir, "portal-build.eld"));
+	expect(plan({ build: dir, ...ok }).problems).toEqual([
+		`${dir} has no portal-build.eld with a source identity: the build did not finish`,
+	]);
+});
+
+test("the checkout's identity is portal-build.el's", () => {
+	const computed = sourceIdentity(root);
+	if (computed === undefined) return; // No Emacs here.
+	expect(computed).toMatch(/^[0-9a-f]{64}$/);
+});
+
+test.each([
+	["aro", "translate_c pins"],
+	["translate_c", "Ghostty pins"],
+])("an archive missing from the pins' closure fails: %s", (name, owner) => {
+	const damaged = lock();
+	const hash = damaged.archives.find((archive) => archive.name === name)?.hash;
+	damaged.archives = damaged.archives.filter(
+		(archive) => archive.name !== name,
+	);
+	expect(
+		plan({ build: fakeBuild(), ...ok, lock: damaged }).problems,
+	).toContainEqual(
+		`${owner} ${hash}, which licenses/source.json lacks: run bun licenses/source.ts refresh`,
+	);
+});
+
+test("an archive nothing pins fails", () => {
+	const damaged = lock();
+	damaged.archives.push({
+		name: "stray",
+		url: "https://example.org/stray.tar.gz",
+		hash: "N-V-stray",
+		zon: "ghostty:build.zig.zon",
+	});
+	expect(plan({ build: fakeBuild(), ...ok, lock: damaged }).problems).toEqual([
+		"licenses/source.json lists stray, which nothing pins: run bun licenses/source.ts refresh",
+	]);
 });
 
 test("index rows unescape pipes", () => {

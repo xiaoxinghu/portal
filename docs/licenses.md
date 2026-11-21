@@ -198,7 +198,14 @@ fails, and writes nothing, in any of these cases:
 
 - The module is not Apple Silicon.
 - The checkout has changes that no commit holds.
+- The build is of other sources: its `portal-build.eld` lacks the source
+  identity that `portal-build.el` computes for the checkout. `EMACS` names the
+  Emacs that computes it, as for the build.
 - `licenses/source.json` was read from another libghostty-spm pin.
+- An archive that Ghostty pins, directly or through a package's own manifest,
+  is missing, or the lock lists an archive nothing pins. The lock records each
+  package's pins to make this check possible, since no inventory entry names
+  build-only archives such as arocc.
 - An input has no revision or digest.
 - A component that the build's `licenses/README.md` lists in the module has no
   input that holds its source.

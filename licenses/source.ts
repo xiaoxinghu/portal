@@ -37,7 +37,14 @@ type Download = { url: string; sha256: string };
 // An archive a build.zig.zon file pins: Zig fetches it by URL and checks
 // the package hash of its contents. ZON is OWNER:PATH, the package whose
 // manifest pins it, ghostty for Ghostty's own.
-export type Archive = { name: string; url: string; hash: string; zon: string };
+export type Archive = {
+	name: string;
+	url: string;
+	hash: string;
+	zon: string;
+	// The hashes its own build.zig.zon pins; none for a plain archive.
+	pins?: string[];
+};
 
 // licenses/source.json.
 export type Lock = {
@@ -56,6 +63,9 @@ export type Lock = {
 	// whose standard library and compiler-rt the library contains, and the
 	// Apple Silicon compiler.
 	zig: { version: string; source: Download; "aarch64-macos": Download };
+	// The hashes Ghostty's build.zig.zon files pin: with each archive's
+	// pins, the closure every archive must be in.
+	pins: string[];
 	archives: Archive[];
 	// Components whose code ships from inside an input, not from the
 	// upstream their inventory entry names: component id to input id.
@@ -87,7 +97,8 @@ export type Manifest = {
 	format: 1;
 	module: string;
 	platform: { os: "macos"; arch: string; minimum?: string };
-	portal: { revision?: string; tags: string[] };
+	// identity: portal-build.el's source identity, which the build recorded.
+	portal: { revision?: string; tags: string[]; identity?: string };
 	inputs: Input[];
 	// Inventory component id to the input that holds its source.
 	components: Record<string, string>;
@@ -299,6 +310,33 @@ export function required(at: string, inventory: Component[]): Component[] {
 
 const module = "portal.bundle/Contents/MacOS/portal.dylib";
 
+// The source identity portal-build.el computes for the checkout AT, which a
+// finished build records in portal-build.eld; computed by that Lisp itself,
+// so the two cannot drift. EMACS names the Emacs, as for the build.
+export function sourceIdentity(at: string): string | undefined {
+	const candidates = [
+		process.env.EMACS,
+		"emacs",
+		"/Applications/Emacs.app/Contents/MacOS/Emacs",
+	].filter((emacs): emacs is string => Boolean(emacs));
+	for (const emacs of candidates) {
+		const result = spawnSync(
+			emacs,
+			[
+				"--batch",
+				"-Q",
+				"-l",
+				join(at, "portal-build.el"),
+				"--eval",
+				'(princ (or (portal-build-source-identity) ""))',
+			],
+			{ encoding: "utf8" },
+		);
+		if (result.status === 0) return result.stdout.trim() || undefined;
+	}
+	return undefined;
+}
+
 // The manifest for BUILD, or what keeps it from corresponding to the build.
 export function plan(options: {
 	build: string;
@@ -306,10 +344,13 @@ export function plan(options: {
 	lock?: Lock;
 	portal?: Checkout;
 	inventory?: Component[];
+	// The checkout's source identity, as portal-build.el computes it.
+	identity?: string;
 }): { manifest?: Manifest; problems: string[] } {
 	const at = options.at ?? root;
 	const lock = options.lock ?? json<Lock>(lockPath);
 	const portal = options.portal ?? checkout(at);
+	const identity = options.identity ?? sourceIdentity(at);
 	const inventory =
 		options.inventory ??
 		json<{ components: Component[] }>(join(at, "licenses", "inventory.json"))
@@ -345,6 +386,51 @@ export function plan(options: {
 				.map((line) => `\n  ${line}`)
 				.join("")}`,
 		);
+
+	// The build must be of these sources: its record names their identity.
+	const recordPath = join(options.build, "portal-build.eld");
+	const recorded = existsSync(recordPath)
+		? /:identity "([0-9a-f]+)"/.exec(read(recordPath))?.[1]
+		: undefined;
+	if (!recorded)
+		problems.push(
+			`${options.build} has no portal-build.eld with a source identity: the build did not finish`,
+		);
+	else if (!identity)
+		problems.push(
+			"cannot compute this checkout's source identity: set EMACS to an Emacs that runs portal-build.el",
+		);
+	else if (recorded !== identity)
+		problems.push(
+			`the build is of other sources than this checkout's (identity ${recorded}, the checkout's ${identity}): build again`,
+		);
+
+	// Every archive Ghostty's build can fetch: its pins and theirs.
+	const byHash = new Map(
+		lock.archives.map((archive) => [archive.hash, archive]),
+	);
+	const reached = new Set<string>();
+	const queue: [string, string][] = lock.pins.map((hash) => [hash, "Ghostty"]);
+	if (!lock.pins.length)
+		problems.push(
+			"licenses/source.json lists none of Ghostty's pins: run bun licenses/source.ts refresh",
+		);
+	for (let next = queue.shift(); next; next = queue.shift()) {
+		const [hash, owner] = next;
+		if (reached.has(hash)) continue;
+		reached.add(hash);
+		const archive = byHash.get(hash);
+		if (!archive)
+			problems.push(
+				`${owner} pins ${hash}, which licenses/source.json lacks: run bun licenses/source.ts refresh`,
+			);
+		else for (const pin of archive.pins ?? []) queue.push([pin, archive.name]);
+	}
+	for (const archive of lock.archives)
+		if (!reached.has(archive.hash))
+			problems.push(
+				`licenses/source.json lists ${archive.name}, which nothing pins: run bun licenses/source.ts refresh`,
+			);
 
 	// The lock must have been read from the pinned wrapper.
 	const spm: { revision: string } = json(
@@ -412,7 +498,7 @@ export function plan(options: {
 			format: 1,
 			module,
 			platform,
-			portal: { revision: portal.revision, tags: portal.tags },
+			portal: { revision: portal.revision, tags: portal.tags, identity },
 			inputs: list,
 			components,
 		},
@@ -732,17 +818,22 @@ export async function refresh(): Promise<Lock> {
 		)
 		.sort();
 	const archives = new Map<string, Archive>();
+	const pins = new Set<string>();
 	for (const zon of zons)
-		for (const dep of zonDependencies(show(ghosttyClone, ghostty, zon)))
+		for (const dep of zonDependencies(show(ghosttyClone, ghostty, zon))) {
+			pins.add(dep.hash);
 			if (!archives.has(dep.hash))
 				archives.set(dep.hash, { ...dep, zon: `ghostty:${zon}` });
+		}
 	// And what those packages pin in turn. A hash starting N-V- names a plain
 	// archive, which has no build.zig.zon.
 	const queue = [...archives.values()];
 	for (let archive = queue.shift(); archive; archive = queue.shift()) {
 		if (archive.hash.startsWith("N-V-")) continue;
 		const zon = await packageZon(archive.url);
-		for (const dep of zon ? zonDependencies(zon) : [])
+		const deps = zon ? zonDependencies(zon) : [];
+		archive.pins = deps.map((dep) => dep.hash).sort();
+		for (const dep of deps)
 			if (!archives.has(dep.hash)) {
 				const entry = { ...dep, zon: `${archive.name}:build.zig.zon` };
 				archives.set(dep.hash, entry);
@@ -762,6 +853,7 @@ export async function refresh(): Promise<Lock> {
 			source: download("src"),
 			"aarch64-macos": download("aarch64-macos"),
 		},
+		pins: [...pins].sort(),
 		archives: [...archives.values()].sort((a, b) =>
 			a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
 		),
