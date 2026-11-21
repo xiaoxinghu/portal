@@ -207,6 +207,23 @@ fails, and writes nothing, in any of these cases:
 The `corresponding-source` CTest suite checks each of these failures, and
 checks the build's own notices against the inputs.
 
+The rebuild steps in `SOURCE.md` were verified on 2026-11-21, on an Apple
+Silicon Mac with Zig 0.17.0:
+
+- In a fresh clone, the wrapper's `build.sh --platforms macos` rebuilt the
+  library from the inputs alone in 8 minutes.
+- The Zig cache then held exactly the 37 archives `licenses/source.json` lists,
+  and their package hashes matched. One of them, arocc, is pinned by
+  `translate_c`'s manifest rather than Ghostty's, so the refresh follows each
+  package's own pins too.
+- The rebuilt `libghostty.a` is not byte for byte the published one: its arm64
+  slice is 0.16% larger. It has the same 137 object members, the same 2,496
+  exported symbols and identical headers.
+- Portal built against it with `./build.sh --prune`. The build's own check
+  loaded the module and started Ghostty.
+- Staging from that pruned build passed, and failed, writing nothing, when z2d's
+  archive was removed from the lock.
+
 The Linux module's corresponding source is
 `tasks/portal/runtime-linux-notices-source.md`'s to settle; nothing here
 covers Portal's own Ghostty build.
