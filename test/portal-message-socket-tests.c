@@ -815,6 +815,9 @@ static void test_refusals(void)
 static void test_a_server_with_no_room(void)
 {
     enum { FILL = 64 };
+    /* The sockets of the tests before let go of their descriptors on their
+       own threads: count from none, not from one still closing. */
+    EVENTUALLY(open_descriptors() == 0);
     int fill[FILL], filled = 0, listener = listen_at("full");
     /* Fill its queue with connections nobody accepts, until one is turned
        away: Linux says to try again, and a BSD refuses. */

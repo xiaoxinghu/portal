@@ -137,6 +137,38 @@ the installer, `portal-runtime-install`, fetches them by the release's tag,
 under these names; see
 [downloaded runtimes](install.md#downloaded-runtimes).
 
+The same run has a Linux job for each CPU, `ubuntu-26.04` and
+`ubuntu-26.04-arm`, equal in priority, which make
+`portal-runtime-…-linux-x86_64-gnu.tar.gz` and
+`portal-runtime-…-linux-aarch64-gnu.tar.gz` from the build of the checks
+that run on Linux: CTest and the Python tests, no graphical suite. Each
+holds `portal.so`, `portal-build.eld`, `licenses`, and of
+`ghostty-linux` Ghostty's library with its soname link, its resources and
+`terminfo`, and no host. An archive is chosen by the CPU and the C library,
+glibc, never by distribution or desktop: its floor, in the manifest, is
+glibc 2.43, Ubuntu 26.04's, on which it is built with the runner's own
+compiler and libraries. Ghostty's library is built for that glibc and the
+CPU's baseline, `-DPORTAL_GHOSTTY_TARGET=x86_64-linux-gnu.2.43` (or
+`aarch64-…`) `-DPORTAL_GHOSTTY_CPU=baseline`, and the module for the same
+CPU by name, `-march=x86-64` or `-march=armv8-a`: the x86-64 image's GCC
+would otherwise assume x86-64-v3. Its glibc is built for that too, and
+marks every executable linked there as needing it, so the jobs' Emacs 31.1
+is built in a stock `ubuntu:26.04` container, with pgtk, and cached. Unpacking checks each ELF binary's machine, that it needs no glibc
+symbol version newer than the floor, nor, on x86-64, a CPU level above the
+baseline in the note GCC writes, that it loads only GTK 3, Wayland,
+EGL and glibc from the system and Ghostty's library from the runtime
+through the module's `$ORIGIN/ghostty-linux/lib` runpath, and asks the
+system's loader where it finds each. A disposable Emacs then loads the
+module and starts Ghostty there. It does that again in a stock
+`ubuntu:26.04` container, with the libraries of Ubuntu's own pgtk Emacs,
+and then on a CPU of the baseline that QEMU emulates there, `qemu64` or
+`cortex-a53`, where an instruction beyond it would stop Emacs; the
+emulated CPU must first refuse a program of one newer instruction. Not on
+the runner's own system: the x86-64 image's glibc is built for x86-64-v3,
+and its loader stops on an older CPU before any program starts. `readelf`'s own account of both
+binaries is `runtime/abi.log` in the job's `logs-TARGET`. No terminal is
+drawn: Linux renders are checked on desktops, not here.
+
 ## Guard rails on GitHub
 
 Two rulesets keep `stable` and the tags from being rewritten, whoever pushes.

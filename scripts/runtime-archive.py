@@ -16,10 +16,15 @@ after the build's version and the commit, and its manifest has no tag.
 would land outside DESTINATION, unpacks it there, a new or empty directory,
 and checks what it unpacked: the files of the runtime and nothing else, the
 build record the manifest names, and each binary's CPU, oldest system and
-libraries.  It does not load the module: in a checkout of the same
-sources, `emacs --batch -Q -l portal-build.el -f portal-build--probe-batch
-DESTINATION` does, and test/render-smoke.sh DESTINATION draws a terminal
-from it.
+libraries.  On Linux that is each ELF binary's machine, on x86-64 the CPU
+level its GNU property note says it needs, the newest glibc symbol
+version it needs, its libraries and where it looks for them: those
+of the system by name, Ghostty's from the runtime through the module's
+$ORIGIN runpath.  Run on a machine of the archive's CPU, it also asks the
+system's loader, ldd, where each library is found.  It does not load the
+module: in a checkout of the same sources, `emacs --batch -Q -l
+portal-build.el -f portal-build--probe-batch DESTINATION` does, and
+test/render-smoke.sh DESTINATION draws a terminal from it.
 
 test/fixtures/runtime-manifest.json is an example manifest: the tests of
 this script and of the installer read it.  Runs with the Python of macOS's
@@ -31,18 +36,30 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import re
 import shutil
 import stat
 import struct
+import subprocess
 import sys
 import tarfile
 from pathlib import Path
 
 FORMAT = 1
 
-# What each target's archive holds, at its top, and which of its files are
-# Mach-O binaries to check.  The Linux archives will add rows.
+# What each target's archive holds, each entry with all beneath it, which of
+# its files are binaries to check and which must be executable.  A Linux
+# archive is one per CPU, for every glibc system of its floor or newer,
+# whatever the distribution or desktop: it holds Ghostty's library under its
+# soname too, and the resources, not the rest of Ghostty's install.
+LINUX_ENTRIES = ["licenses", "portal-build.eld", "portal.so",
+                 "ghostty-linux/lib/ghostty-internal.so", "ghostty-linux/lib/libghostty.so",
+                 "ghostty-linux/share/ghostty", "ghostty-linux/share/terminfo"]
+LINUX_REQUIRED = ["licenses/LICENSE", "licenses/README.md", "portal-build.eld", "portal.so",
+                  "ghostty-linux/lib/libghostty.so",
+                  "ghostty-linux/share/terminfo/x/xterm-ghostty"]
+LINUX_BINARIES = ["portal.so", "ghostty-linux/lib/ghostty-internal.so"]
 TARGETS = {
     "macos-arm64": {
         "entries": ["licenses", "portal-build.eld", "portal-host", "portal.bundle"],
@@ -50,8 +67,17 @@ TARGETS = {
                      "portal-host", "portal.bundle/Contents/Info.plist",
                      "portal.bundle/Contents/MacOS/portal.dylib"],
         "binaries": ["portal.bundle/Contents/MacOS/portal.dylib", "portal-host"],
+        "executables": ["portal-host"],
         "cpu": "arm64",
         "floor": {"macos": "13.0"},
+    },
+    "linux-x86_64-gnu": {
+        "entries": LINUX_ENTRIES, "required": LINUX_REQUIRED, "binaries": LINUX_BINARIES,
+        "executables": [], "cpu": "x86_64", "floor": {"glibc": "2.43"},
+    },
+    "linux-aarch64-gnu": {
+        "entries": LINUX_ENTRIES, "required": LINUX_REQUIRED, "binaries": LINUX_BINARIES,
+        "executables": [], "cpu": "aarch64", "floor": {"glibc": "2.43"},
     },
 }
 
@@ -196,8 +222,12 @@ def version_key(text: str) -> tuple:
     return tuple(int(part) for part in text.split("."))
 
 
-def check_binary(path: Path, name: str, target: str) -> str:
-    """Refuse a binary that would not run on every system TARGET claims."""
+def check_binary(root: Path, name: str, target: str) -> str:
+    """Refuse a binary, NAME in the runtime ROOT, that would not run on every
+system TARGET claims."""
+    if "glibc" in TARGETS[target]["floor"]:
+        return check_elf(root, name, target)
+    path = root / name
     spec = TARGETS[target]
     found = macho(path)
     if found["cpu"] != spec["cpu"]:
@@ -217,6 +247,211 @@ def check_binary(path: Path, name: str, target: str) -> str:
             f"{len(found['loads'])} system libraries{rpaths}")
 
 
+# ELF, as much as the checks need: the machine, the libraries needed and
+# where they are looked for, the soname, and the symbol versions needed.
+
+MACHINES = {62: "x86_64", 183: "aarch64"}
+ET_DYN, SHT_DYNAMIC, SHT_NOTE, SHT_GNU_VERNEED = 3, 6, 7, 0x6FFFFFFE
+# The x86-64 levels a binary says it needs, in its GNU property note, which
+# GCC and binutils write and glibc's loader enforces: x86-64 itself, then
+# v2, v3 (Haswell's AVX2) and v4 (AVX-512).
+NT_GNU_PROPERTY_TYPE_0, GNU_PROPERTY_X86_ISA_1_NEEDED = 5, 0xC0008002
+X86_LEVELS = [(1, "x86-64"), (2, "x86-64-v2"), (4, "x86-64-v3"), (8, "x86-64-v4")]
+DT_NEEDED, DT_SONAME, DT_RPATH, DT_RUNPATH = 1, 14, 15, 29
+
+# Libraries a Linux binary may load by name from the system: glibc's, and
+# GTK 3, Wayland's client and EGL, with the libraries GTK's pkg-config
+# links.  The system supplies them, the archive never.  Anything else would
+# have to be on the user's machine, where it was on the builder's.
+LINUX_SYSTEM_LIBRARIES = {
+    "libc.so.6", "libm.so.6", "libdl.so.2", "libpthread.so.0", "librt.so.1",
+    "ld-linux-x86-64.so.2", "ld-linux-aarch64.so.1",
+    "libgtk-3.so.0", "libgdk-3.so.0", "libpangocairo-1.0.so.0", "libpango-1.0.so.0",
+    "libharfbuzz.so.0", "libatk-1.0.so.0", "libcairo-gobject.so.2", "libcairo.so.2",
+    "libgdk_pixbuf-2.0.so.0", "libgio-2.0.so.0", "libgobject-2.0.so.0", "libglib-2.0.so.0",
+    "libgmodule-2.0.so.0", "libwayland-client.so.0", "libEGL.so.1",
+}
+
+
+def elf(path: Path) -> dict:
+    """The machine, type, libraries, soname, search paths and needed
+symbol versions of a 64-bit little-endian ELF file."""
+    data = path.read_bytes()
+    if len(data) < 64 or data[:4] != b"\x7fELF":
+        raise Refusal(f"{path} is not an ELF binary")
+    if data[4] != 2 or data[5] != 1:
+        raise Refusal(f"{path} is not a 64-bit little-endian ELF binary")
+    kind, machine = struct.unpack_from("<HH", data, 16)
+    shoff, = struct.unpack_from("<Q", data, 40)
+    shentsize, shnum = struct.unpack_from("<HH", data, 58)
+    found = {"machine": MACHINES.get(machine, str(machine)), "type": kind, "needed": [],
+             "soname": None, "rpath": [], "runpath": [], "versions": {}, "x86_isa": None}
+    if shentsize != 64 or shoff + shnum * 64 > len(data):
+        raise Refusal(f"{path} has damaged section headers")
+    sections = [struct.unpack_from("<IIQQQQIIQQ", data, shoff + index * 64)
+                for index in range(shnum)]
+
+    def section(index):
+        if index >= len(sections):
+            raise Refusal(f"{path} has a damaged section link")
+        _, _, _, _, offset, size, link, info, _, _ = sections[index]
+        if offset + size > len(data):
+            raise Refusal(f"{path} has a damaged section")
+        return offset, size, link, info
+
+    def string(table, at):
+        offset, size, _, _ = section(table)
+        if at >= size:
+            raise Refusal(f"{path} has a damaged string table")
+        return data[offset + at:data.index(b"\0", offset + at)].decode("utf-8", "replace")
+
+    for index, header in enumerate(sections):
+        if header[1] == SHT_DYNAMIC:
+            offset, size, strings, _ = section(index)
+            for at in range(offset, offset + size - 15, 16):
+                tag, value = struct.unpack_from("<qQ", data, at)
+                if tag == 0:
+                    break
+                if tag == DT_NEEDED:
+                    found["needed"].append(string(strings, value))
+                elif tag == DT_SONAME:
+                    found["soname"] = string(strings, value)
+                elif tag in (DT_RPATH, DT_RUNPATH):
+                    key = "rpath" if tag == DT_RPATH else "runpath"
+                    found[key] += [part for part in string(strings, value).split(":") if part]
+        elif header[1] == SHT_NOTE:
+            offset, size, _, _ = section(index)
+            align = max(4, header[8])
+            at, end = offset, offset + size
+            while at + 12 <= end:
+                namesz, descsz, kind_ = struct.unpack_from("<III", data, at)
+                name = data[at + 12:at + 12 + namesz]
+                desc = at + (12 + namesz + align - 1) // align * align
+                if name == b"GNU\0" and kind_ == NT_GNU_PROPERTY_TYPE_0:
+                    there = desc
+                    while there + 8 <= desc + descsz:
+                        property_, datasz = struct.unpack_from("<II", data, there)
+                        if property_ == GNU_PROPERTY_X86_ISA_1_NEEDED and datasz >= 4:
+                            found["x86_isa"] = (found["x86_isa"] or 0) | \
+                                struct.unpack_from("<I", data, there + 8)[0]
+                        there += 8 + (datasz + 7) // 8 * 8
+                at = desc + (descsz + align - 1) // align * align
+        elif header[1] == SHT_GNU_VERNEED:
+            offset, size, strings, count = section(index)
+            at = offset
+            for _ in range(count):
+                _, entries, file, aux, following = struct.unpack_from("<HHIII", data, at)
+                names = found["versions"].setdefault(string(strings, file), [])
+                there = at + aux
+                for _ in range(entries):
+                    _, _, _, name, after = struct.unpack_from("<IHHII", data, there)
+                    names.append(string(strings, name))
+                    there += after
+                at += following
+    return found
+
+
+def glibc_version(name: str):
+    match = re.fullmatch(r"GLIBC_(\d+(?:\.\d+)+)", name)
+    return match and version_key(match.group(1))
+
+
+def search_paths(root: Path, name: str, found: dict) -> list:
+    """The directories the binary NAME in ROOT names in its runpath, with
+$ORIGIN, its own directory, expanded."""
+    origin = (root / name).parent
+    places = []
+    for entry in found["runpath"]:
+        if not re.match(r"\$(ORIGIN|\{ORIGIN\})(/|$)", entry):
+            raise Refusal(f"{name} searches {entry} for libraries, not a place beside it")
+        place = Path(os.path.normpath(origin / re.sub(r"^\$(ORIGIN|\{ORIGIN\})", ".", entry)))
+        if os.path.commonpath([os.path.realpath(place), str(root.resolve())]) != str(root.resolve()):
+            raise Refusal(f"{name} searches {entry} for libraries, outside the runtime")
+        places.append(place)
+    return places
+
+
+def check_elf(root: Path, name: str, target: str) -> str:
+    spec = TARGETS[target]
+    found = elf(root / name)
+    if found["machine"] != spec["cpu"]:
+        raise Refusal(f"{name} is for {found['machine']}, not {spec['cpu']}")
+    if found["type"] != ET_DYN:
+        raise Refusal(f"{name} is not a shared object")
+    if found["rpath"]:
+        raise Refusal(f"{name} has an RPATH, {':'.join(found['rpath'])}, which overrides "
+                      "the user's library path; a runpath is what it needs")
+    level = ""
+    if found["machine"] == "x86_64":
+        marked = found["x86_isa"]
+        newer = [name for bit, name in X86_LEVELS[1:] if marked and marked & bit]
+        if newer:
+            raise Refusal(f"{name} needs {newer[-1]}, a newer CPU than the baseline, x86-64")
+        level = ", x86-64 baseline" if marked else ", no x86-64 level marked"
+    floor = spec["floor"]["glibc"]
+    newest, others = None, []
+    for library, names in sorted(found["versions"].items()):
+        for version in names:
+            key = glibc_version(version)
+            if key is None:
+                others.append(f"{version} of {library}")
+            elif newest is None or key > glibc_version(newest):
+                newest = version
+    if any(version.startswith("GLIBC_PRIVATE") for version in others):
+        raise Refusal(f"{name} needs glibc's private symbols, which change with every release")
+    if newest and glibc_version(newest) > version_key(floor):
+        raise Refusal(f"{name} needs {newest}, newer than the floor, glibc {floor}")
+    places = search_paths(root, name, found)
+    own, system = [], []
+    for library in found["needed"]:
+        inside = next((place / library for place in places if (place / library).is_file()), None)
+        if inside:
+            if elf(inside)["soname"] != library:
+                raise Refusal(f"{name} needs {library}, and the runtime's "
+                              f"{inside.relative_to(root)} has another soname")
+            own.append((library, inside))
+        elif library in LINUX_SYSTEM_LIBRARIES:
+            system.append(library)
+        else:
+            raise Refusal(f"{name} needs {library}, which is neither the system's nor "
+                          "the runtime's")
+    found_by_loader = check_loader(root, name, own, spec["cpu"])
+    return (f"{name}: {found['machine']}{level}, {newest or 'no glibc versions'} at most"
+            f"{', also ' + ', '.join(others) if others else ''}; "
+            f"system libraries {', '.join(system) or 'none'}"
+            + "".join(f"; {library} from the runtime's "
+                      f"{inside.relative_to(root).as_posix()} by its runpath "
+                      f"{':'.join(found['runpath'])}" for library, inside in own)
+            + found_by_loader)
+
+
+def check_loader(root: Path, name: str, own: list, cpu: str) -> str:
+    """Ask the system's loader, through ldd, where it finds each library
+of the binary NAME, when this is a Linux machine of its CPU: the runtime's
+must be found in ROOT, and none missing."""
+    if not sys.platform.startswith("linux") or platform.machine() != cpu:
+        return "; the loader not asked: this is not a Linux machine of its CPU"
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith("LD_")}
+    result = subprocess.run(["ldd", str(root / name)], capture_output=True, text=True,
+                            env=environment)
+    if result.returncode != 0:
+        raise Refusal(f"ldd cannot read {name}: {result.stderr.strip() or result.stdout.strip()}")
+    where = {}
+    for line in result.stdout.splitlines():
+        match = re.match(r"\s*(\S+) => (.*?)(?: \(0x[0-9a-f]+\))?$", line)
+        if match:
+            where[match.group(1)] = match.group(2)
+    missing = [library for library, place in where.items() if place == "not found"]
+    if missing:
+        raise Refusal(f"the loader does not find {', '.join(missing)} for {name}")
+    for library, inside in own:
+        if os.path.realpath(where.get(library, "")) != os.path.realpath(inside):
+            raise Refusal(f"the loader finds {library} for {name} at "
+                          f"{where.get(library, 'no place')}, not in the runtime")
+    return f"; the loader finds {len(where)} libraries, the runtime's in it"
+
+
 # Packing.
 
 def files_under(root: Path, entries: list) -> list:
@@ -226,6 +461,11 @@ def files_under(root: Path, entries: list) -> list:
         top = root / entry
         if not os.path.lexists(top):
             raise Refusal(f"the build lacks {entry}")
+        # The directories it is in, which must be directories, not links.
+        for parent in list(Path(entry).parents)[:-1]:
+            if not stat.S_ISDIR(os.lstat(root / parent).st_mode):
+                raise Refusal(f"the build's {parent} is not a directory")
+            paths.append(parent)
         paths.append(Path(entry))
         if top.is_dir() and not top.is_symlink():
             for directory, subdirectories, files in os.walk(top):
@@ -370,9 +610,9 @@ def check_unpacked(destination: Path, archive: Path, manifest: dict, spec: dict,
     """Check the runtime unpacked in DESTINATION against its MANIFEST."""
     entry = manifest["archives"][0]
     tops = sorted(path.name for path in destination.iterdir())
-    if tops != sorted(spec["entries"]):
-        raise Refusal(f"{archive.name} holds {', '.join(tops)}, not "
-                      f"{', '.join(sorted(spec['entries']))}")
+    wanted = sorted({entry.split("/")[0] for entry in spec["entries"]})
+    if tops != wanted:
+        raise Refusal(f"{archive.name} holds {', '.join(tops)}, not {', '.join(wanted)}")
     for name in spec["required"]:
         if not (destination / name).is_file():
             raise Refusal(f"{archive.name} lacks {name}")
@@ -381,13 +621,22 @@ def check_unpacked(destination: Path, archive: Path, manifest: dict, spec: dict,
         if record[key] != manifest[key]:
             raise Refusal(f"the archive's build record has {key} {record[key]}, "
                           f"not the manifest's {manifest[key]}")
-    if not os.access(destination / "portal-host", os.X_OK):
-        raise Refusal("the archive's portal-host is not executable")
+    for name in spec["executables"]:
+        if not os.access(destination / name, os.X_OK):
+            raise Refusal(f"the archive's {name} is not executable")
     print(f"Unpacked {archive.name} into {destination}: {count} paths, "
           f"SHA-256 {digest}")
     print(f"  version {record['version']}, identity {record['identity']}")
     for name in spec["binaries"]:
-        print("  " + check_binary(destination / name, name, entry["target"]))
+        print("  " + check_binary(destination, name, entry["target"]))
+
+
+def of_runtime(name: str, directory: bool, spec: dict) -> bool:
+    """Whether NAME is an entry of the runtime, beneath one, or a directory
+an entry is in."""
+    return any(name == entry or name.startswith(entry + "/")
+               or (directory and entry.startswith(name + "/"))
+               for entry in spec["entries"])
 
 
 def unpack(manifest_path: Path, destination: Path) -> None:
@@ -425,7 +674,7 @@ def unpack(manifest_path: Path, destination: Path) -> None:
                 raise Refusal(f"{archive.name} holds {name!r} twice")
             seen.add(name)
         for member in members:
-            if member.name.split("/")[0] not in spec["entries"]:
+            if not of_runtime(member.name, member.isdir(), spec):
                 raise Refusal(f"{archive.name} holds {member.name!r}, which is not of the runtime")
             if not (member.issym() or member.isfile() or member.isdir()):
                 raise Refusal(f"{archive.name} holds {member.name!r}, neither a file, "
@@ -458,7 +707,8 @@ def main(arguments: list) -> int:
     packing = commands.add_parser("pack", help="tar a tested build and write its manifest")
     packing.add_argument("--tag", help="the release's tag, vX.Y.Z; none outside a release")
     packing.add_argument("--commit", required=True, help="the commit the build is of")
-    packing.add_argument("--target", default="macos-arm64", choices=sorted(TARGETS))
+    packing.add_argument("--target", default="macos-arm64", choices=sorted(TARGETS),
+                         help="what the build is for: this job's CPU and system")
     packing.add_argument("build", type=Path)
     packing.add_argument("out", type=Path)
     unpacking = commands.add_parser("unpack", help="check an archive and unpack it elsewhere")

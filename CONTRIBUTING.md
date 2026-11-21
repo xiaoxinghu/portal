@@ -258,7 +258,16 @@ and answers with its version, build mode and resources; the build's own check
 calls it, and so does the `linux-module` suite.
 
 `--optimize Debug` builds with Zig's safety checks in place of ReleaseFast, and
-`--prefix DIR` installs somewhere else. A Debug build also checks every page of
+`--prefix DIR` installs somewhere else. Zig builds for this machine's CPU and
+C library unless `--target` and `--cpu` name others, as a release archive's
+build does through CMake, with `-DPORTAL_GHOSTTY_TARGET=x86_64-linux-gnu.2.43
+-DPORTAL_GHOSTTY_CPU=baseline` (`aarch64-linux-gnu.2.43` on Arm): then the
+library needs no glibc newer than that and no CPU feature beyond the
+baseline. Zig looks for no system library for a target it is given, so the
+script lets pkg-config name EGL's directory then. Such a build compiles the
+module for the same CPU by name, `-DCMAKE_C_FLAGS=-march=x86-64` or
+`-march=armv8-a`: a compiler's default may be newer than the distribution's,
+as on GitHub's x86-64 Ubuntu image, whose GCC assumes x86-64-v3. A Debug build also checks every page of
 a terminal after each change and takes a minute to print 2 MB: it is for
 finding faults, not for use. ReleaseSafe is not offered, because Ghostty at this
 pin does not compile in it here: glibc's fortified `ptsname_r` does not get
