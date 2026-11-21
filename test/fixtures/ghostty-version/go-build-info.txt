@@ -1,0 +1,5 @@
+path	go.superlogical.com/rex/cmd/rex
+mod	go.superlogical.com/rex	v0.0.0-20261119192944-a086db17db8d	
+dep	github.com/yuin/gopher-lua	v1.1.2	h1:yF/FjE3hD65tBbt0VXLE13HWS9h34fdzJmrWRXwobGA=
+dep	go.mitchellh.com/libghostty	v0.0.0-20261107144202-b13f277ddcb2	h1:iTuAheqDQPb07qiRSc1b1p7s+dwFIbH7wUktPrrngvU=
+dep	go4.org/mem	v0.0.0-20240501181205-ae6ca9944745	h1:Tl++JLUCe4sxGu8cTpDzRLd3tN7US4hOxG5YpKCzkek=
