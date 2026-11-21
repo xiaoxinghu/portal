@@ -494,26 +494,50 @@ changed since the build started: the outputs may contain either version."
     (portal-build--write portal-build--record
                          (list :identity started :version (portal-build-version)))))
 
+(defun portal-build--check-artifacts ()
+  "Signal an error naming the first file of a complete build that is missing."
+  (dolist (file portal-build--artifacts)
+    (unless (file-exists-p (portal-build-file file))
+      (error "Portal's build lacks %s" (portal-build-file file)))))
+
+(defun portal-build--check-runs ()
+  "Load the build's module and start its host, or signal an error.
+Only a disposable batch Emacs may: the module stays loaded."
+  (module-load (portal-build-file portal-build--module))
+  (unless (fboundp 'portal--web-load)
+    (error "Portal's native module lacks its functions"))
+  ;; On Linux, start Ghostty's library from the module's own place, with
+  ;; the resources beside it.
+  (when (fboundp 'portal--terminal-engine)
+    (portal--terminal-engine))
+  (when portal-build--host
+    (portal-build--probe-host (portal-build-file portal-build--host))))
+
 (defun portal-build--finish-batch ()
   "Check a finished build and record its identity, in a disposable batch Emacs.
 The argument after this function's name on the command line is the build
 directory.  The build runs this last: loading the new module anywhere else
 could replace one that Emacs already uses."
   (let ((portal-build-directory (file-name-as-directory (pop command-line-args-left))))
-    (dolist (file portal-build--artifacts)
-      (unless (file-exists-p (portal-build-file file))
-        (error "Portal's build lacks %s" (portal-build-file file))))
-    (module-load (portal-build-file portal-build--module))
-    (unless (fboundp 'portal--web-load)
-      (error "Portal's native module lacks its functions"))
-    ;; On Linux, start Ghostty's library from the module's own place, with
-    ;; the resources beside it.
-    (when (fboundp 'portal--terminal-engine)
-      (portal--terminal-engine))
-    (when portal-build--host
-      (portal-build--probe-host (portal-build-file portal-build--host)))
+    (portal-build--check-artifacts)
+    (portal-build--check-runs)
     (portal-build--record-identity)
     (message "The Portal build is complete")))
+
+(defun portal-build--probe-batch ()
+  "Check a build made elsewhere in a disposable batch Emacs.
+The argument after this function's name on the command line is its
+directory, such as that of an unpacked runtime archive.  It must be
+ready for this Lisp as `portal-build-directory': complete, and recorded
+from these sources, or without them this version.  Its module must load
+from there and its host start."
+  (let ((portal-build-directory (file-name-as-directory
+                                 (expand-file-name (pop command-line-args-left)))))
+    (portal-build--check-artifacts)
+    (when-let* ((problem (portal-build-problem)))
+      (error "%s in %s" (portal-build--describe problem) portal-build-directory))
+    (portal-build--check-runs)
+    (message "The Portal build in %s is ready" portal-build-directory)))
 
 (provide 'portal-build)
 ;;; portal-build.el ends here

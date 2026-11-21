@@ -109,6 +109,31 @@ the run restored no cached downloads, `build.log`, CTest's own log
 directory of its own. Every suite prints its counts and the reasons for its
 skips there, and the notes quote them.
 
+## The runtime archive
+
+A run whose checks all passed also packs the build they tested, never a
+second one, as the Apple Silicon runtime archive: `portal.bundle`,
+`portal-host`, `portal-build.eld` and `licenses`, as the build made them.
+`scripts/runtime-archive.py pack` writes it beside its manifest, which names
+the target, the oldest macOS, the release's tag, the version, the commit, the
+native source identity, and the archive's name, size and SHA-256. On a
+candidate's branch the tag is `vX.Y.Z` and the archive
+`portal-runtime-vX.Y.Z-macos-arm64.tar.gz`; elsewhere there is no tag, and
+the archive is named after the version and the commit.
+[`test/fixtures/runtime-manifest.json`](../test/fixtures/runtime-manifest.json)
+is an example manifest.
+
+The run then moves its `build/` away, unpacks the archive into another
+directory with `scripts/runtime-archive.py unpack`, and checks it there: the
+archive against the manifest, its files, each binary's CPU, oldest macOS and
+libraries, then the module loaded and the host started by a disposable
+Emacs, `portal-build--probe-batch`, and a terminal drawn by the
+[rendering smoke test](testing.md#rendering-smoke-test). Only then are the
+archive and the manifest kept, as two artifacts for 14 days; their record is
+`runtime/` in `logs`. Portal's repository is public, so any signed-in GitHub
+user can download them: the archive's `licenses/` is the notice and the
+pointer to the source. A release does not attach them yet.
+
 ## Guard rails on GitHub
 
 Two rulesets keep `stable` and the tags from being rewritten, whoever pushes.

@@ -447,7 +447,9 @@ to where the build outputs are; the host needs no adjacent web assets. Without
 bundle intact, including its terminfo and shell integration resources.
 `sh test/render-smoke.sh DIRECTORY` checks that a terminal draws and takes
 input from such a directory; [Testing Portal](docs/testing.md#rendering-smoke-test)
-says how. `build/licenses` holds Portal's license and the third-party notices, copied
+says how. The Checks workflow packs its tested build this way, as the runtime
+archive that [Releasing Portal](docs/releasing.md#the-runtime-archive)
+describes, with `scripts/runtime-archive.py`. `build/licenses` holds Portal's license and the third-party notices, copied
 from `licenses/`; see [Licenses and third-party notices](docs/licenses.md). Restart
 Emacs when upgrading from the former separate web and terminal modules, or after
 rebuilding a loaded native module.

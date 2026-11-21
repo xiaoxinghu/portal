@@ -1,0 +1,18 @@
+{
+  "format": 1,
+  "tag": "v0.3.0",
+  "version": "0.3.0",
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "identity": "885c5ee63016d8280cb017114e47c8e24cca959d714746c1c17df4dbc8cd454e",
+  "archives": [
+    {
+      "target": "macos-arm64",
+      "floor": {
+        "macos": "13.0"
+      },
+      "name": "portal-runtime-v0.3.0-macos-arm64.tar.gz",
+      "size": 45749571,
+      "sha256": "95cd1c723bac159c10b6ec67306fbf6e34113558d15d1de29b696d2dedadfed9"
+    }
+  ]
+}

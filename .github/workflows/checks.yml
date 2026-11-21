@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # The full set of checks, graphical ones and expensive tests included, in one
 # job on one macOS runner, so the downloads and the build serve them all. Runs
-# on main after a merge, not on pull requests: macOS minutes are scarce on this
-# private repository.
+# on main after a merge, and by hand, as on a release candidate's branch; not on
+# pull requests. When every check passed, it packs the build they tested as the
+# runtime archive, checks it unpacked elsewhere and keeps it as an artifact,
+# which on this public repository any signed-in GitHub user can download.
 name: Checks
 
 on:
@@ -239,6 +241,58 @@ jobs:
           export PORTAL_TEST_LOGS=$PORTAL_TEST_LOGS/package
           mkdir -p "$PORTAL_TEST_LOGS"
           sh test/package-gui.sh 2>&1 | tee "$PORTAL_TEST_LOGS/test.log"
+
+      # The runtime archive: the build every step above tested, tarred as it
+      # is, never built again, so only after all of them passed. On a release
+      # candidate's branch, release/vX.Y.Z, its manifest names the tag.
+      - name: Pack the runtime
+        id: runtime
+        run: |
+          tag=
+          case $GITHUB_REF_NAME in release/v*) tag=${GITHUB_REF_NAME#release/} ;; esac
+          mkdir -p "$PORTAL_TEST_LOGS/runtime"
+          python3 -B scripts/runtime-archive.py pack ${tag:+--tag "$tag"} --commit "$GITHUB_SHA" \
+              build "$RUNNER_TEMP/runtime" 2>&1 | tee "$PORTAL_TEST_LOGS/runtime/runtime.log"
+          manifest=$(ls "$RUNNER_TEMP/runtime/"*.json)
+          cp "$manifest" "$PORTAL_TEST_LOGS/runtime/"
+          echo "manifest=$manifest" >>"$GITHUB_OUTPUT"
+          echo "archive=${manifest%.json}.tar.gz" >>"$GITHUB_OUTPUT"
+
+      # The archive unpacked into another directory, with the checkout's build
+      # moved away so that nothing falls back on it: its files and binaries,
+      # then its module loaded and host started by a disposable Emacs, then a
+      # terminal drawn from it, which shows Ghostty's resources found there. The
+      # suites are not run again on the same bytes. A smoke test that cannot
+      # run here (77) fails this step: an archive nothing drew from is unchecked.
+      - name: Check the unpacked runtime (graphical)
+        env:
+          MANIFEST: ${{ steps.runtime.outputs.manifest }}
+        run: |
+          export PORTAL_TEST_LOGS=$PORTAL_TEST_LOGS/runtime
+          unpacked=$RUNNER_TEMP/unpacked/portal
+          mv build "$RUNNER_TEMP/build-tested"
+          trap 'mv "$RUNNER_TEMP/build-tested" build' EXIT
+          python3 -B scripts/runtime-archive.py unpack "$MANIFEST" "$unpacked" 2>&1 | tee -a "$PORTAL_TEST_LOGS/runtime.log"
+          "$EMACS" --batch -Q -l portal-build.el -f portal-build--probe-batch "$unpacked" 2>&1 |
+              tee -a "$PORTAL_TEST_LOGS/runtime.log"
+          sh test/render-smoke.sh "$unpacked"
+
+      - name: Keep the runtime archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          # Unzipped, so the artifact is the archive itself, named as it is.
+          path: ${{ steps.runtime.outputs.archive }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Keep the runtime manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: ${{ steps.runtime.outputs.manifest }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Keep logs
         if: ${{ !cancelled() }}
