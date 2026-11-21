@@ -390,12 +390,29 @@ install it, or name it with ZIG")
         message(FATAL_ERROR "Ghostty's library links EGL: install its development files, \
 pkg-config's egl, such as libglvnd's")
     endif()
+    # Zig builds Ghostty's library for this machine's CPU and C library unless
+    # told otherwise. A release archive names both, such as
+    # -DPORTAL_GHOSTTY_TARGET=x86_64-linux-gnu.2.43 -DPORTAL_GHOSTTY_CPU=baseline,
+    # for every machine of its floor; the module itself is compiled with the
+    # compiler's defaults, never for this CPU alone.
+    set(PORTAL_GHOSTTY_TARGET "" CACHE STRING
+        "Zig's target for Ghostty's library, such as x86_64-linux-gnu.2.43; empty for this machine")
+    set(PORTAL_GHOSTTY_CPU "" CACHE STRING
+        "Zig's CPU for Ghostty's library, such as baseline; empty for this machine's")
+    set(ghostty_options)
+    if(PORTAL_GHOSTTY_TARGET)
+        list(APPEND ghostty_options --target "${PORTAL_GHOSTTY_TARGET}")
+    endif()
+    if(PORTAL_GHOSTTY_CPU)
+        list(APPEND ghostty_options --cpu "${PORTAL_GHOSTTY_CPU}")
+    endif()
     file(GLOB ghostty_patch_files CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/native/patches/ghostty/*.patch")
-    # The patch set by name, rewritten only when it changes: a patch removed
-    # leaves every remaining dependency older than the stamp, but not this.
+    # The patch set by name, and the target, rewritten only when they change: a
+    # patch removed leaves every remaining dependency older than the stamp, but
+    # not this, and another target builds the library again.
     list(JOIN ghostty_patch_files "\n" ghostty_patch_names)
-    file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/ghostty-linux.patches"
-        CONTENT "${ghostty_patch_names}\n" @ONLY)
+    file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/ghostty-linux.inputs"
+        CONTENT "${ghostty_patch_names}\ntarget ${PORTAL_GHOSTTY_TARGET}\ncpu ${PORTAL_GHOSTTY_CPU}\n" @ONLY)
     set(ghostty_prefix "${CMAKE_BINARY_DIR}/ghostty-linux")
     set(ghostty_stamp "${CMAKE_BINARY_DIR}/ghostty-linux.stamp")
     # build.sh configures on every build: an output deleted since makes the
@@ -411,10 +428,11 @@ pkg-config's egl, such as libglvnd's")
             sh "${CMAKE_SOURCE_DIR}/tools/build-ghostty-linux.sh"
             --pin "${ghostty_pin}" --patches "${CMAKE_SOURCE_DIR}/native/patches/ghostty"
             --source "${CMAKE_BINARY_DIR}/ghostty" --prefix "${ghostty_prefix}"
+            ${ghostty_options}
         COMMAND "${CMAKE_COMMAND}" -E touch "${ghostty_stamp}"
         BYPRODUCTS "${ghostty_prefix}/lib/libghostty.so" "${ghostty_prefix}/include/ghostty.h"
         DEPENDS "${ghostty_pin}" ${ghostty_patch_files}
-            "${CMAKE_BINARY_DIR}/ghostty-linux.patches"
+            "${CMAKE_BINARY_DIR}/ghostty-linux.inputs"
             "${CMAKE_SOURCE_DIR}/tools/build-ghostty-linux.sh"
         USES_TERMINAL
         COMMENT "Building Ghostty ${ghostty_version}'s library with Zig: minutes the first time"
