@@ -16,6 +16,7 @@ import { join } from "node:path";
 import type { Component } from "../licenses/notices";
 import {
 	type Checkout,
+	cover,
 	indexRows,
 	type Lock,
 	machO,
@@ -243,13 +244,12 @@ test("the build's own notices are covered", () => {
 		!existsSync(join(build, "licenses", "README.md"))
 	)
 		return;
-	// Whether the build is current is the identity tests' concern.
-	const recorded = /:identity "([0-9a-f]+)"/.exec(
-		readFileSync(join(build, "portal-build.eld"), "utf8"),
-	)?.[1];
-	expect(plan({ build, portal: clean, identity: recorded }).problems).toEqual(
-		[],
+	// Coverage alone: a development build may hold an edited wrapper copy,
+	// which only release staging refuses.
+	const rows = indexRows(
+		readFileSync(join(build, "licenses", "README.md"), "utf8"),
 	);
+	expect(cover(rows, root, lock(), inventory).problems).toEqual([]);
 });
 
 test("a build of other sources fails", () => {

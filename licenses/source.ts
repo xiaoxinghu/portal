@@ -388,6 +388,66 @@ export function sourceIdentity(at: string): string | undefined {
 	return undefined;
 }
 
+// Whether every component the build's notices list in the module has the
+// input that holds its source, and the pins' components are all listed:
+// ROWS are the build's licenses/README.md rows. Release eligibility, a clean
+// checkout and an unedited libghostty-spm copy, is plan's concern.
+export function cover(
+	rows: { name: string; version: string; shipped: string }[],
+	at: string,
+	lock: Lock,
+	inventory: Component[],
+	list: Input[] = inputs(at, lock, { tags: [], changes: [] }),
+): { components: Record<string, string>; problems: string[] } {
+	const problems: string[] = [];
+	// Every component the build's notices list in the module needs the input
+	// that holds its source; the pins' components must all be listed.
+	const needed = required(at, inventory);
+	const inModule = rows.filter((row) =>
+		/portal\.(dylib|bundle)/.test(row.shipped),
+	);
+	const components: Record<string, string> = {};
+	for (const row of inModule) {
+		const component = inventory.find(
+			(entry) => entry.name === row.name && entry.version === row.version,
+		);
+		if (!component) {
+			problems.push(
+				`the build's notices list ${row.name} ${row.version}, which licenses/inventory.json does not: the build is not of this checkout`,
+			);
+			continue;
+		}
+		const vendored = lock.vendored[component.id];
+		const input = vendored
+			? list.find((entry) => entry.id === vendored)
+			: list.find(
+					(entry) =>
+						entry.url === component.source ||
+						entry.browse.some(
+							(link) =>
+								component.source === link ||
+								component.source.startsWith(`${link}/`),
+						),
+				);
+		if (input) components[component.id] = input.id;
+		else
+			problems.push(
+				`${component.name} ${component.version} ships in the module, but no input holds its source, ${component.source}: refresh licenses/source.json, or record the input it is vendored in`,
+			);
+	}
+	for (const component of needed)
+		if (
+			!inModule.some(
+				(row) =>
+					row.name === component.name && row.version === component.version,
+			)
+		)
+			problems.push(
+				`the build's notices lack ${component.name} ${component.version}, which this checkout's pins require: the build is not of this checkout`,
+			);
+	return { components, problems };
+}
+
 // The manifest for BUILD, or what keeps it from corresponding to the build.
 export function plan(options: {
 	build: string;
@@ -501,51 +561,9 @@ export function plan(options: {
 		if (!input.url || !(input.revision || input.sha256 || input.hash))
 			problems.push(`input ${input.id} has no URL, revision or digest`);
 
-	// Every component the build's notices list in the module needs the input
-	// that holds its source; the pins' components must all be listed.
-	const needed = required(at, inventory);
-	const inModule = rows.filter((row) =>
-		/portal\.(dylib|bundle)/.test(row.shipped),
-	);
-	const components: Record<string, string> = {};
-	for (const row of inModule) {
-		const component = inventory.find(
-			(entry) => entry.name === row.name && entry.version === row.version,
-		);
-		if (!component) {
-			problems.push(
-				`the build's notices list ${row.name} ${row.version}, which licenses/inventory.json does not: the build is not of this checkout`,
-			);
-			continue;
-		}
-		const vendored = lock.vendored[component.id];
-		const input = vendored
-			? list.find((entry) => entry.id === vendored)
-			: list.find(
-					(entry) =>
-						entry.url === component.source ||
-						entry.browse.some(
-							(link) =>
-								component.source === link ||
-								component.source.startsWith(`${link}/`),
-						),
-				);
-		if (input) components[component.id] = input.id;
-		else
-			problems.push(
-				`${component.name} ${component.version} ships in the module, but no input holds its source, ${component.source}: refresh licenses/source.json, or record the input it is vendored in`,
-			);
-	}
-	for (const component of needed)
-		if (
-			!inModule.some(
-				(row) =>
-					row.name === component.name && row.version === component.version,
-			)
-		)
-			problems.push(
-				`the build's notices lack ${component.name} ${component.version}, which this checkout's pins require: the build is not of this checkout`,
-			);
+	const covered = cover(rows, at, lock, inventory, list);
+	problems.push(...covered.problems);
+	const components = covered.components;
 
 	if (problems.length) return { problems };
 	return {
