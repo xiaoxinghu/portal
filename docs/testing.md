@@ -341,6 +341,64 @@ its default, so set the limit too:
 PORTAL_TEST_TIMEOUT=3600 bash test/vm.sh sh test/gui-all.sh
 ```
 
+## Rendering smoke test
+
+The one short check of a built runtime: does a terminal draw in its pane
+and take input, for a given build, in the graphical session it runs in?
+
+```sh
+sh test/render-smoke.sh                       # the checkout's build/
+sh test/render-smoke.sh /path/to/runtime      # a build elsewhere
+```
+
+The directory is what `portal-build-directory` would name: `portal.bundle`,
+`portal-host`, `licenses` and `portal-build.eld` on macOS. The Lisp is the
+checkout's, which must be the build's version. The directory need not be
+the checkout's build: an archive unpacked elsewhere, or a copy, is what it
+is for. In the VM the directory is a path in the guest.
+
+[The test](../test/portal-render-smoke.el) opens one terminal alone in a
+fresh Emacs. The terminal runs a program of the test's own through your
+login shell, as every terminal starts. The program asks for a token, which
+the test types, then sets the background orange and draws a red block at the
+grid's top left and a blue one right of it and below. It draws the blue
+block only when it finds Ghostty's resources and terminfo. The test captures
+the window as the window server shows it and checks the pane to the device
+pixel: orange at its four corners and not beside them, none of the pane's
+green inside, red at its top left, and the marker upright. Then it splits
+the pane under output and checks again. A blank, shifted, cropped, flipped
+or mirrored pane fails one of these.
+
+Only the adapter differs between places: how it captures, types and tells
+that the window has the keyboard. On macOS everything runs in process: the
+[injector](#input-graphical-checks) types, and
+[window-capture.m](../test/window-capture.m) captures Emacs's own window with
+ScreenCaptureKit. Capturing a process's own window needs no Screen Recording
+permission: none was asked for in the VM or on GitHub's
+`xcode-27` runner, where the Checks workflow runs it on the checkout's build. Linux has no adapters yet: the
+test reports itself not run there.
+
+It exits 0 when every check passed and 1 when one failed. It also exits 1
+when the test did not finish within `PORTAL_SMOKE_TIMEOUT` seconds
+(default 60). It exits 77, not run, without a graphical session or without a
+way to capture or type in it, when no check had failed before it stopped. A
+not-run is never a pass. It never starts a
+desktop of its own. The record, `render-smoke.log`, goes to `render-smoke/`
+in `PORTAL_TEST_LOGS`, or in `build/`, and is printed at the end. It
+records the machine, the system, the GPU, the build's record and its
+module's SHA-256, each check with its time, and what failed with its pixels.
+The captures stay beside it as PPM and PNG, with Emacs's output. A build
+Portal refuses, such as one with a resource missing, fails with Portal's
+message.
+
+`--fault blank` hides the view after the token is typed, and `--fault shift`
+moves it a pixel right and down, to check that the test finds both.
+`--adapter NAME` chooses an adapter in place of the session's. It takes about
+5 seconds from Emacs's start. It takes the keyboard for that time, so leave
+the desktop alone or run it in the VM, where `sh test/render-smoke.sh` goes
+when the clone names one. It is not in `gui-all.sh`: the suites cover more,
+and this covers a runtime they do not.
+
 ## View graphical checks
 
 For ordinary terminal and web views (WebKit loading, terminals, their
