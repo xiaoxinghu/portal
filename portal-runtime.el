@@ -706,27 +706,33 @@ directory that the next install removes."
     (rename-file directory trash)
     (delete-directory trash t)))
 
-(defun portal-runtime--link (place name target)
-  "Point the link NAME in PLACE at TARGET, replacing it in one rename."
-  (let ((new (expand-file-name (concat name ".new") place)))
-    (when (file-symlink-p new) (delete-file new))
-    (make-symbolic-link target new)
-    (rename-file new (expand-file-name name place) t)))
+(defun portal-runtime--state (place)
+  "Return the runtimes PLACE records as active: (:current ID :previous ID), or nil."
+  (let ((file (expand-file-name "active.eld" place)))
+    (when (file-readable-p file)
+      (with-temp-buffer
+        (insert-file-contents file)
+        (ignore-errors (read (current-buffer)))))))
 
 (defun portal-runtime--activate (place identity)
   "Make IDENTITY's runtime in PLACE the current one, and prune the others.
-The link `current' names it and `previous' the one it replaced, which a
-running Emacs may have loaded; every other runtime is deleted.  Each link
-changes in one step, and pruning runs on every activation, so one that
-an interruption cut short is finished by the next, even a reuse."
-  (let ((current (file-symlink-p (expand-file-name "current" place))))
+active.eld records it as current and the one it replaced, which a
+running Emacs may have loaded, as previous; every other runtime is
+deleted.  The record changes in one rename, so an interruption leaves
+either the old pair or the new one, and pruning runs on every
+activation, so the next one finishes what an interruption cut short,
+even a reuse."
+  (let* ((state (portal-runtime--state place))
+         (current (plist-get state :current)))
     (unless (equal current identity)
-      (when current (portal-runtime--link place "previous" current))
-      (portal-runtime--link place "current" identity))
-    (let ((previous (file-symlink-p (expand-file-name "previous" place))))
-      (dolist (name (directory-files place nil "\\`[0-9a-f]\\{64\\}\\'"))
-        (unless (member name (list identity previous))
-          (portal-runtime--delete (expand-file-name name place) place))))))
+      (let ((new (expand-file-name "active.new" place)))
+        (with-temp-file new
+          (prin1 (list :current identity :previous current) (current-buffer)))
+        (rename-file new (expand-file-name "active.eld" place) t)
+        (setq state (list :current identity :previous current))))
+    (dolist (name (directory-files place nil "\\`[0-9a-f]\\{64\\}\\'"))
+      (unless (member name (list identity (plist-get state :previous)))
+        (portal-runtime--delete (expand-file-name name place) place)))))
 
 (defun portal-runtime--install (options)
   "Install the runtime that this Portal's native sources need, and return a report.
@@ -747,7 +753,7 @@ certificate authorities to trust as well as the system's."
          (final (expand-file-name identity place)))
     (make-directory place t)
     ;; What an interrupted install left: no other install runs now.
-    (dolist (name (directory-files place nil "\\`\\(?:staging\\|trash\\)-\\|\\`[a-z]+\\.new\\'"))
+    (dolist (name (directory-files place nil "\\`\\(?:staging\\|trash\\)-\\|\\`active\\.new\\'"))
       (let ((path (expand-file-name name place)))
         (if (eq (file-attribute-type (file-attributes path)) t)
             (delete-directory path t)

@@ -224,7 +224,7 @@ The lock is left out: it is the system's, not the cache's contents."
 
 (defun portal-runtime-test--current ()
   "Return the identity of the current runtime."
-  (file-symlink-p (expand-file-name "current" (portal-runtime--target-directory))))
+  (plist-get (portal-runtime--state (portal-runtime--target-directory)) :current))
 
 (defun portal-runtime-test--refused (pattern &optional releases)
   "Install and expect a refusal matching PATTERN that leaves the cache as it was."
@@ -389,10 +389,13 @@ as packed is kept aside, so that the next variant starts from it too."
                               (portal-runtime-test--cache))))))
 
 (ert-deftest portal-runtime-finishes-an-interrupted-activation ()
-  ;; Activation changes two links, then prunes.  Cut short at either
-  ;; point, the next install, even a reuse, leaves two runtimes.
+  ;; With A then B installed, installing C is cut short as it records C as
+  ;; current, or as it prunes.  Either way the next install, even a reuse,
+  ;; leaves the right two: B and A after going back to B, C and B after
+  ;; taking up C again.
   (skip-unless (portal-runtime-test--can-install))
-  (dolist (stop '(pruning current))
+  (pcase-dolist (`(,stop ,back ,current ,kept)
+                 '((record "1.2.4" 1 (1 2)) (pruning "1.2.5" 0 (0 1))))
     (ert-info ((symbol-name stop))
       (portal-runtime-test--with-world
         (let (identities)
@@ -401,21 +404,27 @@ as packed is kept aside, so that the next variant starts from it too."
             (portal-runtime-test--native-change version)
             (push (portal-runtime-test--release) identities)
             (if (equal version "1.2.5")
-                (cl-letf* ((link (symbol-function 'portal-runtime--link))
-                           ((symbol-function 'portal-runtime--delete)
-                            (lambda (&rest _) (when (eq stop 'pruning) (error "Interrupted"))))
-                           ((symbol-function 'portal-runtime--link)
-                            (lambda (place name target)
-                              (if (and (eq stop 'current) (equal name "current"))
+                (cl-letf* ((rename (symbol-function 'rename-file))
+                           ((symbol-function 'rename-file)
+                            (lambda (file newname &rest rest)
+                              (if (and (eq stop 'record)
+                                       (string-suffix-p "/active.eld" newname))
                                   (error "Interrupted")
-                                (funcall link place name target)))))
+                                (apply rename file newname rest))))
+                           ((symbol-function 'portal-runtime--delete)
+                            (lambda (&rest _) (error "Interrupted"))))
                   (should-error (portal-runtime-test--install)))
               (portal-runtime-test--install)))
+          ;; identities is C, B, A.
           (should (= 3 (length (portal-runtime-test--runtimes))))
-          (should (portal-runtime-test--install))
-          (should (equal (portal-runtime-test--current) (car identities)))
+          (portal-runtime-test--version back)
+          (portal-runtime-test--native-change back)
+          (should (string-match-p "already in"
+                                  (portal-runtime-test--install "https://127.0.0.1:1/")))
+          (should (equal (portal-runtime-test--current) (nth current identities)))
           (should (equal (portal-runtime-test--runtimes)
-                         (sort (seq-take identities 2) #'string<))))))))
+                         (sort (mapcar (lambda (n) (nth n identities)) kept)
+                               #'string<))))))))
 
 (ert-deftest portal-runtime-a-slow-download-is-not-a-stalled-one ()
   ;; Half the archive in tiny chunks, whose framing decoding removes, then
