@@ -155,9 +155,13 @@ symbol version newer than the floor, that it loads only GTK 3, Wayland,
 EGL and glibc from the system and Ghostty's library from the runtime
 through the module's `$ORIGIN/ghostty-linux/lib` runpath, and asks the
 system's loader where it finds each. A disposable Emacs then loads the
-module and starts Ghostty there, and does it again on a CPU of the
-baseline that QEMU emulates, `qemu64` or `cortex-a53`, where an
-instruction beyond it would stop Emacs. `readelf`'s own account of both
+module and starts Ghostty there. It does that again in a stock
+`ubuntu:26.04` container, with the libraries of Ubuntu's own pgtk Emacs,
+and then on a CPU of the baseline that QEMU emulates there, `qemu64` or
+`cortex-a53`, where an instruction beyond it would stop Emacs; the
+emulated CPU must first refuse a program of one newer instruction. Not on
+the runner's own system: the x86-64 image's glibc is built for x86-64-v3,
+and its loader stops on an older CPU before any program starts. `readelf`'s own account of both
 binaries is `runtime/abi.log` in the job's `logs-TARGET`. No terminal is
 drawn: Linux renders are checked on desktops, not here.
 

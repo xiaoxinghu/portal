@@ -534,10 +534,8 @@ jobs:
       # The archive unpacked elsewhere, with the checkout's build moved away:
       # its files, and each binary's machine, libraries, symbol versions and
       # runpath, the loader asked where it finds them; then the module loaded
-      # and Ghostty started from there by a disposable Emacs, and the same
-      # again on an emulated CPU of the target's baseline, where an
-      # instruction beyond it would stop Emacs. The ABI evidence, readelf's
-      # own, goes to the logs.
+      # and Ghostty started from there by a disposable Emacs. The ABI
+      # evidence, readelf's own, goes to the logs.
       - name: Check the unpacked runtime
         env:
           MANIFEST: ${{ steps.runtime.outputs.manifest }}
@@ -558,36 +556,82 @@ jobs:
               ldd "$unpacked/$binary"
             } >>"$PORTAL_TEST_LOGS/abi.log" 2>&1
           done
-          probe=(--batch -Q -l portal-build.el -f portal-build--probe-batch "$unpacked"
-                 --eval '(princ (format "Ghostty: %S\n" (portal--terminal-engine)))')
-          "$EMACS" "${probe[@]}" 2>&1 | tee -a "$PORTAL_TEST_LOGS/runtime.log"
-          # The emulated CPU must refuse an instruction beyond the baseline, one
-          # this runner's CPU has: AVX2's on x86-64, an Armv8.1 atomic on Arm.
+          {
+            # The runner's own system may be built for a newer CPU than its
+            # distribution's: what it and GCC assume, for the record.
+            echo "== the builder"
+            dpkg-query -W -f '${Package} ${Version} ${Architecture}\n' libc6
+            gcc -Q --help=target | grep -E '^ +-march=|^ +-mcpu='
+          } >>"$PORTAL_TEST_LOGS/abi.log" 2>&1
+          "$EMACS" --batch -Q -l portal-build.el -f portal-build--probe-batch "$unpacked" \
+              --eval '(princ (format "Ghostty: %S\n" (portal--terminal-engine)))' 2>&1 |
+              tee -a "$PORTAL_TEST_LOGS/runtime.log"
+
+      # The same bits on Ubuntu 26.04 as its archive installs it, in a
+      # container, and then on an emulated CPU of the archive's baseline,
+      # where an instruction beyond it stops Emacs. Not on the runner's own
+      # system: the x86-64 image's glibc is built for x86-64-v3, and its
+      # loader stops on a CPU older than Haswell before any program starts.
+      # First a program of one newer instruction, which the runner's CPU
+      # has: the emulated CPU must refuse it. It needs no C library.
+      - name: Run the unpacked runtime on the floor's system and baseline CPU
+        env:
+          IMAGE: ubuntu:26.04
+          QEMU: ${{ matrix.qemu }}
+          QEMU_CPU: ${{ matrix.qemu-cpu }}
+        run: |
+          export PORTAL_TEST_LOGS=$PORTAL_TEST_LOGS/runtime
+          unpacked=$RUNNER_TEMP/unpacked/portal
+          mv build "$RUNNER_TEMP/build-tested"
+          trap 'mv "$RUNNER_TEMP/build-tested" build' EXIT
           cat >"$RUNNER_TEMP/newer.c" <<'EOF'
-          int main(void) {
+          void _start(void)
+          {
           #if defined(__x86_64__)
               __asm__ volatile("vpxor %%ymm0, %%ymm0, %%ymm0" ::: "xmm0");
+              __asm__ volatile("mov $60, %%eax\n\txor %%edi, %%edi\n\tsyscall" ::: "memory");
           #else
               static int word;
               int old;
               __asm__ volatile(".arch armv8.1-a\n\tldadd %w1, %w0, [%2]"
                                : "=r"(old) : "r"(1), "r"(&word) : "memory");
+              __asm__ volatile("mov x8, #93\n\tmov x0, #0\n\tsvc #0" ::: "memory");
           #endif
-              return 0;
+              for (;;) {
+              }
           }
           EOF
-          cc -o "$RUNNER_TEMP/newer" "$RUNNER_TEMP/newer.c"
+          cc -O1 -static -nostdlib -o "$RUNNER_TEMP/newer" "$RUNNER_TEMP/newer.c"
           "$RUNNER_TEMP/newer"
-          if ${{ matrix.qemu }} -cpu ${{ matrix.qemu-cpu }} "$RUNNER_TEMP/newer" 2>/dev/null; then
-            echo "::error::The emulated ${{ matrix.qemu-cpu }} ran an instruction beyond the baseline"
-            exit 1
-          fi
-          echo "The emulated ${{ matrix.qemu-cpu }} refuses an instruction beyond the baseline" |
+          docker pull -q "$IMAGE"
+          docker image inspect --format 'Image {{index .RepoDigests 0}}' "$IMAGE" |
               tee -a "$PORTAL_TEST_LOGS/runtime.log"
-          # QEMU runs Emacs's own binary, not a script: the installed emacs is a link to it.
-          echo "On an emulated ${{ matrix.qemu-cpu }}:" | tee -a "$PORTAL_TEST_LOGS/runtime.log"
-          ${{ matrix.qemu }} -cpu ${{ matrix.qemu-cpu }} "$(readlink -f "$EMACS")" "${probe[@]}" 2>&1 |
-              tee -a "$PORTAL_TEST_LOGS/runtime.log"
+          # Emacs's libraries come from Ubuntu's pgtk Emacs, as a user's would.
+          docker run --rm -v "$RUNNER_TEMP:$RUNNER_TEMP" -v "$PWD:$PWD" -w "$PWD" \
+              -e EMACS -e QEMU -e QEMU_CPU -e unpacked="$unpacked" -e newer="$RUNNER_TEMP/newer" \
+              "$IMAGE" bash -euo pipefail -c '
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -q >/dev/null
+            apt-get install -y -q --no-install-recommends emacs-pgtk libegl1 libegl-mesa0 \
+                qemu-user >/dev/null
+            grep PRETTY_NAME /etc/os-release
+            dpkg-query -W -f "\${Package} \${Version} \${Architecture}\n" libc6
+            status=0
+            "$QEMU" -cpu "$QEMU_CPU" "$newer" || status=$?
+            if [ "$status" != 132 ]; then
+              echo "::error::The emulated $QEMU_CPU did not refuse a newer instruction: $status"
+              exit 1
+            fi
+            echo "The emulated $QEMU_CPU refuses an instruction beyond the baseline"
+            emacs=$(readlink -f "$EMACS")
+            probe=(--batch -Q -l portal-build.el -f portal-build--probe-batch "$unpacked"
+                   --eval "(princ (format \"Ghostty: %S\n\" (portal--terminal-engine)))")
+            echo "On this system:"
+            "$emacs" "${probe[@]}"
+            echo "On an emulated $QEMU_CPU:"
+            "$QEMU" -cpu "$QEMU_CPU" /bin/true
+            "$QEMU" -cpu "$QEMU_CPU" "$emacs" "${probe[@]}"
+          ' 2>&1 | tee -a "$PORTAL_TEST_LOGS/runtime.log"
           {
             echo "### ${{ matrix.target }}"
             echo '```'
@@ -610,49 +654,6 @@ jobs:
           archive: false
           if-no-files-found: error
           retention-days: 14
-
-      # TEMPORARY: which code stops on the emulated baseline CPU.
-      - name: Diagnose the emulated CPU
-        if: failure() && steps.runtime.outcome == 'success'
-        continue-on-error: true
-        run: |
-          sudo apt-get install -y -q --no-install-recommends gdb >/dev/null
-          unpacked=$RUNNER_TEMP/unpacked/portal
-          emacs=$(readlink -f "$EMACS")
-          /lib64/ld-linux-x86-64.so.2 --help 2>/dev/null | sed -n '/hwcaps/,$p' || :
-          /lib/ld-linux-aarch64.so.1 --help 2>/dev/null | sed -n '/hwcaps/,$p' || :
-          probe=(--batch -Q -l portal-build.el -f portal-build--probe-batch "$unpacked")
-          case ${{ matrix.qemu }} in
-            qemu-x86_64) cpus="qemu64 qemu64,+ssse3,+sse4.1,+sse4.2,+popcnt,+cx16 Nehalem Haswell max" ;;
-            *) cpus="cortex-a53 cortex-a72 neoverse-n1 max" ;;
-          esac
-          for cpu in $cpus; do
-            for what in true emacs probe; do
-              case $what in
-                true) set -- /bin/true ;;
-                emacs) set -- "$emacs" --batch -Q --eval '(princ "emacs ran\n")' ;;
-                probe) set -- "$emacs" "${probe[@]}" ;;
-              esac
-              status=0
-              ${{ matrix.qemu }} -cpu "$cpu" "$@" >/dev/null 2>&1 || status=$?
-              echo "$cpu $what: $status"
-            done
-          done
-          # The faulting instruction, on the baseline CPU.
-          for what in emacs probe; do
-            case $what in
-              emacs) set -- "$emacs" --batch -Q --eval '(princ "emacs ran\n")' ;;
-              probe) set -- "$emacs" "${probe[@]}" ;;
-            esac
-            ${{ matrix.qemu }} -cpu ${{ matrix.qemu-cpu }} -g 1234 "$@" &
-            sleep 2
-            timeout 300 gdb -q -batch -ex 'set pagination off' \
-                -ex 'set sysroot /' -ex 'target remote :1234' -ex continue \
-                -ex 'x/3i $pc' -ex 'info symbol $pc' -ex bt -ex 'info sharedlibrary' \
-                "$emacs" 2>&1 | tail -80
-            kill %1 2>/dev/null || :
-            wait || :
-          done
 
       - name: Keep logs
         if: ${{ !cancelled() }}
