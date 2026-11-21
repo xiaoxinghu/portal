@@ -390,7 +390,7 @@ before any terminal changes.
 
 A terminal's appearance is the system's. On macOS it is that of the Emacs
 frame showing the terminal, which is the system's unless the frame sets
-`ns-appearance`; a hidden terminal follows the system's. On Linux it is the
+`ns-appearance`. On Linux it is the
 desktop's light or dark preference, which the XDG desktop portal says.
 A Rex block's view follows the same theme, its pane beside the grid too.
 
