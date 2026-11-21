@@ -201,6 +201,10 @@ fails, and writes nothing, in any of these cases:
 - The build is of other sources: its `portal-build.eld` lacks the source
   identity that `portal-build.el` computes for the checkout. `EMACS` names the
   Emacs that computes it, as for the build.
+- The build compiled a libghostty-spm copy that was not the pin plus Portal's
+  committed patches. The build keeps edits made in `build/libghostty-spm` and
+  records the copy's state, through `tools/libghostty-spm-state.sh`, in
+  `build/libghostty-spm.state`, which a pruned build keeps.
 - `licenses/source.json` was read from another libghostty-spm pin.
 - An archive that Ghostty pins, directly or through a package's own manifest,
   is missing, or the lock lists an archive nothing pins. The lock records each
@@ -229,7 +233,10 @@ Silicon Mac with Zig 0.17.0:
 - Portal built against it with `./build.sh --prune`. The build's own check
   loaded the module and started Ghostty.
 - Staging from that pruned build passed, and failed, writing nothing, when z2d's
-  archive was removed from the lock.
+  archive was removed from the lock. That was before staging checked the
+  wrapper copy. Such a rebuild now fails to stage, correctly: step 2 edits the
+  copy's `Package.swift` to link the rebuilt library. Recipients rebuild; they
+  do not stage.
 
 The Linux module's corresponding source is
 `tasks/portal/runtime-linux-notices-source.md`'s to settle; nothing here

@@ -6,6 +6,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	rmSync,
 	writeFileSync,
@@ -63,6 +64,29 @@ function header(cpu: number, minos = 0x000d0000): Uint8Array {
 	return bytes;
 }
 
+// libghostty-spm.state for a copy made from this checkout's pin and patches,
+// with HEAD and CHANGED as given.
+function wrapperState(head = "1".repeat(40), changed: string[] = []): string {
+	const sha256 = (file: string) =>
+		new Bun.CryptoHasher("sha256").update(readFileSync(file)).digest("hex");
+	const pin = JSON.parse(
+		readFileSync(join(root, "native", "libghostty-spm.json"), "utf8"),
+	);
+	const patches = join(root, "native", "patches", "libghostty-spm");
+	return [
+		`made ${pin.url} ${pin.version} ${pin.revision}`,
+		...readdirSync(patches)
+			.filter((name) => name.endsWith(".patch"))
+			.sort()
+			.map((name) => `made ${name} ${sha256(join(patches, name))}`),
+		`made patch-libghostty-spm ${sha256(join(root, "tools", "patch-libghostty-spm.sh"))}`,
+		`patched ${"1".repeat(40)}`,
+		`head ${head}`,
+		...changed.map((line) => `changed ${line}`),
+		"",
+	].join("\n");
+}
+
 // A pruned build's layout: the module and the notices its pins require,
 // as licenses/notices.ts indexes them.
 function fakeBuild(options: { cpu?: number; omit?: string } = {}): string {
@@ -80,6 +104,7 @@ function fakeBuild(options: { cpu?: number; omit?: string } = {}): string {
 		join(dir, "portal-build.eld"),
 		`(:identity "${identity}" :version "0.2.0")`,
 	);
+	writeFileSync(join(dir, "libghostty-spm.state"), wrapperState());
 	const rows = required(root, inventory)
 		.filter((component) => component.id !== options.omit)
 		.map(
@@ -264,6 +289,44 @@ test.each([
 	).toContainEqual(
 		`${owner} ${hash}, which licenses/source.json lacks: run bun licenses/source.ts refresh`,
 	);
+});
+
+test("a build of an edited libghostty-spm copy fails", () => {
+	const dir = fakeBuild();
+	writeFileSync(
+		join(dir, "libghostty-spm.state"),
+		wrapperState("1".repeat(40), [" M Package.swift"]),
+	);
+	const [problem] = plan({ build: dir, ...ok }).problems;
+	expect(problem).toContain("changes beyond Portal's committed patches");
+	expect(problem).toContain("M Package.swift");
+	writeFileSync(
+		join(dir, "libghostty-spm.state"),
+		wrapperState("2".repeat(40)),
+	);
+	expect(plan({ build: dir, ...ok }).problems[0]).toContain(
+		`HEAD ${"2".repeat(40)}, patched ${"1".repeat(40)}`,
+	);
+});
+
+test("a build of a copy made from other patches fails", () => {
+	const dir = fakeBuild();
+	const state = readFileSync(join(dir, "libghostty-spm.state"), "utf8");
+	writeFileSync(
+		join(dir, "libghostty-spm.state"),
+		state.replace(/^made 0001-\S+ \S+$/m, "made 0001-other.patch 00"),
+	);
+	expect(plan({ build: dir, ...ok }).problems).toEqual([
+		"the build's libghostty-spm copy was made from other pins, patches or scripts than this checkout's: build Portal again",
+	]);
+});
+
+test("a build without the copy's record fails", () => {
+	const dir = fakeBuild();
+	rmSync(join(dir, "libghostty-spm.state"));
+	expect(plan({ build: dir, ...ok }).problems).toEqual([
+		`${dir} has no libghostty-spm.state, the record of the libghostty-spm copy it built: build Portal again`,
+	]);
 });
 
 test("an archive nothing pins fails", () => {

@@ -18,6 +18,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	renameSync,
 	rmSync,
@@ -310,6 +311,56 @@ export function required(at: string, inventory: Component[]): Component[] {
 
 const module = "portal.bundle/Contents/MacOS/portal.dylib";
 
+// What keeps the libghostty-spm copy the build recorded, in
+// libghostty-spm.state (tools/libghostty-spm-state.sh), from being the pin
+// with this checkout's patches.
+export function wrapperProblems(build: string, at: string): string[] {
+	const path = join(build, "libghostty-spm.state");
+	if (!existsSync(path))
+		return [
+			`${build} has no libghostty-spm.state, the record of the libghostty-spm copy it built: build Portal again`,
+		];
+	const lines = read(path).split("\n").filter(Boolean);
+	const field = (name: string) =>
+		lines
+			.filter((line) => line.startsWith(`${name} `))
+			.map((line) => line.slice(name.length + 1));
+	// tools/patch-libghostty-spm.sh's record of what the copy is made from.
+	const sha256 = (file: string) =>
+		new Bun.CryptoHasher("sha256").update(readFileSync(file)).digest("hex");
+	const pin: { url: string; version: string; revision: string } = json(
+		join(at, "native", "libghostty-spm.json"),
+	);
+	const patches = join(at, "native", "patches", "libghostty-spm");
+	const made = [
+		`${pin.url} ${pin.version} ${pin.revision}`,
+		...readdirSync(patches)
+			.filter((name) => name.endsWith(".patch"))
+			.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+			.map((name) => `${name} ${sha256(join(patches, name))}`),
+		`patch-libghostty-spm ${sha256(join(at, "tools", "patch-libghostty-spm.sh"))}`,
+	];
+	const problems: string[] = [];
+	if (field("made").join("\n") !== made.join("\n"))
+		problems.push(
+			"the build's libghostty-spm copy was made from other pins, patches or scripts than this checkout's: build Portal again",
+		);
+	const changed = field("changed");
+	const [patched] = field("patched");
+	const [head] = field("head");
+	if (!patched || head !== patched || changed.length)
+		problems.push(
+			`the build compiled libghostty-spm with changes beyond Portal's committed patches, which no input holds:${[
+				...(head !== patched ? [`HEAD ${head}, patched ${patched}`] : []),
+				...changed,
+			]
+				.slice(0, 10)
+				.map((line) => `\n  ${line}`)
+				.join("")}`,
+		);
+	return problems;
+}
+
 // The source identity portal-build.el computes for the checkout AT, which a
 // finished build records in portal-build.eld; computed by that Lisp itself,
 // so the two cannot drift. EMACS names the Emacs, as for the build.
@@ -431,6 +482,10 @@ export function plan(options: {
 			problems.push(
 				`licenses/source.json lists ${archive.name}, which nothing pins: run bun licenses/source.ts refresh`,
 			);
+
+	// And libghostty-spm's copy, which the build keeps edits in, must have
+	// been the pin with Portal's committed patches and nothing else.
+	problems.push(...wrapperProblems(options.build, at));
 
 	// The lock must have been read from the pinned wrapper.
 	const spm: { revision: string } = json(

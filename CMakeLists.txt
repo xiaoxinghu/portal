@@ -259,7 +259,11 @@ if(APPLE)
             --scratch-path "${native_scratch}" -c release --show-bin-path
         OUTPUT_VARIABLE native_bin OUTPUT_STRIP_TRAILING_WHITESPACE
         COMMAND_ERROR_IS_FATAL ANY)
+    # Record the copy of libghostty-spm the module is built from, edited or
+    # not; licenses/source.ts checks it before staging the source's pointers.
     add_custom_target(portal ALL
+        COMMAND sh "${CMAKE_SOURCE_DIR}/tools/libghostty-spm-state.sh"
+            "${ghostty_source}" "${CMAKE_BINARY_DIR}/libghostty-spm.state"
         COMMAND "${CMAKE_COMMAND}" -E env "EMACS_INCLUDE=${EMACS_INCLUDE}"
             "PORTAL_LIBGHOSTTY_SPM=${ghostty_source}"
             xcrun swift build --package-path "${native_package}"

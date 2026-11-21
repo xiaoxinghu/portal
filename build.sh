@@ -53,10 +53,12 @@ if [ -n "${EMACS_INCLUDE:-}" ]; then set -- "$@" "-DEMACS_INCLUDE=$EMACS_INCLUDE
 cmake --preset dev "$@"
 cmake --build --preset dev
 if [ -n "$prune" ]; then
-    # Keep the outputs, the build record and log, the lock and the Bun cache.
+    # Keep the outputs, the build record and log, the lock, the Bun cache and
+    # the record of the libghostty-spm copy the module was built from.
     find build -mindepth 1 -maxdepth 1 ! -name portal.bundle ! -name portal.so \
         ! -name ghostty-linux ! -name portal-host \
         ! -name licenses ! -name portal-build.eld ! -name portal-build.log \
+        ! -name libghostty-spm.state \
         ! -name .build.lock ! -name tools -exec rm -rf {} +
     # Of Ghostty's install on Linux, what portal.so loads: the library, by its
     # file and its soname, and the resources.
