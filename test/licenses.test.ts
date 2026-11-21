@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The staged license notices cover what the build ships; see docs/licenses.md.
 import { afterEach, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -78,4 +79,29 @@ test("a stray file fails the check", async () => {
 	expect(check(build, directory)).toContain(
 		"staged file extra.txt is not a required notice",
 	);
+});
+
+// MPL-2.0 section 3.2(a): a binary release tells recipients where the source
+// is. The index names Portal's tag, its pins and z2d's source.
+test("the index says where the source is", () => {
+	const index = readFileSync(join(build, "licenses", "README.md"), "utf8");
+	const section = index.split("## Source\n")[1]?.split("\n## ")[0] ?? "";
+	expect(section).toContain("https://github.com/xiaoxinghu/portal");
+	const pin = JSON.parse(
+		readFileSync(
+			join(
+				import.meta.dir,
+				"..",
+				"native",
+				swift ? "libghostty-spm.json" : "ghostty.json",
+			),
+			"utf8",
+		),
+	);
+	expect(section).toContain(pin.revision);
+	const z2d = swift
+		? "https://github.com/vancluever/z2d/archive/8787d71bac42d9aab00428ccb37a4fd453418761.tar.gz"
+		: "https://deps.files.ghostty.org/z2d-40af3e84a4e15a9f31d126b3f281f23ce6a3dae5.tar.gz";
+	expect(section).toContain(z2d);
+	expect(index).not.toContain("MPL-2.0 code in executable form");
 });
