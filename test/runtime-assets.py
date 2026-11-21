@@ -32,6 +32,7 @@ installer's own checks of the archive's contents can refuse it.
 """
 from __future__ import annotations
 
+import faulthandler
 import hashlib
 import http.server
 import io
@@ -170,12 +171,15 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 
 def serve(certificates: Path, name: str, root: Path) -> None:
+    # Not up in 10 s: say on stderr where it is.
+    faulthandler.dump_traceback_later(10)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(certificates / f"{name}.pem", certificates / f"{name}.key")
     Assets.root = root.resolve()
     server = Server(("127.0.0.1", 0), Assets)
     server.socket = context.wrap_socket(server.socket, server_side=True)
     print(json.dumps({"port": server.server_address[1]}), flush=True)
+    faulthandler.cancel_dump_traceback_later()
     server.serve_forever()
 
 

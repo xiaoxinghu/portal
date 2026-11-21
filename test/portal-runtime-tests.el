@@ -162,7 +162,10 @@ Trust the run's certificate authority."
       (setq server (make-process
                     :name "portal-runtime-assets" :connection-type 'pipe :noquery t
                     ;; Python's complaints of failed handshakes go apart.
-                    :stderr (get-buffer-create " *portal-runtime-assets errors*")
+                    :stderr (with-current-buffer (get-buffer-create
+                                                  " *portal-runtime-assets errors*")
+                              (erase-buffer)
+                              (current-buffer))
                     :command (list (portal-runtime-test--python) "-B" portal-runtime-test--assets
                                    "serve" (portal-runtime-test--certificate-directory)
                                    (symbol-name certificate) (portal-runtime-test--file "site"))
@@ -187,7 +190,8 @@ Trust the run's certificate authority."
       (let ((deadline (+ (float-time) 30)))
         (while (not (process-get server 'port))
           (unless (and (process-live-p server) (< (float-time) deadline))
-            (error "The asset server did not start"))
+            (error "The asset server did not start (%s): %s" (process-status server)
+                   (with-current-buffer " *portal-runtime-assets errors*" (buffer-string))))
           (accept-process-output server 0.1))))
     (setq gnutls-trustfiles
           (list (expand-file-name "ca.pem" (portal-runtime-test--certificate-directory))))
