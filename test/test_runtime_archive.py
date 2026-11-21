@@ -170,6 +170,11 @@ class RuntimeArchiveTests(unittest.TestCase):
                 ([("licenses/up", ".."), ("licenses/up/up", ".."), ("licenses/up/up/x", None)],
                  "links licenses/up/up outside"),
                 ([("licenses/texts/abs", "/etc/hosts")], "links licenses/texts/abs outside"),
+                # Through a link the lookup by name would miss, to the parent.
+                ([("licenses/./a", ".."), ("licenses/b", "a/.."), ("licenses/b/payload", None)],
+                 "'licenses/./a', which is not a plain path"),
+                ([("licenses//x", None)], "not a plain path"),
+                ([("licenses/a", None), ("licenses/a", "..")], "'licenses/a' twice"),
                 ([("licenses/up", ".."), ("licenses/up/Makefile", None)],
                  "'licenses/up/Makefile', which a link takes outside")):
             with self.subTest(pattern):
@@ -188,7 +193,7 @@ class RuntimeArchiveTests(unittest.TestCase):
                 manifest["archives"][0]["size"] = tarball.stat().st_size
                 manifest["archives"][0]["sha256"] = archive.sha256(tarball)
                 written.write_text(json.dumps(manifest))
-                self.refused(pattern, archive.unpack, written, self.root / "unpacked")
+                self.refused(pattern, archive.unpack, written, self.root / "unpacked" / "portal")
                 self.assertFalse((self.root / "unpacked").exists())
 
     def test_a_binary_may_name_the_build_in_its_debug_map(self):

@@ -366,12 +366,22 @@ def unpack(manifest_path: Path, destination: Path) -> None:
 
     with tarfile.open(archive, "r:gz") as tar:
         members = tar.getmembers()
+        # Names as pack writes them, each once: the links below are looked up
+        # by name, and a "." or a repeated name would hide one.
+        seen = set()
+        for member in members:
+            name = member.name
+            if name.startswith("/") or ".." in name.split("/"):
+                raise Refusal(f"{archive.name} holds {name!r}, which is outside the runtime")
+            if any(part in ("", ".") for part in name.split("/")):
+                raise Refusal(f"{archive.name} holds {name!r}, which is not a plain path")
+            if name in seen:
+                raise Refusal(f"{archive.name} holds {name!r} twice")
+            seen.add(name)
         links = {member.name: member.linkname for member in members if member.issym()}
         for member in members:
             name = member.name
-            parts = Path(name).parts
-            if name.startswith("/") or ".." in parts or not parts:
-                raise Refusal(f"{archive.name} holds {name!r}, which is outside the runtime")
+            parts = name.split("/")
             if parts[0] not in spec["entries"]:
                 raise Refusal(f"{archive.name} holds {name!r}, which is not of the runtime")
             # Through the archive's own links, which extraction follows.
