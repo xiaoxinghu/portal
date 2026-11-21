@@ -122,6 +122,16 @@ test("a clean staging run writes pointers for every component the module ships",
 		expect(input.revision ?? input.sha256 ?? input.hash).toBeTruthy();
 	}
 	expect(text).toContain(`git checkout ${clean.revision}`);
+	// Two packages pin a wayland_protocols; translate_c pins aro.
+	const what = (id: string) =>
+		manifest.inputs.find((input: { id: string }) => input.id === id)?.what;
+	expect(what("archive:ghostty/wayland_protocols")).toBe(
+		"Pinned by Ghostty's build.zig.zon",
+	);
+	expect(what("archive:gtk4-layer-shell/wayland_protocols")).toBe(
+		"Pinned by Ghostty's pkg/gtk4-layer-shell/build.zig.zon",
+	);
+	expect(what("archive:aro")).toBe("Pinned by translate_c's build.zig.zon");
 });
 
 test("an input missing from licenses/source.json fails, staging nothing", () => {

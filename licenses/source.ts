@@ -35,7 +35,8 @@ const zigIndex = "https://ziglang.org/download/index.json";
 type Download = { url: string; sha256: string };
 
 // An archive a build.zig.zon file pins: Zig fetches it by URL and checks
-// the package hash of its contents.
+// the package hash of its contents. ZON is OWNER:PATH, the package whose
+// manifest pins it, ghostty for Ghostty's own.
 export type Archive = { name: string; url: string; hash: string; zon: string };
 
 // licenses/source.json.
@@ -139,11 +140,13 @@ export function checkout(at: string): Checkout {
 	}
 }
 
-// archive:NAME, or archive:PACKAGE/NAME when two packages pin a NAME.
+// archive:NAME, or archive:PACKAGE/NAME when two packages pin a NAME:
+// PACKAGE is Ghostty's pkg/ directory, or the package whose manifest pins it.
 function archiveId(archive: Archive, all: Archive[]): string {
 	if (all.filter((other) => other.name === archive.name).length < 2)
 		return `archive:${archive.name}`;
-	const pkg = archive.zon.split("/")[1] ?? "ghostty";
+	const [owner, zon] = archive.zon.split(":");
+	const pkg = owner === "ghostty" ? (zon?.split("/")[1] ?? owner) : owner;
 	return `archive:${pkg}/${archive.name}`;
 }
 
@@ -209,7 +212,7 @@ export function inputs(at: string, lock: Lock, portal: Checkout): Input[] {
 		},
 		...lock.archives.map((archive) => ({
 			id: archiveId(archive, lock.archives),
-			what: `Pinned by Ghostty's ${archive.zon}`,
+			what: `Pinned by ${archive.zon.replace(/^ghostty:/, "Ghostty's ").replace(/^([^:]+):/, "$1's ")}`,
 			url: archive.url,
 			hash: archive.hash,
 			browse: [],
@@ -462,14 +465,14 @@ export function markdown(manifest: Manifest, lock: Lock): string {
 		"### Archives Ghostty's build fetches",
 		"",
 		`Zig fetches these while building Ghostty ${lock["libghostty-spm"].ghostty} and checks`,
-		"each against its package hash. Ghostty's build.zig.zon files pin them all;",
-		"a macOS build fetches the ones it uses.",
+		"each against its package hash. Ghostty's build.zig.zon files pin them, or",
+		"the manifests of the packages they pin; a macOS build fetches the ones it uses.",
 		"",
 		"| Name | Pinned by | Where | Zig hash |",
 		"| --- | --- | --- | --- |",
 		...archives.map(
 			(input) =>
-				`| ${input.id.slice("archive:".length)} | ${input.what.replace("Pinned by Ghostty's ", "")} | ${input.url} | \`${input.hash}\` |`,
+				`| ${input.id.slice("archive:".length)} | ${input.what.replace("Pinned by ", "")} | ${input.url} | \`${input.hash}\` |`,
 		),
 		"",
 		"## Rebuilding",
@@ -599,6 +602,52 @@ function fetchRevision(url: string, revision: string, clone?: string): string {
 	return dir;
 }
 
+// The build.zig.zon at the top of the package archive at URL, if any. Zig
+// strips one leading directory, as tar's archives usually have.
+async function packageZon(url: string): Promise<string | undefined> {
+	// git+https://HOST/PATH#COMMIT, which Zig fetches with Git.
+	const gitURL = /^git\+(https:\/\/[^#]+)#([0-9a-f]{40})$/.exec(url);
+	if (gitURL?.[1] && gitURL[2]) {
+		const dir = fetchRevision(gitURL[1], gitURL[2]);
+		try {
+			return spawnSync(
+				"git",
+				["-C", dir, "show", `${gitURL[2]}:build.zig.zon`],
+				{
+					encoding: "utf8",
+				},
+			).stdout;
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}
+	if (!/^https:\/\//.test(url))
+		throw new Error(
+			`cannot read a package from ${url}: not https or git+https`,
+		);
+	const response = await fetch(url);
+	if (!response.ok) throw new Error(`cannot fetch ${url}: ${response.status}`);
+	let bytes: Uint8Array = new Uint8Array(await response.arrayBuffer());
+	// macOS's tar reads gzip and xz, not zstd.
+	if (/\.zst$/.test(url)) bytes = Bun.zstdDecompressSync(bytes);
+	const dir = mkdtempSync(join(tmpdir(), "portal-package-"));
+	try {
+		const file = join(dir, "archive");
+		writeFileSync(file, bytes);
+		const entry = spawnSync("tar", ["-tf", file], { encoding: "utf8" })
+			.stdout.split("\n")
+			.filter((path) => /^(\.\/)?([^/]+\/)?build\.zig\.zon$/.test(path))
+			.sort((a, b) => a.length - b.length)[0];
+		if (!entry) return undefined;
+		const zon = spawnSync("tar", ["-xOf", file, entry], { encoding: "utf8" });
+		if (zon.status !== 0)
+			throw new Error(`cannot read ${entry} in ${url}: ${zon.stderr}`);
+		return zon.stdout;
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
 export async function refresh(): Promise<Lock> {
 	const previous: Partial<Lock> = existsSync(lockPath) ? json(lockPath) : {};
 	const spm: { url: string; version: string; revision: string } = json(
@@ -685,7 +734,21 @@ export async function refresh(): Promise<Lock> {
 	const archives = new Map<string, Archive>();
 	for (const zon of zons)
 		for (const dep of zonDependencies(show(ghosttyClone, ghostty, zon)))
-			if (!archives.has(dep.hash)) archives.set(dep.hash, { ...dep, zon });
+			if (!archives.has(dep.hash))
+				archives.set(dep.hash, { ...dep, zon: `ghostty:${zon}` });
+	// And what those packages pin in turn. A hash starting N-V- names a plain
+	// archive, which has no build.zig.zon.
+	const queue = [...archives.values()];
+	for (let archive = queue.shift(); archive; archive = queue.shift()) {
+		if (archive.hash.startsWith("N-V-")) continue;
+		const zon = await packageZon(archive.url);
+		for (const dep of zon ? zonDependencies(zon) : [])
+			if (!archives.has(dep.hash)) {
+				const entry = { ...dep, zon: `${archive.name}:build.zig.zon` };
+				archives.set(dep.hash, entry);
+				queue.push(entry);
+			}
+	}
 
 	const lock: Lock = {
 		"libghostty-spm": {
