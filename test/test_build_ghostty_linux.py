@@ -132,6 +132,26 @@ class BuildGhosttyLinux(unittest.TestCase):
         self.assertIn("-Doptimize=Debug", self.zig_call.read_text().split("\n"))
         self.assertIn("Built Ghostty v1.0.0 (Debug) with 0 patches", result.stdout)
 
+    def test_a_release_names_the_target_and_cpu_and_lets_pkg_config_name_system_directories(self):
+        self.zig.write_text(FAKE_ZIG.replace(
+            'printf \'%s\\n\' "$@" >"$ZIG_CALL"',
+            'printf \'%s\\n\' "$@" "allow=${PKG_CONFIG_ALLOW_SYSTEM_LIBS:-}" >"$ZIG_CALL"'))
+        result = self.run_script("--target", "aarch64-linux-gnu.2.43", "--cpu", "baseline")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        call = self.zig_call.read_text().split("\n")
+        self.assertEqual(call[:-6], [
+            "build", "-Dapp-runtime=none", "-Doptimize=ReleaseFast", "-Dversion-string=1.0.0",
+            "-Demit-docs=false", "-Dtarget=aarch64-linux-gnu.2.43", "-Dcpu=baseline"])
+        self.assertEqual(call[-2], "allow=1")
+        self.assertIn("for aarch64-linux-gnu.2.43, CPU baseline:", result.stdout)
+
+        # A developer's build names neither, and pkg-config is left alone.
+        self.run_script()
+        call = self.zig_call.read_text().split("\n")
+        self.assertFalse([arg for arg in call if arg.startswith(("-Dtarget", "-Dcpu"))])
+        self.assertEqual(call[-2], "allow=")
+
     def test_another_mode_is_refused_before_anything_is_fetched(self):
         # ReleaseSafe among them: Ghostty at the pin does not compile in it.
         result = self.run_script("--optimize", "ReleaseSafe")

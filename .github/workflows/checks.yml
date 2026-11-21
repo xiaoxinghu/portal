@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # The full set of checks, graphical ones and expensive tests included, in one
-# job on one macOS runner, so the downloads and the build serve them all. Runs
-# on main after a merge, and by hand, as on a release candidate's branch; not on
-# pull requests. When every check passed, it packs the build they tested as the
-# runtime archive, checks it unpacked elsewhere and keeps it as an artifact,
-# which on this public repository any signed-in GitHub user can download.
+# job on one macOS runner, so the downloads and the build serve them all, and
+# the checks that run on Linux in a job on each Linux CPU. Runs on main after a
+# merge, and by hand, as on a release candidate's branch; not on pull requests.
+# When every check of a job passed, it packs the build they tested as that
+# system's runtime archive, checks it unpacked elsewhere and keeps it as an
+# artifact, which on this public repository any signed-in GitHub user can
+# download.
 name: Checks
 
 on:
@@ -299,5 +301,296 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: logs
+          path: ${{ runner.temp }}/logs
+          retention-days: 14
+
+  linux:
+    # The two Linux runtime archives, one a CPU, equal in priority: Ubuntu
+    # 26.04's glibc 2.43 is their floor, so each builds on the runner itself,
+    # with its own GCC, CMake and GTK 3, Wayland and EGL packages, and needs no
+    # container or sysroot. The runner lacks three things: Emacs 31.1 with
+    # modules (Ubuntu packages 30.2), built here with pgtk and cached; Zig at
+    # Ghostty's pin; and a target for Ghostty's library, which Zig would
+    # otherwise build for the runner's CPU: here it is the floor's glibc and a
+    # baseline CPU. The module is compiled with GCC's defaults, which are those
+    # of the distribution, not of this CPU. No graphical checks: Linux renders
+    # are not checked here, and there is no app host on Linux.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-26.04
+            target: linux-x86_64-gnu
+            ghostty-target: x86_64-linux-gnu.2.43
+            zig: zig-x86_64-linux
+            # ziglang.org/download/index.json, for the pin's Zig.
+            zig-sha256: 1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026
+            # x86-64 as AMD64 first was, with SSE2 and no later extension.
+            qemu: qemu-x86_64
+            qemu-cpu: qemu64
+          - runner: ubuntu-26.04-arm
+            target: linux-aarch64-gnu
+            ghostty-target: aarch64-linux-gnu.2.43
+            zig: zig-aarch64-linux
+            zig-sha256: 9e8d11661d4ae3bd57702a3832781e23ad151dde5798e16a5ccd503f65234ff8
+            # Armv8.0-A, with none of the later atomics, SVE or the like.
+            qemu: qemu-aarch64
+            qemu-cpu: cortex-a53
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      # GNU's release tarball, checked against its signature when pinned.
+      EMACS_VERSION: '31.1'
+      EMACS_SHA256: 1da5790d9580c81932b5bf700633114468da7b3412d69faa767daebf974f4586
+      EMACS_CONFIGURE: >-
+        --with-pgtk --with-modules --without-native-compilation
+        --without-sound --without-mailutils --with-gnutls=ifavailable
+        --with-xpm=ifavailable --with-jpeg=ifavailable --with-gif=ifavailable
+        --with-tiff=ifavailable --with-png=ifavailable
+      DEBIAN_FRONTEND: noninteractive
+      USE_CACHE: ${{ github.event_name != 'workflow_dispatch' || inputs.cache }}
+      PORTAL_TEST_EXPENSIVE: 1
+      EMACS_TEST_VERBOSE: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the build's packages
+        run: |
+          # Emacs's and Portal's development files, Ghostty's tic, Mesa's
+          # EGL for the ghostty-fed suite, and QEMU's user-mode CPUs.
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
+              ninja-build pkg-config libgtk-3-dev libwayland-dev wayland-protocols \
+              libegl-dev libegl-mesa0 libgl1-mesa-dri ncurses-bin libncurses-dev \
+              libgnutls28-dev qemu-user binutils
+
+      - name: Record the environment
+        id: env
+        run: |
+          {
+            echo "PORTAL_TEST_LOGS=$RUNNER_TEMP/logs"
+            echo "EMACS=$RUNNER_TEMP/emacs/bin/emacs"
+            echo "EMACS_INCLUDE=$RUNNER_TEMP/emacs/include"
+            echo "ZIG_GLOBAL_CACHE_DIR=$RUNNER_TEMP/zig-global"
+          } >>"$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/logs"
+          echo "image=$ImageOS-$ImageVersion" >>"$GITHUB_OUTPUT"
+          echo "zig=$(sed -n 's/.*"zig": *"\([^"]*\)".*/\1/p' native/ghostty.json)" >>"$GITHUB_OUTPUT"
+          echo "emacs=$(echo "$EMACS_SHA256 $EMACS_CONFIGURE" | sha256sum | cut -c1-16)" >>"$GITHUB_OUTPUT"
+          {
+            echo "USE_CACHE=$USE_CACHE"
+            echo "Runner image $ImageOS $ImageVersion"
+            grep PRETTY_NAME /etc/os-release
+            uname -srm
+            nproc
+            ldd --version | head -1
+            cc --version | head -1
+            cmake --version | head -1
+            echo "Ninja $(ninja --version)"
+            for package in gtk+-3.0 wayland-client wayland-protocols egl; do
+              echo "$package $(pkg-config --modversion "$package")"
+            done
+            qemu-x86_64 --version | head -1 || :
+            python3 --version
+          } 2>&1 | tee "$RUNNER_TEMP/logs/environment.log"
+
+      # Restore and save separately, as on the Mac: a combined cache step
+      # saves only when the whole job succeeds.
+      - name: Restore Emacs
+        id: emacs-cache
+        if: env.USE_CACHE == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/emacs
+          key: emacs-${{ env.EMACS_VERSION }}-${{ steps.env.outputs.image }}-${{ runner.arch }}-${{ steps.env.outputs.emacs }}
+
+      - name: Build Emacs
+        if: steps.emacs-cache.outputs.cache-hit != 'true'
+        run: |
+          source=$RUNNER_TEMP/emacs-source
+          mkdir -p "$source"
+          curl -fsSL --retry 3 -o "$source.tar.xz" \
+              "https://ftpmirror.gnu.org/gnu/emacs/emacs-$EMACS_VERSION.tar.xz"
+          echo "$EMACS_SHA256  $source.tar.xz" | sha256sum -c -
+          tar -xJf "$source.tar.xz" -C "$source" --strip-components=1
+          cd "$source"
+          # shellcheck disable=SC2086 # the options are words
+          ./configure -q --prefix="$RUNNER_TEMP/emacs" $EMACS_CONFIGURE >"$PORTAL_TEST_LOGS/emacs-build.log" 2>&1 ||
+              { tail -50 "$PORTAL_TEST_LOGS/emacs-build.log"; exit 1; }
+          make -j"$(nproc)" >>"$PORTAL_TEST_LOGS/emacs-build.log" 2>&1 ||
+              { tail -50 "$PORTAL_TEST_LOGS/emacs-build.log"; exit 1; }
+          make install >>"$PORTAL_TEST_LOGS/emacs-build.log" 2>&1
+
+      - name: Save Emacs
+        if: steps.emacs-cache.outcome == 'success' && steps.emacs-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/emacs
+          key: ${{ steps.emacs-cache.outputs.cache-primary-key }}
+
+      - name: Check Emacs
+        run: |
+          "$EMACS" --batch -Q --eval '(princ (format "%s\n%s\n" (emacs-version)
+              system-configuration-features))' | tee -a "$PORTAL_TEST_LOGS/environment.log"
+          "$EMACS" --batch -Q --eval '(unless (and (equal emacs-version "'"$EMACS_VERSION"'")
+              (fboundp (quote module-load))
+              (string-match-p "\\_<PGTK\\_>" system-configuration-features))
+            (kill-emacs 1))'
+
+      - name: Restore Zig and Ghostty's packages
+        id: zig-cache
+        if: env.USE_CACHE == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ runner.temp }}/zig.tar.xz
+            ${{ runner.temp }}/zig-global/p
+          key: zig-${{ steps.env.outputs.zig }}-${{ runner.arch }}-${{ hashFiles('native/ghostty.json') }}
+
+      - name: Install Zig
+        env:
+          ZIG_TARBALL: ${{ matrix.zig }}-${{ steps.env.outputs.zig }}
+          ZIG_SHA256: ${{ matrix.zig-sha256 }}
+        run: |
+          # Ghostty's pin names the Zig; the digest here is that release's.
+          [ -f "$RUNNER_TEMP/zig.tar.xz" ] ||
+              curl -fsSL --retry 3 -o "$RUNNER_TEMP/zig.tar.xz" \
+                  "https://ziglang.org/download/${{ steps.env.outputs.zig }}/$ZIG_TARBALL.tar.xz"
+          echo "$ZIG_SHA256  $RUNNER_TEMP/zig.tar.xz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/zig"
+          tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP/zig" --strip-components=1
+          echo "ZIG=$RUNNER_TEMP/zig/zig" >>"$GITHUB_ENV"
+          echo "Zig $("$RUNNER_TEMP/zig/zig" version)" | tee -a "$PORTAL_TEST_LOGS/environment.log"
+
+      - name: Restore Emacs packages
+        id: build-cache
+        if: env.USE_CACHE == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/elpa
+          key: linux-elpa-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Build
+        id: build
+        run: |
+          ./build.sh -DPORTAL_GHOSTTY_TARGET=${{ matrix.ghostty-target }} -DPORTAL_GHOSTTY_CPU=baseline \
+              2>&1 | tee "$PORTAL_TEST_LOGS/build.log"
+          # The module must build against the header of the Emacs that loads it.
+          header=$(sed -n 's/^EMACS_INCLUDE:PATH=//p' build/CMakeCache.txt)
+          echo "emacs-module.h from $header" | tee -a "$PORTAL_TEST_LOGS/environment.log"
+          [ "$header" = "$EMACS_INCLUDE" ] ||
+              { echo "::error::Built against $header, not $EMACS's $EMACS_INCLUDE"; exit 1; }
+
+      - name: Save Zig and Ghostty's packages
+        if: steps.zig-cache.outcome == 'success' && steps.zig-cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ runner.temp }}/zig.tar.xz
+            ${{ runner.temp }}/zig-global/p
+          key: ${{ steps.zig-cache.outputs.cache-primary-key }}
+
+      - name: CTest
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          status=0
+          ctest --test-dir build -j"$(nproc)" --output-on-failure || status=$?
+          cp build/Testing/Temporary/LastTest.log "$PORTAL_TEST_LOGS/ctest.log" || :
+          exit "$status"
+
+      - name: Save Emacs packages
+        if: steps.build-cache.outcome == 'success' && steps.build-cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/elpa
+          key: ${{ steps.build-cache.outputs.cache-primary-key }}
+
+      - name: Python
+        if: ${{ !cancelled() }}
+        run: python3 -B -m unittest discover -v -s test -p 'test_*.py' 2>&1 | tee "$PORTAL_TEST_LOGS/python.log"
+
+      # The runtime archive: the build the steps above tested, tarred as it
+      # is, only after all of them passed, as on the Mac.
+      - name: Pack the runtime
+        id: runtime
+        run: |
+          tag=
+          case $GITHUB_REF_NAME in release/v*) tag=${GITHUB_REF_NAME#release/} ;; esac
+          mkdir -p "$PORTAL_TEST_LOGS/runtime"
+          python3 -B scripts/runtime-archive.py pack --target ${{ matrix.target }} \
+              ${tag:+--tag "$tag"} --commit "$GITHUB_SHA" \
+              build "$RUNNER_TEMP/runtime" 2>&1 | tee "$PORTAL_TEST_LOGS/runtime/runtime.log"
+          manifest=$(ls "$RUNNER_TEMP/runtime/"*.json)
+          cp "$manifest" "$PORTAL_TEST_LOGS/runtime/"
+          echo "manifest=$manifest" >>"$GITHUB_OUTPUT"
+          echo "archive=${manifest%.json}.tar.gz" >>"$GITHUB_OUTPUT"
+
+      # The archive unpacked elsewhere, with the checkout's build moved away:
+      # its files, and each binary's machine, libraries, symbol versions and
+      # runpath, the loader asked where it finds them; then the module loaded
+      # and Ghostty started from there by a disposable Emacs, and the same
+      # again on an emulated CPU of the target's baseline, where an
+      # instruction beyond it would stop Emacs. The ABI evidence, readelf's
+      # own, goes to the logs.
+      - name: Check the unpacked runtime
+        env:
+          MANIFEST: ${{ steps.runtime.outputs.manifest }}
+        run: |
+          export PORTAL_TEST_LOGS=$PORTAL_TEST_LOGS/runtime
+          unpacked=$RUNNER_TEMP/unpacked/portal
+          mv build "$RUNNER_TEMP/build-tested"
+          trap 'mv "$RUNNER_TEMP/build-tested" build' EXIT
+          python3 -B scripts/runtime-archive.py unpack "$MANIFEST" "$unpacked" 2>&1 |
+              tee -a "$PORTAL_TEST_LOGS/runtime.log"
+          for binary in portal.so ghostty-linux/lib/ghostty-internal.so; do
+            {
+              echo "== $binary"
+              sha256sum "$unpacked/$binary"
+              readelf --file-header "$unpacked/$binary" | grep -E 'Class|Machine|Type'
+              readelf --dynamic "$unpacked/$binary" | grep -E 'NEEDED|SONAME|RPATH|RUNPATH'
+              readelf --version-info "$unpacked/$binary" | sed -n '/Version needs/,$p'
+              ldd "$unpacked/$binary"
+            } >>"$PORTAL_TEST_LOGS/abi.log" 2>&1
+          done
+          probe=(--batch -Q -l portal-build.el -f portal-build--probe-batch "$unpacked"
+                 --eval '(princ (format "Ghostty: %S\n" (portal--terminal-engine)))')
+          "$EMACS" "${probe[@]}" 2>&1 | tee -a "$PORTAL_TEST_LOGS/runtime.log"
+          # QEMU runs Emacs's own binary, not a script: the installed emacs is a link to it.
+          echo "On an emulated ${{ matrix.qemu-cpu }}:" | tee -a "$PORTAL_TEST_LOGS/runtime.log"
+          ${{ matrix.qemu }} -cpu ${{ matrix.qemu-cpu }} "$(readlink -f "$EMACS")" "${probe[@]}" 2>&1 |
+              tee -a "$PORTAL_TEST_LOGS/runtime.log"
+          {
+            echo "### ${{ matrix.target }}"
+            echo '```'
+            cat "$PORTAL_TEST_LOGS/runtime.log"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the runtime archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: ${{ steps.runtime.outputs.archive }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Keep the runtime manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: ${{ steps.runtime.outputs.manifest }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Keep logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: logs-${{ matrix.target }}
           path: ${{ runner.temp }}/logs
           retention-days: 14

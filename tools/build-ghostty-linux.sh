@@ -1,6 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Usage: build-ghostty-linux.sh [--optimize MODE] [--prefix DIR]
+#                               [--target TRIPLE] [--cpu CPU]
 #                               [--pin FILE] [--patches DIR] [--source DIR]
 #
 # Build Ghostty's embedding library for Linux with Portal's patches, with Zig.
@@ -28,6 +29,14 @@
 # installed.  Zig's cache is beside the source copy, in SOURCE-cache, and
 # outlives it.
 #
+# Without --target and --cpu Zig builds for this machine, its CPU and its C
+# library: a developer's build.  A release names both, as Zig does, such as
+# --target x86_64-linux-gnu.2.43 --cpu baseline: the oldest glibc whose symbol
+# versions the library may need, and the CPU it may assume, whatever the
+# builder's.  Zig looks for no library of the system for a target it is
+# given, so the script then lets pkg-config name EGL's directory, a system
+# one it would otherwise leave out.
+#
 # $ZIG names the Zig to use when it is not `zig` on PATH.  It must be the pin's
 # Zig or a later patch release of it, as Ghostty's build itself requires; the
 # pin's Zig must be the one the source's build.zig.zon asks for.  Zig and tic
@@ -42,10 +51,12 @@ patches=$root/native/patches/ghostty
 dest=$root/build/ghostty
 prefix=$root/build/ghostty-linux
 optimize=ReleaseFast
+target=
+cpu=
 
 while [ "$#" -gt 0 ]; do
     case $1 in
-    --pin | --patches | --source | --prefix | --optimize)
+    --pin | --patches | --source | --prefix | --optimize | --target | --cpu)
         if [ "$#" -lt 2 ]; then
             echo "$me: $1 needs a value" >&2
             exit 2
@@ -56,11 +67,14 @@ while [ "$#" -gt 0 ]; do
         --source) dest=$2 ;;
         --prefix) prefix=$2 ;;
         --optimize) optimize=$2 ;;
+        --target) target=$2 ;;
+        --cpu) cpu=$2 ;;
         esac
         shift 2
         ;;
     *)
-        echo "usage: $0 [--optimize MODE] [--prefix DIR] [--pin FILE] [--patches DIR] [--source DIR]" >&2
+        echo "usage: $0 [--optimize MODE] [--prefix DIR] [--target TRIPLE] [--cpu CPU]" \
+            "[--pin FILE] [--patches DIR] [--source DIR]" >&2
         exit 2
         ;;
     esac
@@ -203,13 +217,17 @@ fi
 
 # The version is given: Ghostty's build would ask Git, and the copy has no tags.
 # No documentation: it is built only where pandoc is found.
-(cd "$dest" && "$zig" build \
-    -Dapp-runtime=none \
-    -Doptimize="$optimize" \
-    -Dversion-string="${version#v}" \
-    -Demit-docs=false \
-    --prefix "$prefix" \
-    --cache-dir "$dest-cache") || {
+set -- -Dapp-runtime=none -Doptimize="$optimize" -Dversion-string="${version#v}" \
+    -Demit-docs=false
+if [ -n "$target" ]; then
+    set -- "$@" -Dtarget="$target"
+    PKG_CONFIG_ALLOW_SYSTEM_LIBS=1
+    export PKG_CONFIG_ALLOW_SYSTEM_LIBS
+fi
+if [ -n "$cpu" ]; then
+    set -- "$@" -Dcpu="$cpu"
+fi
+(cd "$dest" && "$zig" build "$@" --prefix "$prefix" --cache-dir "$dest-cache") || {
     echo "$me: zig build failed; Ghostty $version asks for Zig $needs, and $zig is $has" >&2
     exit 1
 }
@@ -222,7 +240,7 @@ fi
 # The library's soname is libghostty.so, whatever Ghostty's build calls the file.
 ln -sfn ghostty-internal.so "$prefix/lib/libghostty.so"
 
-echo "Built Ghostty $version ($optimize) with $count patches:"
+echo "Built Ghostty $version ($optimize) with $count patches, for ${target:-this machine}${cpu:+, CPU $cpu}:"
 echo "  library    $prefix/lib/libghostty.so"
 echo "  header     $prefix/include/ghostty.h"
 echo "  resources  $prefix/share/ghostty"

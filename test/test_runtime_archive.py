@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """scripts/runtime-archive.py packs a stand-in build and checks it unpacked.
 
-The build's binaries are small Mach-O files written here, so these tests run
-anywhere, without a build.  The manifest's format is the fixture's,
+The build's binaries are small Mach-O and ELF files written here, so these
+tests run anywhere, without a build.  The manifest's format is the fixture's,
 test/fixtures/runtime-manifest.json, which the installer's tests read too.
 """
 from pathlib import Path
@@ -10,10 +10,13 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import struct
+import subprocess
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "runtime-archive.py"
@@ -42,6 +45,45 @@ def macho(cpu=0x0100000C, minos=(13, 0), loads=("/usr/lib/libSystem.B.dylib",),
                  for path in rpaths]
     body = b"".join(commands)
     return struct.pack("<IiIIIIII", 0xFEEDFACF, cpu, 0, 6, len(commands), len(body), 0, 0) + body
+
+
+def elf(machine=62, kind=3, needed=("libc.so.6",), soname=None, runpath=(), rpath=(),
+        versions=(("libc.so.6", ("GLIBC_2.2.5", "GLIBC_2.34")),)):
+    """A 64-bit little-endian ELF file with these dynamic entries and
+needed symbol versions in its sections, and no code."""
+    strings = bytearray(b"\0")
+
+    def string(text):
+        offset = len(strings)
+        strings.extend(text.encode() + b"\0")
+        return offset
+
+    dynamic = b"".join(struct.pack("<qQ", 1, string(name)) for name in needed)
+    for tag, value in ((14, soname), (29, ":".join(runpath)), (15, ":".join(rpath))):
+        if value:
+            dynamic += struct.pack("<qQ", tag, string(value))
+    dynamic += struct.pack("<qQ", 0, 0)
+    verneed = b""
+    for index, (file, names) in enumerate(versions):
+        aux = b"".join(struct.pack("<IHHII", 0, 0, 2 + number, string(name),
+                                   16 if number < len(names) - 1 else 0)
+                       for number, name in enumerate(names))
+        following = 16 + len(aux) if index < len(versions) - 1 else 0
+        verneed += struct.pack("<HHIII", 1, len(names), string(file), 16, following) + aux
+    strings = bytes(strings)
+    offsets = [64, 64 + len(strings), 64 + len(strings) + len(dynamic)]
+    shoff = offsets[2] + len(verneed)
+
+    def section(kind_, offset, size, link=0, info=0):
+        return struct.pack("<IIQQQQIIQQ", 0, kind_, 0, 0, offset, size, link, info, 8, 0)
+
+    sections = (section(0, 0, 0) + section(3, offsets[0], len(strings))
+                + section(6, offsets[1], len(dynamic), link=1)
+                + section(0x6FFFFFFE, offsets[2], len(verneed), link=1, info=len(versions)))
+    header = (b"\x7fELF" + bytes([2, 1, 1, 0]) + bytes(8)
+              + struct.pack("<HHIQQQIHHHHHH", kind, machine, 1, 0, 0, shoff, 0, 64, 56, 0,
+                            64, 4, 0))
+    return header + strings + dynamic + verneed + sections
 
 
 class RuntimeArchiveTests(unittest.TestCase):
@@ -277,6 +319,195 @@ class RuntimeArchiveTests(unittest.TestCase):
     def test_the_command_line_says_why_it_refuses(self):
         self.assertEqual(archive.main(["pack", "--commit", "eaa7f52", str(self.build), str(self.out)]), 1)
         self.assertEqual(archive.main(["pack", "--commit", COMMIT, str(self.build), str(self.out)]), 0)
+
+
+class LinuxRuntimeArchiveTests(unittest.TestCase):
+    """The Linux archives: one per CPU, Ghostty's library and resources
+beside the module, the system's libraries by name."""
+    LIBRARY = "ghostty-linux/lib/ghostty-internal.so"
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(prefix="portal runtime ")
+        self.addCleanup(directory.cleanup)
+        quiet = contextlib.redirect_stdout(io.StringIO())
+        quiet.__enter__()
+        self.addCleanup(quiet.__exit__, None, None, None)
+        self.root = Path(directory.name)
+        self.build = self.root / "checkout" / "build"
+        self.out = self.root / "out"
+        files = {
+            "portal-build.eld": f'(:identity "{IDENTITY}" :version "0.3.0")',
+            "licenses/LICENSE": "GPL",
+            "licenses/README.md": "Notices",
+            "ghostty-linux/share/ghostty/shell-integration/bash/ghostty.bash": "bash",
+            "ghostty-linux/share/terminfo/x/xterm-ghostty": "terminfo",
+            # Ghostty's install, besides what Portal runs.
+            "ghostty-linux/include/ghostty.h": "header",
+            "ghostty-linux/share/man/man1/ghostty.1": "manual",
+            "CMakeCache.txt": f"CMAKE_HOME={self.build}",
+        }
+        for name, text in files.items():
+            (self.build / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.build / name).write_text(text)
+        self.binary("portal.so", self.module())
+        self.binary(self.LIBRARY, self.library())
+        (self.build / "ghostty-linux/lib/libghostty.so").symlink_to("ghostty-internal.so")
+        # The loader is asked only on a Linux machine of the archive's CPU,
+        # and these binaries are not ones it could load.
+        patch = mock.patch.object(archive, "check_loader", return_value="")
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    @staticmethod
+    def module(**changes):
+        fields = {"needed": ("libghostty.so", "libgtk-3.so.0", "libwayland-client.so.0",
+                             "libc.so.6"),
+                  "runpath": ("$ORIGIN/ghostty-linux/lib",)}
+        return elf(**{**fields, **changes})
+
+    @staticmethod
+    def library(**changes):
+        fields = {"needed": ("libEGL.so.1", "libm.so.6", "libc.so.6"), "soname": "libghostty.so",
+                  "versions": (("libm.so.6", ("GLIBC_2.2.5", "GLIBC_2.43")),
+                               ("libc.so.6", ("GLIBC_2.2.5", "GLIBC_2.34")))}
+        return elf(**{**fields, **changes})
+
+    def binary(self, name, data):
+        (self.build / name).parent.mkdir(parents=True, exist_ok=True)
+        (self.build / name).write_bytes(data)
+
+    def pack(self, target="linux-x86_64-gnu"):
+        for path in self.out.glob("*"):
+            path.unlink()
+        return archive.pack(self.build, self.out, COMMIT, "v0.3.0", target)
+
+    def refused(self, pattern, function, *arguments):
+        with self.assertRaisesRegex(archive.Refusal, pattern):
+            function(*arguments)
+
+    def test_packs_the_module_with_ghostty_and_unpacks_it_elsewhere(self):
+        written = self.pack()
+        manifest = json.loads(written.read_text())
+        entry = manifest["archives"][0]
+        self.assertEqual((entry["target"], entry["floor"], entry["name"], written.name),
+                         ("linux-x86_64-gnu", {"glibc": "2.43"},
+                          "portal-runtime-v0.3.0-linux-x86_64-gnu.tar.gz",
+                          "portal-runtime-v0.3.0-linux-x86_64-gnu.json"))
+        with tarfile.open(self.out / entry["name"]) as tar:
+            members = {member.name: member for member in tar.getmembers()}
+        self.assertEqual({name.split("/")[0] for name in members},
+                         {"licenses", "portal-build.eld", "portal.so", "ghostty-linux"})
+        self.assertEqual(members["ghostty-linux/lib/libghostty.so"].linkname, "ghostty-internal.so")
+        for name in ("ghostty-linux", "ghostty-linux/lib", "ghostty-linux/share"):
+            self.assertTrue(members[name].isdir(), name)
+        self.assertFalse([name for name in members if "include" in name or "man" in name])
+
+        destination = self.root / "elsewhere" / "portal"
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            archive.unpack(written, destination)
+        self.assertEqual((destination / "ghostty-linux/lib/libghostty.so").read_bytes(),
+                         self.library())
+        self.assertEqual(os.readlink(destination / "ghostty-linux/lib/libghostty.so"),
+                         "ghostty-internal.so")
+        report = out.getvalue()
+        self.assertIn("portal.so: x86_64, GLIBC_2.34 at most; system libraries libgtk-3.so.0, "
+                      "libwayland-client.so.0, libc.so.6; libghostty.so from the runtime's "
+                      "ghostty-linux/lib/libghostty.so by its runpath $ORIGIN/ghostty-linux/lib",
+                      report)
+        self.assertIn(f"{self.LIBRARY}: x86_64, GLIBC_2.43 at most; system libraries "
+                      "libEGL.so.1, libm.so.6, libc.so.6", report)
+
+    def test_one_archive_a_cpu(self):
+        self.refused("portal.so is for x86_64, not aarch64", archive.unpack,
+                     self.pack("linux-aarch64-gnu"), self.root / "arm")
+        self.binary("portal.so", self.module(machine=183))
+        self.binary(self.LIBRARY, self.library(machine=183))
+        archive.unpack(self.pack("linux-aarch64-gnu"), self.root / "arm")
+
+    def test_refuses_binaries_that_would_not_run_on_every_claimed_system(self):
+        for name, data, pattern in (
+                (self.LIBRARY, self.library(versions=(("libm.so.6", ("GLIBC_2.44",)),)),
+                 "needs GLIBC_2.44, newer than the floor, glibc 2.43"),
+                (self.LIBRARY, self.library(versions=(("libc.so.6", ("GLIBC_PRIVATE",)),)),
+                 "glibc's private symbols"),
+                (self.LIBRARY, self.library(needed=("libstdc++.so.6",)),
+                 "needs libstdc\\+\\+.so.6, which is neither the system's nor the runtime's"),
+                (self.LIBRARY, self.library(kind=2), "not a shared object"),
+                (self.LIBRARY, self.library(soname="ghostty-internal.so"), "another soname"),
+                ("portal.so", self.module(runpath=()), "needs libghostty.so, which is neither"),
+                ("portal.so", self.module(rpath=("$ORIGIN/ghostty-linux/lib",)), "has an RPATH"),
+                ("portal.so", self.module(runpath=(f"{self.build}/ghostty-linux/lib",)),
+                 "not a place beside it"),
+                ("portal.so", self.module(runpath=("$ORIGIN/../..",)), "outside the runtime"),
+                ("portal.so", b"#!/bin/sh\n" + bytes(64), "not an ELF binary")):
+            with self.subTest(pattern):
+                original = (self.build / name).read_bytes()
+                self.binary(name, data)
+                self.refused(pattern, archive.unpack, self.pack(), self.root / "unpacked")
+                self.assertFalse((self.root / "unpacked").exists())
+                self.binary(name, original)
+
+    def test_refuses_what_ghostty_installs_besides_the_runtime(self):
+        for name, directory in (("ghostty-linux/include/ghostty.h", False),
+                                ("ghostty-linux/share/man", True),
+                                ("ghostty-linux", False)):
+            with self.subTest(name):
+                written = self.pack()
+                manifest = json.loads(written.read_text())
+                tarball = self.out / manifest["archives"][0]["name"]
+                with tarfile.open(tarball, "w:gz") as tar:
+                    info = tarfile.TarInfo(name)
+                    if directory:
+                        info.type = tarfile.DIRTYPE
+                        tar.addfile(info)
+                    else:
+                        info.size = 1
+                        tar.addfile(info, io.BytesIO(b"x"))
+                manifest["archives"][0]["size"] = tarball.stat().st_size
+                manifest["archives"][0]["sha256"] = archive.sha256(tarball)
+                written.write_text(json.dumps(manifest))
+                self.refused("not of the runtime", archive.unpack, written, self.root / "unpacked")
+
+    def test_refuses_a_build_whose_ghostty_directory_is_a_link(self):
+        (self.build / "ghostty-linux").rename(self.root / "elsewhere")
+        (self.build / "ghostty-linux").symlink_to(self.root / "elsewhere")
+        self.refused("the build's ghostty-linux is not a directory", self.pack)
+
+
+class LoaderTests(unittest.TestCase):
+    """What ldd says decides where the runtime's libraries come from."""
+    LDD = """\tlinux-vdso.so.1 (0x0000ffff8a5f0000)
+\tlibghostty.so => {library} (0x0000ffff88000000)
+\tlibgtk-3.so.0 => /usr/lib/libgtk-3.so.0 (0x0000ffff87a00000)
+\tlibc.so.6 => /usr/lib/libc.so.6 (0x0000ffff87800000)
+\t/lib/ld-linux-aarch64.so.1 (0x0000ffff8a5b0000)
+"""
+
+    def ask(self, stdout, own, machine="aarch64", system="linux"):
+        result = subprocess.CompletedProcess([], 0, stdout, "")
+        with mock.patch.object(archive.sys, "platform", system), \
+                mock.patch.object(archive.platform, "machine", return_value=machine), \
+                mock.patch.object(archive.subprocess, "run", return_value=result) as run:
+            answer = archive.check_loader(Path("/runtime"), "portal.so", own, "aarch64")
+        return answer, run
+
+    def test_the_runtimes_library_comes_from_the_runtime(self):
+        own = [("libghostty.so", Path("/runtime/ghostty-linux/lib/libghostty.so"))]
+        answer, run = self.ask(self.LDD.format(library="/runtime/ghostty-linux/lib/libghostty.so"),
+                               own)
+        self.assertEqual(answer, "; the loader finds 3 libraries, the runtime's in it")
+        self.assertNotIn("LD_LIBRARY_PATH", run.call_args.kwargs["env"])
+        with self.assertRaisesRegex(archive.Refusal, "at /usr/lib/libghostty.so, not in the runtime"):
+            self.ask(self.LDD.format(library="/usr/lib/libghostty.so"), own)
+        with self.assertRaisesRegex(archive.Refusal, "does not find libghostty.so"):
+            self.ask(self.LDD.format(library="not found"), own)
+
+    def test_is_asked_only_on_a_linux_machine_of_the_cpu(self):
+        for machine, system in (("x86_64", "linux"), ("arm64", "darwin")):
+            answer, run = self.ask("", [], machine, system)
+            self.assertIn("not asked", answer)
+            run.assert_not_called()
 
 
 if __name__ == "__main__":
