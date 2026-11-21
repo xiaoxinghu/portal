@@ -903,11 +903,13 @@ To see how far apart they are, run the report from a checkout of Portal:
 tools/ghostty-version.py
 ```
 
-It prints Portal's Ghostty, that of the newest libghostty-spm release and that
-of the Rex server installed on this Mac, how many of the server's commits each
-lacks, and whether a newer release would help. It knows the macOS pin alone,
-and cannot read the Ghostty of the Linux server, whose program does not name
-its commit. It is the only check there is;
+It prints Portal's Ghostty, that of the newest release and that of the
+installed Rex server, how many of the server's commits each lacks, and whether
+a newer release would help. On macOS the releases are libghostty-spm's and the
+server is in Rex's bundle; on Linux they are Ghostty's own, Portal's the one
+`native/ghostty.json` pins, and the server is `rex` on `PATH`, whose program
+names a libghostty-vt release rather than a commit: the report reads the
+commit from that release's tag. It is the only check there is;
 [Contributing](../CONTRIBUTING.md#the-ghostty-dependency) says how to bump the
 pin when it would.
 

@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """tools/ghostty-version.py: its parsing, on fixtures taken from libghostty-spm
-2.2.2026110702 and Rex 0.1.0-preview.14, and its report and bump against local
-stand-ins for the package, Ghostty and a Rex server, offline."""
+2.2.2026110702, Rex 0.1.0-preview.14 and the Linux Rex 0.0.1795116584-ga086db,
+and its report and bump against local stand-ins for the package, Ghostty and a
+Rex server, offline, for macOS and Linux on either."""
 import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -73,6 +75,29 @@ class Parsing(unittest.TestCase):
         self.assertEqual(tool.parse_library_version("1.1.0-dev+5813c9461"), "5813c9461")
         self.assertEqual(tool.parse_library_version("1.3.1+0538f7535be0"), "0538f7535be0")
         self.assertIsNone(tool.parse_library_version("1.1.0-dev"))
+
+    def test_library_release(self):
+        self.assertEqual(tool.parse_library_release("1.0.1"), "1.0.1")
+        self.assertIsNone(tool.parse_library_release("1.1.0-dev"))
+        self.assertIsNone(tool.parse_library_release("1.1.0-dev+5813c9461"))
+
+    def test_go_module_in_a_binary(self):
+        binary = b"\x7fELF\x00" + fixture("go-build-info.txt").encode() + b"\x00more\x00"
+        self.assertEqual(tool.find_go_module(binary),
+                         "v0.0.0-20261107144202-b13f277ddcb2")
+        self.assertIsNone(tool.find_go_module(b"\x00no build info\x00"))
+
+    def test_pseudo_version_date(self):
+        self.assertEqual(tool.pseudo_version_date("v0.0.0-20261107144202-b13f277ddcb2").isoformat(),
+                         "2026-11-07T14:42:02+00:00")
+        self.assertEqual(tool.pseudo_version_date("v1.2.4-0.20261107144202-b13f277ddcb2").date()
+                         .isoformat(), "2026-11-07")
+        self.assertIsNone(tool.pseudo_version_date("v1.2.3"))
+
+    def test_ghostty_releases_leave_out_libghostty_vt(self):
+        tags = {"v1.3.1": "a", "v1.4.0": "b", "vt-1.0.1": "c", "tip": "d"}
+        self.assertEqual(tool.releases(tags, tool.GHOSTTY_RELEASE), ["v1.3.1", "v1.4.0"])
+        self.assertTrue(tool.release_key("v1.10.0") > tool.release_key("v1.4.0"))
 
     def test_library_version_in_a_binary(self):
         record = fixture("ghostty-build-record.txt").strip().encode()
@@ -183,7 +208,7 @@ class Stand_ins(unittest.TestCase):
     def run_tool(self, *args, rex=None):
         return subprocess.run(
             [sys.executable, "-B", str(SCRIPT), *args, "--offline", "--root", str(self.checkout),
-             "--package", str(self.package), "--ghostty", str(self.ghostty),
+             "--platform", "macos", "--package", str(self.package), "--ghostty", str(self.ghostty),
              "--rex", str(rex or self.rex)],
             env=GIT_ENV, capture_output=True, text=True)
 
@@ -212,7 +237,8 @@ class Stand_ins(unittest.TestCase):
 
         result = subprocess.run(
             [sys.executable, "-B", str(SCRIPT), "--offline", "--root", str(self.checkout),
-             "--package", str(self.package), "--ghostty", str(shallow), "--rex", str(self.rex)],
+             "--platform", "macos", "--package", str(self.package), "--ghostty", str(shallow),
+             "--rex", str(self.rex)],
             env=GIT_ENV, capture_output=True, text=True)
 
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -250,7 +276,8 @@ class Stand_ins(unittest.TestCase):
     def test_report_says_what_it_could_not_find_out(self):
         result = subprocess.run(
             [sys.executable, "-B", str(SCRIPT), "--offline", "--root", str(self.checkout),
-             "--rex", str(self.rex)], env=GIT_ENV, capture_output=True, text=True)
+             "--platform", "macos", "--rex", str(self.rex)],
+            env=GIT_ENV, capture_output=True, text=True)
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Verdict: Unknown:", result.stdout)
@@ -342,6 +369,124 @@ class Stand_ins(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("is not a release", result.stderr)
         self.assertEqual(self.pin()["version"], "1.0")
+
+
+class Linux(unittest.TestCase):
+    """The report on Linux: a Ghostty of three commits with the releases v1.0.0 (the
+    first) and the libghostty-vt release vt-1.0.1 (the third), a checkout whose
+    native/ghostty.json pins v1.0.0, and a Linux server whose library_version is
+    1.0.1, without a commit."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.dir = Path(self.temporary.name)
+        self.ghostty = self.dir / "ghostty"
+        self.ghostty.mkdir()
+        git(self.ghostty, "init", "-q")
+        self.commits = []
+        for n in range(3):
+            git(self.ghostty, "commit", "-q", "--allow-empty", "-m", f"g{n}")
+            self.commits.append(git(self.ghostty, "rev-parse", "HEAD"))
+        git(self.ghostty, "tag", "-a", "-m", "Ghostty 1.0.0", "v1.0.0", self.commits[0])
+        git(self.ghostty, "tag", "-a", "-m", "libghostty-vt 1.0.1", "vt-1.0.1", self.commits[2])
+
+        self.checkout = self.dir / "portal"
+        (self.checkout / "native").mkdir(parents=True)
+        (self.checkout / "native" / "ghostty.json").write_text(json.dumps(
+            {"url": "https://example.invalid/ghostty.git", "version": "v1.0.0",
+             "revision": self.commits[0], "zig": "0.0.0"}, indent="\t") + "\n")
+
+        self.bin = self.dir / "bin"
+        self.bin.mkdir()
+        self.rex = self.bin / "rex"
+        self.server("1.0.1")
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def server(self, version):
+        """The stand-in server, its library_version VERSION, without a commit."""
+        record = fixture("ghostty-build-record.txt").strip().replace(
+            '"1.1.0-dev+5813c9461","commit":"5813c9461"', f'"{version}","commit":null')
+        self.assertIn(f'"library_version":"{version}"', record)
+        self.rex.write_text(f'#!/bin/sh\necho "rex 0.0.0-linux"\nexit 0\n{record}\n'
+                            + fixture("go-build-info.txt"))
+        self.rex.chmod(0o755)
+
+    def run_tool(self, *args, ghostty=True, path=None):
+        env = {**GIT_ENV, "PATH": os.pathsep.join([str(self.bin), os.environ["PATH"]])
+               if path is None else path}
+        return subprocess.run(
+            [sys.executable, "-B", str(SCRIPT), *args, "--offline", "--root", str(self.checkout),
+             "--platform", "linux", *(["--ghostty", str(self.ghostty)] if ghostty else [])],
+            env=env, capture_output=True, text=True)
+
+    def test_report(self):
+        result = self.run_tool()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = result.stdout
+        self.assertRegex(out, rf"Portal's pin: +Ghostty v1\.0\.0 +Ghostty {self.commits[0][:12]} of ")
+        self.assertRegex(out, rf"Newest release: +Ghostty v1\.0\.0 \(the pin\) +Ghostty {self.commits[0][:12]} ")
+        self.assertRegex(out, rf"Rex server: +rex 0\.0\.0-linux \(1\.0\.1\) +Ghostty {self.commits[2][:12]} of ")
+        self.assertIn("Portal's Ghostty lacks 2 commits of the server's (counted in the Ghostty clone).", out)
+        self.assertIn("Verdict: The newest release is still behind the server: Portal pins it, "
+                      "and its Ghostty lacks 2 commits of the Rex server's.", out)
+        self.assertIn("Note: The Rex server's Ghostty: its library_version 1.0.1 is libghostty-vt's "
+                      "release, the tag vt-1.0.1.", out)
+        self.assertNotIn("Could not find out", out)
+        self.assertNotIn("libghostty-spm", out)
+
+    def test_a_newer_release_has_the_server(self):
+        git(self.ghostty, "tag", "v1.1.0", self.commits[2])
+
+        result = self.run_tool()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertRegex(result.stdout, rf"Newest release: +Ghostty v1\.1\.0 +Ghostty {self.commits[2][:12]} ")
+        self.assertIn("The newest release's Ghostty is the server's.", result.stdout)
+        self.assertIn("Verdict: A newer release exists: bump to v1.1.0", result.stdout)
+
+    def test_a_release_ghostty_does_not_tag(self):
+        self.server("1.0.2")
+
+        result = self.run_tool()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = result.stdout
+        self.assertIn("Verdict: Unknown: the Rex server's Ghostty could not be read.", out)
+        self.assertIn("1.0.2 is libghostty-vt's release vt-1.0.2, whose commit is unknown: "
+                      "Ghostty has no tag vt-1.0.2.", out)
+        self.assertRegex(out, r"The Rex server's Go module go\.mitchellh\.com/libghostty is "
+                         r"v0\.0\.0-20261107144202-b13f277ddcb2, of 2026-11-07, .* Portal's Ghostty "
+                         r"of \d{4}-\d\d-\d\d; a module's date does not date the Ghostty it builds\.")
+
+    def test_without_a_ghostty_clone(self):
+        result = self.run_tool(ghostty=False)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = result.stdout
+        self.assertRegex(out, rf"Portal's pin: +Ghostty v1\.0\.0 +Ghostty {self.commits[0][:12]} ")
+        self.assertIn("Verdict: Unknown: the Rex server's Ghostty could not be read.", out)
+        self.assertIn("whose commit is unknown: no clone of Ghostty.", out)
+        self.assertIn("of 2026-11-07; Portal's Ghostty's date is unknown.", out)
+
+    def test_without_rex_on_path(self):
+        # Git alone, as a machine with Rex has it in the same folder as rex.
+        only_git = self.dir / "only-git"
+        only_git.mkdir()
+        (only_git / "git").symlink_to(shutil.which("git"))
+
+        result = self.run_tool(path=str(only_git))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("Rex server:", result.stdout)
+        self.assertIn("Note: Rex server not found: no rex on PATH.", result.stdout)
+        self.assertIn("Verdict: Up to date with the newest release. No Rex server", result.stdout)
+
+    def test_rex_on_path_is_the_server(self):
+        self.assertEqual(tool.find_rex(None, "linux", search=str(self.bin)), self.rex)
+        self.assertIsNone(tool.find_rex(None, "linux", search=str(self.dir)))
 
 
 if __name__ == "__main__":

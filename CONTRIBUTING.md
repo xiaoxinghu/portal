@@ -103,6 +103,16 @@ server answers reports; `PORTAL_REX_SERVER` or `--rex` names one that is not in
 Rex's usual place. This report is the only check: Portal does not compare
 versions when it connects to a server.
 
+On Linux the report compares the Ghostty that
+[`native/ghostty.json`](#ghostty-on-linux) pins, its revision the commit, with
+Ghostty's newest release, its `v` tags, and the server is `rex` on `PATH`. The
+Linux server records a libghostty-vt release, such as `1.0.1`, with no commit:
+Ghostty's build gives that only to the release's tag, so the report reads the
+commit of the tag `vt-1.0.1` from the Ghostty clone or the network, and says
+so. When it cannot, it gives the date of the server's Go module,
+`go.mitchellh.com/libghostty`, against that of Portal's Ghostty, and the
+verdict is unknown.
+
 To move to a new release, bump the pin:
 
 ```sh
@@ -335,7 +345,8 @@ run the script for changes made in the copy alone: run it yourself, and
 `./build.sh` then builds the module against the library it made. To move the pin, apply the
 patches to the new tag in a clone of Ghostty with `git am`, repair those that
 stop, write them back the same way and change `native/ghostty.json`, its Zig
-too; `tools/ghostty-version.py` knows only the macOS wrapper. Then follow
+too; `tools/ghostty-version.py bump` knows only the macOS wrapper, though its
+report reads this pin on Linux. Then follow
 [Licenses](docs/licenses.md#when-dependencies-change) for what the library
 now links in. The `test_build_ghostty_linux.py` tests run the script against a
 stand-in for Ghostty and for Zig.

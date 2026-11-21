@@ -6,11 +6,14 @@ Usage:
   tools/ghostty-version.py [report] [--offline] [--package DIR] [--ghostty DIR] [--rex PATH]
   tools/ghostty-version.py bump [VERSION] [--offline] [--package DIR]
 
-report prints the libghostty-spm release native/libghostty-spm.json pins, the
-newest release, the installed Rex server's Ghostty and how far each release's
-Ghostty is from the server's, then one line of verdict.  It changes nothing.
-It reads what is on disk first and asks the network only for what is missing,
-never with --offline, and says what it could not find out.
+report prints Portal's Ghostty, the newest release, the installed Rex
+server's Ghostty and how far each release's Ghostty is from the server's, then
+one line of verdict.  On macOS Portal's Ghostty is that of the libghostty-spm
+release native/libghostty-spm.json pins and the server is in Rex's bundle; on
+Linux it is the Ghostty native/ghostty.json pins, the newest release Ghostty's,
+and the server is rex on PATH.  It changes nothing.  It reads what is on disk
+first and asks the network only for what is missing, never with --offline, and
+says what it could not find out.
 
 bump moves the pin to VERSION, or to the newest release, refreshes
 native/Package.resolved, and names the patches under
@@ -36,11 +39,15 @@ import tempfile
 ROOT = Path(__file__).resolve().parent.parent
 # Relative to a checkout of Portal.
 PIN = Path("native/libghostty-spm.json")
+LINUX_PIN = Path("native/ghostty.json")
 PATCHES = Path("native/patches/libghostty-spm")
 RESOLVED = Path("native/Package.resolved")
 COPY = Path("build/libghostty-spm")
 REPAIR = Path("build/libghostty-spm-bump")
 GHOSTTY_REPO = "ghostty-org/ghostty"
+GHOSTTY_URL = f"https://github.com/{GHOSTTY_REPO}.git"
+# The Go bindings a Linux Rex server builds its Ghostty with.
+GO_MODULE = "go.mitchellh.com/libghostty"
 REX_SERVERS = [
     Path.home() / "Library/Application Support/com.superlogical.rex/RexServer/Versions/Current"
     / "Rex Server.app/Contents/MacOS/rex",
@@ -52,6 +59,10 @@ NETWORK_TIMEOUT = 20
 # Parsing: pure functions over what the package, Git and the server give.
 
 RELEASE = re.compile(r"^\d+(?:\.\d+)+$")
+# Ghostty's own releases, as native/ghostty.json pins them; vt-* tags are
+# libghostty-vt's.
+GHOSTTY_RELEASE = re.compile(r"^v\d+\.\d+\.\d+$")
+LIB_VT_TAG = "vt-"
 COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
 
 
@@ -76,13 +87,13 @@ def parse_binary_target(package_swift):
 
 
 def release_key(name):
-    return tuple(int(part) for part in name.split("."))
+    return tuple(int(part) for part in name.removeprefix("v").split("."))
 
 
-def releases(tags):
+def releases(tags, pattern=RELEASE):
     """The release names among TAGS, oldest first.  Tags named upstream.* hold the
     prebuilt library and others, such as storage.*, are not releases either."""
-    return sorted((tag for tag in tags if RELEASE.match(tag)), key=release_key)
+    return sorted((tag for tag in tags if pattern.match(tag)), key=release_key)
 
 
 def parse_ls_remote(text):
@@ -108,6 +119,31 @@ def parse_library_version(version):
     """The Ghostty commit in a library_version such as 1.1.0-dev+5813c9461."""
     match = re.match(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\+([0-9a-f]{7,40})$", version.strip())
     return match.group(1) if match else None
+
+
+def parse_library_release(version):
+    """The libghostty-vt release a library_version such as 1.0.1 names, or None.
+    Ghostty's build gives a version without -dev and without a commit only to a
+    build of the tag vt-<version>, or of the source tarball made from it."""
+    version = version.strip()
+    return version if re.match(r"^\d+\.\d+\.\d+$", version) else None
+
+
+def find_go_module(data, module=GO_MODULE):
+    """The version of MODULE in a Go binary's build information, or None."""
+    match = re.search(rb"(?:^|\n)dep\t" + re.escape(module.encode()) + rb"\t(v[0-9A-Za-z.+-]{1,100})\t",
+                      data)
+    return match.group(1).decode("ascii") if match else None
+
+
+def pseudo_version_date(version):
+    """The commit date a Go pseudo-version such as v0.0.0-20261107144202-b13f277ddcb2
+    records, in UTC, or None for a tagged version."""
+    match = re.search(r"(?:^|[.-])(\d{14})-[0-9a-f]{12}(?:\+incompatible)?$", version)
+    if not match:
+        return None
+    return datetime.datetime.strptime(match.group(1), "%Y%m%d%H%M%S").replace(
+        tzinfo=datetime.timezone.utc)
 
 
 def find_library_version(data):
@@ -246,14 +282,12 @@ def github_path(url):
     return match.group(1) if match else None
 
 
-class Package:
-    """libghostty-spm's tags and files at a ref: from a clone, the build's patched
-    copy (for the pinned revision only) and the network."""
+class Tags:
+    """A repository's tags: from the network unless offline, else from a clone."""
 
-    def __init__(self, url, clone=None, copy=None, offline=False):
+    def __init__(self, url, clone=None, offline=False):
         self.url, self.offline = url, offline
         self.clone = clone if is_clone(clone) else None
-        self.copy = copy if is_clone(copy) else None
         self._tags = None
         self.tag_source = None
 
@@ -270,6 +304,19 @@ class Package:
                     self._tags = parse_ls_remote(text)
                     self.tag_source = f"the clone at {self.clone}, as last fetched"
         return self._tags
+
+    def missing(self, what):
+        """Why TAGS gave nothing, for a line of what could not be found out."""
+        return (f"no clone of {what}" + ("" if self.offline else " and no answer from the network"))
+
+
+class Package(Tags):
+    """libghostty-spm's tags and files at a ref: from a clone, the build's patched
+    copy (for the pinned revision only) and the network."""
+
+    def __init__(self, url, clone=None, copy=None, offline=False):
+        super().__init__(url, clone, offline)
+        self.copy = copy if is_clone(copy) else None
 
     def file(self, ref, path, revision=None):
         """PATH at REF (a tag, or REVISION for the build's copy), or None."""
@@ -365,8 +412,16 @@ def release_ghostty(package, version, revision=None):
     return from_target or from_ref, note
 
 
-def find_rex(explicit=None):
-    candidates = [Path(explicit)] if explicit else REX_SERVERS
+def find_rex(explicit=None, platform="macos", search=None):
+    """The Rex server's executable: EXPLICIT, else rex on SEARCH (PATH) on Linux or
+    in Rex's bundle on macOS, or None."""
+    if explicit:
+        candidates = [Path(explicit)]
+    elif platform == "linux":
+        found = shutil.which("rex", path=search)
+        candidates = [Path(found)] if found else []
+    else:
+        candidates = REX_SERVERS
     for path in candidates:
         if path.is_file():
             return path
@@ -384,15 +439,16 @@ def rex_version(executable):
 
 
 def rex_library_version(executable):
-    """library_version from the server's binary, as nothing the server answers gives
-    it, and why it is None when it is."""
+    """library_version and the version of the Go module GO_MODULE from the server's
+    binary, as nothing the server answers gives them, and why the first is None
+    when it is."""
     try:
         with open(executable, "rb") as handle, \
                 mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as data:
-            found = find_library_version(data)
+            found, module = find_library_version(data), find_go_module(data)
     except (OSError, ValueError) as error:
-        return None, f"cannot read it: {getattr(error, 'strerror', None) or error}"
-    return found, None if found else "no library_version in it"
+        return None, None, f"cannot read it: {getattr(error, 'strerror', None) or error}"
+    return found, module, None if found else "no library_version in it"
 
 
 # ---------------------------------------------------------------------------
@@ -407,12 +463,20 @@ def day(date):
     return date.astimezone(datetime.timezone.utc).date().isoformat() if date else "date unknown"
 
 
-def report(args):
+class Own:
+    """Portal's Ghostty and the newest release's: release names, as the pin and the
+    tags spell them, their Ghostty commits, and how a row names a release."""
+
+    def __init__(self, pin, pin_commit, newest, newest_commit, name):
+        self.pin, self.pin_commit = pin, pin_commit
+        self.newest, self.newest_commit = newest, newest_commit
+        self.name = name
+
+
+def macos_ghostty(args, unknown, notes):
+    """Own on macOS: the libghostty-spm release the pin names and the newest one."""
     pin = read_pin(args.root)
     package = Package(pin["url"], args.package, args.root / COPY, args.offline)
-    ghostty = Ghostty(args.ghostty, args.offline)
-    unknown = []
-    notes = []
 
     pin_commit, note = release_ghostty(package, pin["version"], pin["revision"])
     notes += [note] if note else []
@@ -424,8 +488,7 @@ def report(args):
     newest_commit = None
     if newest is None:
         unknown.append("the newest release: no release among libghostty-spm's tags" if tags else
-                       "the newest release: no clone of libghostty-spm"
-                       + ("" if args.offline else " and no answer from the network"))
+                       "the newest release: " + package.missing("libghostty-spm"))
     elif newest == pin["version"]:
         newest_commit = pin_commit
     else:
@@ -435,30 +498,86 @@ def report(args):
             unknown.append(f"the Ghostty of the newest release {newest}")
         elif same_commit(newest_commit, pin_commit):
             notes.append(f"{newest} ships the same Ghostty as the pin")
+    if tags and package.tag_source and package.tag_source != pin["url"]:
+        notes.append(f"Releases read from {package.tag_source}")
+    return Own(pin["version"], pin_commit, newest, newest_commit,
+               lambda version: f"libghostty-spm {version}")
 
-    executable = find_rex(args.rex)
-    server_version = server_commit = server_rex = None
+
+def linux_ghostty(args, ghostty_tags, unknown, notes):
+    """Own on Linux: the Ghostty native/ghostty.json pins, whose revision is its
+    commit, and Ghostty's newest release."""
+    pin = json.loads((args.root / LINUX_PIN).read_text())
+    tags = ghostty_tags.tags()
+    known = releases(tags, GHOSTTY_RELEASE) if tags else []
+    newest = known[-1] if known else None
+    newest_commit = None
+    if newest is None:
+        unknown.append("the newest release: no release among Ghostty's tags" if tags else
+                       "the newest release: " + ghostty_tags.missing("Ghostty"))
+    elif newest == pin["version"]:
+        newest_commit = pin["revision"]
+    else:
+        newest_commit = tags[newest]
+    if tags and ghostty_tags.tag_source and ghostty_tags.tag_source != GHOSTTY_URL:
+        notes.append(f"Releases read from {ghostty_tags.tag_source}")
+    return Own(pin["version"], pin["revision"], newest, newest_commit,
+               lambda version: f"Ghostty {version}")
+
+
+def server_ghostty(version, ghostty_tags):
+    """The Ghostty commit a server's library_version VERSION names, how it was
+    found, and why it is None when it is."""
+    commit = parse_library_version(version)
+    if commit:
+        return commit, None, None
+    release = parse_library_release(version)
+    if not release:
+        return None, None, f"no commit in {version}"
+    tag = LIB_VT_TAG + release
+    tags = ghostty_tags.tags()
+    if tags and tag in tags:
+        return tags[tag], f"its library_version {version} is libghostty-vt's release, the tag {tag}", None
+    why = f"Ghostty has no tag {tag}" if tags else ghostty_tags.missing("Ghostty")
+    return None, None, f"{version} is libghostty-vt's release {tag}, whose commit is unknown: {why}"
+
+
+def report(args):
+    unknown = []
+    notes = []
+    ghostty = Ghostty(args.ghostty, args.offline)
+    ghostty_tags = Tags(GHOSTTY_URL, args.ghostty, args.offline)
+    if args.platform == "linux":
+        own = linux_ghostty(args, ghostty_tags, unknown, notes)
+    else:
+        own = macos_ghostty(args, unknown, notes)
+
+    executable = find_rex(args.rex, args.platform)
+    server_version = server_commit = server_rex = module = None
     if executable is None:
-        where = args.rex or " or ".join(str(p) for p in REX_SERVERS)
-        notes.append(f"Rex server not found at {where}")
+        where = (args.rex or ("no rex on PATH" if args.platform == "linux" else
+                              " or ".join(str(p) for p in REX_SERVERS)))
+        notes.append(f"Rex server not found: {where}" if where == "no rex on PATH" else
+                     f"Rex server not found at {where}")
     else:
         server_rex = rex_version(executable)
-        server_version, why = rex_library_version(executable)
-        server_commit = parse_library_version(server_version) if server_version else None
+        server_version, module, why = rex_library_version(executable)
+        if server_version:
+            server_commit, how, why = server_ghostty(server_version, ghostty_tags)
+            notes += [f"The Rex server's Ghostty: {how}"] if how else []
         if not server_commit:
-            unknown.append(f"the Ghostty of the Rex server at {executable}: "
-                           f"{why or 'no commit in ' + server_version}")
+            unknown.append(f"the Ghostty of the Rex server at {executable}: {why}")
 
-    commits = [c for c in (pin_commit, newest_commit, server_commit) if c]
+    commits = [c for c in (own.pin_commit, own.newest_commit, server_commit) if c]
     dates = {c: ghostty.date(c) for c in dict.fromkeys(commits)}
     for commit, date in dates.items():
         if date is None:
             unknown.append(f"the date of Ghostty {short(commit)}")
 
-    rows = [("Portal's pin", f"libghostty-spm {pin['version']}", pin_commit)]
-    if newest:
-        same = " (the pin)" if newest == pin["version"] else ""
-        rows.append(("Newest release", f"libghostty-spm {newest}{same}", newest_commit))
+    rows = [("Portal's pin", own.name(own.pin), own.pin_commit)]
+    if own.newest:
+        same = " (the pin)" if own.newest == own.pin else ""
+        rows.append(("Newest release", own.name(own.newest) + same, own.newest_commit))
     if server_commit or executable:
         label = server_rex or "rex"
         rows.append(("Rex server", f"{label} ({server_version or 'no library_version'})",
@@ -467,20 +586,18 @@ def report(args):
     for name, what, commit in rows:
         when = f" of {day(dates.get(commit))}" if commit else ""
         print(f"{name + ':':16}{what:{width}}  Ghostty {short(commit):<12}{when}")
-    if tags and package.tag_source and package.tag_source != pin["url"]:
-        notes.append(f"Releases read from {package.tag_source}")
 
     pin_distance = newest_distance = None
+    lines = []
     if server_commit:
-        if pin_commit:
-            pin_distance = ghostty.distance(pin_commit, server_commit, dates)
-        if newest_commit:
-            newest_distance = (pin_distance if newest_commit == pin_commit
-                               else ghostty.distance(newest_commit, server_commit, dates))
-        compared = [("Portal's Ghostty", pin_commit, pin_distance)]
-        if newest and newest != pin["version"]:
-            compared.append(("The newest release's Ghostty", newest_commit, newest_distance))
-        lines = []
+        if own.pin_commit:
+            pin_distance = ghostty.distance(own.pin_commit, server_commit, dates)
+        if own.newest_commit:
+            newest_distance = (pin_distance if own.newest_commit == own.pin_commit
+                               else ghostty.distance(own.newest_commit, server_commit, dates))
+        compared = [("Portal's Ghostty", own.pin_commit, pin_distance)]
+        if own.newest and own.newest != own.pin:
+            compared.append(("The newest release's Ghostty", own.newest_commit, newest_distance))
         for what, commit, distance in compared:
             line = distance.describe(what) if distance else None
             if line:
@@ -488,18 +605,36 @@ def report(args):
             elif commit:
                 unknown.append(f"how far {what[0].lower() + what[1:]} is from the server's: "
                                "no Ghostty clone, no answer from GitHub and no dates")
-        if lines:
-            print()
-            print("\n".join(lines))
+    elif executable and module:
+        lines.append(module_line(module, dates.get(own.pin_commit)))
+    if lines:
+        print()
+        print("\n".join(lines))
 
     print()
-    print("Verdict: " + verdict(pin["version"], newest, server_commit, pin_distance, newest_distance,
+    print("Verdict: " + verdict(own.pin, own.newest, server_commit, pin_distance, newest_distance,
                                 executable is not None))
     for note in notes:
         print(f"Note: {note}.")
     for item in unknown:
         print(f"Could not find out {item}.")
     return 0
+
+
+def module_line(module, pin_date):
+    """One line on the date of the server's Go module, against that of Portal's
+    Ghostty, when the server's Ghostty is unknown."""
+    date = pseudo_version_date(module)
+    head = f"The Rex server's Go module {GO_MODULE} is {module}"
+    if date is None:
+        return head + ", which has no date."
+    if pin_date is None:
+        return f"{head}, of {day(date)}; Portal's Ghostty's date is unknown."
+    days = (date.date() - pin_date.astimezone(datetime.timezone.utc).date()).days
+    when = ("the same day as" if days == 0 else
+            f"{plural(abs(days), 'day')} {'after' if days > 0 else 'before'}")
+    return (f"{head}, of {day(date)}, {when} Portal's Ghostty of {day(pin_date)}; "
+            "a module's date does not date the Ghostty it builds.")
 
 
 # ---------------------------------------------------------------------------
@@ -678,6 +813,9 @@ def main(argv=None):
                         help="the Rex server's executable")
     # A checkout of Portal other than this one, for the tests.
     parser.add_argument("--root", type=Path, default=ROOT, help=argparse.SUPPRESS)
+    # The platform whose Ghostty and server the report reads, for the tests.
+    parser.add_argument("--platform", choices=["macos", "linux"], help=argparse.SUPPRESS,
+                        default="linux" if sys.platform.startswith("linux") else "macos")
     args = parser.parse_args(argv)
     # Absolute, as Git runs some commands from elsewhere, such as a scratch repository.
     for name in ("package", "ghostty", "rex"):
