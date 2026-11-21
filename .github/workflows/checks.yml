@@ -561,6 +561,29 @@ jobs:
           probe=(--batch -Q -l portal-build.el -f portal-build--probe-batch "$unpacked"
                  --eval '(princ (format "Ghostty: %S\n" (portal--terminal-engine)))')
           "$EMACS" "${probe[@]}" 2>&1 | tee -a "$PORTAL_TEST_LOGS/runtime.log"
+          # The emulated CPU must refuse an instruction beyond the baseline, one
+          # this runner's CPU has: AVX2's on x86-64, an Armv8.1 atomic on Arm.
+          cat >"$RUNNER_TEMP/newer.c" <<'EOF'
+          int main(void) {
+          #if defined(__x86_64__)
+              __asm__ volatile("vpxor %%ymm0, %%ymm0, %%ymm0" ::: "xmm0");
+          #else
+              static int word;
+              int old;
+              __asm__ volatile(".arch armv8.1-a\n\tldadd %w1, %w0, [%2]"
+                               : "=r"(old) : "r"(1), "r"(&word) : "memory");
+          #endif
+              return 0;
+          }
+          EOF
+          cc -o "$RUNNER_TEMP/newer" "$RUNNER_TEMP/newer.c"
+          "$RUNNER_TEMP/newer"
+          if ${{ matrix.qemu }} -cpu ${{ matrix.qemu-cpu }} "$RUNNER_TEMP/newer" 2>/dev/null; then
+            echo "::error::The emulated ${{ matrix.qemu-cpu }} ran an instruction beyond the baseline"
+            exit 1
+          fi
+          echo "The emulated ${{ matrix.qemu-cpu }} refuses an instruction beyond the baseline" |
+              tee -a "$PORTAL_TEST_LOGS/runtime.log"
           # QEMU runs Emacs's own binary, not a script: the installed emacs is a link to it.
           echo "On an emulated ${{ matrix.qemu-cpu }}:" | tee -a "$PORTAL_TEST_LOGS/runtime.log"
           ${{ matrix.qemu }} -cpu ${{ matrix.qemu-cpu }} "$(readlink -f "$EMACS")" "${probe[@]}" 2>&1 |
@@ -587,6 +610,49 @@ jobs:
           archive: false
           if-no-files-found: error
           retention-days: 14
+
+      # TEMPORARY: which code stops on the emulated baseline CPU.
+      - name: Diagnose the emulated CPU
+        if: failure() && steps.runtime.outcome == 'success'
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y -q --no-install-recommends gdb >/dev/null
+          unpacked=$RUNNER_TEMP/unpacked/portal
+          emacs=$(readlink -f "$EMACS")
+          /lib64/ld-linux-x86-64.so.2 --help 2>/dev/null | sed -n '/hwcaps/,$p' || :
+          /lib/ld-linux-aarch64.so.1 --help 2>/dev/null | sed -n '/hwcaps/,$p' || :
+          probe=(--batch -Q -l portal-build.el -f portal-build--probe-batch "$unpacked")
+          case ${{ matrix.qemu }} in
+            qemu-x86_64) cpus="qemu64 qemu64,+ssse3,+sse4.1,+sse4.2,+popcnt,+cx16 Nehalem Haswell max" ;;
+            *) cpus="cortex-a53 cortex-a72 neoverse-n1 max" ;;
+          esac
+          for cpu in $cpus; do
+            for what in true emacs probe; do
+              case $what in
+                true) set -- /bin/true ;;
+                emacs) set -- "$emacs" --batch -Q --eval '(princ "emacs ran\n")' ;;
+                probe) set -- "$emacs" "${probe[@]}" ;;
+              esac
+              status=0
+              ${{ matrix.qemu }} -cpu "$cpu" "$@" >/dev/null 2>&1 || status=$?
+              echo "$cpu $what: $status"
+            done
+          done
+          # The faulting instruction, on the baseline CPU.
+          for what in emacs probe; do
+            case $what in
+              emacs) set -- "$emacs" --batch -Q --eval '(princ "emacs ran\n")' ;;
+              probe) set -- "$emacs" "${probe[@]}" ;;
+            esac
+            ${{ matrix.qemu }} -cpu ${{ matrix.qemu-cpu }} -g 1234 "$@" &
+            sleep 2
+            timeout 300 gdb -q -batch -ex 'set pagination off' \
+                -ex 'set sysroot /' -ex 'target remote :1234' -ex continue \
+                -ex 'x/3i $pc' -ex 'info symbol $pc' -ex bt -ex 'info sharedlibrary' \
+                "$emacs" 2>&1 | tail -80
+            kill %1 2>/dev/null || :
+            wait || :
+          done
 
       - name: Keep logs
         if: ${{ !cancelled() }}
