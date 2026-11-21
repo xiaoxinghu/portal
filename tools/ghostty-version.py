@@ -788,8 +788,6 @@ def bump(args):
         ]
     steps += [
         "./build.sh, which configures and remakes the patched copy",
-        "ctest --test-dir build -R licenses --output-on-failure, and docs/licenses.md's "
-        "\"When dependencies change\" for the new prebuilt library",
         "update the release and Ghostty versions in docs/terminals.md",
         "tools/ghostty-version.py, to see where the new pin stands",
         "the default loop in CONTRIBUTING.md, then the full set before merging",

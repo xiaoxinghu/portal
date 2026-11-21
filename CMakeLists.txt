@@ -46,7 +46,6 @@ add_custom_command(
         --outfile "${CMAKE_BINARY_DIR}/.portal-host"
     COMMAND "${CMAKE_COMMAND}" -E rename
         "${CMAKE_BINARY_DIR}/.portal-host" "${CMAKE_BINARY_DIR}/portal-host"
-    # The license notices read both bundler records; rebuild if either is gone.
     BYPRODUCTS "${CMAKE_BINARY_DIR}/portal-host.meta.json"
         "${CMAKE_SOURCE_DIR}/host/.generated/editor-inputs.json"
     DEPENDS host/server.ts host/app.ts host/hello.html host/dialogs.html host/about.ts host/about.html
@@ -478,13 +477,17 @@ pkg-config's egl, such as libglvnd's")
     endif()
 endif()
 
-# Portal's license and the notices for what both outputs contain, derived from
-# the Swift pins, the host's Bun and the bundler records. See docs/licenses.md.
+# Portal's license and the third-party notices, copied as they are. See
+# docs/licenses.md.
 add_custom_target(portal-licenses ALL
-    COMMAND "${BUN}" "${CMAKE_SOURCE_DIR}/licenses/notices.ts" stage "${CMAKE_BINARY_DIR}"
-    COMMENT "Staging license notices"
+    COMMAND "${CMAKE_COMMAND}" -E rm -rf "${CMAKE_BINARY_DIR}/licenses"
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory
+        "${CMAKE_SOURCE_DIR}/licenses" "${CMAKE_BINARY_DIR}/licenses"
+    COMMAND "${CMAKE_COMMAND}" -E copy
+        "${CMAKE_SOURCE_DIR}/LICENSE" "${CMAKE_BINARY_DIR}/licenses/LICENSE"
+    COMMENT "Copying license notices"
     VERBATIM)
-add_dependencies(portal-licenses portal portal-ui-host)
+add_dependencies(portal-licenses portal-build-start)
 if(BUILD_TESTING)
     # The message socket, native/Shared, which both modules build, against a
     # server the test plays on real Unix sockets, with no Emacs and no
@@ -509,10 +512,6 @@ if(BUILD_TESTING)
                 --filter "InMemoryTerminalSession")
         set_tests_properties(libghostty-spm PROPERTIES TIMEOUT 600 COST 100)
     endif()
-    add_test(NAME licenses
-        COMMAND "${CMAKE_COMMAND}" -E env "PORTAL_BUILD=${CMAKE_BINARY_DIR}"
-            "${BUN}" test "${CMAKE_SOURCE_DIR}/test/licenses.test.ts")
-    set_tests_properties(licenses PROPERTIES TIMEOUT 60)
 endif()
 
 # portal-build.el reads the record of a complete build. Before replacing any

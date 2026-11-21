@@ -26,8 +26,8 @@ Run shell examples from the repository root, not `docs/`.
 - [Testing Portal](testing.md): batch coverage, graphical procedures, standalone
   native checks and opt-in smoke tests. Recorded results are not a new test run.
 - [Releasing Portal](releasing.md): the checklist and evidence a release needs.
-- [Licenses and third-party notices](licenses.md): what the outputs ship, the
-  staged notices, open questions before a binary release and inventory upkeep.
+- [Licenses and third-party notices](licenses.md): how the notices ship and
+  when to update them.
 - [Domain vocabulary](../CONTEXT.md): view, terminal, hosted-app and Rex terms.
 - [Implementation and native boundaries](architecture.md): state ownership,
   lifetimes, platform interfaces and failure invariants.

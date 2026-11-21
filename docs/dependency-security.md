@@ -25,10 +25,12 @@ with the same `Bun.build` options plus `metafile: true`, then list the inputs
 under `node_modules/`. An installed package that is not an input is not shipped.
 
 Some packages compile other packages into their own files. Neither `bun audit`
-nor the bundle inputs show that code. The `embeds` entries in
-`licenses/inventory.json` list it, as its source maps name it (see
-[licenses](licenses.md)). Check those versions against the GitHub Advisory
-Database as well.
+nor the bundle inputs show that code; a package's source maps name it. As of
+2026-11-21: Mermaid's parser compiles in Langium, Chevrotain, the VS Code
+language server libraries, lodash-es and path-browserify; Mermaid compiles in
+js-yaml; Excalidraw compiles in fonteditor-core, with woff2 and Brotli, and
+harfbuzzjs; Cytoscape contains Thenable. Check those versions against the
+GitHub Advisory Database as well.
 
 Excalidraw's paste handler converts text that starts with a Mermaid diagram
 keyword through `@excalidraw/mermaid-to-excalidraw`. Pasted Mermaid text is the

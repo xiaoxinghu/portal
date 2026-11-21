@@ -127,10 +127,8 @@ applies to the release, exiting with status 1 when one does not. Then
 `git am` up to the first that fails, where it stopped: fix it there and
 `git am --continue`, then write the set back with the `format-patch` command
 above, run from that copy with the new revision. It commits nothing and runs
-no checks, and ends by listing what to do next: those repairs, build, follow
-[Licenses](docs/licenses.md#when-dependencies-change) for the new prebuilt
-library, update the release and Ghostty versions in the terminal guide, and
-run the checks. Run it again after fixing a patch or regaining the network:
+no checks, and ends by listing what to do next: those repairs, build, update
+the release and Ghostty versions in the terminal guide, and run the checks. Run it again after fixing a patch or regaining the network:
 with the pin already moved, it checks the patches and resolves again.
 
 ### Building on Linux
@@ -346,9 +344,7 @@ run the script for changes made in the copy alone: run it yourself, and
 patches to the new tag in a clone of Ghostty with `git am`, repair those that
 stop, write them back the same way and change `native/ghostty.json`, its Zig
 too; `tools/ghostty-version.py bump` knows only the macOS wrapper, though its
-report reads this pin on Linux. Then follow
-[Licenses](docs/licenses.md#when-dependencies-change) for what the library
-now links in. The `test_build_ghostty_linux.py` tests run the script against a
+report reads this pin on Linux. The `test_build_ghostty_linux.py` tests run the script against a
 stand-in for Ghostty and for Zig.
 
 The pin is shaped so that a prebuilt library can join it: a download with
@@ -432,10 +428,8 @@ package root, `build/portal-host`, the complete `build/portal.bundle` (on Linux,
 to where the build outputs are; the host needs no adjacent web assets. Without
 `native/`, Portal accepts only a record from the same `Version:` as `portal.el`. Keep the
 bundle intact, including its terminfo and shell integration resources.
-`build/licenses` holds Portal's license and the third-party notices for both
-outputs, generated from `licenses/inventory.json` and the build's own records. A
-binary release also needs the corresponding source and has open license
-questions; see [Licenses and third-party notices](docs/licenses.md). Restart
+`build/licenses` holds Portal's license and the third-party notices, copied
+from `licenses/`; see [Licenses and third-party notices](docs/licenses.md). Restart
 Emacs when upgrading from the former separate web and terminal modules, or after
 rebuilding a loaded native module.
 
@@ -498,10 +492,7 @@ installed it reports itself not run.
 ### What they cover
 
 The build installs the locked host dependencies and CMake downloads hash-checked
-Emacs packages for integration tests. The `licenses` suite fails when a
-dependency change leaves a staged notice missing or the license inventory out of
-date; [Licenses and third-party notices](docs/licenses.md#when-dependencies-change)
-says what to update. CTest exercises the real C core with a fake
+Emacs packages for integration tests. CTest exercises the real C core with a fake
 backend, Lisp behavior, and the compiled app host; it does not validate native
 windows; the graphical checks do. For native view, keyboard or
 launcher changes, also run the relevant [standalone checks](docs/testing.md#standalone-appkit-checks).
@@ -523,8 +514,9 @@ the suites side by side, in about a third of the time; the
   Keep dependency versions in their manifests and lockfiles. After changing
   host dependencies, rerun `bun audit` and update
   [dependency security findings](docs/dependency-security.md).
-- Record third-party code that ships in `licenses/inventory.json`. Files in
-  `licenses/texts/` are verbatim upstream license texts; do not reformat them.
+- When shipped third-party code brings a new license, add its text to
+  `licenses/texts/` and a line to `licenses/README.md`. The texts are verbatim
+  upstream files; do not reformat them.
 - Launcher examples in [the launcher guide](docs/launcher.md) are executable test
   fixtures. Preserve their `<!-- example: NAME -->` markers and run the `launcher`
   CTest suite after editing them; tests load the actual blocks in both dynamic
