@@ -169,9 +169,17 @@ class Assets(http.server.BaseHTTPRequestHandler):
 class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
 
+    def server_bind(self):
+        # Not HTTPServer's, which looks up the address's name: on macOS
+        # that asks for Python's Local Network permission, whose prompt
+        # nobody answers on a runner.  It stays over the screen, and every
+        # lookup after it waits 35 s.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
 
 def serve(certificates: Path, name: str, root: Path) -> None:
-    # Not up in 10 s: say on stderr where it is.
+    # Not up in 10 s: say on stderr where it is, for the test to report.
     faulthandler.dump_traceback_later(10)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(certificates / f"{name}.pem", certificates / f"{name}.key")
