@@ -173,27 +173,41 @@ names, or nil while the headers are incomplete."
           (goto-char (match-end 0)))
         (cons status (cons (nreverse headers) end))))))
 
-(defun portal-runtime--dechunk (start)
-  "Decode the chunked body from START to the end of the current buffer, in place.
-Signal an error if it is incomplete."
-  (goto-char start)
-  (let ((done nil))
-    (while (not done)
-      (unless (looking-at "\\([[:xdigit:]]+\\)[^\r\n]*\r\n")
-        (error "The download was cut short"))
-      (let ((size (string-to-number (match-string 1) 16)))
-        (delete-region (match-beginning 0) (match-end 0))
-        (if (zerop size)
-            (progn (delete-region (point) (point-max)) (setq done t))
-          (unless (<= (+ (point) size 2) (point-max))
-            (error "The download was cut short"))
-          (forward-char size)
-          (unless (looking-at "\r\n") (error "The download's chunks are malformed"))
-          (delete-region (point) (+ (point) 2)))))))
+(defun portal-runtime--dechunk (cursor room what)
+  "Decode the complete chunks from CURSOR in the current buffer, in place.
+Return (CURSOR . DONE): where the decoded body now ends, and whether the
+last chunk came.  A chunk not yet all received waits for the next call.
+ROOM is how many more bytes the body may have; a chunk larger than that
+signals an error naming WHAT, as does a malformed chunk."
+  (save-excursion
+    (let ((done nil) (waiting nil))
+      (while (not (or done waiting))
+        (goto-char cursor)
+        (cond
+         ((looking-at "\\([[:xdigit:]]+\\)[^\r\n]*\r\n")
+          (let ((size (string-to-number (match-string 1) 16))
+                (data (match-end 0)))
+            (cond ((zerop size)
+                   (delete-region cursor (point-max))
+                   (setq done t))
+                  ((> size room)
+                   (error "%s is larger than expected" what))
+                  ((<= (+ data size 2) (point-max))
+                   (unless (equal (buffer-substring-no-properties (+ data size) (+ data size 2))
+                                  "\r\n")
+                     (error "The chunks of %s are malformed" what))
+                   (delete-region (+ data size) (+ data size 2))
+                   (delete-region cursor data)
+                   (setq cursor (+ cursor size) room (- room size)))
+                  (t (setq waiting t)))))
+         ((looking-at "[^\n]*\n") (error "The chunks of %s are malformed" what))
+         (t (setq waiting t))))
+      (cons cursor done))))
 
 (defun portal-runtime--request (url limit what)
   "GET URL over verified TLS into a new unibyte buffer and return it.
-The buffer holds the whole response.  Signal an error, killing the
+The buffer holds the whole response, a chunked body decoded.  Signal
+an error, killing the
 buffer, if the server sends more than LIMIT bytes of body, or nothing for
 `portal-runtime--idle-timeout' seconds.  WHAT names the download."
   (require 'gnutls)
@@ -243,26 +257,55 @@ refused its certificate or connection" host))
                    "Host: " host (if (eql port 443) "" (format ":%d" port)) "\r\n"
                    "User-Agent: portal-runtime\r\n"
                    "Accept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n"))
-          (let ((received 0) (heard (float-time)) (reported (float-time)) headers)
-            (while (process-live-p process)
-              (accept-process-output process 1)
-              (let ((size (buffer-size buffer)) (now (float-time)))
-                (if (> size received)
-                    (setq received size heard now)
-                  (when (> (- now heard) portal-runtime--idle-timeout)
-                    (error "The download of %s from %s stopped" what host)))
-                (unless headers
-                  (setq headers (with-current-buffer buffer (portal-runtime--headers)))
-                  (when-let* ((length (cdr (assoc "content-length" (cadr headers))))
-                              ((= (car headers) 200))
-                              ((> (string-to-number length) limit)))
-                    (error "%s has %s bytes, more than the %d expected" what length limit)))
-                (when (> size (+ limit 65536))
-                  (error "%s is larger than the %d bytes expected" what limit))
-                (when (and headers (> (- now reported) 5) (> limit 1048576))
-                  (setq reported now)
-                  (message "Downloaded %.1f of %.1f MB of %s"
-                           (/ (- size (cddr headers)) 1048576.0) (/ limit 1048576.0) what)))))
+          ;; A chunked body is decoded as it arrives, so that LIMIT bounds
+          ;; the body's bytes, not the chunks' framing.  CHUNKS is then the
+          ;; place where the decoded body ends, and LAST whether the last
+          ;; chunk came.
+          (let ((received 0) (heard (float-time)) (reported (float-time))
+                headers chunks last)
+            (cl-flet ((step ()
+                        (with-current-buffer buffer
+                          (unless headers
+                            (setq headers (portal-runtime--headers))
+                            (when-let* ((length (cdr (assoc "content-length" (cadr headers))))
+                                        ((= (car headers) 200))
+                                        ((> (string-to-number length) limit)))
+                              (error "%s has %s bytes, more than the %d expected"
+                                     what length limit))
+                            (when (and headers (= (car headers) 200)
+                                       (string-match-p "chunked"
+                                                       (or (cdr (assoc "transfer-encoding"
+                                                                       (cadr headers)))
+                                                           "")))
+                              (setq chunks (cddr headers))))
+                          (when (and chunks (not last))
+                            (let ((decoded (portal-runtime--dechunk
+                                            chunks (- limit (- chunks (cddr headers))) what)))
+                              (setq chunks (car decoded) last (cdr decoded))))
+                          ;; What is not yet decoded is at most the chunk
+                          ;; that is arriving, which fits in what is left.
+                          (when (> (- (point-max) (or chunks (if headers (cddr headers) 1)))
+                                   (+ (- limit (if chunks (- chunks (cddr headers)) 0)) 65536))
+                            (error "%s is larger than the %d bytes expected" what limit)))))
+              (while (process-live-p process)
+                (accept-process-output process 1)
+                (let ((size (buffer-size buffer)) (now (float-time)))
+                  (if (> size received)
+                      (setq received size heard now)
+                    (when (> (- now heard) portal-runtime--idle-timeout)
+                      (error "The download of %s from %s stopped" what host)))
+                  (step)
+                  (when (and headers (> (- now reported) 5) (> limit 1048576))
+                    (setq reported now)
+                    (message "Downloaded %.1f of %.1f MB of %s"
+                             (/ (- (or chunks size) (cddr headers)) 1048576.0)
+                             (/ limit 1048576.0) what))))
+              (step))
+            (when (and chunks (not last))
+              (error "The download of %s was cut short" what))
+            ;; What follows the last chunk: trailers, which Portal ignores.
+            (when last
+              (with-current-buffer buffer (delete-region chunks (point-max)))))
           (setq done t)
           buffer)
       (when (processp process) (delete-process process))
@@ -312,8 +355,7 @@ bytes, all of them received.  WHAT names the download in messages."
                   (length (cdr (assoc "content-length" headers))))
               (condition-case err
                   (progn
-                    (when (string-match-p "chunked" (or (cdr (assoc "transfer-encoding" headers)) ""))
-                      (portal-runtime--dechunk start))
+                    ;; A chunked body was decoded as it arrived.
                     (delete-region (point-min) start)
                     (when (and length (/= (buffer-size) (string-to-number length)))
                       (error "The download of %s was cut short: %d of %s bytes"
@@ -630,20 +672,27 @@ directory that the next install removes."
     (rename-file directory trash)
     (delete-directory trash t)))
 
+(defun portal-runtime--link (place name target)
+  "Point the link NAME in PLACE at TARGET, replacing it in one rename."
+  (let ((new (expand-file-name (concat name ".new") place)))
+    (when (file-symlink-p new) (delete-file new))
+    (make-symbolic-link target new)
+    (rename-file new (expand-file-name name place) t)))
+
 (defun portal-runtime--activate (place identity)
-  "Make IDENTITY's runtime in PLACE the current one; return the one it replaced.
-When it replaced another, keep both and delete any older runtime."
-  (let* ((current (expand-file-name "current" place))
-         (replaced (file-symlink-p current))
-         (new (expand-file-name "current.new" place)))
-    (unless (equal replaced identity)
-      (when (file-symlink-p new) (delete-file new))
-      (make-symbolic-link identity new)
-      (rename-file new current t)
+  "Make IDENTITY's runtime in PLACE the current one, and prune the others.
+The link `current' names it and `previous' the one it replaced, which a
+running Emacs may have loaded; every other runtime is deleted.  Each link
+changes in one step, and pruning runs on every activation, so one that
+an interruption cut short is finished by the next, even a reuse."
+  (let ((current (file-symlink-p (expand-file-name "current" place))))
+    (unless (equal current identity)
+      (when current (portal-runtime--link place "previous" current))
+      (portal-runtime--link place "current" identity))
+    (let ((previous (file-symlink-p (expand-file-name "previous" place))))
       (dolist (name (directory-files place nil "\\`[0-9a-f]\\{64\\}\\'"))
-        (unless (member name (list identity replaced))
-          (portal-runtime--delete (expand-file-name name place) place))))
-    (and (not (equal replaced identity)) replaced)))
+        (unless (member name (list identity previous))
+          (portal-runtime--delete (expand-file-name name place) place))))))
 
 (defun portal-runtime--install (options)
   "Install the runtime that this Portal's native sources need, and return a report.
@@ -664,7 +713,7 @@ certificate authorities to trust as well as the system's."
          (final (expand-file-name identity place)))
     (make-directory place t)
     ;; What an interrupted install left: no other install runs now.
-    (dolist (name (directory-files place nil "\\`\\(?:staging\\|trash\\)-\\|\\`current\\.new\\'"))
+    (dolist (name (directory-files place nil "\\`\\(?:staging\\|trash\\)-\\|\\`[a-z]+\\.new\\'"))
       (let ((path (expand-file-name name place)))
         (if (eq (file-attribute-type (file-attributes path)) t)
             (delete-directory path t)

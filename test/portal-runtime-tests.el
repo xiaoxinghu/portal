@@ -388,13 +388,44 @@ as packed is kept aside, so that the next variant starts from it too."
                                                              (car entry)))
                               (portal-runtime-test--cache))))))
 
+(ert-deftest portal-runtime-finishes-an-interrupted-activation ()
+  ;; Activation changes two links, then prunes.  Cut short at either
+  ;; point, the next install, even a reuse, leaves two runtimes.
+  (skip-unless (portal-runtime-test--can-install))
+  (dolist (stop '(pruning current))
+    (ert-info ((symbol-name stop))
+      (portal-runtime-test--with-world
+        (let (identities)
+          (dolist (version '("1.2.3" "1.2.4" "1.2.5"))
+            (portal-runtime-test--version version)
+            (portal-runtime-test--native-change version)
+            (push (portal-runtime-test--release) identities)
+            (if (equal version "1.2.5")
+                (cl-letf* ((link (symbol-function 'portal-runtime--link))
+                           ((symbol-function 'portal-runtime--delete)
+                            (lambda (&rest _) (when (eq stop 'pruning) (error "Interrupted"))))
+                           ((symbol-function 'portal-runtime--link)
+                            (lambda (place name target)
+                              (if (and (eq stop 'current) (equal name "current"))
+                                  (error "Interrupted")
+                                (funcall link place name target)))))
+                  (should-error (portal-runtime-test--install)))
+              (portal-runtime-test--install)))
+          (should (= 3 (length (portal-runtime-test--runtimes))))
+          (should (portal-runtime-test--install))
+          (should (equal (portal-runtime-test--current) (car identities)))
+          (should (equal (portal-runtime-test--runtimes)
+                         (sort (seq-take identities 2) #'string<))))))))
+
 (ert-deftest portal-runtime-follows-redirects-over-https-only ()
   (skip-unless (portal-runtime-test--can-install))
   (portal-runtime-test--with-world
     (portal-runtime-test--release)
     (let ((site (portal-runtime-test--serve)))
       ;; As GitHub redirects a release asset to its storage.
-      (dolist (way '("redirect" "relative-redirect" "chunked"))
+      ;; In chunks of 4 bytes, the framing outgrows the archive, which is
+      ;; still within the manifest's size.
+      (dolist (way '("redirect" "relative-redirect" "chunked" "tiny-chunks"))
         (should (portal-runtime-test--install (concat site way "/")))
         (delete-directory (portal-runtime--target-directory) t))
       (portal-runtime-test--requests)

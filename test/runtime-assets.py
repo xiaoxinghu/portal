@@ -20,6 +20,7 @@ JSON object a line.  A path's first part may ask for a misbehaving server:
     /relative-redirect/REST   302 to /REST
     /plain-redirect/REST      302 to http://127.0.0.1:N/REST
     /chunked/REST             REST with chunked transfer encoding
+    /tiny-chunks/REST         the same in chunks of 4 bytes, framing more than data
     /truncate/REST            half of REST if an archive, then the connection closes
     /stall/REST               half of REST if an archive, then nothing
 
@@ -122,15 +123,16 @@ class Assets(http.server.BaseHTTPRequestHandler):
         if mode == "plain-redirect":
             return self.answer(302, [("Location", f"http://127.0.0.1:{port}/{rest}"),
                                      ("Content-Length", "0")])
-        if mode not in ("chunked", "truncate", "stall"):
+        if mode not in ("chunked", "tiny-chunks", "truncate", "stall"):
             mode, rest = "", self.path.lstrip("/")
         path = (self.root / rest).resolve()
         if self.root not in path.parents or not path.is_file():
             return self.answer(404, [("Content-Length", "0")])
         data = path.read_bytes()
-        if mode == "chunked":
-            body = b"".join(b"%x\r\n%s\r\n" % (len(data[at:at + 4096]), data[at:at + 4096])
-                            for at in range(0, len(data), 4096)) + b"0\r\n\r\n"
+        if mode in ("chunked", "tiny-chunks"):
+            size = 4096 if mode == "chunked" else 4
+            body = b"".join(b"%x\r\n%s\r\n" % (len(data[at:at + size]), data[at:at + size])
+                            for at in range(0, len(data), size)) + b"0\r\n\r\n"
             return self.answer(200, [("Transfer-Encoding", "chunked")], body)
         if mode in ("truncate", "stall") and rest.endswith(".tar.gz"):
             self.send_response(200)
