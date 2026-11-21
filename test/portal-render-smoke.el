@@ -398,8 +398,12 @@ Return its view's target."
                (portal-render-smoke--run adapter)
                (if (zerop portal-render-smoke--failures) 0 1))
            (portal-render-smoke-not-run
-            (portal-render-smoke--note "NOT RUN: %s" (cadr err))
-            77)
+            ;; Not run only when nothing failed before the test had to stop:
+            ;; a failure seen stays a failure.
+            (if (zerop portal-render-smoke--failures)
+                (progn (portal-render-smoke--note "NOT RUN: %s" (cadr err)) 77)
+              (portal-render-smoke--note "stopped: %s" (cadr err))
+              1))
            (error
             (portal-render-smoke--check "the test ran to its end" nil
                                         (error-message-string err))

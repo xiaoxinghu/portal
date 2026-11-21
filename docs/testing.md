@@ -381,7 +381,8 @@ test reports itself not run there.
 It exits 0 when every check passed and 1 when one failed. It also exits 1
 when the test did not finish within `PORTAL_SMOKE_TIMEOUT` seconds
 (default 60). It exits 77, not run, without a graphical session or without a
-way to capture or type in it. A not-run is never a pass. It never starts a
+way to capture or type in it, when no check had failed before it stopped. A
+not-run is never a pass. It never starts a
 desktop of its own. The record, `render-smoke.log`, goes to `render-smoke/`
 in `PORTAL_TEST_LOGS`, or in `build/`, and is printed at the end. It
 records the machine, the system, the GPU, the build's record and its
