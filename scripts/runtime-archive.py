@@ -265,6 +265,8 @@ its links loop."""
 
 def inside(name: str, link: str, links: dict) -> bool:
     """Whether a link at NAME to LINK stays inside the runtime, through LINKS."""
+    if link.startswith("/"):
+        return False
     parent = "/".join(Path(name).parts[:-1])
     return resolve(f"{parent}/{link}" if parent else link, links) is not None
 

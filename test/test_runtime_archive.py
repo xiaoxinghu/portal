@@ -154,8 +154,12 @@ class RuntimeArchiveTests(unittest.TestCase):
         (self.build / "licenses" / "a").symlink_to(".")
         (self.build / "licenses" / "b").symlink_to("a/../..")
         self.refused("licenses/b links outside the runtime", self.pack)
-        # Links that loop lead nowhere.
+        # An absolute target, below the top too, is the checking machine's.
         (self.build / "licenses" / "b").unlink()
+        (self.build / "licenses" / "texts" / "abs").symlink_to(self.build / "licenses" / "LICENSE")
+        self.refused("licenses/texts/abs links outside the runtime", self.pack)
+        (self.build / "licenses" / "texts" / "abs").unlink()
+        # Links that loop lead nowhere.
         (self.build / "licenses" / "c").symlink_to("d")
         (self.build / "licenses" / "d").symlink_to("c")
         self.refused("links outside the runtime", self.pack)
@@ -165,6 +169,7 @@ class RuntimeArchiveTests(unittest.TestCase):
                 ([("licenses/a", "."), ("licenses/b", "a/../..")], "links licenses/b outside"),
                 ([("licenses/up", ".."), ("licenses/up/up", ".."), ("licenses/up/up/x", None)],
                  "links licenses/up/up outside"),
+                ([("licenses/texts/abs", "/etc/hosts")], "links licenses/texts/abs outside"),
                 ([("licenses/up", ".."), ("licenses/up/Makefile", None)],
                  "'licenses/up/Makefile', which a link takes outside")):
             with self.subTest(pattern):
