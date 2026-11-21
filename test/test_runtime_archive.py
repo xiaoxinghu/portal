@@ -140,9 +140,9 @@ class RuntimeArchiveTests(unittest.TestCase):
         self.refused("names the build's place", self.pack)
         (self.build / "portal.bundle/Contents/Info.plist").write_text("<plist/>")
         (self.build / "portal.bundle/Contents/Resources/escape").symlink_to("../../../../etc")
-        self.refused("links outside the runtime", self.pack)
+        self.refused("escape links to ../../../../etc, outside the runtime", self.pack)
 
-    def test_follows_chained_links_to_see_where_they_lead(self):
+    def test_follows_links_on_disk_to_see_where_they_lead(self):
         # Inside: a chain to a file of the runtime, as a soname link is.
         (self.build / "licenses" / "texts").mkdir()
         (self.build / "licenses" / "texts" / "zlib").write_text("zlib")
@@ -153,34 +153,36 @@ class RuntimeArchiveTests(unittest.TestCase):
         # Outside: each step counts as inside, the chain leads to the parent.
         (self.build / "licenses" / "a").symlink_to(".")
         (self.build / "licenses" / "b").symlink_to("a/../..")
-        self.refused("licenses/b links outside the runtime", self.pack)
-        # An absolute target, below the top too, is the checking machine's.
+        self.refused("licenses/b links to a/../.., outside", self.pack)
         (self.build / "licenses" / "b").unlink()
+        # An absolute target is the machine's, even one into the build.
         (self.build / "licenses" / "texts" / "abs").symlink_to(self.build / "licenses" / "LICENSE")
-        self.refused("licenses/texts/abs links outside the runtime", self.pack)
+        self.refused("licenses/texts/abs links to /", self.pack)
         (self.build / "licenses" / "texts" / "abs").unlink()
         # Links that loop lead nowhere.
         (self.build / "licenses" / "c").symlink_to("d")
         (self.build / "licenses" / "d").symlink_to("c")
-        self.refused("links outside the runtime", self.pack)
+        self.refused("licenses/c links to d, outside the runtime or to nothing", self.pack)
 
-    def test_unpack_follows_the_archives_own_links(self):
+    def test_unpack_writes_nothing_through_a_link_or_outside(self):
         for members, pattern in (
-                ([("licenses/a", "."), ("licenses/b", "a/../..")], "links licenses/b outside"),
-                ([("licenses/up", ".."), ("licenses/up/up", ".."), ("licenses/up/up/x", None)],
-                 "beneath the link licenses/up"),
-                ([("licenses/texts/abs", "/etc/hosts")], "links licenses/texts/abs outside"),
-                # Through a link the lookup by name would miss, to the parent.
+                ([("licenses/a", "."), ("licenses/b", "a/../..")], "links licenses/b to a/../.."),
+                ([("licenses/texts/abs", "/etc/hosts")], "links licenses/texts/abs to /etc/hosts"),
                 ([("licenses/./a", ".."), ("licenses/b", "a/.."), ("licenses/b/payload", None)],
                  "'licenses/./a', which is not a plain path"),
                 ([("licenses//x", None)], "not a plain path"),
+                ([("licenses/a", None), ("licenses/a", "..")], "'licenses/a' twice"),
+                # A file beneath a link: written first, so the link finds its place taken.
+                ([("licenses/up", ".."), ("licenses/up/payload", None)],
+                 "licenses/up is already there"),
                 # Each link made through the one before, to the parent.
                 ([("licenses/a", "."), ("licenses/a/b", ".."), ("licenses/b/c", ".."),
-                  ("licenses/b/c/payload", None)], "beneath the link licenses/a"),
-                ([("licenses/a", None), ("licenses/a", "..")], "'licenses/a' twice"),
-                ([("licenses/up", ".."), ("licenses/up/Makefile", None)],
-                 "'licenses/up/Makefile', beneath the link licenses/up")):
-            with self.subTest(pattern):
+                  ("licenses/b/c/payload", None)], "licenses/a/b goes through licenses/a"),
+                # The same through names a case-insensitive disk takes as one,
+                # as macOS's usually is; a case-sensitive one fails it later.
+                ([("licenses/a", "."), ("licenses/A/b", ".."), ("licenses/B/c", ".."),
+                  ("licenses/B/C/payload", None)], "")):
+            with self.subTest(members):
                 written = self.pack()
                 manifest = json.loads(written.read_text())
                 tarball = self.out / manifest["archives"][0]["name"]
@@ -196,8 +198,12 @@ class RuntimeArchiveTests(unittest.TestCase):
                 manifest["archives"][0]["size"] = tarball.stat().st_size
                 manifest["archives"][0]["sha256"] = archive.sha256(tarball)
                 written.write_text(json.dumps(manifest))
-                self.refused(pattern, archive.unpack, written, self.root / "unpacked" / "portal")
-                self.assertFalse((self.root / "unpacked").exists())
+                parent = self.root / "unpacked"
+                parent.mkdir()
+                self.refused(pattern, archive.unpack, written, parent / "portal")
+                # Nothing written beside the destination, and nothing left in it.
+                self.assertEqual(list(parent.iterdir()), [])
+                parent.rmdir()
 
     def test_a_binary_may_name_the_build_in_its_debug_map(self):
         self.binary(MODULE, macho() + str(self.build / "Backend.o").encode())

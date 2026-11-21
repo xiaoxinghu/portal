@@ -32,6 +32,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import struct
 import sys
@@ -234,41 +235,63 @@ def files_under(root: Path, entries: list) -> list:
     return sorted(set(paths), key=lambda path: path.as_posix())
 
 
-def resolve(path: str, links: dict) -> list | None:
-    """PATH's components inside the runtime, following LINKS, or None.
-LINKS maps each link's name in the runtime to its target.  None means
-that PATH, or a link it goes through, leads outside the runtime, or that
-its links loop."""
-    if path.startswith("/"):
-        return None
-    pending = [part for part in path.split("/") if part not in ("", ".")]
-    resolved = []
-    followed = 0
-    while pending:
-        part = pending.pop(0)
-        if part == "..":
-            if not resolved:
-                return None
-            resolved.pop()
-            continue
-        resolved.append(part)
-        target = links.get("/".join(resolved))
-        if target is not None:
-            followed += 1
-            if target.startswith("/") or followed > 40:
-                return None
-            # A link stands for its target, read from the link's directory.
-            resolved.pop()
-            pending = [part for part in target.split("/") if part not in ("", ".")] + pending
-    return resolved
-
-
-def inside(name: str, link: str, links: dict) -> bool:
-    """Whether a link at NAME to LINK stays inside the runtime, through LINKS."""
-    if link.startswith("/"):
+def within(link: Path, root: Path) -> bool:
+    """Whether LINK leads to something that is in ROOT, as the disk says.
+An absolute target is the machine's, wherever it leads today."""
+    if os.readlink(link).startswith("/"):
         return False
-    parent = "/".join(Path(name).parts[:-1])
-    return resolve(f"{parent}/{link}" if parent else link, links) is not None
+    real = os.path.realpath(link)
+    return os.path.exists(link) and os.path.commonpath([real, str(root)]) == str(root)
+
+
+def extract(tar: tarfile.TarFile, members: list, root: Path) -> None:
+    """Write MEMBERS into ROOT, a resolved directory, judging the disk, not names.
+Files and directories go first and links last, so nothing is written
+through a link of the archive.  Before each, every directory above it must
+be a real one as the filesystem sees it, which also catches names that it
+takes as the same, such as A and a on macOS, and its own place must be
+free.  Then each link must lead to something in ROOT."""
+    def place(name: str, directory: bool = False) -> Path:
+        path = root
+        for part in name.split("/")[:-1]:
+            path = path / part
+            try:
+                mode = os.lstat(path).st_mode
+            except FileNotFoundError:
+                os.mkdir(path, 0o755)
+                continue
+            if not stat.S_ISDIR(mode):
+                raise Refusal(f"the archive's {name} goes through {path.relative_to(root)}, "
+                              "which is not a directory")
+        path = path / name.split("/")[-1]
+        if os.path.lexists(path) and not (directory and stat.S_ISDIR(os.lstat(path).st_mode)):
+            raise Refusal(f"the archive's {name} is already there, under that name or another")
+        return path
+
+    directories = []
+    for member in members:
+        if member.isdir():
+            path = place(member.name, directory=True)
+            if not os.path.lexists(path):
+                os.mkdir(path, 0o755)
+            directories.append((path, member))
+        elif member.isfile():
+            path = place(member.name)
+            with tar.extractfile(member) as source, open(path, "xb") as target:
+                shutil.copyfileobj(source, target)
+            os.chmod(path, member.mode & 0o777)
+            os.utime(path, (member.mtime, member.mtime))
+    for member in members:
+        if member.issym():
+            os.symlink(member.linkname, place(member.name))
+    for member in members:
+        if member.issym() and not within(root / member.name, root):
+            raise Refusal(f"the archive links {member.name} to {member.linkname}, "
+                          "outside the runtime or to nothing")
+    # Deepest first, so that a directory's own mode never stops the next.
+    for path, member in reversed(directories):
+        os.chmod(path, member.mode & 0o777)
+        os.utime(path, (member.mtime, member.mtime))
 
 
 def pack(build: Path, out: Path, commit: str, tag: str | None, target: str) -> Path:
@@ -288,14 +311,13 @@ def pack(build: Path, out: Path, commit: str, tag: str | None, target: str) -> P
     places = sorted({str(place).encode() for directory in (given, build)
                      for place in (directory, directory.parent)}, key=len, reverse=True)
     paths = files_under(build, spec["entries"])
-    links = {path.as_posix(): os.readlink(build / path) for path in paths
-             if (build / path).is_symlink()}
     for path in paths:
         full = build / path
         mode = full.lstat().st_mode
         if stat.S_ISLNK(mode):
-            if not inside(path.as_posix(), links[path.as_posix()], links):
-                raise Refusal(f"{path} links outside the runtime, to {os.readlink(full)}")
+            if not within(full, build):
+                raise Refusal(f"{path} links to {os.readlink(full)}, outside the runtime "
+                              "or to nothing")
         elif stat.S_ISREG(mode):
             if path.as_posix() in spec["binaries"]:
                 continue
@@ -343,6 +365,31 @@ def pack(build: Path, out: Path, commit: str, tag: str | None, target: str) -> P
 
 # Unpacking.
 
+def check_unpacked(destination: Path, archive: Path, manifest: dict, spec: dict,
+                   count: int, digest: str) -> None:
+    """Check the runtime unpacked in DESTINATION against its MANIFEST."""
+    entry = manifest["archives"][0]
+    tops = sorted(path.name for path in destination.iterdir())
+    if tops != sorted(spec["entries"]):
+        raise Refusal(f"{archive.name} holds {', '.join(tops)}, not "
+                      f"{', '.join(sorted(spec['entries']))}")
+    for name in spec["required"]:
+        if not (destination / name).is_file():
+            raise Refusal(f"{archive.name} lacks {name}")
+    record = read_record(destination / "portal-build.eld")
+    for key in ("identity", "version"):
+        if record[key] != manifest[key]:
+            raise Refusal(f"the archive's build record has {key} {record[key]}, "
+                          f"not the manifest's {manifest[key]}")
+    if not os.access(destination / "portal-host", os.X_OK):
+        raise Refusal("the archive's portal-host is not executable")
+    print(f"Unpacked {archive.name} into {destination}: {count} paths, "
+          f"SHA-256 {digest}")
+    print(f"  version {record['version']}, identity {record['identity']}")
+    for name in spec["binaries"]:
+        print("  " + check_binary(destination / name, name, entry["target"]))
+
+
 def unpack(manifest_path: Path, destination: Path) -> None:
     try:
         manifest = check_manifest(json.loads(manifest_path.read_text()))
@@ -366,8 +413,7 @@ def unpack(manifest_path: Path, destination: Path) -> None:
 
     with tarfile.open(archive, "r:gz") as tar:
         members = tar.getmembers()
-        # Names as pack writes them, each once: the links below are looked up
-        # by name, and a "." or a repeated name would hide one.
+        # Names as pack writes them, each once.
         seen = set()
         for member in members:
             name = member.name
@@ -378,51 +424,32 @@ def unpack(manifest_path: Path, destination: Path) -> None:
             if name in seen:
                 raise Refusal(f"{archive.name} holds {name!r} twice")
             seen.add(name)
-        links = {member.name: member.linkname for member in members if member.issym()}
-        # Nothing beneath a link, as pack writes none: extraction would put
-        # it where the link leads, not where its name says.
         for member in members:
-            parts = member.name.split("/")
-            for depth in range(1, len(parts)):
-                if "/".join(parts[:depth]) in links:
-                    raise Refusal(f"{archive.name} holds {member.name!r}, beneath the link "
-                                  f"{'/'.join(parts[:depth])}")
-        for member in members:
-            name = member.name
-            parts = name.split("/")
-            if parts[0] not in spec["entries"]:
-                raise Refusal(f"{archive.name} holds {name!r}, which is not of the runtime")
-            # Where a link leads, through the archive's other links.
-            if member.issym() and not inside(name, member.linkname, links):
-                raise Refusal(f"{archive.name} links {name} outside the runtime")
+            if member.name.split("/")[0] not in spec["entries"]:
+                raise Refusal(f"{archive.name} holds {member.name!r}, which is not of the runtime")
             if not (member.issym() or member.isfile() or member.isdir()):
-                raise Refusal(f"{archive.name} holds {name!r}, neither a file, a directory "
-                              "nor a link")
+                raise Refusal(f"{archive.name} holds {member.name!r}, neither a file, "
+                              "a directory nor a link")
+        # The outermost directory this makes, to remove on a refusal: the
+        # destination was new or empty, so nothing else is in it.
+        made = None
+        top = destination.absolute()
+        while not top.exists():
+            made, top = top, top.parent
         destination.mkdir(parents=True, exist_ok=True)
-        # Members are checked above; "tar" keeps their modes, as Python 3.14's
-        # default would not.
-        options = {"filter": "tar"} if hasattr(tarfile, "tar_filter") else {}
-        tar.extractall(destination, **options)
-
-    tops = sorted(path.name for path in destination.iterdir())
-    if tops != sorted(spec["entries"]):
-        raise Refusal(f"{archive.name} holds {', '.join(tops)}, not "
-                      f"{', '.join(sorted(spec['entries']))}")
-    for name in spec["required"]:
-        if not (destination / name).is_file():
-            raise Refusal(f"{archive.name} lacks {name}")
-    record = read_record(destination / "portal-build.eld")
-    for key in ("identity", "version"):
-        if record[key] != manifest[key]:
-            raise Refusal(f"the archive's build record has {key} {record[key]}, "
-                          f"not the manifest's {manifest[key]}")
-    if not os.access(destination / "portal-host", os.X_OK):
-        raise Refusal("the archive's portal-host is not executable")
-    print(f"Unpacked {archive.name} into {destination}: {len(members)} paths, "
-          f"SHA-256 {digest}")
-    print(f"  version {record['version']}, identity {record['identity']}")
-    for name in spec["binaries"]:
-        print("  " + check_binary(destination / name, name, entry["target"]))
+        try:
+            extract(tar, members, destination.resolve())
+            check_unpacked(destination, archive, manifest, spec, len(members), digest)
+        except Refusal:
+            if made:
+                shutil.rmtree(made)
+            else:
+                for path in destination.iterdir():
+                    if path.is_dir() and not path.is_symlink():
+                        shutil.rmtree(path)
+                    else:
+                        path.unlink()
+            raise
 
 
 def main(arguments: list) -> int:
