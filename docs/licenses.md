@@ -25,15 +25,17 @@ Distribute these together; the notices are part of the release:
 | `build/portal.so`, `build/ghostty-linux` | On Linux, the native module and, beside it, Ghostty's library and resources, as `build.sh --prune` leaves them |
 | `build/portal-host` | The standalone app host, with the Bun runtime inside |
 | `build/licenses/` | A copy of Portal's license, the generated index and every third-party notice |
+| `SOURCE.md`, `source.json` | On macOS, where to get the module's [corresponding source](#corresponding-source), staged by `bun licenses/source.ts stage` |
 
 `build/licenses/` is generated; change `licenses/` instead. The files in
 `licenses/texts/` are byte-for-byte copies of upstream license files from the
 revision each inventory entry cites, and `.gitattributes` keeps Git from
 normalizing them.
 
-A binary release also needs the corresponding source described under
-[unresolved before a binary release](#unresolved-before-a-binary-release).
-A list of dependency names is not that source.
+A binary release also needs the corresponding source. A list of dependency
+names is not that source. The macOS module's is
+[given as pointers](#corresponding-source); the rest is still
+[unresolved](#unresolved-before-a-binary-release).
 
 ## What the build ships
 
@@ -136,6 +138,79 @@ use licenses that GPL-3.0 accepts: MIT, BSD, ISC, Zlib, libpng-2.0, Apache-2.0,
 - The OFL-1.1 and MIT fonts may ship with software when their copyright and
   license accompany them, which the staged notices do. Two fonts remain open.
 
+## Corresponding source
+
+The macOS module's corresponding source is given as **pointers**: where to
+fetch each input and the revision or digest that identifies it, with the steps
+to rebuild. Portal hosts no copies. The owner chose this on 2026-11-21 over
+attaching the inputs to each release (roughly 100–250 MB). The reasons:
+
+- Nearly all of Portal's code is the owner's, so its GPL-3.0 source requirement
+  is the owner's own to meet.
+- In the module, only z2d (MPL-2.0) is third-party code whose license requires
+  its source to be available. Its file-level terms cover z2d's own files, and
+  its pinned archive is a public GitHub download.
+- z2d cannot be removed with reasonable effort. Ghostty's sprite renderer draws
+  every cursor, underline and box-drawing glyph with it. Removing it would mean
+  patching Ghostty and building its library for macOS in Portal.
+
+Pointers depend on the upstreams staying available: GitHub for Portal,
+libghostty-spm, DisplayLink, Ghostty and z2d; ziglang.org for Zig; and
+`deps.files.ghostty.org`, Ghostty's mirror, for most of its archives. Whether a
+link to z2d's upstream archive meets MPL-2.0 is the owner's judgement, not
+settled by this page. If an upstream disappears, a release must attach that
+input instead.
+
+The inputs are:
+
+- Portal at the release commit, which holds its patches to libghostty-spm.
+- libghostty-spm at its pin, whose `Patches/` and `Script/` build Ghostty's
+  library. The prebuilt `GhosttyKit.xcframework` that the pin downloads was
+  built by libghostty-spm's own release workflow, at a commit whose
+  `Patches/`, `Script/` and `Ghostty.ref` are the pin's. So the pin's source is
+  the library's source.
+- DisplayLink at its `native/Package.resolved` pin.
+- Ghostty at the pin's `Ghostty.ref`.
+- Zig at the version that workflow builds with: its source, whose standard
+  library and compiler-rt are in the library, and its Apple Silicon compiler.
+- Every archive that Ghostty's `build.zig.zon` files pin at that revision, by
+  URL and Zig package hash.
+
+[licenses/source.json](../licenses/source.json) records what Portal's own files
+do not: the commit that built the library, Ghostty's revision, the prebuilt
+library's URL and digest, Zig's downloads and digests, the archives, and which
+components ship from inside another input (`vendored`). It is written by
+`bun licenses/source.ts refresh`, which fetches only what is missing from
+`PORTAL_LIBGHOSTTY_SPM_CLONE` and `PORTAL_GHOSTTY_CLONE` when they are set. The
+refresh fails when the library's build commit has different patches or scripts
+from the pin.
+
+A release stages the pointers beside its archive, from the build it archives:
+
+```sh
+bun licenses/source.ts stage build dist/source
+```
+
+This writes `SOURCE.md`, which lists the inputs and the rebuild steps with the
+release's values filled in, and `source.json`, the same in JSON, mapping each
+component to the input that holds its source. It works on a pruned build. It
+fails, and writes nothing, in any of these cases:
+
+- The module is not Apple Silicon.
+- The checkout has changes that no commit holds.
+- `licenses/source.json` was read from another libghostty-spm pin.
+- An input has no revision or digest.
+- A component that the build's `licenses/README.md` lists in the module has no
+  input that holds its source.
+- That index lacks a component the pins require.
+
+The `corresponding-source` CTest suite checks each of these failures, and
+checks the build's own notices against the inputs.
+
+The Linux module's corresponding source is
+`tasks/portal/runtime-linux-notices-source.md`'s to settle; nothing here
+covers Portal's own Ghostty build.
+
 ## Unresolved before a binary release
 
 The generated index repeats the per-component items.
@@ -151,9 +226,10 @@ The generated index repeats the per-component items.
    release tag, with oven-sh/WebKit at the commit Bun pins and the libraries Bun's
    build scripts pin; and the npm packages at the lockfile versions. Statically
    linked LGPL code, such as JavaScriptCore in Bun, also needs a way to relink
-   with a modified library; complete build sources and scripts provide that. No
-   release mechanism provides any of this yet; task 5's release automation
-   should attach it.
+   with a modified library; complete build sources and scripts provide that.
+   The macOS module's part is settled: see
+   [corresponding source](#corresponding-source). Linux's Ghostty build, Bun
+   and the npm packages still have no release mechanism.
 2. **Bun's notices.** Only Bun's LICENSE.md is staged. Bun publishes no license
    texts for the roughly 25 libraries it links statically, the Rust crates behind
    lol-html and argon2, or WebKit's per-file notices. Portal does not pin Bun yet
@@ -194,7 +270,9 @@ failure names the file to update:
   `native/libghostty-spm.json`, the other Swift pins in `native/Package.resolved`. Thin the new prebuilt library with
   `lipo`, list its members with `ar -t` and its symbols with `nm`, read the
   `build.zig.zon` files at the Ghostty revision its `Ghostty.ref` names, and
-  update the Ghostty components and texts.
+  update the Ghostty components and texts. Then run
+  `bun licenses/source.ts refresh` and commit `licenses/source.json`. Check
+  that each component in `vendored` still ships from the input it names.
 - **A new Ghostty pin on Linux, or new patches there.** The pin is in
   `native/ghostty.json`. Read the `build.zig.zon` files and
   `src/build/SharedDeps.zig` at the new revision, check the library with

@@ -513,6 +513,12 @@ if(BUILD_TESTING)
         COMMAND "${CMAKE_COMMAND}" -E env "PORTAL_BUILD=${CMAKE_BINARY_DIR}"
             "${BUN}" test "${CMAKE_SOURCE_DIR}/test/licenses.test.ts")
     set_tests_properties(licenses PROPERTIES TIMEOUT 60)
+    # The corresponding source's pointers in licenses/source.json cover the
+    # macOS module's components, and staging fails for a missing input.
+    add_test(NAME corresponding-source
+        COMMAND "${CMAKE_COMMAND}" -E env "PORTAL_BUILD=${CMAKE_BINARY_DIR}"
+            "${BUN}" test "${CMAKE_SOURCE_DIR}/test/source.test.ts")
+    set_tests_properties(corresponding-source PROPERTIES TIMEOUT 60)
 endif()
 
 # portal-build.el reads the record of a complete build. Before replacing any

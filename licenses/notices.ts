@@ -15,7 +15,7 @@ const host = join(root, "host");
 const texts = join(import.meta.dir, "texts");
 
 // An entry of licenses/inventory.json.
-type Component = {
+export type Component = {
 	id: string;
 	name: string;
 	version: string;
