@@ -74,7 +74,7 @@ double portal_terminal_points(double points)
 
 bool portal_terminals_check(const portal_option *options, size_t count, portal_text *error)
 {
-    const char *const strings[] = {"directory", "command", "argv", "theme"};
+    const char *const strings[] = {"directory", "command", "argv", "theme", "dark-theme"};
     for (size_t i = 0; i < sizeof strings / sizeof *strings; i++) {
         const portal_option *value = option(options, count, strings[i]);
         if (value && !value->is_string && value->flag) {
@@ -104,7 +104,11 @@ bool portal_terminals_check(const portal_option *options, size_t count, portal_t
     if (opacity && opacity->is_number && !portal_terminal_opacity_valid(opacity->number, error))
         return false;
     const portal_option *theme = option(options, count, "theme");
-    return !theme || !theme->is_string || known(theme->string, error);
+    const portal_option *dark = option(options, count, "dark-theme");
+    bool named = theme && theme->is_string, paired = dark && dark->is_string;
+    if (paired && !named)
+        return fail_with(error, "Option :dark-theme needs a :theme");
+    return (!named || known(theme->string, error)) && (!paired || known(dark->string, error));
 }
 
 bool portal_terminal_opacity_valid(double opacity, portal_text *error)
@@ -166,22 +170,26 @@ bool portal_terminals_themes(portal_text *json, portal_text *error)
 }
 
 struct theme {
-    const portal_string *name;
+    const portal_string *light, *dark;
     portal_text *error;
 };
 
 static bool apply(portal_view *terminal, void *context)
 {
     struct theme *theme = context;
-    return portal_terminal_apply_theme(terminal, theme->name, theme->error);
+    return portal_terminal_apply_theme(terminal, theme->light, theme->dark, theme->error);
 }
 
-bool portal_terminals_theme(const portal_string *name, portal_text *error)
+bool portal_terminals_theme(const portal_string *light, const portal_string *dark,
+                            portal_text *error)
 {
-    /* Check the name before touching any terminal, even with none open. */
-    if (name && !known(*name, error))
+    if (dark && !light)
+        return fail_with(error, "A dark terminal theme needs a light one");
+    /* Check the names before touching any terminal, even with none open. */
+    if ((light && !known(*light, error)) || (dark && !known(*dark, error)))
         return false;
-    struct theme theme = {name, error};
+    /* A single name is the pair of itself. */
+    struct theme theme = {light, dark ? dark : light, error};
     return portal_views_each(PORTAL_TERMINAL, apply, &theme);
 }
 

@@ -10,7 +10,7 @@ final class TerminalSession: PortalView {
     var surface: any NativeSurface { fail("The standalone checks have no terminals") }
     var input: NativeInput { fail("The standalone checks have no terminals") }
     func describe() -> [(String, ViewValue)] { [] }
-    func applyTheme(_ name: String?) throws {}
+    func applyTheme(light: String?, dark: String?) throws {}
     func paste(_ text: String) throws {}
     func pressEnter() throws {}
     func text() throws -> String { "" }

@@ -660,16 +660,22 @@ static bool working(struct portal_view *terminal, portal_text *error)
         || fail(error, "%.*s", (int) broken->string.length, broken->string.data);
 }
 
-bool portal_terminal_apply_theme(portal_view *terminal, const portal_string *name,
-                                 portal_text *error)
+bool portal_terminal_apply_theme(portal_view *terminal, const portal_string *light,
+                                 const portal_string *dark, portal_text *error)
 {
     if (!working(terminal, error))
         return false;
+    /* The core gives both names, or neither. */
+    if (!light != !dark)
+        calls.misused++;
     calls.themed++;
-    if (name)
-        set_string(terminal, "theme", name->data, name->length);
-    else
+    if (light && dark) {
+        set_string(terminal, "theme", light->data, light->length);
+        set_string(terminal, "dark-theme", dark->data, dark->length);
+    } else {
         set_flag(terminal, "theme", false);
+        set_flag(terminal, "dark-theme", false);
+    }
     return true;
 }
 

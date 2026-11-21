@@ -444,7 +444,13 @@ It is the compositor the views were written against: no other has run them.
 [the terminals'](../test/portal-linux-terminal-tests.el),
 [the fed terminals'](../test/portal-linux-fed-tests.el) and
 [the Rex suite of the fake server](../test/portal-rex-gui-tests.el) in one
-fresh Emacs through `gui-ert.sh`, and then Emacs quitting with a view open, a
+fresh Emacs through `gui-ert.sh`; then
+[the desktop scheme's suite](../test/portal-linux-scheme-tests.el), a
+terminal with a pair of themes following the desktop's light or dark, in
+another Emacs on a session bus of its own that `dbus-run-session` starts,
+where that Emacs plays the XDG desktop portal, so your desktop is never
+asked to change (without `dbus-run-session` it says it did not run); and
+then Emacs quitting with a view open, a
 test pattern and then a terminal printing as fast as it can. Pass an ERT
 selector regexp to run part of it. It needs `grim`, which reads the
 output's pixels, `wtype`, which types, and `wf-recorder` with `ffmpeg` and

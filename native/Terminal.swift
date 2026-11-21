@@ -197,6 +197,22 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     /// The opacity a fed terminal's pane draws its background at, or nil.
     var paneOpacity: Double? { pane?.opacity }
 
+    /// The background a fed terminal's pane draws in its appearance now, the
+    /// theme's for it, as "rrggbb" in sRGB, or nil.
+    var paneBackground: String? {
+        guard let pane else { return nil }
+        var color: CGColor?
+        pane.effectiveAppearance.performAsCurrentDrawingAppearance { color = pane.background.cgColor }
+        return color.flatMap(Self.hex)
+    }
+
+    private static func hex(_ color: CGColor) -> String? {
+        guard let srgb = CGColorSpace(name: CGColorSpace.sRGB),
+              let converted = color.converted(to: srgb, intent: .defaultIntent, options: nil),
+              let components = converted.components, components.count >= 3 else { return nil }
+        return components.prefix(3).map { String(format: "%02x", Int(($0 * 255).rounded())) }.joined()
+    }
+
     /// Show the background at OPACITY from now on. A running terminal takes
     /// it as the controller's per-session override, which outlasts later
     /// themes and text sizes; only a new surface reads the configuration's line.
@@ -361,7 +377,9 @@ final class TerminalSession: PortalView {
 
     init(target: String, options: ViewOptions) throws {
         let directory = try options.string("directory")
-        let theme = try Terminals.theme(named: options.string("theme"))
+        // A dark theme comes only with a light one (portal.h).
+        let light = try options.string("theme"), dark = try options.string("dark-theme") ?? light
+        let theme = try Terminals.theme(light: light, dark: dark)
         let points = portal_terminal_points(try options.number("points") ?? Double(PORTAL_TERMINAL_POINTS))
         let opacity = try options.number("opacity") ?? 1
         self.target = target
@@ -392,7 +410,7 @@ final class TerminalSession: PortalView {
             terminal = HostedTerminal(directory: directory, command: nil, theme: theme, points: points,
                                       opacity: opacity, fed: session, target: target, pane: pane)
             self.pane = pane
-            terminal.setBackground(try Terminals.background(named: options.string("theme")))
+            terminal.setBackground(try Terminals.background(light: light, dark: dark))
         } else {
             guard let directory else {
                 throw NativeError.message("The core passed a terminal without a :directory")
@@ -446,9 +464,11 @@ final class TerminalSession: PortalView {
          // Ghostty keeps a size as a Float; hundredths are what Lisp sent.
          ("points", .number((Double(terminal.fontSize ?? 0) * 100).rounded() / 100)),
          ("layer", .string(terminal.layer.map { NSStringFromClass(type(of: $0)) } ?? "")),
-         // Diagnostics: Ghostty's own background opacity, and a fed pane's.
+         // Diagnostics: Ghostty's own background opacity, and a fed pane's
+         // opacity and background.
          ("ghostty-opacity", .number(terminal.configuredOpacity))]
             + (terminal.paneOpacity.map { [("pane-opacity", .number($0))] } ?? [])
+            + (terminal.paneBackground.map { [("pane-background", .string($0))] } ?? [])
     }
 
     // The terminal primitives of native/Core/include/portal.h.
@@ -476,9 +496,9 @@ final class TerminalSession: PortalView {
         if terminal.frame != frame { terminal.frame = frame }
     }
 
-    func applyTheme(_ name: String?) throws {
-        let theme = try Terminals.theme(named: name)
-        if terminal.fed != nil { terminal.setBackground(try Terminals.background(named: name)) }
+    func applyTheme(light: String?, dark: String?) throws {
+        let theme = try Terminals.theme(light: light, dark: dark)
+        if terminal.fed != nil { terminal.setBackground(try Terminals.background(light: light, dark: dark)) }
         guard let controller = terminal.controller, controller.theme != theme else { return }
         guard controller.setTheme(theme) else {
             throw NativeError.message(controller.lastConfigurationIssue ?? "Could not apply terminal theme")
@@ -549,38 +569,46 @@ final class TerminalSession: PortalView {
 enum Terminals {
     static func themeNames() -> [String] { GhosttyThemeCatalog.allThemes.map(\.name) }
 
-    /// The theme NAME, which the core has checked, or the default for nil,
-    /// which follows the system's appearance.
-    static func theme(named name: String?) throws -> TerminalTheme {
-        guard let name else { return .default }
+    /// The theme LIGHT in the light appearance and DARK in the dark one,
+    /// names the core has checked, the same for a theme fixed in both; or
+    /// the default for nil, which follows the appearance too. The package's
+    /// view picks the side as its appearance changes.
+    static func theme(light: String?, dark: String?) throws -> TerminalTheme {
+        guard let light else { return .default }
+        let dark = dark ?? light
+        let configuration = try definition(light).toTerminalConfiguration()
+        return TerminalTheme(light: configuration,
+                             dark: dark == light ? configuration : try definition(dark).toTerminalConfiguration())
+    }
+
+    /// The background of the theme LIGHT in the light appearance and DARK in
+    /// the dark one, or of the default theme for nil, which is Alabaster's
+    /// in the light appearance and Afterglow's in the dark one.
+    static func background(light: String?, dark: String?) throws -> NSColor {
+        guard let light else { return try background(light: "Alabaster", dark: "Afterglow") }
+        let dark = dark ?? light
+        let lightColor = color(try definition(light).background)
+        guard dark != light else { return lightColor }
+        let darkColor = color(try definition(dark).background)
+        return NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? darkColor : lightColor
+        }
+    }
+
+    private static func definition(_ name: String) throws -> GhosttyThemeDefinition {
         guard let theme = GhosttyThemeCatalog.theme(named: name) else {
             throw NativeError.message("Unknown terminal theme: \(name)")
         }
-        return theme.toTerminalTheme()
+        return theme
     }
 
-    /// The background of the theme NAME, or of the default theme for nil,
-    /// which is Alabaster's in the light appearance and Afterglow's in the
-    /// dark one.
-    static func background(named name: String?) throws -> NSColor {
-        func color(_ theme: String) -> NSColor {
-            let hex = GhosttyThemeCatalog.theme(named: theme)?.background ?? ""
-            let digits = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
-            guard digits.count >= 6, let value = UInt32(digits.prefix(6), radix: 16) else {
-                return .textBackgroundColor
-            }
-            return NSColor(srgbRed: CGFloat(value >> 16 & 0xff) / 255, green: CGFloat(value >> 8 & 0xff) / 255,
-                           blue: CGFloat(value & 0xff) / 255, alpha: 1)
+    /// The color of HEX, a theme's "#rrggbb".
+    private static func color(_ hex: String) -> NSColor {
+        let digits = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
+        guard digits.count >= 6, let value = UInt32(digits.prefix(6), radix: 16) else {
+            return .textBackgroundColor
         }
-        guard let name else {
-            let light = color("Alabaster"), dark = color("Afterglow")
-            return NSColor(name: nil) { appearance in
-                appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
-            }
-        }
-        guard GhosttyThemeCatalog.theme(named: name) != nil else {
-            throw NativeError.message("Unknown terminal theme: \(name)")
-        }
-        return color(name)
+        return NSColor(srgbRed: CGFloat(value >> 16 & 0xff) / 255, green: CGFloat(value >> 8 & 0xff) / 255,
+                       blue: CGFloat(value & 0xff) / 255, alpha: 1)
     }
 }

@@ -97,6 +97,20 @@ static void test_options_are_checked_before_creation(void)
          "Unknown terminal theme: Gamma"},
         {{directory, flag_option("directory", false)}, 2, "A terminal view needs a :directory"},
         {{directory, number_option("theme", 3)}, 2, "Option :theme must be a string"},
+        /* A pair: both names are checked, and the error names the unknown one. */
+        {{directory, string_option("theme", "Alpha"), string_option("dark-theme", "Gamma")},
+         3,
+         "Unknown terminal theme: Gamma"},
+        {{directory, string_option("theme", "Gamma"), string_option("dark-theme", "Alpha")},
+         3,
+         "Unknown terminal theme: Gamma"},
+        {{directory, string_option("theme", "Alpha"), flag_option("dark-theme", true)},
+         3,
+         "Option :dark-theme must be a string"},
+        {{directory, string_option("dark-theme", "Alpha")}, 2, "Option :dark-theme needs a :theme"},
+        {{directory, flag_option("theme", false), string_option("dark-theme", "Alpha")},
+         3,
+         "Option :dark-theme needs a :theme"},
         {{directory, string_option("points", "14")}, 2, "Option :points must be a number"},
         {{directory, flag_option("points", true)}, 2, "Option :points must be a number"},
         {{directory, number_option("points", 14), string_option("points", "14")},
@@ -136,6 +150,13 @@ static void test_options_are_checked_before_creation(void)
                 "\"quick\":true", "\"name\":\"x\"", NULL));
     /* Without a theme there is nothing to look up. */
     CHECK(portal_fake_calls().listed == before.listed);
+    close_view(target);
+
+    /* A pair passes as given; the platform shows each in its appearance. */
+    const portal_option paired[] = {directory, string_option("theme", "Alpha"),
+                                    string_option("dark-theme", "Ωmega")};
+    target = open_terminal(paired, 3, &error);
+    CHECK(target && shows(target, "\"theme\":\"Alpha\"", "\"dark-theme\":\"Ωmega\"", NULL));
     close_view(target);
 
     /* A size passes as given, fractions too; the platform clamps it with
@@ -216,14 +237,14 @@ static void test_a_theme_reaches_every_terminal(void)
     portal_string beta = text("Beta"), gamma = text("Gamma"),
                   quoted = text("Back\\slash \"quoted\"");
     /* A name is checked even with no terminal open. */
-    CHECK(!portal_terminals_theme(&gamma, &error));
+    CHECK(!portal_terminals_theme(&gamma, NULL, &error));
     CHECK(says(&error, "Unknown terminal theme: Gamma"));
-    CHECK(portal_terminals_theme(&beta, &error));
+    CHECK(portal_terminals_theme(&beta, NULL, &error));
 
     char *web = open_view("web", &error, NULL);
     char *first = open_in("/"), *second = open_in("/"), *third = open_in("/");
     struct portal_fake_calls before = portal_fake_calls();
-    CHECK(portal_terminals_theme(&beta, &error));
+    CHECK(portal_terminals_theme(&beta, NULL, &error));
     CHECK(portal_fake_calls().listed == before.listed + 1);
     CHECK(portal_fake_calls().themed == before.themed + 3);
     CHECK(shows(first, "\"theme\":\"Beta\"", NULL));
@@ -235,32 +256,32 @@ static void test_a_theme_reaches_every_terminal(void)
 
     /* An unknown name touches no terminal. */
     before = portal_fake_calls();
-    CHECK(!portal_terminals_theme(&gamma, &error));
+    CHECK(!portal_terminals_theme(&gamma, NULL, &error));
     CHECK(says(&error, "Unknown terminal theme: Gamma"));
     CHECK(portal_fake_calls().themed == before.themed);
     CHECK(shows(second, "\"theme\":\"Beta\"", NULL));
 
     /* The default needs no lookup. */
     before = portal_fake_calls();
-    CHECK(portal_terminals_theme(NULL, &error));
+    CHECK(portal_terminals_theme(NULL, NULL, &error));
     CHECK(portal_fake_calls().listed == before.listed);
     CHECK(shows(first, "\"theme\":false", NULL));
     CHECK(shows(third, "\"theme\":false", NULL));
-    CHECK(portal_terminals_theme(&quoted, &error));
+    CHECK(portal_terminals_theme(&quoted, NULL, &error));
     CHECK(shows(third, "\"theme\":\"Back\\\\slash \\\"quoted\\\"\"", NULL));
 
     /* A closed terminal is not themed. */
     close_view(second);
     before = portal_fake_calls();
-    CHECK(portal_terminals_theme(&beta, &error));
+    CHECK(portal_terminals_theme(&beta, NULL, &error));
     CHECK(portal_fake_calls().themed == before.themed + 2);
 
     /* A refusing platform changes nothing. */
     portal_fake_refuse(true);
     before = portal_fake_calls();
-    CHECK(!portal_terminals_theme(NULL, &error));
+    CHECK(!portal_terminals_theme(NULL, NULL, &error));
     CHECK(says(&error, "The fake refuses to run view primitives"));
-    CHECK(!portal_terminals_theme(&beta, &error));
+    CHECK(!portal_terminals_theme(&beta, NULL, &error));
     CHECK(says(&error, "The fake refuses to run view primitives"));
     portal_fake_refuse(false);
     CHECK(same_calls(portal_fake_calls(), before));
@@ -341,6 +362,41 @@ static void test_an_opacity_reaches_every_terminal(void)
     CHECK(!portal_fake_calls().misused);
 }
 
+static void test_a_pair_reaches_every_terminal(void)
+{
+    portal_text error = {0};
+    portal_string alpha = text("Alpha"), omega = text("Ωmega"), gamma = text("Gamma");
+    char *first = open_in("/"), *second = open_in("/");
+    CHECK(portal_terminals_theme(&alpha, &omega, &error));
+    CHECK(shows(first, "\"theme\":\"Alpha\"", "\"dark-theme\":\"Ωmega\"", NULL));
+    CHECK(shows(second, "\"theme\":\"Alpha\"", "\"dark-theme\":\"Ωmega\"", NULL));
+
+    /* A single name is the pair of itself. */
+    CHECK(portal_terminals_theme(&omega, NULL, &error));
+    CHECK(shows(first, "\"theme\":\"Ωmega\"", "\"dark-theme\":\"Ωmega\"", NULL));
+
+    /* An unknown name on either side touches no terminal, and is named. */
+    struct portal_fake_calls before = portal_fake_calls();
+    CHECK(!portal_terminals_theme(&alpha, &gamma, &error));
+    CHECK(says(&error, "Unknown terminal theme: Gamma"));
+    CHECK(!portal_terminals_theme(&gamma, &alpha, &error));
+    CHECK(says(&error, "Unknown terminal theme: Gamma"));
+    CHECK(portal_fake_calls().themed == before.themed);
+    CHECK(shows(second, "\"theme\":\"Ωmega\"", "\"dark-theme\":\"Ωmega\"", NULL));
+
+    /* A dark theme alone is no theme. */
+    CHECK(!portal_terminals_theme(NULL, &alpha, &error));
+    CHECK(says(&error, "A dark terminal theme needs a light one"));
+    CHECK(portal_fake_calls().themed == before.themed);
+
+    /* The default is neither. */
+    CHECK(portal_terminals_theme(NULL, NULL, &error));
+    CHECK(shows(first, "\"theme\":false", "\"dark-theme\":false", NULL));
+    close_view(first);
+    close_view(second);
+    CHECK(!portal_fake_calls().misused);
+}
+
 static void test_a_rejected_theme_stops_at_that_terminal(void)
 {
     portal_text error = {0};
@@ -353,13 +409,13 @@ static void test_a_rejected_theme_stops_at_that_terminal(void)
     char *third = open_terminal(alpha, 2, &error);
     /* Terminals before it are themed, and it and those after are not. */
     struct portal_fake_calls before = portal_fake_calls();
-    CHECK(!portal_terminals_theme(&beta, &error));
+    CHECK(!portal_terminals_theme(&beta, NULL, &error));
     CHECK(says(&error, "Metal is gone"));
     CHECK(portal_fake_calls().themed == before.themed + 1);
     CHECK(shows(first, "\"theme\":\"Beta\"", NULL));
     CHECK(shows(third, "\"theme\":\"Alpha\"", NULL));
     close_view(second);
-    CHECK(portal_terminals_theme(&beta, &error));
+    CHECK(portal_terminals_theme(&beta, NULL, &error));
     CHECK(shows(third, "\"theme\":\"Beta\"", NULL));
     close_view(first);
     close_view(third);
@@ -544,6 +600,7 @@ int main(void)
     test_options_are_checked_before_creation();
     test_the_theme_catalog_is_sorted();
     test_a_theme_reaches_every_terminal();
+    test_a_pair_reaches_every_terminal();
     test_a_rejected_theme_stops_at_that_terminal();
     test_an_opacity_reaches_every_terminal();
     test_points_are_clamped();

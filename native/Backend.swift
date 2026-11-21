@@ -411,10 +411,14 @@ public func portalTerminalListThemes(_ names: UnsafeMutablePointer<UnsafeMutable
 }
 
 @_cdecl("portal_terminal_apply_theme")
-public func portalTerminalApplyTheme(_ terminal: OpaquePointer, _ name: UnsafePointer<portal_string>?,
+public func portalTerminalApplyTheme(_ terminal: OpaquePointer, _ light: UnsafePointer<portal_string>?,
+                                     _ dark: UnsafePointer<portal_string>?,
                                      _ error: UnsafeMutablePointer<portal_text>) -> Bool {
-    let terminal = native(terminal), name = name.map { String(copying: $0.pointee) }
-    return perform(error) { try session(terminal, as: TerminalSession.self).applyTheme(name) } != nil
+    let terminal = native(terminal), light = light.map { String(copying: $0.pointee) },
+        dark = dark.map { String(copying: $0.pointee) }
+    return perform(error) {
+        try session(terminal, as: TerminalSession.self).applyTheme(light: light, dark: dark)
+    } != nil
 }
 
 @_cdecl("portal_terminal_set_opacity")

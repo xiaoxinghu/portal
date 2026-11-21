@@ -4,8 +4,9 @@
 # Portal's views, input and terminals on Linux, after ./build.sh: the suites
 # of test/portal-linux-gui-tests.el, its terminals' and fed terminals', and
 # test/portal-rex-gui-tests.el, Rex blocks shown against the fake server, in
-# one fresh Emacs, through test/gui-ert.sh, then an Emacs that quits with a
-# view open. SELECTOR, an ERT regexp, narrows the suites. It runs on a desktop of its own, a second Hyprland with a
+# one fresh Emacs, through test/gui-ert.sh; then the themes of
+# test/portal-linux-scheme-tests.el in another, on a session bus of its own
+# that dbus-run-session starts; then an Emacs that quits with a view open. SELECTOR, an ERT regexp, narrows the suites. It runs on a desktop of its own, a second Hyprland with a
 # headless output (test/linux-desktop.sh), so its windows are on no screen of
 # yours and its keys and clicks go nowhere else. Beside Hyprland it needs
 # grim, which reads that output's pixels, and wtype, which types. Exits 77,
@@ -29,6 +30,25 @@ sh "$root/test/gui-ert.sh" \
              (list (quote and) "^portal-\\(linux\\|rex\\)-gui-"
                    (let ((focus (getenv "PORTAL_LINUX_SELECTOR")))
                      (if (equal focus "") t focus))))'
+# A terminal with a pair of themes follows the desktop's light or dark, in
+# an Emacs on a session bus of its own, where it plays the desktop portal
+# (test/portal-linux-scheme-tests.el): yours is never asked to change.
+case "$PORTAL_LINUX_SELECTOR" in
+    "" | *scheme*)
+        if command -v dbus-run-session >/dev/null 2>&1; then
+            dbus-run-session -- sh "$root/test/gui-ert.sh" \
+                -l "$root/test/portal-linux-gui-tests.el" \
+                -l "$root/test/portal-linux-terminal-tests.el" \
+                -l "$root/test/portal-linux-scheme-tests.el" \
+                --eval '(portal-gui-ert-start
+                         (list (quote and) "^portal-linux-scheme-"
+                               (let ((focus (getenv "PORTAL_LINUX_SELECTOR")))
+                                 (if (equal focus "") t focus))))'
+        else
+            echo "GUI checks: not run: a terminal following the desktop's light or dark, without dbus-run-session" >&2
+        fi
+        ;;
+esac
 # Emacs quits with a view open, shown and drawing, and the keyboard in it:
 # the view ends in kill-emacs-hook, and Emacs exits as it was asked to. Once
 # with the test pattern, and once with a terminal whose program is printing

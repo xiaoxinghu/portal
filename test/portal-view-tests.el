@@ -419,6 +419,38 @@ Return the view's target."
           (should (equal portal-terminal-theme "Dracula")))
       (setq portal-terminal-theme original))))
 
+(ert-deftest portal-view-terminal-theme-pair-reaches-old-and-new-terminals ()
+  (let ((original portal-terminal-theme))
+    (unwind-protect
+        (portal-view-test--environment
+          (portal-terminal)
+          ;; A pair reaches the running terminals at once, light first.
+          (setq portal-terminal-theme '("Catppuccin Latte" . "Catppuccin Mocha"))
+          (should (equal (portal-fake-native-calls 'portal--terminal-theme)
+                         '(("Catppuccin Latte" "Catppuccin Mocha"))))
+          ;; Anything but two names is refused, and changes nothing.
+          (dolist (value '(("Dracula") ("Dracula" . 3) (3 . "Dracula") ("Dracula" "Alabaster")
+                           [ "Dracula" "Alabaster" ]))
+            (should-error (setq portal-terminal-theme value))
+            (should (equal portal-terminal-theme '("Catppuccin Latte" . "Catppuccin Mocha"))))
+          ;; A new terminal opens with both.
+          (portal-terminal-new)
+          (let ((options (plist-get (portal--inspect (portal-view-target)) :options)))
+            (should (equal (plist-get options :theme) "Catppuccin Latte"))
+            (should (equal (plist-get options :dark-theme) "Catppuccin Mocha")))
+          ;; A single name and nil are as before: no dark theme.
+          (setopt portal-terminal-theme "Dracula")
+          (setq portal-terminal-theme nil)
+          (should (equal (cdr (portal-fake-native-calls 'portal--terminal-theme))
+                         '(("Dracula" nil) (nil nil))))
+          (setq portal-terminal-theme "Dracula")
+          (portal-terminal-new)
+          (let ((options (plist-get (portal--inspect (portal-view-target)) :options)))
+            (should (equal (plist-get options :theme) "Dracula"))
+            (should (plist-member options :dark-theme))
+            (should-not (plist-get options :dark-theme))))
+      (setq portal-terminal-theme original))))
+
 (ert-deftest portal-view-terminal-opacity-reaches-old-and-new-terminals ()
   (let ((original portal-terminal-opacity))
     (unwind-protect
