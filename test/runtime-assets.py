@@ -136,8 +136,8 @@ class Assets(http.server.BaseHTTPRequestHandler):
             self.send_header("Transfer-Encoding", "chunked")
             self.send_header("Connection", "close")
             self.end_headers()
-            half = len(data) // 2
-            self.wfile.write(b"".join(b"%x\r\n%s\r\n" % (len(data[at:at + 4]), data[at:at + 4])
+            half = len(data) // 2 // 4 * 4
+            self.wfile.write(b"".join(b"%x\r\n%s\r\n" % (4, data[at:at + 4])
                                       for at in range(0, half, 4)))
             self.wfile.flush()
             for at in range(half, len(data), 4096):
