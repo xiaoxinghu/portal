@@ -109,16 +109,20 @@ retry placement or close.
 ## Terminal rules and metadata
 
 The core owns terminal rules in `native/Core/terminals.c`. The platform supplies
-six terminal or engine primitives: list themes, apply a named or default theme,
+six terminal or engine primitives: list themes, apply a theme (a light and a
+dark name, the same name for a fixed theme, or the default),
 set the text size, paste text, press Enter, and read all text. Before creation,
 the core validates options: `:directory` must be a string, except for a
 [fed terminal](#rex-connections), made with `:fed`, which runs no process
 and takes neither `:command` nor `:argv`; `:command`, `:argv` and
-`:theme` a string or nil; `:command` and `:argv` mutually exclusive; `:theme`
-a platform-listed name; and `:points` nil or a number. The adapter decodes `:argv` into literal arguments and
+`:theme` and `:dark-theme` a string or nil; `:command` and `:argv` mutually
+exclusive; `:theme` a platform-listed name, and `:dark-theme`, the name shown
+while the terminal's appearance is dark, one too and only with a `:theme`; and
+`:points` nil or a number. The adapter decodes `:argv` into literal arguments and
 executes them through the user's interactive login shell. The core likewise
-validates theme names before applying them to all open terminals, oldest first;
-unknown names change none. If a terminal rejects a theme, it supplies the error:
+validates theme names, both of a pair, before applying them to all open
+terminals, oldest first; unknown names change none, and the error names the
+unknown one. A single name reaches the platform as the pair of itself. If a terminal rejects a theme, it supplies the error:
 earlier terminals keep the new theme; it and later terminals keep the old one.
 `portal--terminal-themes` returns platform names sorted by code point.
 `portal--terminal-text-size` sizes one terminal's text, in points, which may
@@ -132,7 +136,10 @@ later theme keeps.
 on success. Enter has its own primitive because input replays real native events
 without synthetic keys. Reading text on macOS selects all, leaving the selection
 active. The macOS platform owns Ghostty types, binding strings such as
-`select_all`, and the system-appearance default theme.
+`select_all`, and the system-appearance default theme. A terminal follows its
+own appearance: on macOS its view's, which libghostty-spm's `TerminalTheme`
+reads, with a configuration for each side; on Linux the desktop's, which the
+backend reconfigures each terminal of the default or a pair for.
 
 Every platform reports a terminal's `:ready`, `:title`, `:pwd`, `:program`,
 `:columns`, `:rows`, `:points`, a number that may be fractional, and `:exited`;

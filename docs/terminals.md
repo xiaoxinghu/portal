@@ -372,14 +372,27 @@ actions and Ibuffer export as in normal use.
 Configure in Lisp after loading `portal.el` (changes apply to running terminals):
 
 ```elisp
-(setq portal-terminal-theme "Dracula") ; nil follows system light/dark appearance
+(setq portal-terminal-theme '("Catppuccin Latte" . "Catppuccin Mocha")) ; light, dark
+(setq portal-terminal-theme "Dracula") ; the same in light and dark
+(setq portal-terminal-theme nil)       ; Alabaster in light, Afterglow in dark
 ```
 
 `portal-terminal-theme` takes an exact, case-sensitive name from
-`(portal-terminal-themes)`, set through `setq` or Customize, even before loading
-Portal in your init file. Changes recolor running terminals, including hidden
-ones, and apply to new ones without restarting shells. `nil` restores Alabaster
-(light) and Afterglow (dark). Named themes ignore system appearance changes.
+`(portal-terminal-themes)`, or a pair of them, light first, set through
+`setq` or Customize, even before loading Portal in your init file. A pair
+shows its first theme while a terminal's appearance is light and its second
+while it is dark, and switches by itself when the appearance changes, as
+Ghostty's own `theme = light:...,dark:...` does. `nil` does the same with
+Alabaster and Afterglow. A single name stays fixed in both. Changes recolor
+running terminals, including hidden ones, and apply to new ones without
+restarting shells; an unknown name, in a pair too, is refused, naming it,
+before any terminal changes.
+
+A terminal's appearance is the system's. On macOS it is that of the Emacs
+frame showing the terminal, which is the system's unless the frame sets
+`ns-appearance`; a hidden terminal follows the system's. On Linux it is the
+desktop's light or dark preference, which the XDG desktop portal says.
+A Rex block's view follows the same theme, its pane beside the grid too.
 
 In a frame that is itself see-through, such as one with a frosted
 background, terminals can be see-through too:
@@ -499,7 +512,10 @@ What differs from macOS:
 - **Themes** are the catalog of the Ghostty Portal builds, with the same
   names. Without `portal-terminal-theme`, a terminal is Alabaster or
   Afterglow as the desktop prefers light or dark, which the XDG desktop
-  portal says, and changes with it.
+  portal says, and changes with it; with a pair, its light or its dark
+  theme the same way. Portal picks the name itself, not Ghostty's
+  `light:...,dark:...`, which would reread the configuration without the
+  command and directory the terminal was made with.
 - **The clipboard** is the desktop's, and selecting text copies it to the
   primary selection. A paste that Ghostty would ask about, such as text with
   a newline in it, goes ahead: you asked for it. A program asking to read
