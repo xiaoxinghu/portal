@@ -518,6 +518,43 @@ echo \"TOOLS=$PORTAL_TOOLS_DIR\"\nmkdir -p build\n")
     (should-error (portal-build--record-identity))
     (should (eq (portal-build-problem) 'missing))))
 
+(ert-deftest portal-build-probes-a-build-made-elsewhere ()
+  ;; An unpacked runtime: checked for this Lisp's sources, then loaded and
+  ;; its host started from where it is, never from Portal's own build.
+  (portal-build-test--with-root
+    (portal-build-test--complete)
+    (let* ((elsewhere (make-temp-file "portal runtime " t))
+           (probe (lambda ()
+                    (let ((command-line-args-left (list elsewhere)))
+                      (portal-build--probe-batch))))
+           loaded started)
+      (unwind-protect
+          (cl-letf (((symbol-function 'module-load) (lambda (file) (push file loaded)))
+                    ((symbol-function 'portal--web-load) #'ignore)
+                    ((symbol-function 'portal-build--probe-host)
+                     (lambda (program) (push program started))))
+            (copy-directory (portal-build-file "") (file-name-as-directory elsewhere) nil t t)
+            (delete-directory (portal-build-file "") t)
+            (funcall probe)
+            (should (equal loaded (list (expand-file-name portal-build--module elsewhere))))
+            (should (equal started (and portal-build--host
+                                        (list (expand-file-name portal-build--host elsewhere)))))
+            ;; A file of the runtime missing, then a build of other sources:
+            ;; refused before anything loads.
+            (setq loaded nil)
+            (let ((resource (expand-file-name (car (last portal-build--artifacts
+                                                         (if portal-build--host 2 1)))
+                                              elsewhere)))
+              (rename-file resource (concat resource ".away"))
+              (should (string-match-p (regexp-quote resource)
+                                      (cadr (should-error (funcall probe)))))
+              (rename-file (concat resource ".away") resource))
+            (portal-build-test--write "native/Core/emacs.c" "changed")
+            (should (string-match-p "older than its sources"
+                                    (cadr (should-error (funcall probe)))))
+            (should-not loaded))
+        (delete-directory elsewhere t)))))
+
 (ert-deftest portal-build-rejects-a-module-of-unknown-build ()
   ;; A module that Portal Lisp from before build records loaded: the real
   ;; C core's test module provides the same native functions.

@@ -375,7 +375,9 @@ that the window has the keyboard. On macOS everything runs in process: the
 [window-capture.m](../test/window-capture.m) captures Emacs's own window with
 ScreenCaptureKit. Capturing a process's own window needs no Screen Recording
 permission: none was asked for in the VM or on GitHub's
-`xcode-27` runner, where the Checks workflow runs it on the checkout's build. Linux has no adapters yet: the
+`xcode-27` runner, where the Checks workflow runs it on the checkout's build,
+then on [the runtime archive](releasing.md#the-runtime-archive) unpacked
+elsewhere. Linux has no adapters yet: the
 test reports itself not run there.
 
 It exits 0 when every check passed and 1 when one failed. It also exits 1
