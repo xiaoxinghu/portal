@@ -197,11 +197,17 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     /// The opacity a fed terminal's pane draws its background at, or nil.
     var paneOpacity: Double? { pane?.opacity }
 
-    /// The background a fed terminal's pane last drew, as "rrggbb" in sRGB,
-    /// or nil: the theme's for the pane's appearance.
+    /// The background a fed terminal's pane draws in its appearance now, the
+    /// theme's for it, as "rrggbb" in sRGB, or nil.
     var paneBackground: String? {
-        guard let color = pane?.layer?.backgroundColor,
-              let srgb = CGColorSpace(name: CGColorSpace.sRGB),
+        guard let pane else { return nil }
+        var color: CGColor?
+        pane.effectiveAppearance.performAsCurrentDrawingAppearance { color = pane.background.cgColor }
+        return color.flatMap(Self.hex)
+    }
+
+    private static func hex(_ color: CGColor) -> String? {
+        guard let srgb = CGColorSpace(name: CGColorSpace.sRGB),
               let converted = color.converted(to: srgb, intent: .defaultIntent, options: nil),
               let components = converted.components, components.count >= 3 else { return nil }
         return components.prefix(3).map { String(format: "%02x", Int(($0 * 255).rounded())) }.joined()

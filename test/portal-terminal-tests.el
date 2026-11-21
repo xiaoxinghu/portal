@@ -222,6 +222,17 @@ Restore the frame's appearance and `portal-terminal-theme' after."
         (should (equal portal-terminal-theme "Dracula"))
         (portal-terminal-test--background-becomes first "282a36")))))
 
+(defun portal-terminal-test--pane-becomes (target hex)
+  "Wait until fed terminal TARGET's pane has drawn HEX as its background."
+  (let ((deadline (+ (float-time) 10)))
+    (while (and (not (equal (plist-get (portal--inspect target) :pane-background) hex))
+                (< (float-time) deadline))
+      (accept-process-output nil 0.02)
+      (redisplay t))
+    (ert-info ((format "Wanted %s; %S, the frame %S" hex (portal--inspect target)
+                       (frame-parameter nil 'ns-appearance)))
+      (should (equal (plist-get (portal--inspect target) :pane-background) hex)))))
+
 (ert-deftest portal-terminal-theme-pair-colors-a-fed-pane ()
   :tags '(:gui)
   (skip-unless (eq window-system 'ns))
@@ -239,15 +250,12 @@ Restore the frame's appearance and `portal-terminal-theme' after."
             (let ((target (portal-view-open 'terminal
                                             (append '(:fed t) (portal-terminal--theme-options)))))
               (redisplay t)
-              (portal-terminal-test--wait
-               (lambda () (equal (plist-get (portal--inspect target) :pane-background) "f7f7f7")))
+              (portal-terminal-test--pane-becomes target "f7f7f7")
               (set-frame-parameter nil 'ns-appearance 'dark)
-              (portal-terminal-test--wait
-               (lambda () (equal (plist-get (portal--inspect target) :pane-background) "282a36")))
+              (portal-terminal-test--pane-becomes target "282a36")
               ;; A running fed terminal takes a new pair.
               (setq portal-terminal-theme '("Dracula" . "Alabaster"))
-              (portal-terminal-test--wait
-               (lambda () (equal (plist-get (portal--inspect target) :pane-background) "f7f7f7")))))
+              (portal-terminal-test--pane-becomes target "f7f7f7")))
         (kill-buffer buffer)))))
 
 (defun portal-terminal-test--opacity-p (target opacity)
