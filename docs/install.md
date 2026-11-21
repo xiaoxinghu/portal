@@ -214,6 +214,50 @@ Only one build of a checkout runs at a time; another one stops immediately.
 `*portal-build*` shows the current build, and `build/portal-build.log` keeps the
 last one started from Emacs.
 
+## Downloaded runtimes
+
+On Apple Silicon, Portal can download its native part instead of building it:
+the runtime archive a release attaches, holding the module, the app host and
+Ghostty's resources. Nothing offers the download yet; from Lisp,
+`(portal-runtime-install)` runs it in the background and shows its progress in
+`*portal-runtime*`. A build from source stays the alternative, and
+`portal-build-directory` still names a build supplied elsewhere.
+
+What an install does, in a batch Emacs of its own:
+
+1. It looks in `portal-runtime-directory` (`~/.emacs.d/portal/runtime/` by
+   default) for a runtime of this Portal's native source identity, the hash
+   that [what Portal checks](#what-portal-checks) describes. If one is there,
+   it uses it with no network. So a release that changed only Lisp downloads
+   nothing.
+2. Otherwise it fetches the manifest of the release tag of this Portal's
+   version, never `latest`, from GitHub. It goes on only when that release
+   was built from these native sources: a checkout past its release with
+   native changes needs a build, and the install says so before fetching the
+   archive.
+3. It downloads the archive, checks its size and SHA-256 against the
+   manifest, and unpacks it into a staging directory. It refuses an archive
+   with a name or link that leads out of the runtime, or anything but files,
+   directories and links, and checks the runtime's files and build record.
+4. It loads the module and starts the host in a disposable batch Emacs.
+   Only then does the runtime take its place, in one rename.
+
+A failed or interrupted install leaves the runtimes already there as they
+were. One install runs at a time; another one stops at once, saying so. A
+successful install keeps the runtime it replaced, which a running Emacs may
+have loaded, and deletes any older one.
+
+**What the download trusts.** Portal trusts the runtime as it trusts its Lisp:
+GitHub over TLS, pinned to a release tag. Nothing is signed. The manifest
+comes from the same place as the archive, so its digest catches a truncated
+or corrupted download, not an attacker. TLS is what protects it: the install
+verifies GitHub's certificate and host name, and when they do not verify, it
+stops. It never asks whether to continue, as Emacs's Network Security
+Manager asks elsewhere, and a certificate you once accepted there for good
+does not count. Every redirect must be HTTPS too. The install connects
+directly, not through a proxy. It trusts the system's certificate
+authorities and those in `gnutls-trustfiles`.
+
 ## Bun
 
 Bun compiles the app host, and the built host includes that Bun as its
@@ -247,6 +291,7 @@ An installed Portal and the caches its build fills, measured on Apple Silicon:
 | The app host's packages, in Bun's cache | `~/.bun/install/cache/`, or `BUN_INSTALL_CACHE_DIR` | 330 MB |
 | GhosttyKit, in SwiftPM's cache | `~/Library/Caches/org.swift.swiftpm/` | 80 MB |
 | Portal's pinned Bun, if a build downloaded it | `portal-build-tools-directory` | 60 MB |
+| Downloaded runtimes, at most two | `portal-runtime-directory` | 100 MB each |
 
 The caches spare a rebuild after an upgrade most of its downloads. Removing
 Portal's package leaves them. Other Bun and Swift projects share Bun's and
@@ -273,6 +318,7 @@ that cannot succeed.
 | `portal-build-bun` | Use this Bun executable |
 | `portal-build-download-bun` | Allow downloading Portal's pinned Bun |
 | `portal-build-tools-directory` | Where downloaded tools are cached |
+| `portal-runtime-directory` | Where downloaded runtimes are kept |
 
 ## Troubleshooting
 
