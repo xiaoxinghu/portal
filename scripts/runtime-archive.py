@@ -379,20 +379,22 @@ def unpack(manifest_path: Path, destination: Path) -> None:
                 raise Refusal(f"{archive.name} holds {name!r} twice")
             seen.add(name)
         links = {member.name: member.linkname for member in members if member.issym()}
+        # Nothing beneath a link, as pack writes none: extraction would put
+        # it where the link leads, not where its name says.
+        for member in members:
+            parts = member.name.split("/")
+            for depth in range(1, len(parts)):
+                if "/".join(parts[:depth]) in links:
+                    raise Refusal(f"{archive.name} holds {member.name!r}, beneath the link "
+                                  f"{'/'.join(parts[:depth])}")
         for member in members:
             name = member.name
             parts = name.split("/")
             if parts[0] not in spec["entries"]:
                 raise Refusal(f"{archive.name} holds {name!r}, which is not of the runtime")
-            # Through the archive's own links, which extraction follows.
-            if member.issym():
-                if not inside(name, member.linkname, links):
-                    raise Refusal(f"{archive.name} links {name} outside the runtime")
-            else:
-                where = resolve(name, links)
-                if not where or where[0] not in spec["entries"]:
-                    raise Refusal(f"{archive.name} holds {name!r}, which a link takes outside "
-                                  "the runtime")
+            # Where a link leads, through the archive's other links.
+            if member.issym() and not inside(name, member.linkname, links):
+                raise Refusal(f"{archive.name} links {name} outside the runtime")
             if not (member.issym() or member.isfile() or member.isdir()):
                 raise Refusal(f"{archive.name} holds {name!r}, neither a file, a directory "
                               "nor a link")

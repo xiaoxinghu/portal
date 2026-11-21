@@ -168,15 +168,18 @@ class RuntimeArchiveTests(unittest.TestCase):
         for members, pattern in (
                 ([("licenses/a", "."), ("licenses/b", "a/../..")], "links licenses/b outside"),
                 ([("licenses/up", ".."), ("licenses/up/up", ".."), ("licenses/up/up/x", None)],
-                 "links licenses/up/up outside"),
+                 "beneath the link licenses/up"),
                 ([("licenses/texts/abs", "/etc/hosts")], "links licenses/texts/abs outside"),
                 # Through a link the lookup by name would miss, to the parent.
                 ([("licenses/./a", ".."), ("licenses/b", "a/.."), ("licenses/b/payload", None)],
                  "'licenses/./a', which is not a plain path"),
                 ([("licenses//x", None)], "not a plain path"),
+                # Each link made through the one before, to the parent.
+                ([("licenses/a", "."), ("licenses/a/b", ".."), ("licenses/b/c", ".."),
+                  ("licenses/b/c/payload", None)], "beneath the link licenses/a"),
                 ([("licenses/a", None), ("licenses/a", "..")], "'licenses/a' twice"),
                 ([("licenses/up", ".."), ("licenses/up/Makefile", None)],
-                 "'licenses/up/Makefile', which a link takes outside")):
+                 "'licenses/up/Makefile', beneath the link licenses/up")):
             with self.subTest(pattern):
                 written = self.pack()
                 manifest = json.loads(written.read_text())
