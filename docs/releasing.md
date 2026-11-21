@@ -134,6 +134,30 @@ archive and the manifest kept, as two artifacts for 14 days; their record is
 user can download them: the archive's `licenses/` is the notice and the
 pointer to the source. A release does not attach them yet.
 
+The same run has a Linux job for each CPU, `ubuntu-26.04` and
+`ubuntu-26.04-arm`, equal in priority, which make
+`portal-runtime-…-linux-x86_64-gnu.tar.gz` and
+`portal-runtime-…-linux-aarch64-gnu.tar.gz` from the build of the checks
+that run on Linux: CTest and the Python tests, no graphical suite. Each
+holds `portal.so`, `portal-build.eld`, `licenses`, and of
+`ghostty-linux` Ghostty's library with its soname link, its resources and
+`terminfo`, and no host. An archive is chosen by the CPU and the C library,
+glibc, never by distribution or desktop: its floor, in the manifest, is
+glibc 2.43, Ubuntu 26.04's, on which it is built with the runner's own
+compiler and libraries. Ghostty's library is built for that glibc and the
+CPU's baseline, `-DPORTAL_GHOSTTY_TARGET=x86_64-linux-gnu.2.43` (or
+`aarch64-…`) `-DPORTAL_GHOSTTY_CPU=baseline`, and the module with GCC's
+defaults. Unpacking checks each ELF binary's machine, that it needs no glibc
+symbol version newer than the floor, that it loads only GTK 3, Wayland,
+EGL and glibc from the system and Ghostty's library from the runtime
+through the module's `$ORIGIN/ghostty-linux/lib` runpath, and asks the
+system's loader where it finds each. A disposable Emacs then loads the
+module and starts Ghostty there, and does it again on a CPU of the
+baseline that QEMU emulates, `qemu64` or `cortex-a53`, where an
+instruction beyond it would stop Emacs. `readelf`'s own account of both
+binaries is `runtime/abi.log` in the job's `logs-TARGET`. No terminal is
+drawn: Linux renders are checked on desktops, not here.
+
 ## Guard rails on GitHub
 
 Two rulesets keep `stable` and the tags from being rewritten, whoever pushes.

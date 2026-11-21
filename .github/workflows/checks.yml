@@ -336,6 +336,7 @@ jobs:
             # Armv8.0-A, with none of the later atomics, SVE or the like.
             qemu: qemu-aarch64
             qemu-cpu: cortex-a53
+    name: linux (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     defaults:
