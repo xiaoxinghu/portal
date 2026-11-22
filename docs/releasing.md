@@ -133,8 +133,8 @@ archive and the manifest kept, as two artifacts for 14 days; their record is
 `runtime/` in `logs`. Portal's repository is public, so any signed-in GitHub
 user can download them: the archive's `licenses/` is the notice and the
 pointer to the source. A release does not attach them yet. When it does,
-the installer, `portal-runtime-install`, fetches them by the release's tag,
-under these names; see
+`M-x portal-download-runtime`, and the first native command when asked to
+download, fetch them by the release's tag, under these names; see
 [downloaded runtimes](install.md#downloaded-runtimes).
 
 The same run has a Linux job for each CPU, `ubuntu-26.04` and

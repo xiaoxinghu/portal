@@ -1,8 +1,9 @@
 # Install Portal
 
 Portal is an Emacs package with a native part: a module that Emacs loads and a
-standalone app host. Package managers install the Lisp and the sources; Portal
-builds its native part from those sources the first time you need it.
+standalone app host. Package managers install the Lisp and the sources; the
+first time you need the native part, Portal offers to download it from the
+release of its version or to build it from those sources.
 
 The use-package examples marked `<!-- example: NAME -->` are test fixtures: the
 package installation test runs them. Keep their markers when editing them.
@@ -44,9 +45,19 @@ Emacs can install Portal straight from its Git repository:
 ```
 
 Installing compiles Portal's Lisp only. The first native command, such as
-`M-x portal-terminal` or `M-x portal-hello`, offers to build the native part and
-shows the build in `*portal-build*`. When it finishes, run the command again.
-To prepare Portal ahead of time, run `M-x portal-build` yourself.
+`M-x portal-terminal` or `M-x portal-hello`, asks how to get the native part:
+
+- **Download** (`d`) fetches the runtime of this Portal's release from
+  GitHub, about 46 MB on Apple Silicon, and shows it in `*portal-runtime*`.
+  It needs no Xcode, CMake or Bun. See [downloaded runtimes](#downloaded-runtimes).
+- **Build here** (`b`) builds it from the sources and shows the build in
+  `*portal-build*`. See [first build and first run](#first-build-and-first-run).
+- **Not now** (`n`) does neither, and asks again next time.
+
+Either runs in the background; when it finishes, run the command again. To
+prepare Portal ahead of time, run `M-x portal-download-runtime` or
+`M-x portal-build` yourself. To choose once for good, set
+[`portal-build-on-first-use`](#choosing-ahead).
 
 ### Which revision
 
@@ -93,7 +104,7 @@ git switch stable
 then `M-x package-vc-rebuild RET portal`, which recompiles the Lisp, and
 restart Emacs. The same commands move a checkout that is not on a branch.
 `main` is ahead of the latest release, so this goes back to it; when the two
-differ in native sources, the first native command offers to rebuild.
+differ in native sources, the first native command asks again.
 
 `M-x portal-version` says which Portal this is: its version, how many commits
 it is past the release, and its branch, such as `Portal 0.2.0 (stable)`.
@@ -187,8 +198,9 @@ Upgrade Portal the way you installed it: `M-x package-vc-upgrade RET portal`,
 Emacs. On `stable`, an upgrade is the next release, and the release's notes on
 the [releases page](https://github.com/xiaoxinghu/portal/releases) say whether
 it needs a native rebuild. When the upgrade changed the native sources, the
-first native command offers to rebuild, as on first use; Lisp-only changes need
-no rebuild.
+first native command asks again, as on first use, to download the new
+release's runtime or to rebuild; Lisp-only changes need neither, and reuse the
+runtime or build you have.
 
 To rebuild at any time, run `M-x portal-build`. Emacs cannot unload a module,
 so after rebuilding a module that this Emacs has already loaded, restart Emacs
@@ -204,7 +216,8 @@ anything, and records nothing if its sources changed while it ran, so a failed,
 interrupted or overtaken build is never taken as ready.
 
 Before loading its module, Portal compares the record with its sources once per
-Emacs session. Startup never rebuilds. After an upgrade that changes the native
+Emacs session; a [downloaded runtime](#downloaded-runtimes) carries the same
+record. Startup never rebuilds, downloads or asks. After an upgrade that changes the native
 sources, the first native command offers to rebuild. Lisp-only changes need no
 rebuild. Emacs cannot unload a module: when the module that Emacs already loaded
 came from another build, or from a Portal too old to record its build, Portal
@@ -218,10 +231,35 @@ last one started from Emacs.
 
 On Apple Silicon, Portal can download its native part instead of building it:
 the runtime archive a release attaches, holding the module, the app host and
-Ghostty's resources. Nothing offers the download yet; from Lisp,
-`(portal-runtime-install)` runs it in the background and shows its progress in
-`*portal-runtime*`. A build from source stays the alternative, and
-`portal-build-directory` still names a build supplied elsewhere.
+Ghostty's resources. No release attaches one yet: until one does, Download
+says the runtime is not released, and Build here remains. Choose **Download**
+when the first native command asks, or run `M-x portal-download-runtime` at
+any time. The install runs in the
+background, shows its progress in `*portal-runtime*`, and ends by saying one
+of:
+
+- "Portal's runtime is installed: retry your command";
+- "Portal's runtime is installed: restart Emacs to load its new native
+  module", when this Emacs already loaded the module of another build. Portal
+  never replaces a module Emacs has loaded: restart Emacs, then run the
+  command;
+- "Portal's runtime was not installed: …", with the reason, followed by "To
+  build it here instead, run M-x portal-build" unless the reason already says
+  so. See [troubleshooting](#troubleshooting). A failed download never builds
+  by itself.
+
+Which native part Portal uses, checked once per session:
+
+1. With `portal-build-directory` set, that build, and nothing else: Portal
+   neither downloads nor builds, and `M-x portal-download-runtime` refuses.
+2. Otherwise its own build in `build/`, when it is complete and recorded from
+   these native sources.
+3. Otherwise the runtime downloaded for these native sources, if
+   `portal-runtime-directory` holds one. An upgrade that changed only Lisp
+   keeps using it, with no network.
+
+So a build from source stays the alternative at any time: `M-x portal-build`
+makes `build/`, which then comes first.
 
 On Linux the same install takes one of two archives, for x86-64 and for
 aarch64, each holding the module and Ghostty's library and resources, and no
@@ -271,8 +309,10 @@ What an install does, in a batch Emacs of its own:
    disposable batch Emacs. Only then does the runtime take its place, in one
    rename.
 
-A failed or interrupted install leaves the runtimes already there as they
-were. One install runs at a time; another one stops at once, saying so. A
+A release whose runtime was built from other native sources, as on `main`
+past a release that changed them, is refused before the archive is fetched:
+build from source there. A failed or interrupted install leaves the runtimes
+already there as they were. One install runs at a time; another one stops at once, saying so. A
 successful install keeps the runtime it replaced, which a running Emacs may
 have loaded, and deletes any older one.
 
@@ -342,12 +382,40 @@ that cannot succeed.
 
 | Option | Effect |
 | --- | --- |
-| `portal-build-on-first-use` | `ask` (default), `always` for unattended setups, or `never` |
+| `portal-build-on-first-use` | What the first native command does: `ask` (default), `download`, `build` or `never`; see [choosing ahead](#choosing-ahead) |
 | `portal-build-directory` | Use a build supplied elsewhere |
 | `portal-build-bun` | Use this Bun executable |
 | `portal-build-download-bun` | Allow downloading Portal's pinned Bun |
 | `portal-build-tools-directory` | Where downloaded tools are cached |
 | `portal-runtime-directory` | Where downloaded runtimes are kept |
+
+## Choosing ahead
+
+`portal-build-on-first-use` says what the first native command does when the
+native part is missing or older than the sources:
+
+| Value | The first native command |
+| --- | --- |
+| `ask` (default) | asks: Download, Build here or Not now |
+| `download` | downloads the release's runtime without asking. When it cannot, it says why and that `M-x portal-build` builds instead; it never builds by itself |
+| `build` | builds here without asking, for unattended setups |
+| `always` | the former name of `build`, and still the same: it builds and never downloads |
+| `never` | only says what is missing; `M-x portal-download-runtime` and `M-x portal-build` remain |
+
+For example, to always download:
+
+```elisp
+(setq portal-build-on-first-use 'download)
+```
+
+`always` was the only unattended value before downloads existed, and a
+setup that names it keeps building from source as before: download only if you
+choose `download`. `download`, `build` and `always` also act outside a command,
+as from a timer; `ask` asks only in a command. Batch Emacs never asks,
+downloads or builds, whatever the value, and neither does Portal when
+`portal-build-directory` names a build made elsewhere. When a download cannot
+be offered, `ask` says why and offers Build here or Not now; when a build
+cannot start, it offers Download or Not now.
 
 ## Troubleshooting
 
@@ -359,7 +427,8 @@ Emacs's `exec-path` nor in Homebrew's or MacPorts' directories. Install them,
 or, if they are installed elsewhere, add that directory to `exec-path` as in
 [prerequisites](#prerequisites). Emacs started from the Dock or Finder does not
 read your shell's startup files. `M-: (executable-find "cmake")` shows what
-Emacs finds on `exec-path`.
+Emacs finds on `exec-path`. Or [download](#downloaded-runtimes) the native
+part, which needs none of them.
 
 **"…needs xcrun", or Swift errors early in the build.** Install Xcode, open it
 once to finish its setup, and select it with
@@ -393,13 +462,40 @@ sources. Install it where you can write, or build it elsewhere and set
 `portal-build-directory`. If the Bun cache cannot be created, set
 `portal-build-tools-directory`.
 
-**"Portal's native build is older than its sources".** Run `M-x portal-build`.
+**"Portal's native part is older than its sources".** The native sources
+changed since your build or download: run `M-x portal-download-runtime` or
+`M-x portal-build`.
 **"…restart Emacs to use it"** or **"Restart Emacs to replace the old Portal
 native modules"** means this Emacs already loaded another build; restart it.
 "Portal is already building" and "another Portal build is running" mean one
 build is in progress; wait for it. If builds fail after you changed Emacs,
 Xcode or CMake, remove the `build` directory in `portal-build-root`, or run
 `cmake --fresh --preset dev` in a clone, and build again.
+
+**"Portal's runtime was not installed: …".** The end of `*portal-runtime*`
+has the same reason. Portal tried nothing else: run `M-x portal-build` to
+build from source instead, or fix the cause and run
+`M-x portal-download-runtime` again.
+
+- "…answered 404 for …: is it released?" This Portal's release has no runtime
+  for this system: it predates downloads, or the release is not published.
+- "Cannot reach github.com securely: …" The network is down, a proxy is
+  required (the download connects directly), or the certificate did not
+  verify. The download never asks whether to continue.
+- "The runtime of vX.Y.Z was built from other native sources than these" This
+  checkout's native sources are not the release's, as on `main` or a branch.
+  Build from source.
+- "The runtime failed its check in a separate Emacs" The runtime did not load
+  in this Emacs, and nothing was replaced. Build from source.
+- "Another Portal runtime install is running" Wait for it, then retry.
+
+Some reasons come before any download, from the question or the command
+itself, such as "Portal has no runtime to download for …" for an Intel Emacs
+on a Mac: no release has a runtime for this Emacs. Build from source.
+
+To start over, delete `portal-runtime-directory` (`~/.emacs.d/portal/runtime/`
+by default) while no Emacs has loaded Portal's module from there, then
+download again.
 
 **A page stays blank, or a message says "(see \*portal-server\*)".** The app
 host did not start or stopped. `*portal-server*` holds its diagnostics; press
