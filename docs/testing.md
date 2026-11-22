@@ -683,6 +683,19 @@ The fake follows what a real server was seen to send, from a preview
 protocol that moves every few days, so tests against it prove only that
 Portal matches that reading. The real-server tier checks the reading.
 
+A real server usually sends the events of a change before its answer to
+the request that made it, and sometimes after, still counted after the
+answer's `seq`. A client that renamed a session 300 times on a throwaway
+server saw `session_label_changed` after the answer to `session.set_label`
+20, 93 and 30 times in three runs of the Mac's pinned 0.1.0-preview.14, 3,
+3 and 6 times on 0.1.0-preview.21, and 112 times on Linux's
+0.0.1795116584. The fake sends them first unless told
+`{"events": "after"}`, which `PORTAL_TEST_REX_EVENTS=after` tells every
+fake a runner starts; `test/vm.sh` passes it on to the VM. CTest runs the
+`rex` suite both ways, the second as `rex-events-after`. A command that
+returns once Emacs has followed a change takes neither order for granted:
+it waits for the event, or asks the server.
+
 ### Against a real Rex server
 
 ```sh
