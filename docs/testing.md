@@ -73,6 +73,11 @@ with [two graphical ones](#linux-graphical-checks) of their own.
 - CTest runs suites in parallel. Keep each one to its own temporary files and
   dynamically chosen ports; mark a suite that cannot share the machine
   `RUN_SERIAL`.
+- Serve and connect by address, never by looking a name up. On macOS a
+  lookup, even of 127.0.0.1's name, can ask for the Local Network
+  permission: on GitHub's runners nobody answers its prompt, every lookup
+  after it waits 35 s, and it stays on screen over the graphical checks.
+  Python's `http.server.HTTPServer` looks up its own address as it binds.
 - Keep default checks headless and credential-free. Register them in the
   [CMake suite](../CMakeLists.txt) or [core suite](../native/Core/CMakeLists.txt).
   Keep special setup beside the test. Use
