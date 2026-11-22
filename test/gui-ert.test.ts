@@ -16,8 +16,14 @@ import { join } from "node:path";
 const script = new URL("./gui-ert.sh", import.meta.url).pathname;
 
 // Run gui-ert.sh from a scratch checkout whose Emacs is EMACS, a shell
-// script. xcrun and sample are stubs, so no window opens.
+// script. xcrun and sample are stubs, so no window opens. The watchdog's
+// budget is 2 s, or TIMEOUT for runWithin; it counts whole seconds from its
+// stamps, so it can run out a second early.
 function run(emacs: string, ...args: string[]) {
+	return runWithin("2", emacs, ...args);
+}
+
+function runWithin(timeout: string, emacs: string, ...args: string[]) {
 	const root = mkdtempSync(join(tmpdir(), "gui-ert-"));
 	for (const directory of ["test", "build", "bin"]) {
 		mkdirSync(join(root, directory));
@@ -39,7 +45,7 @@ function run(emacs: string, ...args: string[]) {
 			env: {
 				PATH: `${join(root, "bin")}:/usr/bin:/bin`,
 				EMACS: join(root, "bin", "emacs"),
-				PORTAL_GUI_TEST_TIMEOUT: "2",
+				PORTAL_GUI_TEST_TIMEOUT: timeout,
 			},
 		},
 	);
@@ -51,7 +57,9 @@ function run(emacs: string, ...args: string[]) {
 }
 
 test("Emacs's arguments come first and its exit status passes through", () => {
-	const { result, file, root } = run(
+	// Nothing times out here: a budget that a loaded machine cannot use up.
+	const { result, file, root } = runWithin(
+		"30",
 		`echo "$(date +%s) start a-test" >>"$PORTAL_GUI_PROGRESS"
 		echo "$(date +%s) end a-test" >>"$PORTAL_GUI_PROGRESS"
 		exit 3`,
