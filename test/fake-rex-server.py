@@ -25,13 +25,13 @@ was seen to, and as its documentation of data connections says:
 - Gives each response the seq of the last event it sent that client.
 - Changes its sessions and blocks as a real server does, sending the
   events of each change before its answer, or after it on command:
-  session.create (with the label
-  given, or one it chooses), session.set_label, session.destroy (closing
-  the session's blocks), session.new_window (one window of one block of
-  the flavor com.superlogical.terminal.shell, called shell or the label
-  given) and session.set_block_label (an event only for a block in a
-  window).  A label is trimmed, and refused with bad_request when longer
-  than 128 characters or with a control character.
+  session.create (with the label given, or one it chooses),
+  session.set_label, session.destroy (closing the session's blocks),
+  session.new_window (one window of one block of the flavor
+  com.superlogical.terminal.shell, called shell or the label given) and
+  session.set_block_label (an event only for a block in a window).  A
+  label is trimmed, and refused with bad_request when longer than 128
+  characters or with a control character.
 - Shows a block as a real server does: session.attach joins a session;
   session.own_block, which needs that, claims the block, "take" making the
   client its owner and "request" only if it has none, and sends
