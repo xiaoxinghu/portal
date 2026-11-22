@@ -264,50 +264,51 @@ either matches the frame's monitor's top left."
 One frame of its PipeWire stream, read with GStreamer.  Return the scale,
 or why not."
   (let ((start (float-time)) node session)
-    (condition-case err
-        (pcase-let ((`(,connector ,width ,height ,scale) (portal-render-smoke--gnome-monitor)))
-          (if (not (and connector width))
-              "Mutter has no monitor where the frame is"
-            (setq session (portal-render-smoke--mutter-call
-                           "ScreenCast" "/org/gnome/Mutter/ScreenCast" "CreateSession"
-                           '(:array :signature "{sv}")))
-            (let ((stream (portal-render-smoke--mutter-call
-                           "ScreenCast" session "RecordMonitor" connector
-                           '(:array (:dict-entry "cursor-mode" (:variant :uint32 0)))))
-                  (raw (concat file ".raw")))
-              (dbus-register-signal :session nil stream
-                                    (concat portal-render-smoke--mutter ".ScreenCast.Stream")
-                                    "PipeWireStreamAdded" (lambda (id) (setq node id)))
-              (portal-render-smoke--mutter-call "ScreenCast" session "Start")
-              ;; D-Bus signals arrive as events, which reading handles.
-              (let ((deadline (+ (float-time) 10)))
-                (while (and (not node) (< (float-time) deadline))
-                  (read-event nil nil 0.05)))
-              (if (not node)
-                  "Mutter's ScreenCast gave no PipeWire stream in 10 s"
-                (pcase (portal-render-smoke--program-output
-                        "gst-launch-1.0" "-q" "pipewiresrc" (format "path=%d" node)
-                        "num-buffers=1" "!" "videoconvert" "!"
-                        (format "video/x-raw,format=RGB,width=%d,height=%d" width height)
-                        "!" "filesink" (concat "location=" raw))
-                  (`(0 . ,_)
-                   (or (portal-render-smoke--write-ppm
-                        file width height
-                        (with-temp-buffer
-                          (set-buffer-multibyte nil)
-                          (insert-file-contents-literally raw)
-                          (buffer-string)))
-                       (progn
-                         (portal-render-smoke--note
-                          "captured %s, %dx%d at scale %s, in %.3fs by Mutter's ScreenCast"
-                          connector width height scale (- (float-time) start))
-                         scale)))
-                  (`(,status . ,output)
-                   (format "GStreamer exited %s on stream %s: %s" status node output)))))))
-      (dbus-error (format "Mutter's ScreenCast: %s" (error-message-string err))))
-    ;; Stopping a session ends its stream.
-    (when session
-      (ignore-errors (portal-render-smoke--mutter-call "ScreenCast" session "Stop")))))
+    (unwind-protect
+        (condition-case err
+            (pcase-let ((`(,connector ,width ,height ,scale) (portal-render-smoke--gnome-monitor)))
+              (if (not (and connector width))
+                  "Mutter has no monitor where the frame is"
+                (setq session (portal-render-smoke--mutter-call
+                               "ScreenCast" "/org/gnome/Mutter/ScreenCast" "CreateSession"
+                               '(:array :signature "{sv}")))
+                (let ((stream (portal-render-smoke--mutter-call
+                               "ScreenCast" session "RecordMonitor" connector
+                               '(:array (:dict-entry "cursor-mode" (:variant :uint32 0)))))
+                      (raw (concat file ".raw")))
+                  (dbus-register-signal :session nil stream
+                                        (concat portal-render-smoke--mutter ".ScreenCast.Stream")
+                                        "PipeWireStreamAdded" (lambda (id) (setq node id)))
+                  (portal-render-smoke--mutter-call "ScreenCast" session "Start")
+                  ;; D-Bus signals arrive as events, which reading handles.
+                  (let ((deadline (+ (float-time) 10)))
+                    (while (and (not node) (< (float-time) deadline))
+                      (read-event nil nil 0.05)))
+                  (if (not node)
+                      "Mutter's ScreenCast gave no PipeWire stream in 10 s"
+                    (pcase (portal-render-smoke--program-output
+                            "gst-launch-1.0" "-q" "pipewiresrc" (format "path=%d" node)
+                            "num-buffers=1" "!" "videoconvert" "!"
+                            (format "video/x-raw,format=RGB,width=%d,height=%d" width height)
+                            "!" "filesink" (concat "location=" raw))
+                      (`(0 . ,_)
+                       (or (portal-render-smoke--write-ppm
+                            file width height
+                            (with-temp-buffer
+                              (set-buffer-multibyte nil)
+                              (insert-file-contents-literally raw)
+                              (buffer-string)))
+                           (progn
+                             (portal-render-smoke--note
+                              "captured %s, %dx%d at scale %s, in %.3fs by Mutter's ScreenCast"
+                              connector width height scale (- (float-time) start))
+                             scale)))
+                      (`(,status . ,output)
+                       (format "GStreamer exited %s on stream %s: %s" status node output)))))))
+          (dbus-error (format "Mutter's ScreenCast: %s" (error-message-string err))))
+      ;; Stopping a session ends its stream.
+      (when session
+        (ignore-errors (portal-render-smoke--mutter-call "ScreenCast" session "Stop"))))))
 
 (defun portal-render-smoke--gnome-type (text)
   "Type TEXT and Return as keysyms through Mutter's RemoteDesktop; nil, or why not."
