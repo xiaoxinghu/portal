@@ -72,9 +72,36 @@ if [ "$(uname -s)" = Darwin ]; then
     emacs=${EMACS:-/Applications/Emacs.app/Contents/MacOS/Emacs}
 else
     module=$build/portal.so
-    note "$(uname -srm), CPU $(sed -n 's/^model name[^:]*: //p' /proc/cpuinfo | head -n 1)," \
-        "$(nproc) cores"
+    # An Arm CPU's cores have no model name in /proc/cpuinfo; lscpu names
+    # each kind, and the device tree the machine.
+    cpu=$(lscpu 2>/dev/null | sed -n 's/^Model name: *//p' | paste -sd ',' - | sed 's/,/, /g')
+    cpu=${cpu:-$(sed -n 's/^model name[^:]*: //p' /proc/cpuinfo | head -n 1)}
+    machine=$(tr -d '\0' </proc/device-tree/model 2>/dev/null ||
+        cat /sys/class/dmi/id/product_name 2>/dev/null || :)
+    note "$(uname -srm), ${machine:+$machine, }CPU ${cpu:-unknown}, $(nproc) cores"
     note "desktop ${XDG_CURRENT_DESKTOP:-unnamed}, Wayland display ${WAYLAND_DISPLAY:-none}"
+    # The compositor that draws the frame, and its version.
+    if [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
+        note "compositor $(hyprctl version 2>/dev/null | head -n 1 || echo 'Hyprland, hyprctl not answering')"
+    else
+        case $(printf %s "${XDG_CURRENT_DESKTOP:-}" | tr '[:upper:]' '[:lower:]') in
+            *gnome*) note "compositor $(gnome-shell --version 2>/dev/null || echo 'GNOME Shell, version unknown')" ;;
+            *kde*) note "compositor $(kwin_wayland --version 2>/dev/null || echo 'KWin, version unknown')," \
+                "$(plasmashell --version 2>/dev/null || echo 'plasmashell version unknown')" ;;
+        esac
+    fi
+    # The GPU: each render node's driver and device, and Mesa's renderer
+    # when eglinfo is installed.  Ghostty's own report is in emacs.log.
+    for node in /sys/class/drm/renderD*; do
+        [ -e "$node/device/driver" ] || continue
+        device=$(tr '\0' ' ' <"$node/device/of_node/compatible" 2>/dev/null ||
+            cat "$node/device/vendor" "$node/device/device" 2>/dev/null | paste -sd: - || :)
+        note "GPU ${node##*/}: driver $(basename "$(readlink -f "$node/device/driver")"), device ${device% }"
+    done
+    if command -v eglinfo >/dev/null 2>&1; then
+        note "EGL $(eglinfo -B -p wayland 2>/dev/null |
+            sed -nE 's/^OpenGL core profile (renderer|version): /\1 /p' | paste -sd ',' - | sed 's/,/, /g')"
+    fi
     emacs=${EMACS:-emacs}
 fi
 if [ -f "$module" ]; then
@@ -109,6 +136,23 @@ else
     if [ -z "${WAYLAND_DISPLAY:-}" ]; then
         note "NOT RUN: no Wayland session: WAYLAND_DISPLAY is not set"
         finish 77
+    fi
+    # On Plasma the test types through KWin's EIS with a libei client of
+    # its own, built here; the Lisp says why not when it is missing.
+    place=$adapter
+    if [ -z "$place" ] && [ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
+        case $(printf %s "${XDG_CURRENT_DESKTOP:-}" | tr '[:upper:]' '[:lower:]') in
+            *kde*) place=plasma ;;
+        esac
+    fi
+    if [ "$place" = plasma ]; then
+        if flags=$(pkg-config --cflags --libs libei-1.0 dbus-1 2>&1) &&
+            why=$(${CC:-cc} -std=c11 -Wall -Wextra -Werror -o "$out/linux-ei-type" \
+                "$root/test/linux-ei-type.c" $flags 2>&1); then
+            export PORTAL_SMOKE_EI_TYPE="$out/linux-ei-type"
+        else
+            export PORTAL_SMOKE_EI_WHY="${why:-$flags}"
+        fi
     fi
     set --
 fi

@@ -365,7 +365,8 @@ sh test/render-smoke.sh /path/to/runtime      # a build elsewhere
 ```
 
 The directory is what `portal-build-directory` would name: `portal.bundle`,
-`portal-host`, `licenses` and `portal-build.eld` on macOS. The Lisp is the
+`portal-host`, `licenses` and `portal-build.eld` on macOS, and `portal.so`,
+`ghostty-linux`, `licenses` and `portal-build.eld` on Linux. The Lisp is the
 checkout's, which must be the build's version. The directory need not be
 the checkout's build: an archive unpacked elsewhere, or a copy, is what it
 is for. In the VM the directory is a path in the guest.
@@ -390,28 +391,85 @@ ScreenCaptureKit. Capturing a process's own window needs no Screen Recording
 permission: none was asked for in the VM or on GitHub's
 `xcode-27` runner, where the Checks workflow runs it on the checkout's build,
 then on [the runtime archive](releasing.md#the-runtime-archive) unpacked
-elsewhere. Linux has no adapters yet: the
-test reports itself not run there.
+elsewhere.
+
+On Linux, Emacs built with pgtk on Wayland, the frame fills its output and
+the compositor captures it and types into it, as a person's screenshot and
+keys go. The adapter is the session's: Hyprland when
+`HYPRLAND_INSTANCE_SIGNATURE` is set, otherwise GNOME or Plasma as
+`XDG_CURRENT_DESKTOP` says; `--adapter hyprland`, `gnome` or `plasma`
+chooses one. The test checks first that the place offers a way to capture
+and to type, and is not run without one.
+
+- **Hyprland**: `grim` captures the frame's window at its monitor's scale
+  and `wtype` types; `hyprctl` says which window is active. To keep it off
+  your screen and your keyboard, run it on [a desktop of its
+  own](#linux-graphical-checks), a second Hyprland with a headless output
+  at scale 2, which you start by naming it:
+
+  ```sh
+  sh test/linux-desktop.sh sh test/render-smoke.sh [RUNTIME-DIRECTORY]
+  ```
+
+  Run plainly, it runs on your desktop: its window goes fullscreen on the
+  monitor it opens on for about 4 seconds, and the token is typed into it.
+- **GNOME**: Mutter's own D-Bus services, which Emacs calls itself:
+  `org.gnome.Mutter.ScreenCast` records the frame's monitor, of which
+  GStreamer's `pipewiresrc` (`gst-launch-1.0`, with PipeWire's GStreamer
+  plugin) reads one frame, and `org.gnome.Mutter.RemoteDesktop` types. No
+  permission is asked; GNOME Shell shows its screen-sharing icon while it
+  captures. GNOME Shell does not give a window a script started the
+  keyboard, so when the window has not had it for 3 seconds the test asks
+  for a click on it in the echo area and waits `PORTAL_SMOKE_CLICK_WAIT`
+  seconds (30). Run it from a terminal in the GNOME session, and click the
+  window when asked:
+
+  ```sh
+  sh test/render-smoke.sh [RUNTIME-DIRECTORY]
+  ```
+
+- **Plasma**: Spectacle captures the active window, the frame's, through
+  KWin's `org.kde.KWin.ScreenShot2`, which answers only the programs KWin's
+  desktop files authorise, Spectacle among them. The test types through
+  KWin's EIS with [a libei client](../test/linux-ei-type.c), which the
+  script builds into the record's directory with `cc` and the development
+  files of `libei-1.0` and `dbus-1`; without them it says so and is not
+  run. The client sends key codes, which KWin reads with your layout's
+  keymap, so a layout that does not put the letters where US English does
+  types another token, and the token check fails. Run it from a terminal in
+  the Plasma Wayland session, as on GNOME, with no click.
+
+Only Hyprland's has run: on an Apple M1 Pro under Asahi Linux, in a
+Hyprland of its own (Hyprland 0.56.2, scale 2, Mesa's Asahi driver). The
+GNOME and Plasma adapters follow what headless GNOME Shell 50 and KWin 6.6
+did when these routes were tried by hand, and have not run on either
+desktop.
 
 It exits 0 when every check passed and 1 when one failed. It also exits 1
 when the test did not finish within `PORTAL_SMOKE_TIMEOUT` seconds
 (default 60). It exits 77, not run, without a graphical session or without a
 way to capture or type in it, when no check had failed before it stopped. A
 not-run is never a pass. It never starts a
-desktop of its own. The record, `render-smoke.log`, goes to `render-smoke/`
+desktop or compositor of its own, nor another in place of the session's. The record, `render-smoke.log`, goes to `render-smoke/`
 in `PORTAL_TEST_LOGS`, or in `build/`, and is printed at the end. It
 records the machine, the system, the GPU, the build's record and its
 module's SHA-256, each check with its time, and what failed with its pixels.
-The captures stay beside it as PPM and PNG, with Emacs's output. A build
+On Linux it also records the compositor and its version, each render node's
+driver, Ghostty's engine as the module reports it, the OpenGL drivers Emacs
+loaded and the GPU devices it holds open: a terminal drawn on the GPU
+holds a render node open, one drawn by software need not.
+The captures stay beside it as PPM, and PNG on the Mac, with Emacs's
+output. A build
 Portal refuses, such as one with a resource missing, fails with Portal's
 message.
 
 `--fault blank` hides the view after the token is typed, and `--fault shift`
 moves it a pixel right and down, to check that the test finds both.
 `--adapter NAME` chooses an adapter in place of the session's. It takes about
-5 seconds from Emacs's start. It takes the keyboard for that time, so leave
-the desktop alone or run it in the VM, where `sh test/render-smoke.sh` goes
-when the clone names one. It is not in `gui-all.sh`: the suites cover more,
+5 seconds from Emacs's start on the Mac and 4 on Hyprland. It takes the
+keyboard for that time, so leave the desktop alone, or run it in the VM,
+where `sh test/render-smoke.sh` goes when the clone names one, or on
+Hyprland on a desktop of its own, as above. It is not in `gui-all.sh`: the suites cover more,
 and this covers a runtime they do not.
 
 ## View graphical checks
