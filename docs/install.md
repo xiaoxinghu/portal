@@ -223,6 +223,34 @@ Ghostty's resources. Nothing offers the download yet; from Lisp,
 `*portal-runtime*`. A build from source stays the alternative, and
 `portal-build-directory` still names a build supplied elsewhere.
 
+On Linux the same install takes one of two archives, for x86-64 and for
+aarch64, each holding the module and Ghostty's library and resources, and no
+app host: Linux has terminals and Rex blocks, not web views or the launcher.
+No Linux release has published them yet. The Emacs process chooses, not the
+distribution or the desktop: its CPU and C library, from
+`system-configuration`, and the version of the glibc it runs with. Before
+anything is downloaded, Portal refuses, saying why and offering
+`M-x portal-build`:
+
+- a CPU other than x86-64 and aarch64;
+- musl, as on Alpine, or any C library other than glibc;
+- a glibc older than 2.43, the archives' floor (Ubuntu 26.04, Fedora 44,
+  current Arch).
+
+An Emacs that cannot show Portal's views is refused whatever its runtime,
+and no build is offered: one built without pgtk, a frame on X11 or
+XWayland, a text terminal.
+
+Portal reads the glibc version from the C library the Emacs process has
+mapped, as `/proc/self/maps` names it, by the "release version" every glibc
+carries: an Emacs from Nix, Guix, Flatpak or Snap may use a C library
+other than the system's, which `ldd --version` would report. When the
+version cannot be read, nothing is refused on that account. Either way the
+check is there for a clear message: what protects a system it misjudges is
+step 4 below, where the loader's own message, such as a glibc version not
+found, stops the install, followed by what the runtime needs and the offer of
+a build.
+
 What an install does, in a batch Emacs of its own:
 
 1. It looks in `portal-runtime-directory` (`~/.emacs.d/portal/runtime/` by
@@ -239,8 +267,9 @@ What an install does, in a batch Emacs of its own:
    manifest, and unpacks it into a staging directory. It refuses an archive
    with a name or link that leads out of the runtime, or anything but files,
    directories and links, and checks the runtime's files and build record.
-4. It loads the module and starts the host in a disposable batch Emacs.
-   Only then does the runtime take its place, in one rename.
+4. It loads the module and starts the host, on Linux Ghostty's library, in a
+   disposable batch Emacs. Only then does the runtime take its place, in one
+   rename.
 
 A failed or interrupted install leaves the runtimes already there as they
 were. One install runs at a time; another one stops at once, saying so. A

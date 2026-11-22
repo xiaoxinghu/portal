@@ -230,6 +230,8 @@ VARIANTS = {
     # What no runtime holds.
     "hardlink": lambda: [member("licenses/hard", kind=tarfile.LNKTYPE, link="licenses/LICENSE")],
     "fifo": lambda: [member("licenses/fifo", kind=tarfile.FIFOTYPE)],
+    # Beside what a Linux runtime takes from Ghostty's directory.
+    "beside": lambda: [member("ghostty-linux/include/ghostty.h", b"not of the runtime")],
 }
 
 
@@ -247,7 +249,7 @@ def variant(kind: str, manifest_path: Path, out: Path) -> None:
                     manifest["identity"].encode(), b"0" * 64)
                 info.size = len(data)
                 new.addfile(info, io.BytesIO(data))
-            elif kind == "missing" and info.name == "portal-host":
+            elif kind == "missing" and info.name in ("portal-host", "portal.so"):
                 continue
             else:
                 new.addfile(info, old.extractfile(info) if info.isfile() else None)
