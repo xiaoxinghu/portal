@@ -24,13 +24,14 @@ was seen to, and as its documentation of data connections says:
   with method_not_found, but those of showing a block, below.
 - Gives each response the seq of the last event it sent that client.
 - Changes its sessions and blocks as a real server does, sending the
-  events of each change before its answer: session.create (with the label
-  given, or one it chooses), session.set_label, session.destroy (closing
-  the session's blocks), session.new_window (one window of one block of
-  the flavor com.superlogical.terminal.shell, called shell or the label
-  given) and session.set_block_label (an event only for a block in a
-  window).  A label is trimmed, and refused with bad_request when longer
-  than 128 characters or with a control character.
+  events of each change before its answer, or after it on command:
+  session.create (with the label given, or one it chooses),
+  session.set_label, session.destroy (closing the session's blocks),
+  session.new_window (one window of one block of the flavor
+  com.superlogical.terminal.shell, called shell or the label given) and
+  session.set_block_label (an event only for a block in a window).  A
+  label is trimmed, and refused with bad_request when longer than 128
+  characters or with a control character.
 - Shows a block as a real server does: session.attach joins a session;
   session.own_block, which needs that, claims the block, "take" making the
   client its owner and "request" only if it has none, and sends
@@ -57,7 +58,8 @@ was seen to, and as its documentation of data connections says:
   one.
 - Closes a block on block.close, by its block_id or its window's
   window_id: block_closed, then window_closed and session_view_changed
-  for a block that had a window, before its answer.
+  for a block that had a window, before its answer or after, as the
+  others.
 - On a data connection, answers a HELLO with the ticket's WELCOME, a nonce
   of its own, then a snapshot of two records and a Rex resize message with
   the block's grid; or with a REJECT, reason 0x01, and a close, for a
@@ -140,6 +142,10 @@ Commands, on standard input:
         Come back as a server that restarted: drop every connection,
         forget every client and stream, so no token or RESUME is known,
         and have these sessions and blocks from now on.
+    {"events": "after"}
+        Send the events a request causes, of a change or a claim, after
+        its answer, still counted after the answer's seq, as a real server
+        sometimes does; "before", the start, sends them first.
     {"welcome": false}
         Do not answer later hellos; true answers them again.
     {"refuse_hello": CODE, "reason": TEXT}
@@ -248,6 +254,8 @@ state = {
     "kept": {},
     "refuse_hello": None,
     "statuses": {},
+    "events": "before",  # Whether a change's events come before its answer or after.
+    "deferred": None,  # While a request is answered with events after: those held back.
 }
 
 
@@ -384,57 +392,68 @@ class Client:
         payload = request.get("payload") or {}
         with lock:
             response = {"type": "response", "id": identifier, "seq": self.seq}
-            if method in state["errors"]:
-                response["error"] = state["errors"][method]
-            elif method in state["results"]:
-                response["payload"] = state["results"][method]
-            elif method == "server.version":
-                response["payload"] = {
-                    "rex_version": "0.0.0-fake",
-                    "platform": "fake",
-                    "api_revision": API_REVISION,
-                }
-            elif method == "session.list":
-                response["payload"] = {"sessions": state["sessions"]}
-            elif method == "session.attach_all":
-                if payload.get("event_scope") in ("session", "all"):
-                    self.attached = True
-                    self.scope = payload["event_scope"]
-                    response["payload"] = {"sessions": state["sessions"]}
-                else:
-                    response["error"] = {
-                        "code": "bad_request",
-                        "message": 'session.attach_all request: event_scope must be "all" or "session"',
-                        "status": 400,
-                    }
-            elif method == "session.list_blocks":
-                session = payload.get("session_id")
-                if any(known["session_id"] == session for known in state["sessions"]):
-                    response["payload"] = {"blocks": state["blocks"].get(session, [])}
-                else:
-                    response["error"] = {
-                        "code": "session_not_found",
-                        "message": "session %s not found" % session,
-                        "status": 404,
-                    }
-            elif method in SHOWING or method in CHANGING:
-                result = (SHOWING.get(method) or CHANGING[method])(self, payload)
-                if "code" in result:
-                    response["error"] = result
-                else:
-                    response["payload"] = result
-            else:
-                response["error"] = {
-                    "code": "method_not_found",
-                    "message": 'netapi: no handler for method "%s"' % method,
-                    "status": 404,
-                }
-            if method in state["held"]:
-                state["held"][method].append((self, response))
-            elif method not in state["silent"]:
-                self.send(response)
+            if state["events"] == "after":
+                state["deferred"] = []
+            try:
+                self.answer(method, payload, response)
+            finally:
+                deferred, state["deferred"] = state["deferred"] or [], None
+            for client, message in deferred:
+                client.send(message)
             for value in state["after"].pop(method, []):
                 command(value)
+
+    def answer(self, method, payload, response):
+        """Fill RESPONSE in for METHOD and send it, or hold it back."""
+        if method in state["errors"]:
+            response["error"] = state["errors"][method]
+        elif method in state["results"]:
+            response["payload"] = state["results"][method]
+        elif method == "server.version":
+            response["payload"] = {
+                "rex_version": "0.0.0-fake",
+                "platform": "fake",
+                "api_revision": API_REVISION,
+            }
+        elif method == "session.list":
+            response["payload"] = {"sessions": state["sessions"]}
+        elif method == "session.attach_all":
+            if payload.get("event_scope") in ("session", "all"):
+                self.attached = True
+                self.scope = payload["event_scope"]
+                response["payload"] = {"sessions": state["sessions"]}
+            else:
+                response["error"] = {
+                    "code": "bad_request",
+                    "message": 'session.attach_all request: event_scope must be "all" or "session"',
+                    "status": 400,
+                }
+        elif method == "session.list_blocks":
+            session = payload.get("session_id")
+            if any(known["session_id"] == session for known in state["sessions"]):
+                response["payload"] = {"blocks": state["blocks"].get(session, [])}
+            else:
+                response["error"] = {
+                    "code": "session_not_found",
+                    "message": "session %s not found" % session,
+                    "status": 404,
+                }
+        elif method in SHOWING or method in CHANGING:
+            result = (SHOWING.get(method) or CHANGING[method])(self, payload)
+            if "code" in result:
+                response["error"] = result
+            else:
+                response["payload"] = result
+        else:
+            response["error"] = {
+                "code": "method_not_found",
+                "message": 'netapi: no handler for method "%s"' % method,
+                "status": 404,
+            }
+        if method in state["held"]:
+            state["held"][method].append((self, response))
+        elif method not in state["silent"]:
+            self.send(response)
 
     def reject(self, reason):
         self.frame(2, b"\x82" + bytes([reason]))
@@ -642,8 +661,7 @@ def set_owner(block, owner, reason):
         "session_id": session, "event": {"type": "block_owner_changed", "payload": fields}}}
     for client in list(clients.values()):
         if session in client.joined or client.attached:
-            client.seq += 1
-            client.send({"type": "event", "seq": client.seq, "payload": event})
+            emit(client, event)
     wanted = state["desired"].get(block, {}).get(owner)
     if wanted and wanted != state["grids"][block][:4]:
         set_grid(block, wanted)
@@ -854,12 +872,22 @@ def answer_block(client, payload):
     return {"bytes_written": len(data.encode())} if data is not None else {}
 
 
+def emit(client, event):
+    """Send CLIENT this event with its next seq, or keep it until the
+    answer being given has gone, as a server whose events trail it."""
+    client.seq += 1
+    message = {"type": "event", "seq": client.seq, "payload": event}
+    if state["deferred"] is not None:
+        state["deferred"].append((client, message))
+    else:
+        client.send(message)
+
+
 def broadcast(event):
     """Send every client that called session.attach_all this event."""
     for client in list(clients.values()):
         if client.attached:
-            client.seq += 1
-            client.send({"type": "event", "seq": client.seq, "payload": event})
+            emit(client, event)
 
 
 def session_event(session, kind, **fields):
@@ -994,7 +1022,7 @@ def close_block(client, payload):
 
 
 # The methods that change what the server has, and send their events
-# before their answer, as a real server does.
+# before their answer, as a real server usually does, or after it.
 CHANGING = {
     "session.create": create_session,
     "session.set_label": set_label,
@@ -1076,6 +1104,10 @@ def command(value):
         elif "drop" in value:
             for client in everyone:
                 drop(client)
+        elif "events" in value:
+            if value["events"] not in ("before", "after"):
+                raise ValueError("events is before or after")
+            state["events"] = value["events"]
         elif "welcome" in value:
             state["welcome"] = bool(value["welcome"])
         elif "refuse_hello" in value:
@@ -1138,8 +1170,7 @@ def command(value):
                     "name": name, "payload": fields}}}}
             for client in everyone:
                 if session in client.joined or (client.attached and client.scope == "all"):
-                    client.seq += 1
-                    client.send({"type": "event", "seq": client.seq, "payload": event})
+                    emit(client, event)
         elif "end_stream" in value:
             for stream in list(state["streams"].get(value["end_stream"], [])):
                 stream.end()
