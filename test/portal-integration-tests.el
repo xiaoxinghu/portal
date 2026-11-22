@@ -148,7 +148,10 @@ its field.  Wait for that, as a person's next key would."
           (portal-terminal-test--wait (lambda () (file-exists-p receipt)))
           (should (= pid (with-temp-buffer (insert-file-contents receipt)
                                            (string-to-number (buffer-string)))))
-          (portal-terminal-unfocus)
+          ;; The command gives the keyboard back to Emacs, the shell still live.
+          (call-interactively #'portal-terminal-unfocus)
+          (should-not (plist-get (portal-terminal-test--state terminal-id) :focused))
+          (should (plist-get (portal-terminal-test--state terminal-id) :ready))
           (switch-to-buffer web-buffer)
           (should (portal-test--shown web-id (selected-window)))
           (portal-test--wait-for-page "Ready" web-id))

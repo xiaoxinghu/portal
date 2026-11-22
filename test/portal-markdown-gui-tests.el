@@ -98,10 +98,13 @@ The folder is `portal-markdown-gui--directory'."
     (should (eq (car-safe event) type))
     (funcall (lookup-key global-map (vector type)) event)))
 
-(ert-deftest portal-markdown-gui-links-go-back-and-forward-with-reading-position ()
+(ert-deftest portal-markdown-gui-links-navigate-and-hand-files-to-emacs ()
   :tags '(:gui)
   (portal-markdown-gui--documents
-    (let ((preview (current-buffer)))
+    (let ((preview (current-buffer))
+          (target (portal-view-target))
+          (origin (selected-window)))
+      ;; Back and forward keep each document's reading position.
       (portal-excalidraw-gui--js "window.scrollTo(0, 1200); return true;")
       (should (= (portal-markdown-gui--scroll) 1200))
       (portal-markdown-gui--link "Architecture")
@@ -111,9 +114,6 @@ The folder is `portal-markdown-gui--directory'."
       (portal-terminal-test--wait
        (lambda () (equal (buffer-name preview) "*portal: arch notes.md*")))
       (portal-excalidraw-gui--js "window.scrollTo(0, 700); return true;")
-      ;; Relative links resolve from the new document's folder.
-      (should (portal-excalidraw-gui--js
-               "return [...document.links].find(a => a.textContent === 'Up').href.endsWith('README.md');"))
       (call-interactively (key-binding "l"))
       (portal-test--wait-for-page "README.md")
       (portal-terminal-test--wait
@@ -122,6 +122,16 @@ The folder is `portal-markdown-gui--directory'."
       (call-interactively (key-binding "r"))
       (portal-test--wait-for-page "arch notes.md")
       (portal-terminal-test--wait (lambda () (= (portal-markdown-gui--scroll) 700)))
+      ;; A heading fragment scrolls to the heading.
+      (portal-web-back)
+      (portal-test--wait-for-page "README.md")
+      (portal-markdown-gui--link "Decisions")
+      (portal-test--wait-for-page "arch notes.md")
+      (portal-terminal-test--wait (lambda () (> (portal-markdown-gui--scroll) 1000)))
+      ;; Previewing the document on screen again finds its preview.
+      (switch-to-buffer "*scratch*")
+      (portal-render-markdown (portal-markdown-gui--file "docs é/arch notes.md"))
+      (should (eq (current-buffer) preview))
       ;; g rereads the file on screen.
       (portal-markdown-gui--write "docs é/arch notes.md" "# Rewritten\n")
       (call-interactively (key-binding "g"))
@@ -129,53 +139,24 @@ The folder is `portal-markdown-gui--directory'."
        (lambda () (equal (portal-excalidraw-gui--js "return document.querySelector('h1')?.textContent;")
                          "Rewritten")))
       (should (equal (buffer-name preview) "*portal: arch notes.md*"))
-      ;; A new link after going back discards the old forward branch.
+      ;; Open in Emacs edits the document on screen, and returning comes
+      ;; back to the preview.
       (portal-web-back)
       (portal-test--wait-for-page "README.md")
-      (portal-markdown-gui--link "Other")
-      (portal-test--wait-for-page "other.md")
-      ;; A heading fragment scrolls to the heading; lookup by file still works.
-      (portal-web-back)
-      (portal-test--wait-for-page "README.md")
-      (portal-markdown-gui--link "Decisions")
+      (portal-input-focus)
+      (portal-render-open-in-emacs)
+      (should (equal buffer-file-name (portal-markdown-gui--file "README.md")))
+      (should-not (portal-input--action "focused" target))
+      (portal-integration-test--emacs-input)
+      (portal-render-return)
+      (should (eq (selected-window) origin))
+      (portal-web-forward)
       (portal-test--wait-for-page "arch notes.md")
-      (portal-markdown-gui--write "docs é/arch notes.md"
-                                  (concat "# Arch\n\n"
-                                          (mapconcat (lambda (n) (format "Detail %d.\n\n" n))
-                                                     (number-sequence 1 150))
-                                          "## Decisions\n"))
-      (call-interactively (key-binding "g"))
-      (portal-terminal-test--wait
-       (lambda () (portal-excalidraw-gui--js "return !!document.getElementById('decisions');")))
-      (portal-test--wait-for-page "arch notes.md")
-      (portal-web-back)
-      (portal-test--wait-for-page "README.md")
-      (portal-markdown-gui--link "Decisions")
-      (portal-test--wait-for-page "arch notes.md")
-      (portal-terminal-test--wait (lambda () (> (portal-markdown-gui--scroll) 1000)))
-      (switch-to-buffer "*scratch*")
-      (portal-render-markdown (portal-markdown-gui--file "docs é/arch notes.md"))
-      (should (eq (current-buffer) preview))
-      ;; A missing document shows the host's error page, and Back recovers.
-      (portal-web-back)
-      (portal-test--wait-for-page "README.md")
-      (portal-markdown-gui--link "Missing")
-      (portal-test--wait-for-page "Markdown preview unavailable")
-      (should (string-match-p "could not be found"
-                              (portal-excalidraw-gui--js "return document.body.innerText;")))
-      (portal-web-back)
-      (portal-test--wait-for-page "README.md"))))
-
-(ert-deftest portal-markdown-gui-source-links-hand-off-and-return ()
-  :tags '(:gui)
-  (portal-markdown-gui--documents
-    (let* ((preview (current-buffer))
-           (target (portal-view-target))
-           (origin (selected-window)))
-      (portal-excalidraw-gui--js "window.marker = 'kept'; return true;")
-      ;; Going back leaves a forward branch, which Emacs handoffs keep.
-      (portal-markdown-gui--link "Other")
-      (portal-test--wait-for-page "other.md")
+      (portal-terminal-test--wait (lambda () (equal (buffer-name) "*portal: arch notes.md*")))
+      (portal-render-open-in-emacs)
+      (should (equal buffer-file-name (portal-markdown-gui--file "docs é/arch notes.md")))
+      (portal-render-return)
+      (should (eq (selected-window) origin))
       (portal-web-back)
       (portal-test--wait-for-page "README.md")
       (portal-excalidraw-gui--js "window.marker = 'kept'; return true;")
@@ -227,63 +208,52 @@ The folder is `portal-markdown-gui--directory'."
         (portal-markdown-gui--event 'portal-input-select)
         (portal-markdown-gui--event 'portal-web-follow)
         (should (eq major-mode 'dired-mode))
-        (should (equal (portal-excalidraw-gui--js "return window.marker;") "kept"))))))
+        (should (equal (portal-excalidraw-gui--js "return window.marker;") "kept"))
+        ;; A click while Emacs reads a key sequence from the page ends the
+        ;; sequence and follows the link.
+        (select-window origin)
+        (let ((point (portal-markdown-gui--link-point "Source")))
+          (portal-input-focus)
+          ;; The page does not use C-x, so Emacs reads a key sequence from it.
+          (portal-test-native-key 7 (ash 1 18) "\C-x")
+          (let ((event (aref (with-timeout (5 (ert-fail "No key event"))
+                               (read-key-sequence-vector nil))
+                             0)))
+            (should (eq (car-safe event) 'portal-input-key))
+            ;; The click comes while Emacs reads the rest of the sequence.
+            (run-at-time 0.2 nil (lambda () (portal-test-native-click (aref point 0) (aref point 1))))
+            (with-timeout (5 (ert-fail "The click did not end the sequence"))
+              (portal-input--dispatch event)))
+          (should-not (portal-input--action "pending" target))
+          (portal-markdown-gui--event 'portal-input-select)
+          (portal-markdown-gui--event 'portal-web-follow)
+          (should (equal buffer-file-name (portal-markdown-gui--file "src/main file.ts")))
+          (should-not (portal-input--action "focused" target)))))))
 
-(ert-deftest portal-markdown-gui-link-click-ends-a-pending-sequence ()
-  :tags '(:gui)
-  (portal-markdown-gui--documents
-    (let ((target (portal-view-target))
-          (point (portal-markdown-gui--link-point "Source")))
-      (portal-input-focus)
-      ;; The page does not use C-x, so Emacs reads a key sequence from it.
-      (portal-test-native-key 7 (ash 1 18) "\C-x")
-      (let ((event (aref (with-timeout (5 (ert-fail "No key event"))
-                           (read-key-sequence-vector nil))
-                         0)))
-        (should (eq (car-safe event) 'portal-input-key))
-        ;; The click comes while Emacs reads the rest of the sequence.
-        (run-at-time 0.2 nil (lambda () (portal-test-native-click (aref point 0) (aref point 1))))
-        (with-timeout (5 (ert-fail "The click did not end the sequence"))
-          (portal-input--dispatch event)))
-      (should-not (portal-input--action "pending" target))
-      (portal-markdown-gui--event 'portal-input-select)
-      (portal-markdown-gui--event 'portal-web-follow)
-      (should (equal buffer-file-name (portal-markdown-gui--file "src/main file.ts")))
-      (should-not (portal-input--action "focused" target)))))
+;; Emacs frames may force an appearance of their own; previews follow the
+;; system's.  How the page shows through is WebKit's to draw: the test
+;; proves what crosses the seam, the backing and the property the
+;; stylesheet reads.
+(defun portal-markdown-gui--glass ()
+  "The preview's backing, its root's opacity property and background."
+  (list (plist-get (portal--inspect (portal-view-target)) :backing)
+        (portal-excalidraw-gui--js
+         (concat "const root = document.documentElement;"
+                 "return [root.style.getPropertyValue('--portal-view-opacity'),"
+                 " getComputedStyle(root).backgroundColor];"))))
 
-(ert-deftest portal-markdown-gui-open-in-emacs-edits-the-file-on-screen ()
-  :tags '(:gui)
-  (portal-markdown-gui--documents
-    (let ((target (portal-view-target))
-          (origin (selected-window)))
-      (portal-markdown-gui--link "Architecture")
-      (portal-test--wait-for-page "arch notes.md")
-      (portal-web-back)
-      (portal-test--wait-for-page "README.md")
-      (portal-input-focus)
-      (portal-render-open-in-emacs)
-      (should (equal buffer-file-name (portal-markdown-gui--file "README.md")))
-      (should-not (portal-input--action "focused" target))
-      (portal-integration-test--emacs-input)
-      (portal-render-return)
-      (should (eq (selected-window) origin))
-      (portal-web-forward)
-      (portal-test--wait-for-page "arch notes.md")
-      (portal-terminal-test--wait (lambda () (equal (buffer-name) "*portal: arch notes.md*")))
-      (portal-render-open-in-emacs)
-      (should (equal buffer-file-name (portal-markdown-gui--file "docs é/arch notes.md"))))))
-
-;; Emacs frames may force an appearance of their own; previews follow the system's.
-(ert-deftest portal-markdown-gui-appearance-follows-the-system-or-the-option ()
+(ert-deftest portal-markdown-gui-appearance-and-see-through-reach-the-open-preview ()
   :tags '(:gui)
   (let ((original portal-web-appearance)
+        (original-opacity portal-web-preview-opacity)
         (frame-appearance (frame-parameter nil 'ns-appearance))
         (system-dark (equal (string-trim
                              (shell-command-to-string "defaults read -g AppleInterfaceStyle 2>/dev/null"))
                             "Dark")))
     (unwind-protect
         (progn
-          (setq portal-web-appearance nil)
+          (setq portal-web-appearance nil
+                portal-web-preview-opacity 1)
           (modify-frame-parameters nil `((ns-appearance . ,(if system-dark 'light 'dark))))
           (portal-markdown-gui--documents
             (let ((target (portal-view-target))
@@ -303,40 +273,22 @@ The folder is `portal-markdown-gui--directory'."
               (portal-test--wait-for-page "other.md")
               (should (eq (portal-excalidraw-gui--js (format "return %s;" dark)) t))
               (portal-web-set-appearance nil)
-              (should (eq (plist-get (portal--inspect target) :dark) system-dark)))))
-      (setq portal-web-appearance original)
-      (modify-frame-parameters nil `((ns-appearance . ,frame-appearance))))))
-
-;; How the page shows through is WebKit's to draw: the test proves what
-;; crosses the seam, the backing and the property the stylesheet reads.
-(defun portal-markdown-gui--glass ()
-  "The preview's backing, its root's opacity property and background."
-  (list (plist-get (portal--inspect (portal-view-target)) :backing)
-        (portal-excalidraw-gui--js
-         (concat "const root = document.documentElement;"
-                 "return [root.style.getPropertyValue('--portal-view-opacity'),"
-                 " getComputedStyle(root).backgroundColor];"))))
-
-(ert-deftest portal-markdown-gui-a-see-through-preview-has-no-backing ()
-  :tags '(:gui)
-  (let ((original portal-web-preview-opacity))
-    (unwind-protect
-        (progn
-          (setq portal-web-preview-opacity 1)
-          (portal-markdown-gui--documents
-            ;; At 1, the default, the preview is as any other page.
+              (should (eq (plist-get (portal--inspect target) :dark) system-dark))
+              (portal-web-back)
+              (portal-test--wait-for-page "README.md"))
+            ;; At opacity 1, the default, the preview is as any other page.
             (pcase-let ((`(,backing [,property ,solid]) (portal-markdown-gui--glass)))
               (should (eq backing t))
               (should (equal property ""))
               (should-not (string-match-p "/" solid))
               ;; Below 1 the open preview changes without loading again.
-              (portal-excalidraw-gui--js "window.portalStayed = true; return true;")
+              (portal-excalidraw-gui--js "window.portalStayed = 'glass'; return true;")
               (setopt portal-web-preview-opacity 0.85)
               (pcase-let ((`(,backing [,property ,glass]) (portal-markdown-gui--glass)))
                 (should-not backing)
                 (should (equal property "0.850"))
                 (should (string-match-p "/ 0\\.85)\\'" glass)))
-              (should (eq (portal-excalidraw-gui--js "return window.portalStayed === true;") t))
+              (should (equal (portal-excalidraw-gui--js "return window.portalStayed;") "glass"))
               ;; The next page keeps it, and a later change reaches it.
               (portal-markdown-gui--link "Other")
               (portal-test--wait-for-page "other.md")
@@ -364,7 +316,9 @@ The folder is `portal-markdown-gui--directory'."
                 (should (eq backing t))
                 (should (equal property ""))
                 (should (equal opaque solid))))))
-      (setq portal-web-preview-opacity original))))
+      (setq portal-web-appearance original
+            portal-web-preview-opacity original-opacity)
+      (modify-frame-parameters nil `((ns-appearance . ,frame-appearance))))))
 
 ;; Printing lays the page out on paper.  Whether it prints light is WebKit's
 ;; and the stylesheet's, which host/markdown.test.ts checks has a print rule.

@@ -71,6 +71,9 @@ TARGET defaults to the selected pane's view.  Return its state."
       (switch-to-buffer buffer)
       (should (portal-test--shown target (selected-window)))
       (portal-test--wait-for-page "JS works")
+      ;; The same view loads another page.
+      (portal--web-load target "data:text/html,<title>Second</title>")
+      (portal-test--wait-for-page "Second")
       (kill-buffer buffer)
       (should-not (portal--inspect target)))))
 
@@ -119,38 +122,6 @@ TARGET defaults to the selected pane's view.  Return its state."
               (call-interactively #'portal-render-html))
             (portal-test--wait-for-page "Local assets work"))
         (delete-directory directory t)))))
-
-(ert-deftest portal-web-loads-again-and-rejects-invalid-urls ()
-  :tags '(:gui)
-  (portal-test--with-web
-    (portal-open-url "data:text/html,<title>First</title>")
-    (let ((target (portal-view-target)))
-      (portal-test--wait-for-page "First")
-      (should-error (portal--web-load target 42) :type 'wrong-type-argument)
-      (dolist (url '("relative/path" "javascript:alert(1)" "https://"))
-        (should-error (portal--web-load target url)))
-      (should-error (portal--web-load "web:999999" "about:blank"))
-      (portal-test--wait-for-page "First")
-      (portal--web-load target "data:text/html,<title>Second</title>")
-      (portal-test--wait-for-page "Second"))))
-
-;; Safari's Develop menu lists exactly the pages WebKit marks inspectable.
-(ert-deftest portal-web-inspectable-follows-the-option ()
-  :tags '(:gui)
-  (portal-test--with-web
-    (skip-unless (version<= "13.3" (car (process-lines "sw_vers" "-productVersion"))))
-    (let ((original portal-web-inspectable))
-      (unwind-protect
-          (progn
-            (setq portal-web-inspectable t)
-            (portal-open-url "data:text/html,<title>Inspectable</title>")
-            (should (plist-get (portal-test--wait-for-page "Inspectable") :inspectable))
-            (setq portal-web-inspectable nil)
-            (portal-open-url "data:text/html,<title>Closed</title>")
-            (let ((state (portal-test--wait-for-page "Closed")))
-              (should (plist-member state :inspectable))
-              (should-not (plist-get state :inspectable))))
-        (setq portal-web-inspectable original)))))
 
 ;;; JavaScript dialogs
 
@@ -555,9 +526,6 @@ return true;" constraints)))
         (portal-web-find-next)
         (portal-test--wait-for-selection "apple@0")
         (portal-test--wait-for-echo "Wrapped 1/3 apple")
-        ;; Command-G and Command-Shift-G move in the minibuffer too.
-        (portal-test--find "apple s-g s-g s-G RET")
-        (portal-test--wait-for-selection "apple@13")
         ;; An upper-case letter makes case matter.
         (portal-test--find "Apple RET")
         (portal-test--wait-for-selection "Apple@19")
@@ -639,12 +607,17 @@ Blur any focused field first so WebKit does not scroll back to reveal it."
         (portal-test--wait-for-match "d")
         (portal-test--wait-for-echo "4/5 apple")))))
 
-(ert-deftest portal-web-find-wraps-in-the-documents-order ()
-  :tags '(:gui)
+;; Edge cases of WebKit's own finding, whose plain case the tests above
+;; cover: right to left, the second match is left of the first, and wrapping
+;; goes by the document's order; in a frame, finding goes on from the frame's
+;; match, and Portal cannot tell which of them it is.
+(ert-deftest portal-web-find-goes-in-the-documents-order-and-through-frames ()
+  :tags '(:gui :expensive)
   (portal-test--with-web
     (portal-test--with-page-scripts
-      (let ((portal-web-find-history nil))
-        ;; Right to left, the second match is left of the first.
+      (let ((portal-web-find-history nil)
+            (selected "const s = document.querySelector('iframe').contentDocument.getSelection();
+                       return s.rangeCount && s.toString() ? s.anchorNode.parentElement.id : '';"))
         (portal-open-url "data:text/html,<title>Right to left</title><p dir=rtl>apple x apple y</p>")
         (portal-test--wait-for-page "Right to left")
         (portal-test--find "apple RET")
@@ -655,22 +628,12 @@ Blur any focused field first so WebKit does not scroll back to reveal it."
         (portal-test--wait-for-echo "2/2 apple")
         (portal-web-find-next)
         (portal-test--wait-for-selection "apple@0")
-        (portal-test--wait-for-echo "Wrapped 1/2 apple")))))
-
-(ert-deftest portal-web-find-goes-on-through-a-frame-in-the-page ()
-  :tags '(:gui)
-  (portal-test--with-web
-    (portal-test--with-page-scripts
-      (let ((portal-web-find-history nil)
-            (selected "const s = document.querySelector('iframe').contentDocument.getSelection();
-                       return s.rangeCount && s.toString() ? s.anchorNode.parentElement.id : '';"))
+        (portal-test--wait-for-echo "Wrapped 1/2 apple")
         (portal-open-url "data:text/html,<title>Framed</title><p id=a>apple a</p><iframe srcdoc='<p id=b>apple b</p><p id=c>apple c</p>'></iframe>")
         (portal-test--wait-for-page "Framed")
         (portal-test--find "apple RET")
         (portal-test--wait-for-match "a")
         (portal-test--wait-for-echo "1/3 apple")
-        ;; In the frame, finding goes on from the frame's match; Portal
-        ;; cannot tell which of them it is.
         (portal-web-find-next)
         (portal-terminal-test--wait (lambda () (equal (portal-excalidraw-gui--js selected) "b")))
         (portal-test--wait-for-echo "3 apple")

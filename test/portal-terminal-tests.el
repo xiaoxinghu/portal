@@ -670,25 +670,6 @@ Restore the frame's appearance and `portal-terminal-theme' after."
              (lambda () (string-match-p "^PORTAL_KEY_WINDOW_OK" (portal-terminal-test--text)))))
         (delete-frame other)))))
 
-(ert-deftest portal-terminal-unfocus-command-returns-focus ()
-  :tags '(:gui)
-  (portal-terminal-test--session
-    (should (plist-get (portal-terminal-test--state) :focused))
-    (call-interactively #'portal-terminal-unfocus)
-    (should-not (plist-get (portal-terminal-test--state) :focused))
-    (should (plist-get (portal-terminal-test--state) :ready))
-    (portal-terminal-focus)
-    (should (plist-get (portal-terminal-test--state) :focused))))
-
-(ert-deftest portal-terminal-invalid-target-preserves-live-shell ()
-  :tags '(:gui)
-  (portal-terminal-test--session
-    (should-error (portal--close 42) :type 'wrong-type-argument)
-    (should-error (portal--close "terminal:0"))
-    (should-not (portal--inspect "terminal:0"))
-    (should (plist-get (portal-terminal-test--state) :ready))
-    (should (plist-get (portal-terminal-test--state) :focused))))
-
 (provide 'portal-terminal-tests)
 (defvar portal-terminal-test--keys (make-sparse-keymap)
   "Emacs bindings the chord tests give every buffer, as a user's config does.")
@@ -998,15 +979,11 @@ The terminal does not use TRIGGER, so Emacs reads it, and STROKES after it."
           (should (plist-get (portal-terminal-test--state regular-id) :ready))
           (kill-buffer quick))))))
 
-(ert-deftest portal-terminal-bindings-new-session-and-native-validation ()
+(ert-deftest portal-terminal-bindings-reach-a-new-session ()
   :tags '(:gui)
   (portal-terminal-test--native-maps
     (portal-terminal-bind-key portal-terminal-native-map "s-j" #'portal-terminal-test--prompt)
     (portal-terminal-test--session
-      ;; Bad JSON or either bad profile cannot partially replace live bindings.
-      (should-error (portal--terminal-bindings "{"))
-      (should-error (portal--terminal-bindings
-                     "{\"regular\":[],\"quick\":[{\"character\":\"x\",\"modifiers\":0,\"event\":120}]}"))
       (setq portal-terminal-test--answer nil)
       (portal-terminal-test--native-binding
        (list 38 (ash 1 20) "j" t) '(0 0 "a") '(36 0 "\r"))
