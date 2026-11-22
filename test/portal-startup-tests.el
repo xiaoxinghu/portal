@@ -22,14 +22,16 @@
     (dolist (feature '(portal portal-build portal-web portal-terminal
                       portal-excalidraw portal-global-shortcut portal-system))
       (should (featurep feature)))
-    (dolist (command '(portal-hello portal-terminal portal-build))
+    (dolist (command '(portal-hello portal-terminal portal-build portal-download-runtime))
       (should (commandp command)))
     ;; The build belongs to this checkout, not the working directory.
     (should (equal portal-build-root
                    (file-truename (file-name-directory portal-startup-test--entry))))
     (should (fboundp 'portal-global-shortcut-set))
     (should (fboundp 'portal-post-key))
-    ;; Loading registers no shortcut and loads no native code.
+    ;; Loading starts no build, download or other process, registers no
+    ;; shortcut and loads no native code.
+    (should-not (process-list))
     (should-not portal-global-shortcut--registrations)
     (should-not (featurep 'portal-native-module))
     (should-not (assoc "shortcut" portal-view-feature-record-handlers))

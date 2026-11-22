@@ -12,8 +12,10 @@
 
 ;; The package root.  Loading it loads every Portal feature; the commands are
 ;; autoloaded from the feature files.  Portal's native module and app host are
-;; built from this package's sources: the first native command offers to build
-;; them, and `portal-build' builds them on request.
+;; built from this package's sources, or downloaded from the release of this
+;; version when it was built from the same native sources: the first native
+;; command offers either, and `portal-download-runtime' and `portal-build' do
+;; them on request.
 
 ;;; Code:
 
@@ -25,6 +27,8 @@
   (add-to-list 'load-path (file-name-directory (or (macroexp-file-name) buffer-file-name))))
 
 (require 'portal-build)
+;; Downloads nothing until a native command or `portal-download-runtime' asks.
+(require 'portal-runtime)
 (require 'portal-web)
 (require 'portal-web-bookmark)
 (require 'portal-terminal)

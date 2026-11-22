@@ -7,7 +7,9 @@
 ;; Nothing reaches the network or the user's runtimes.  A fixture runtime's
 ;; module is the C core's test module, PORTAL_TEST_MODULE, so the installs
 ;; need it, Python 3 and openssl, and a system that has a runtime to
-;; download; the checks that need no install run anywhere.
+;; download; the checks that need no install run anywhere.  The first
+;; native command's choice, at the end, never builds: `portal-build' is a
+;; stand-in there.
 
 (require 'ert)
 (require 'cl-lib)
@@ -15,6 +17,7 @@
 (require 'nsm)
 (require 'portal-build)
 (require 'portal-runtime)
+(require 'portal-server)
 
 (defconst portal-runtime-test--checkout
   (file-name-directory
@@ -80,6 +83,9 @@ version is 1.2.3.  Every name contains a space."
           (portal-build-directory nil)
           (portal-build--loaded nil)
           (portal-build--ready nil)
+          (portal-build--runtime nil)
+          (portal-build--process nil)
+          (portal-build-on-first-use 'ask)
           (portal-runtime--process nil)
           (portal-runtime-directory (portal-runtime-test--file "runtime cache/"))
           (portal-runtime--releases "https://127.0.0.1:1/unused/")
@@ -927,6 +933,324 @@ with tarfile.open(sys.argv[2], 'r:gz') as tar:
                                    (directory-files-recursively directory "" t)))))
             (should (equal (funcall listing (portal-runtime-installed))
                            (funcall listing unpacked)))))))))
+
+;;; First use: Download, Build here or Not now
+
+(defvar portal-runtime-test--built 0 "How many builds a first use started.")
+(defvar portal-runtime-test--loaded nil "The modules a first use loaded, latest first.")
+
+(defmacro portal-runtime-test--first-use (&rest body)
+  "Run BODY as the first native command would, in a graphical Emacs.
+Builds and module loads are recorded in `portal-runtime-test--built' and
+`portal-runtime-test--loaded', not made; a build's prerequisites are met.
+Batch Emacs's frame, a text terminal, which Linux refuses, is not one.
+Messages keep their quotes as typed."
+  (declare (indent 0))
+  `(let ((noninteractive nil) (this-command 'portal-terminal) (text-quoting-style 'grave)
+         (portal-runtime-test--built 0) (portal-runtime-test--loaded nil))
+     (cl-letf (((symbol-function 'portal-build) (lambda () (cl-incf portal-runtime-test--built)))
+               ((symbol-function 'portal-build--check-prerequisites) #'ignore)
+               ((symbol-function 'module-load)
+                (lambda (file) (push file portal-runtime-test--loaded)))
+               ((symbol-function 'portal-runtime--display-problem) #'ignore))
+       ,@body)))
+
+(defun portal-runtime-test--ensure (&optional answer)
+  "Run `portal-build-ensure' as a native command; return its user error, or nil.
+ANSWER is the key that answers the question it asks, if it may ask one;
+the question, (PROMPT KEYS DESCRIPTIONS), is in `portal-runtime-test--asked'."
+  (setq portal-runtime-test--asked nil)
+  (cl-letf (((symbol-function 'read-multiple-choice)
+             (lambda (prompt choices &rest _)
+               (unless answer (ert-fail (format "Asked: %s" prompt)))
+               (setq portal-runtime-test--asked
+                     (list prompt (mapcar #'car choices) (mapcar #'caddr choices)))
+               (or (assq answer choices) (ert-fail (format "%c not offered: %s" answer prompt))))))
+    (condition-case err
+        (progn (portal-build-ensure) nil)
+      (user-error (cadr err)))))
+
+(defvar portal-runtime-test--asked nil "The question the last first use asked, or nil.")
+
+(defun portal-runtime-test--finish ()
+  "Wait for the running install; return what Portal said when it ended."
+  (let ((process portal-runtime--process) said)
+    (should (process-live-p process))
+    (cl-letf (((symbol-function 'message)
+               (lambda (format &rest arguments)
+                 (when format (push (apply #'format-message format arguments) said)))))
+      (portal-runtime-test--wait process))
+    (should-not portal-runtime--process)
+    (car said)))
+
+(defun portal-runtime-test--reload ()
+  "Forget what this Emacs found, as reloading Portal's Lisp after an upgrade does."
+  (setq portal-build--ready nil portal-build--runtime nil))
+
+(defun portal-runtime-test--no-download ()
+  "Fail the test if an install starts."
+  (lambda (&rest _) (ert-fail "Downloaded")))
+
+(ert-deftest portal-runtime-first-use-offers-the-three-choices ()
+  ;; With no server: Build here and Not now need none, and Download is
+  ;; seen starting.
+  (portal-runtime-test--with-world
+    (let ((system-type 'darwin) (system-configuration "aarch64-apple-darwin25.6.0")
+          downloads)
+      (cl-letf (((symbol-function 'portal-runtime-install)
+                 (lambda (callback) (push callback downloads) nil)))
+        (portal-runtime-test--first-use
+          ;; Build here: the build starts, and nothing is downloaded.
+          (should (equal (portal-runtime-test--ensure ?b)
+                         "Building Portal in *portal-build*: retry when it finishes"))
+          (pcase-let ((`(,prompt ,keys ,descriptions) portal-runtime-test--asked))
+            (should (string-match-p "\\`Portal's native module.* not built\\.  Get it now\\?\\'"
+                                    prompt))
+            (should (equal keys '(?d ?b ?n)))
+            (should (string-search "release v1.2.3 from GitHub" (nth 0 descriptions)))
+            (should (string-search "takes several minutes" (nth 1 descriptions))))
+          (should (= portal-runtime-test--built 1))
+          (should-not downloads)
+          ;; Not now: neither, and the two commands named.
+          (should (string-match-p "not built: run M-x portal-build to build it here, or \
+M-x portal-download-runtime to download it\\'"
+                                  (portal-runtime-test--ensure ?n)))
+          (should (= portal-runtime-test--built 1))
+          (should-not downloads)
+          ;; Download: the install starts, with the report of its end.
+          (should (equal (portal-runtime-test--ensure ?d)
+                         "Downloading Portal's runtime in *portal-runtime*: retry when \
+it finishes"))
+          (should (equal downloads (list #'portal-runtime--report)))
+          (should (= portal-runtime-test--built 1))
+          ;; While it runs, nothing is asked or started again.
+          (let ((portal-runtime--process (make-process :name "portal-runtime-test"
+                                                       :command '("sleep" "10") :noquery t)))
+            (unwind-protect
+                (progn
+                  (should (string-match-p "yet: retry when the download in \\*portal-runtime\\*"
+                                          (portal-runtime-test--ensure)))
+                  (should (string-match-p "already being downloaded"
+                                          (cadr (should-error (portal-download-runtime)
+                                                              :type 'user-error)))))
+              (delete-process portal-runtime--process)))
+          (should (= (length downloads) 1)))))))
+
+(ert-deftest portal-runtime-first-use-follows-each-value-of-the-option ()
+  (portal-runtime-test--with-world
+    (let ((system-type 'darwin) (system-configuration "aarch64-apple-darwin25.6.0")
+          (downloads 0))
+      (cl-letf (((symbol-function 'portal-runtime-install)
+                 (lambda (_callback) (cl-incf downloads) nil)))
+        (portal-runtime-test--first-use
+          ;; `always', as it did, and `build', its new name: a build, never a
+          ;; download, and no question.
+          (dolist (value '(always build))
+            (let ((portal-build-on-first-use value))
+              (should (string-prefix-p "Building Portal" (portal-runtime-test--ensure)))))
+          (should (= portal-runtime-test--built 2))
+          (should (= downloads 0))
+          ;; `download': a download, never a build, and no question.
+          (let ((portal-build-on-first-use 'download))
+            (should (string-prefix-p "Downloading Portal's runtime" (portal-runtime-test--ensure))))
+          (should (= downloads 1))
+          (should (= portal-runtime-test--built 2))
+          ;; `never': only the report.
+          (let ((portal-build-on-first-use 'never))
+            (should (string-match-p "not built: run M-x portal-build to build it here, or \
+M-x portal-download-runtime" (portal-runtime-test--ensure))))
+          ;; Outside a command, as from a timer: only those that need no
+          ;; question go on.
+          (let ((this-command nil))
+            (should (string-match-p "not built: run" (portal-runtime-test--ensure)))
+            (let ((portal-build-on-first-use 'download))
+              (should (string-prefix-p "Downloading" (portal-runtime-test--ensure))))
+            (let ((portal-build-on-first-use 'always))
+              (should (string-prefix-p "Building" (portal-runtime-test--ensure)))))
+          (should (= downloads 2))
+          (should (= portal-runtime-test--built 3))
+          ;; Batch Emacs: never, whatever the value.
+          (let ((noninteractive t))
+            (dolist (portal-build-on-first-use '(ask always build download never))
+              (should (string-match-p "not built: run M-x portal-build"
+                                      (portal-runtime-test--ensure)))))
+          (should (= downloads 2))
+          (should (= portal-runtime-test--built 3)))))))
+
+(ert-deftest portal-runtime-first-use-explains-what-it-cannot-download ()
+  ;; Refused before any network: offered a build, never given one.
+  (portal-runtime-test--with-world
+    (cl-letf (((symbol-function 'portal-runtime-install) (portal-runtime-test--no-download)))
+      (portal-runtime-test--first-use
+        ;; An Intel Emacs, which no runtime fits.
+        (let ((system-type 'darwin) (system-configuration "x86_64-apple-darwin24.1.0"))
+          (let ((portal-build-on-first-use 'download))
+            (should (string-match-p "not built, and Portal cannot download it: Portal has no \
+runtime to download for x86_64-apple-darwin24\\.1\\.0: build it with M-x portal-build\\'"
+                                    (portal-runtime-test--ensure))))
+          (should (= portal-runtime-test--built 0))
+          ;; Asked, it gives the reason and offers the rest.
+          (should (string-prefix-p "Building" (portal-runtime-test--ensure ?b)))
+          (should (equal (nth 1 portal-runtime-test--asked) '(?b ?n)))
+          (should (string-search "no runtime to download for x86_64"
+                                 (car portal-runtime-test--asked)))
+          (should (string-match-p "not built: run M-x portal-build\\'"
+                                  (let ((portal-build-on-first-use 'never))
+                                    (portal-runtime-test--ensure))))
+          (should (string-match-p "no runtime to download.*\\'"
+                                  (cadr (should-error (portal-download-runtime)
+                                                      :type 'user-error)))))
+        ;; A version that names no release.
+        (let ((system-type 'darwin) (system-configuration "aarch64-apple-darwin25.6.0")
+              (portal-build-on-first-use 'download))
+          (portal-runtime-test--version "1.2")
+          (should (string-match-p "cannot download it: Portal's version names no release to \
+download a runtime from\\.  To build it here instead, run M-x portal-build\\'"
+                                  (portal-runtime-test--ensure))))
+        (should (= portal-runtime-test--built 1))))))
+
+(ert-deftest portal-runtime-first-use-a-failed-download-offers-a-build ()
+  ;; What only the download finds: no release, no network, or a release
+  ;; of other native sources, as on main past a release that changed them.
+  (skip-unless (portal-runtime-test--can-install))
+  (portal-runtime-test--with-world
+    (portal-runtime-test--first-use
+      (let ((portal-build-on-first-use 'download))
+        (setq portal-runtime--releases (portal-runtime-test--serve))
+        (portal-runtime-test--ensure)
+        (should (string-match-p "\\`Portal's runtime was not installed: 127\\.0\\.0\\.1 answered \
+404 for .*: is it released\\?  To build it here instead, run M-x portal-build\\'"
+                                (portal-runtime-test--finish)))
+        (setq portal-runtime--releases "https://127.0.0.1:1/")
+        (portal-runtime-test--ensure)
+        (should (string-match-p "\\`Portal's runtime was not installed: Cannot reach 127\\.0\\.0\\.1 \
+securely: .*  To build it here instead, run M-x portal-build\\'"
+                                (portal-runtime-test--finish)))
+        (setq portal-runtime--releases (portal-runtime-test--serve))
+        (portal-runtime-test--release)
+        (portal-runtime-test--native-change "unreleased")
+        (portal-runtime-test--ensure)
+        (should (string-match-p "built from other native sources than these .*: build it \
+with M-x portal-build\\'"
+                                (portal-runtime-test--finish)))
+        ;; Nothing was built, and the command asks again next time.
+        (should (= portal-runtime-test--built 0))
+        (should-not (portal-runtime-test--runtimes))
+        (should (string-prefix-p "Downloading" (portal-runtime-test--ensure)))
+        (portal-runtime-test--finish)))))
+
+(ert-deftest portal-runtime-first-use-downloads-and-uses-the-runtime ()
+  (skip-unless (portal-runtime-test--can-install))
+  (portal-runtime-test--with-world
+    (let ((identity (portal-runtime-test--release)))
+      (setq portal-runtime--releases (portal-runtime-test--serve))
+      (portal-runtime-test--first-use
+        (should (string-prefix-p "Downloading" (portal-runtime-test--ensure ?d)))
+        (should (equal (portal-runtime-test--finish)
+                       "Portal's runtime is installed: retry your command"))
+        (should (equal (portal-runtime-test--requests) (portal-runtime-test--paths "/v1.2.3/")))
+        (should (= portal-runtime-test--built 0))
+        ;; The retried command goes on, from the runtime: its module and
+        ;; its host, never Portal's own build directory.
+        (let ((runtime (portal-runtime-installed)))
+          (should-not (portal-runtime-test--ensure))
+          (should (equal portal-build--runtime runtime))
+          (should (equal (portal-server-program-file) (expand-file-name "portal-host" runtime)))
+          (portal-build-load-module)
+          (should (equal portal-runtime-test--loaded
+                         (list (expand-file-name portal-build--module runtime))))
+          (should (equal portal-build--loaded identity))
+          (should-not (file-exists-p (portal-build-file ""))))))))
+
+(ert-deftest portal-runtime-first-use-reuses-it-after-a-lisp-only-update ()
+  (skip-unless (portal-runtime-test--can-install))
+  (portal-runtime-test--with-world
+    (let ((identity (portal-runtime-test--release)))
+      (portal-runtime-test--install)
+      (portal-runtime-test--requests)
+      (cl-letf (((symbol-function 'portal-runtime-install) (portal-runtime-test--no-download)))
+        (portal-runtime-test--first-use
+          (should-not (portal-runtime-test--ensure))
+          (portal-build-load-module)
+          ;; An upgrade that changed only Lisp: the same runtime, with no
+          ;; question, no network and no restart.
+          (portal-runtime-test--version "1.2.4")
+          (portal-runtime-test--reload)
+          (should-not (portal-runtime-test--ensure))
+          (should (equal portal-build--runtime (portal-runtime-installed identity)))
+          (should-not (portal-runtime-test--requests))
+          ;; Portal's own build, once complete for these sources, comes first.
+          (let ((build (portal-build-file "")))
+            (dolist (file portal-build--artifacts)
+              (portal-runtime-test--write (expand-file-name file build) ""))
+            (portal-runtime-test--write (expand-file-name portal-build--record build)
+                                        (prin1-to-string (list :identity identity
+                                                               :version "1.2.4"))))
+          (portal-runtime-test--reload)
+          (should-not (portal-runtime-test--ensure))
+          (should-not portal-build--runtime)
+          (should (equal (portal-server-program-file) (portal-build-file "portal-host")))
+          (should (= portal-runtime-test--built 0)))))))
+
+(ert-deftest portal-runtime-first-use-asks-for-a-restart-after-a-native-change ()
+  (skip-unless (portal-runtime-test--can-install))
+  (portal-runtime-test--with-world
+    (let ((old (portal-runtime-test--release)))
+      (setq portal-runtime--releases (portal-runtime-test--serve))
+      (portal-runtime-test--install)
+      (portal-runtime-test--first-use
+        (should-not (portal-runtime-test--ensure))
+        (portal-build-load-module)
+        (should (equal portal-build--loaded old))
+        ;; An upgrade to a release that changed the native sources.
+        (portal-runtime-test--version "1.2.4")
+        (portal-runtime-test--native-change "1.2.4")
+        (let ((new (portal-runtime-test--release)))
+          (portal-runtime-test--reload)
+          (should (string-prefix-p "Downloading" (portal-runtime-test--ensure ?d)))
+          (should (string-match-p "\\`Portal's native part is older than its sources\\."
+                                  (car portal-runtime-test--asked)))
+          (should (equal (portal-runtime-test--finish)
+                         "Portal's runtime is installed: restart Emacs to load its new \
+native module"))
+          ;; The loaded module stays where it is, and is not replaced.
+          (should (equal (portal-runtime-test--runtimes) (sort (list old new) #'string<)))
+          (should (equal (portal-runtime-test--ensure)
+                         "Portal's native module changed after Emacs loaded it: restart \
+Emacs to use it"))
+          ;; After the restart, the new runtime.
+          (setq portal-build--loaded nil portal-runtime-test--loaded nil)
+          (portal-runtime-test--reload)
+          (should-not (portal-runtime-test--ensure))
+          (portal-build-load-module)
+          (should (equal portal-runtime-test--loaded
+                         (list (expand-file-name portal-build--module
+                                                 (portal-runtime-installed new)))))
+          (should (= portal-runtime-test--built 0)))))))
+
+(ert-deftest portal-runtime-first-use-leaves-a-supplied-build-alone ()
+  (skip-unless (portal-runtime-test--can-install))
+  (portal-runtime-test--with-world
+    (portal-runtime-test--release)
+    (portal-runtime-test--install)
+    (portal-runtime-test--requests)
+    (let ((portal-build-directory (portal-runtime-test--file "supplied/")))
+      (cl-letf (((symbol-function 'portal-runtime-install) (portal-runtime-test--no-download)))
+        (portal-runtime-test--first-use
+          ;; A runtime for these sources is there, and not used: the build
+          ;; named is reported, with nothing asked, downloaded or built.
+          (dolist (portal-build-on-first-use '(ask download build))
+            (should (equal (portal-runtime-test--ensure)
+                           (format "%s in %s" (portal-build--describe 'missing)
+                                   portal-build-directory))))
+          (should (string-match-p "`portal-build-directory'), which a download does not replace"
+                                  (cadr (should-error (portal-download-runtime)
+                                                      :type 'user-error))))
+          ;; Even after a runtime was chosen in its place.
+          (setq portal-build--runtime (portal-runtime-installed))
+          (should (equal (portal-server-program-file)
+                         (expand-file-name "portal-host" portal-build-directory)))
+          (should (= portal-runtime-test--built 0)))))))
 
 (provide 'portal-runtime-tests)
 ;;; portal-runtime-tests.el ends here

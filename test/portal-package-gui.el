@@ -3,7 +3,8 @@
 ;; Loaded last by test/package-gui.sh into a graphical Emacs whose HOME holds
 ;; a Portal installed through the use-package-vc example and never built.
 ;; PORTAL_PACKAGE_GUI_PHASE chooses the check:
-;;   setup  M-x portal-terminal offers to build; answering y builds once.
+;;   setup  M-x portal-terminal offers Download, Build here or Not now;
+;;          answering b, Build here, builds once.
 ;;   use    A fresh Emacs opens a terminal and the Hello World web view.
 ;; Results go to standard error, ending with how many checks passed; Emacs
 ;; exits with 0 only when all hold.
@@ -48,16 +49,18 @@ STATE, if given, is reported too, to explain a failure."
     (funcall predicate)))
 
 (defun portal-package-gui--setup ()
-  "Type the first native command, accept the offered build and wait for it."
+  "Type the first native command, choose to build here and wait for the build."
   (portal-package-gui--check "nothing is built yet" (eq (portal-build-problem) 'missing))
   (let (prompts messages)
-    (advice-add 'y-or-n-p :before (lambda (prompt) (push prompt prompts)))
+    (advice-add 'read-multiple-choice :before
+                (lambda (prompt choices &rest _) (push (cons prompt (mapcar #'car choices)) prompts)))
     (advice-add 'message :before (lambda (format &rest arguments)
                                    (when format
                                      (push (apply #'format-message format arguments) messages))))
     ;; The command stops with a user error after starting the build.
-    (ignore-errors (execute-kbd-macro (kbd "M-x portal-terminal RET y")))
-    (portal-package-gui--check "the command offered a build" (car prompts))
+    (ignore-errors (execute-kbd-macro (kbd "M-x portal-terminal RET b")))
+    (portal-package-gui--check "the command offered a download and a build"
+                               (equal (cdar prompts) '(?d ?b ?n)) prompts)
     (portal-package-gui--check "one build started" (process-live-p portal-build--process))
     ;; Asking again while it builds starts nothing new.
     (ignore-errors (execute-kbd-macro (kbd "M-x portal-terminal RET")))

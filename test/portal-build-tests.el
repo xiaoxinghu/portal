@@ -115,17 +115,29 @@ and no ZIG names the Zig, which would hide the tests' stand-ins."
 
 (ert-deftest portal-build-ensure-never-builds-or-asks-in-batch ()
   (portal-build-test--with-root
-    (dolist (portal-build-on-first-use '(ask always))
-      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) (ert-fail "Asked")))
-                ((symbol-function 'portal-build) (lambda () (ert-fail "Built"))))
+    (dolist (portal-build-on-first-use '(ask always build download))
+      (cl-letf (((symbol-function 'read-multiple-choice) (lambda (&rest _) (ert-fail "Asked")))
+                ((symbol-function 'portal-build) (lambda () (ert-fail "Built")))
+                ((symbol-function 'portal-download-runtime)
+                 (lambda () (ert-fail "Downloaded"))))
         (should (string-match-p "not built: run M-x portal-build"
                                 (cadr (should-error (portal-build-ensure)
                                                     :type 'user-error))))))))
 
+(defun portal-build-test--answer (key &optional record)
+  "Return a `read-multiple-choice' that answers KEY.
+It calls RECORD, if any, with the prompt and the choices it offered."
+  (lambda (prompt choices &rest _)
+    (when record (funcall record prompt choices))
+    (or (assq key choices) (ert-fail (format "Not offered: %c" key)))))
+
 (ert-deftest portal-build-ensure-offers-a-build-from-a-command ()
+  ;; This tree's version names no release, so no download is offered:
+  ;; the reason is given, and a build or nothing.
   (portal-build-test--with-root
-    (let ((exec-path (portal-build-test--tools)) asked built)
-      (cl-letf (((symbol-function 'y-or-n-p) (lambda (prompt) (push prompt asked) t))
+    (let ((exec-path (portal-build-test--tools)) (asked nil) built)
+      (cl-letf (((symbol-function 'read-multiple-choice)
+                 (portal-build-test--answer ?b (lambda (&rest question) (push question asked))))
                 ((symbol-function 'portal-build) (lambda () (push t built))))
         (portal-build-test--interactive
           ;; The command stops: the build runs in the background.
@@ -133,10 +145,15 @@ and no ZIG names the Zig, which would hide the tests' stand-ins."
                                   (cadr (should-error (portal-build-ensure)
                                                       :type 'user-error))))
           (should (equal built '(t)))
-          (should (string-match-p "downloads its dependencies" (car asked)))
+          (pcase-let ((`(,prompt ,choices) (car asked)))
+            (should (string-match-p "not built\\.  Portal's version names no release" prompt))
+            (should (equal (mapcar #'car choices) '(?b ?n)))
+            (should (string-match-p "downloads its dependencies" (nth 2 (assq ?b choices)))))
           ;; Declining builds nothing.
-          (cl-letf (((symbol-function 'y-or-n-p) #'ignore))
-            (should-error (portal-build-ensure) :type 'user-error))
+          (cl-letf (((symbol-function 'read-multiple-choice) (portal-build-test--answer ?n)))
+            (should (string-match-p "not built: run M-x portal-build\\'"
+                                    (cadr (should-error (portal-build-ensure)
+                                                        :type 'user-error)))))
           (should (equal built '(t)))
           ;; Unattended setups build without asking.
           (setq asked nil)
@@ -148,8 +165,10 @@ and no ZIG names the Zig, which would hide the tests' stand-ins."
 (ert-deftest portal-build-ensure-only-reports-when-it-must-not-build ()
   (portal-build-test--with-root
     (let ((exec-path (portal-build-test--tools)))
-      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) (ert-fail "Asked")))
-                ((symbol-function 'portal-build) (lambda () (ert-fail "Built"))))
+      (cl-letf (((symbol-function 'read-multiple-choice) (lambda (&rest _) (ert-fail "Asked")))
+                ((symbol-function 'portal-build) (lambda () (ert-fail "Built")))
+                ((symbol-function 'portal-download-runtime)
+                 (lambda () (ert-fail "Downloaded"))))
         (portal-build-test--interactive
           (let ((portal-build-on-first-use 'never))
             (should-error (portal-build-ensure) :type 'user-error))
@@ -169,11 +188,13 @@ and no ZIG names the Zig, which would hide the tests' stand-ins."
                                         (cadr (should-error (portal-build-ensure)
                                                             :type 'user-error))))
               (delete-process portal-build--process)))
-          ;; A build that cannot succeed is explained, not offered.
+          ;; A build that cannot succeed is explained, not offered; nor,
+          ;; here, a download, whose reason is given too.
           (let ((exec-path nil) (portal-build--tool-directories nil))
-            (should (string-match-p (string-join portal-build--tools ", ")
-                                    (cadr (should-error (portal-build-ensure)
-                                                        :type 'user-error))))))))))
+            (let ((text (cadr (should-error (portal-build-ensure) :type 'user-error))))
+              (should (string-search (string-join portal-build--tools ", ") text))
+              (should (string-search "neither download it nor build it here" text))
+              (should (string-search "names no release" text)))))))))
 
 (ert-deftest portal-build-ensure-checks-once-until-reloaded ()
   (portal-build-test--with-root
