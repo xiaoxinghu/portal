@@ -296,6 +296,15 @@ if(BUILD_TESTING)
             -l "${CMAKE_SOURCE_DIR}/test/portal-rex-tests.el"
             ${ert_batch})
     set_tests_properties(rex PROPERTIES TIMEOUT 60)
+    # The same with the fake sending a change's events after its answer, as
+    # a real server sometimes does.
+    add_test(NAME rex-events-after
+        COMMAND "${CMAKE_COMMAND}" -E env "PORTAL_TEST_BUILD=${CMAKE_BINARY_DIR}"
+            "PORTAL_TEST_REX_EVENTS=after"
+            ${test_emacs} -L "${CMAKE_SOURCE_DIR}"
+            -l "${CMAKE_SOURCE_DIR}/test/portal-rex-tests.el"
+            ${ert_batch})
+    set_tests_properties(rex-events-after PROPERTIES TIMEOUT 60)
     add_test(NAME excalidraw
         COMMAND ${test_emacs} -L "${CMAKE_SOURCE_DIR}"
             -l "${CMAKE_SOURCE_DIR}/test/portal-excalidraw-tests.el"

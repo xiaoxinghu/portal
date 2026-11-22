@@ -1776,6 +1776,27 @@ It and those before it are taken: a later call finds only newer ones."
     (portal-rex-parity-check-sessions (portal-rex-tests--connect server)
                                       temporary-file-directory)))
 
+(ert-deftest portal-rex-fake-sends-a-changes-events-either-side-of-its-answer ()
+  ;; The suite runs once each way; this proves the two ways differ.
+  (dolist (order '("before" "after"))
+    (let ((portal-fake-rex-events order))
+      (portal-rex-tests--with (server)
+        (let ((connection (portal-rex-tests--connect server)) seen)
+          (add-hook 'portal-rex-event-functions
+                    (lambda (_connection event)
+                      (push (plist-get (plist-get (plist-get (plist-get event :payload) :payload)
+                                                  :event)
+                                       :type)
+                            seen)))
+          (portal-rex-call-async connection "session.set_label"
+                                 '(:session_id "session:fake-1" :label "renamed")
+                                 (lambda (&rest _) (push 'answer seen)))
+          (portal-rex-tests--until connection (lambda () (= (length seen) 3)))
+          (should (equal (reverse seen)
+                         (if (equal order "before")
+                             '("session_label_changed" "session_view_changed" answer)
+                           '(answer "session_label_changed" "session_view_changed")))))))))
+
 (ert-deftest portal-rex-session-create-makes-a-session ()
   (portal-rex-tests--with (server)
     (let* ((connection (portal-rex-tests--connect server))
@@ -1822,7 +1843,7 @@ It and those before it are taken: a later call finds only newer ones."
       (portal-rex-session-rename connection "session:a" "server")
       (should (equal (portal-rex-tests--request server "session.set_label")
                      '(:session_id "session:a" :label "server")))
-      ;; The event came before the answer: renamed when it returns.
+      ;; Its event came before the answer or after: renamed when it returns.
       (should (equal (portal-rex-tests--names) '("*rex: play/shell*" "*rex: server/api*")))
       ;; Interactively, from a block's buffer: its session is the default,
       ;; and its label the text to edit.

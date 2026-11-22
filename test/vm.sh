@@ -199,10 +199,14 @@ main() {
         echo "Logs: $logs"
     }
     trap collect_logs EXIT
-    # SSH passes no environment; the tests' tier crosses with the stage limit.
+    # SSH passes no environment; the tests' tier and the fake Rex server's
+    # order of events cross with the stage limit.
     forward=("PORTAL_TEST_TIMEOUT=$timeout")
     if [[ -n ${PORTAL_TEST_EXPENSIVE:-} ]]; then
         forward+=("PORTAL_TEST_EXPENSIVE=$PORTAL_TEST_EXPENSIVE")
+    fi
+    if [[ -n ${PORTAL_TEST_REX_EVENTS:-} ]]; then
+        forward+=("PORTAL_TEST_REX_EVENTS=$PORTAL_TEST_REX_EVENTS")
     fi
     status=0
     "${ssh_vm[@]}" "$(quote env "${forward[@]}" /bin/bash \

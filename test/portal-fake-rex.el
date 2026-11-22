@@ -19,6 +19,13 @@
   (done 0 :documentation "How many of them it has said it finished.")
   (pending "" :documentation "The start of a report whose end is still to come."))
 
+(defvar portal-fake-rex-events (or (getenv "PORTAL_TEST_REX_EVENTS") "before")
+  "When a fake server started now sends a change's events: \"before\" or \"after\".
+Before the answer to the request that made the change, as a real
+server usually does, or after it, as it sometimes does.  The
+environment's PORTAL_TEST_REX_EVENTS sets it, so a suite runs either
+way; a test that needs one order binds it.")
+
 (defconst portal-fake-rex--script
   (expand-file-name "fake-rex-server.py"
                     (file-name-directory (or load-file-name buffer-file-name)))
@@ -52,6 +59,7 @@
                         :filter (lambda (_process text)
                                   (portal-fake-rex--filter server text))))
     (portal-fake-rex-take server :listening)
+    (portal-fake-rex-command server :events portal-fake-rex-events)
     server))
 
 (defun portal-fake-rex-stop (server)
