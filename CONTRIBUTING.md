@@ -483,8 +483,9 @@ essential set: the default loop's checks, then the launcher, rendering smoke
 and terminal shell startup suites, without `PORTAL_TEST_EXPENSIVE`. A run
 started by hand (`gh workflow run checks.yml`), as a release candidate's is,
 and any run on a `release/` branch run the full set: `PORTAL_TEST_EXPENSIVE=1`
-and `test/package-gui.sh` besides. Only such a run, without cached downloads,
-is a [release's evidence](docs/releasing.md#evidence).
+and `test/package-gui.sh` besides; `-f full=false` makes a run by hand
+essential, to try that tier on a branch. Only a full run without cached
+downloads is a [release's evidence](docs/releasing.md#evidence).
 
 ### Default loop
 

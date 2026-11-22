@@ -97,7 +97,8 @@ a new batch suite with `${ert_batch}` in CMake, and start a graphical one
 through `portal-gui-ert-start`, so that it honours the tiers too.
 
 The Checks workflow sets `PORTAL_TEST_EXPENSIVE` only on the full set's
-runs, those started by hand and those on a `release/` branch; a push to
+runs, those started by hand (unless `-f full=false`) and those on a
+`release/` branch; a push to
 `main` runs the default tier, and leaves out `test/package-gui.sh`
 ([Contributing](../CONTRIBUTING.md#checks) lists both). So a feature's one
 graphical proof must stay in the default tier, and an `:expensive` test is
@@ -801,8 +802,9 @@ as its second build takes about two minutes.
 
 ## Launcher graphical checks
 
-For the launcher's whole graphical suite, daily-use checks included, in one
-fresh Emacs:
+For the launcher's graphical suite in one fresh Emacs, with the daily-use
+check of live views (the configured-completion check runs in
+`test/launcher-daily-use.sh`, with the configuration it is given):
 
 ```sh
 sh test/launcher-gui.sh

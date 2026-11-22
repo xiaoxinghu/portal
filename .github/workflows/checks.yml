@@ -2,8 +2,8 @@
 # The checks in one job on one macOS runner, so the downloads and the build
 # serve them all, and the checks that run on Linux in a job on each Linux CPU.
 # Two tiers, as in CONTRIBUTING.md: a push to main runs the essential set; a
-# run started by hand, as on a release candidate's branch, or any run on a
-# release/ branch, runs the full set, which adds the tests tagged :expensive
+# run started by hand, as on a release candidate's branch, unless told
+# otherwise, and any run on a release/ branch, run the full set, which adds the tests tagged :expensive
 # and the package's first use in graphical Emacs, with its own second build.
 # Not on pull requests.
 # When every check of a job passed, it packs the build they tested as that
@@ -19,6 +19,10 @@ on:
     inputs:
       cache:
         description: Restore cached downloads (off proves a cold build)
+        type: boolean
+        default: true
+      full:
+        description: Run the full set (off runs the essential set, as a push to main does)
         type: boolean
         default: true
 
@@ -48,7 +52,7 @@ jobs:
       USE_CACHE: ${{ github.event_name != 'workflow_dispatch' || inputs.cache }}
       # The full set's runs: every ERT runner includes the tests tagged
       # :expensive, and the package's first use runs. Empty on main's pushes.
-      PORTAL_TEST_EXPENSIVE: ${{ (github.event_name == 'workflow_dispatch' || startsWith(github.ref_name, 'release/')) && '1' || '' }}
+      PORTAL_TEST_EXPENSIVE: ${{ ((github.event_name == 'workflow_dispatch' && inputs.full) || startsWith(github.ref_name, 'release/')) && '1' || '' }}
       # ERT says why each skipped test skipped, for a release's notes: those
       # are written from the logs alone, so every step that counts tests or
       # describes the machine writes its output there too.
@@ -389,7 +393,7 @@ jobs:
       # is not: Emacs is built there, and the archive run there.
       UBUNTU_IMAGE: ubuntu:26.04
       USE_CACHE: ${{ github.event_name != 'workflow_dispatch' || inputs.cache }}
-      PORTAL_TEST_EXPENSIVE: ${{ (github.event_name == 'workflow_dispatch' || startsWith(github.ref_name, 'release/')) && '1' || '' }}
+      PORTAL_TEST_EXPENSIVE: ${{ ((github.event_name == 'workflow_dispatch' && inputs.full) || startsWith(github.ref_name, 'release/')) && '1' || '' }}
       EMACS_TEST_VERBOSE: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
