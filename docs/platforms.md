@@ -58,6 +58,19 @@ Emacs built without pgtk, a text terminal, or a pgtk frame that GDK put on
 X11. [Building on Linux](../CONTRIBUTING.md#building-on-linux) says what a
 build needs and which checks run.
 
+The [runtime download](install.md#downloaded-runtimes) has an archive for
+x86-64 and one for aarch64, for glibc 2.43 or newer, and refuses musl, other
+CPUs and older glibc before downloading, offering a build. Which archive an
+install takes, and each refusal, is tested on fixtures only: no Linux release
+has published an archive, and no download has run on a desktop.
+
+**Untested: Emacs from Nix, Guix, Flatpak or Snap.** None has been tried,
+with a build or a download. Such an Emacs may not use the system's C library
+or library paths, and Portal does not special-case it: the download reads
+the glibc of the Emacs process itself, and the module load in a disposable
+Emacs decides. When that load fails, the install says what the runtime needs
+and offers the local build.
+
 The view machinery was run on 2026-11-20 on one machine, with a test pattern
 for content: Arch Linux on aarch64 (an M1 Pro under Asahi), Hyprland 0.56.2,
 Arch's `emacs-wayland` 31.1, GTK 3.24.52, GCC 16.1, CMake 4.5, Zig 0.17.1 and

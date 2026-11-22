@@ -111,37 +111,49 @@ version is 1.2.3.  Every name contains a space."
   "Change the source tree's native sources, writing TEXT into one."
   (portal-runtime-test--write (expand-file-name "native/Core/emacs.c" portal-build-root) text))
 
-(defun portal-runtime-test--release (&optional module)
+(defun portal-runtime-test--release (&optional module target)
   "Publish a release of the source tree as it is, and return its identity.
-Its runtime is built from the test module, or from MODULE, a file's
-contents, and packed by scripts/runtime-archive.py under the tag of the
-tree's version."
+Its runtime, for TARGET or this system's, is built from the test module,
+or from MODULE: a file's contents, or (:file FILE) for a file's own.  It
+is packed by scripts/runtime-archive.py under the tag of the tree's
+version."
   (let* ((identity (portal-build-source-identity))
          (version (portal-build-version))
-         (build (portal-runtime-test--file (format "builds/%s/" version))))
-    (dolist (file portal-build--artifacts)
-      (portal-runtime-test--write (expand-file-name file build) file))
-    (if module
-        (portal-runtime-test--write (expand-file-name portal-build--module build) module)
-      (copy-file (getenv "PORTAL_TEST_MODULE") (expand-file-name portal-build--module build) t))
-    (when portal-build--host
+         (target (or target (portal-runtime--target)))
+         (spec (cdr (assoc target portal-runtime--targets)))
+         (linux (string-prefix-p "linux-" target))
+         (build (portal-runtime-test--file (format "builds/%s %s/" target version)))
+         (place (lambda (file) (expand-file-name file build)))
+         (module-file (funcall place (if linux "portal.so"
+                                       "portal.bundle/Contents/MacOS/portal.dylib"))))
+    (dolist (file (plist-get spec :files))
+      (portal-runtime-test--write (funcall place file) file))
+    (pcase module
+      ('nil (copy-file (getenv "PORTAL_TEST_MODULE") module-file t))
+      (`(:file ,file) (copy-file file module-file t))
+      (_ (portal-runtime-test--write module-file module)))
+    (dolist (file (plist-get spec :executables))
       (portal-runtime-test--write
-       (expand-file-name portal-build--host build)
+       (funcall place file)
        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"ready\",\"protocol\":3,\"port\":4242,\
 \"token\":\"0123456789abcdef0123456789abcdef\"}'\nexec cat >/dev/null\n"
        #o755))
-    (portal-runtime-test--write (expand-file-name "portal.bundle/Contents/Info.plist" build)
-                                "<plist/>")
-    ;; A link within the runtime, as bundles have.
-    (make-symbolic-link "../Info.plist"
-                        (expand-file-name "portal.bundle/Contents/Resources/Info-link" build) t)
-    (dolist (file '("licenses/LICENSE" "licenses/README.md"))
-      (portal-runtime-test--write (expand-file-name file build) file))
-    (portal-runtime-test--write (expand-file-name portal-build--record build)
+    (if linux
+        ;; Ghostty's library under its soname, a link, as a build leaves it.
+        (let ((library (funcall place "ghostty-linux/lib/libghostty.so")))
+          (portal-runtime-test--write (funcall place "ghostty-linux/lib/ghostty-internal.so")
+                                      "Ghostty")
+          (delete-file library)
+          (make-symbolic-link "ghostty-internal.so" library))
+      (portal-runtime-test--write (funcall place "portal.bundle/Contents/Info.plist") "<plist/>")
+      ;; A link within the runtime, as bundles have.
+      (make-symbolic-link "../Info.plist"
+                          (funcall place "portal.bundle/Contents/Resources/Info-link") t))
+    (portal-runtime-test--write (funcall place portal-build--record)
                                 (prin1-to-string (list :identity identity :version version)))
     (portal-runtime-test--run (expand-file-name "scripts/runtime-archive.py"
                                                 portal-runtime-test--checkout)
-                              "pack" "--tag" (concat "v" version)
+                              "pack" "--tag" (concat "v" version) "--target" target
                               "--commit" "0123456789abcdef0123456789abcdef01234567"
                               build (portal-runtime-test--file (format "site/v%s" version)))
     identity))
@@ -211,6 +223,15 @@ Trust the run's certificate authority."
          :releases (or releases (portal-runtime-test--serve))
          :trustfiles gnutls-trustfiles)))
 
+(defun portal-runtime-test--paths (directory &optional target)
+  "Return the paths of the manifest and archive of TARGET in DIRECTORY.
+TARGET defaults to this system's; DIRECTORY is a tag's, as requested."
+  (let ((tag (car (last (split-string directory "/" t)))))
+    (mapcar (lambda (extension)
+              (concat directory (portal-runtime--asset tag (or target (portal-runtime--target))
+                                                       extension)))
+            '(".json" ".tar.gz"))))
+
 (defun portal-runtime-test--cache ()
   "Return what the runtime cache holds: each path, with a link's target.
 The lock is left out: it is the system's, not the cache's contents."
@@ -272,12 +293,57 @@ as packed is kept aside, so that the next variant starts from it too."
                     ("x86_64-apple-darwin24.1.0" . nil)))
       (let ((system-configuration (car case)))
         (should (equal (portal-runtime--target) (cdr case))))))
-  (let ((system-type 'gnu/linux) (system-configuration "aarch64-unknown-linux-gnu"))
+  ;; On Linux by the CPU and the C library, one runtime for each CPU
+  ;; whatever the distribution.
+  (let ((system-type 'gnu/linux))
+    (dolist (case '(("x86_64-pc-linux-gnu" . "linux-x86_64-gnu")
+                    ("x86_64-linux-gnu" . "linux-x86_64-gnu")
+                    ("aarch64-unknown-linux-gnu" . "linux-aarch64-gnu")
+                    ("x86_64-alpine-linux-musl" . nil)
+                    ("aarch64-unknown-linux-musl" . nil)
+                    ("riscv64-unknown-linux-gnu" . nil)
+                    ("i686-pc-linux-gnu" . nil)
+                    ("arm-unknown-linux-gnueabihf" . nil)
+                    ("x86_64-pc-linux-gnux32" . nil)))
+      (let ((system-configuration (car case)))
+        (should (equal (portal-runtime--target) (cdr case))))))
+  (let ((system-type 'berkeley-unix) (system-configuration "x86_64-unknown-freebsd15.0"))
     (should-not (portal-runtime--target))))
 
+(ert-deftest portal-runtime-describes-the-archives-runtime-archive-py-packs ()
+  (skip-unless (portal-runtime-test--python))
+  ;; The same targets, floors and entries as the script that packs them.
+  (let ((packed (with-temp-buffer
+                  (unless (eql 0 (call-process
+                                  (portal-runtime-test--python) nil t nil "-B" "-c"
+                                  "import json, runpy, sys
+print(json.dumps(runpy.run_path(sys.argv[1])['TARGETS']))"
+                                  (expand-file-name "scripts/runtime-archive.py"
+                                                    portal-runtime-test--checkout)))
+                    (error "%s" (buffer-string)))
+                  (goto-char (point-min))
+                  (json-parse-buffer :object-type 'alist :array-type 'list))))
+    (should (equal (sort (mapcar #'car portal-runtime--targets) #'string<)
+                   (sort (mapcar (lambda (pair) (symbol-name (car pair))) packed) #'string<)))
+    (pcase-dolist (`(,target . ,spec) portal-runtime--targets)
+      (let ((theirs (alist-get (intern target) packed)))
+        (should (equal (plist-get spec :floor) (alist-get 'floor theirs)))
+        (should (equal (plist-get spec :entries) (alist-get 'entries theirs)))
+        (should (equal (plist-get spec :executables) (alist-get 'executables theirs)))
+        (should-not (seq-difference (alist-get 'required theirs)
+                                    (append (plist-get spec :files) '("portal-build.eld")
+                                            (plist-get spec :executables)
+                                            (list (if (string-prefix-p "linux-" target)
+                                                      "portal.so"
+                                                    "portal.bundle/Contents/MacOS/portal.dylib")))))))
+    ;; A complete runtime is a complete build of its system.
+    (when-let* ((spec (cdr (assoc (portal-runtime--target) portal-runtime--targets))))
+      (should-not (seq-difference portal-build--artifacts (plist-get spec :files))))))
+
 (ert-deftest portal-runtime-problem-says-what-it-cannot-serve ()
+  ;; As an Apple Silicon Emacs, on whatever system the test runs.
   (portal-runtime-test--with-world
-    (cl-letf (((symbol-function 'portal-runtime--target) (lambda () "macos-arm64")))
+    (let ((system-type 'darwin) (system-configuration "aarch64-apple-darwin25.6.0"))
       (should-not (portal-runtime-problem))
       ;; Without its native sources Portal cannot tell which runtime it
       ;; needs: a version alone does not say.
@@ -288,8 +354,9 @@ as packed is kept aside, so that the next variant starts from it too."
                    (expand-file-name "native" portal-build-root))
       (portal-runtime-test--version "1.2")
       (should (string-match-p "names no release" (portal-runtime-problem))))
-    (cl-letf (((symbol-function 'portal-runtime--target) #'ignore))
-      (should (string-match-p "no runtime to download for .*M-x portal-build"
+    (let ((system-type 'darwin) (system-configuration "x86_64-apple-darwin24.1.0"))
+      (should (string-match-p "no runtime to download for x86_64-apple-darwin24\\.1\\.0: \
+build it with M-x portal-build\\'"
                               (portal-runtime-problem)))
       (should-error (portal-runtime-install) :type 'user-error))))
 
@@ -331,6 +398,183 @@ as packed is kept aside, so that the next variant starts from it too."
       (should (string-match-p (car case)
                               (cadr (should-error (funcall read (nth 1 case) (nth 2 case)))))))))
 
+;;; Linux: which runtime, and what it cannot serve
+
+(defun portal-runtime-test--libc (version)
+  "Make the world's process map name a C library of VERSION, and return it.
+VERSION is a glibc version, nil for a library that does not say, or
+`none' for a process map that names none, as musl's would not."
+  (let ((library (portal-runtime-test--file "lib dir/libc.so.6"))
+        (maps (portal-runtime-test--file "maps")))
+    (make-directory (file-name-directory library) t)
+    (with-temp-file library
+      (set-buffer-multibyte nil)
+      (setq buffer-file-coding-system 'no-conversion)
+      (insert "\177ELF\2\1\1\0" (make-string 4096 0))
+      (when (stringp version)
+        (insert (format "GNU C Library (Ubuntu GLIBC %s-2ubuntu2.7) stable release version %s.\n"
+                        version version)))
+      (insert (make-string 4096 0)))
+    (with-temp-file maps
+      (insert "aaaab4c10000-aaaab4c90000 r-xp 00000000 00:24 1951                       /usr/bin/emacs\n")
+      (unless (eq version 'none)
+        (insert (format "ffff87f60000-ffff88109000 r-xp 00000000 00:24 1954                       %s\n"
+                        library)))
+      (insert "ffff88140000-ffff88170000 r-xp 00000000 00:24 1963                       /usr/lib/ld-linux-aarch64.so.1\n"))
+    maps))
+
+(defmacro portal-runtime-test--as-linux (configuration glibc &rest body)
+  "Run BODY in the world as a Linux Emacs built for CONFIGURATION, with GLIBC.
+GLIBC is as `portal-runtime-test--libc' takes it.  The frame is a pgtk
+frame on Wayland, whatever this Emacs is."
+  (declare (indent 2))
+  `(dlet ((features (cons 'pgtk (remq 'ns features))))
+     (let ((system-type 'gnu/linux)
+           (system-configuration ,configuration)
+           (portal-runtime--maps (portal-runtime-test--libc ,glibc))
+           (window-system 'pgtk))
+       (cl-letf (((symbol-function 'pgtk-backend-display-class)
+                  (lambda () "GdkWaylandDisplay")))
+         ,@body))))
+
+(ert-deftest portal-runtime-reads-the-glibc-of-the-emacs-process ()
+  (portal-runtime-test--with-world
+    (dolist (version '("2.43" "2.39" "2.44"))
+      (let ((portal-runtime--maps (portal-runtime-test--libc version)))
+        (should (equal (portal-runtime--glibc) version))))
+    ;; What cannot be told is nil, not a guess.
+    (let ((portal-runtime--maps (portal-runtime-test--libc nil)))
+      (should-not (portal-runtime--glibc)))
+    (let ((portal-runtime--maps (portal-runtime-test--libc 'none)))
+      (should-not (portal-runtime--glibc)))
+    (let ((portal-runtime--maps (portal-runtime-test--file "no such maps")))
+      (should-not (portal-runtime--glibc))))
+  ;; And this Emacs's own, where it runs with glibc.
+  (when (equal (cdr (portal-runtime--linux-system)) "gnu")
+    (should (string-match-p "\\`2\\.[0-9]+\\'" (portal-runtime--glibc)))))
+
+(ert-deftest portal-runtime-refuses-what-no-linux-runtime-serves ()
+  (portal-runtime-test--with-world
+    ;; Served: either CPU with glibc at the floor or newer, or a glibc
+    ;; whose version cannot be told, which the probe decides.
+    (dolist (configuration '("x86_64-pc-linux-gnu" "aarch64-unknown-linux-gnu"))
+      (dolist (glibc '("2.43" "2.44" nil none))
+        (portal-runtime-test--as-linux configuration glibc
+          (should-not (portal-runtime--refusal))
+          (should-not (portal-runtime--display-problem)))))
+    ;; Refused, each with its reason and a build on offer.
+    (pcase-dolist (`(,configuration ,glibc ,pattern)
+                   '(("x86_64-alpine-linux-musl" none
+                      "Linux runtimes need glibc, and this Emacs uses musl: build it with M-x portal-build")
+                     ("aarch64-unknown-linux-musl" none "uses musl")
+                     ("x86_64-pc-linux-gnu" "2.39"
+                      "runtime needs glibc 2\\.43 or newer, and this Emacs uses glibc 2\\.39: build it with M-x portal-build")
+                     ("aarch64-unknown-linux-gnu" "2.42" "uses glibc 2\\.42: build it")
+                     ("riscv64-unknown-linux-gnu" "2.43"
+                      "are for x86-64 and aarch64, and this Emacs runs on riscv64: build it with M-x portal-build")
+                     ("i686-pc-linux-gnu" "2.43" "runs on i686: build it")
+                     ("x86_64-pc-linux-gnux32" "2.43"
+                      "need glibc, and this Emacs, built for x86_64-pc-linux-gnux32, does not use it: build it")))
+      (ert-info (configuration)
+        (portal-runtime-test--as-linux configuration glibc
+          (should (string-match-p pattern (portal-runtime-problem)))
+          (should (equal (portal-runtime-problem) (portal-runtime--refusal)))
+          (should-error (portal-runtime-install) :type 'user-error)
+          (should-not portal-runtime--process))))
+    ;; No runtime or build cures the display: say so, and offer neither.
+    (pcase-dolist (`(,setting ,pattern)
+                   '((no-pgtk "built with pure GTK, for Wayland")
+                     (x11 "frame on Wayland; this frame's display is a GdkX11Display")
+                     (text "this frame is a text terminal")))
+      (ert-info ((symbol-name setting))
+        ;; Before the CPU too: a build would not cure that either.
+        (dolist (configuration '("x86_64-pc-linux-gnu" "riscv64-unknown-linux-gnu"))
+          (portal-runtime-test--as-linux configuration "2.43"
+            (dlet ((features (if (eq setting 'no-pgtk) (remq 'pgtk features) features))
+                   (window-system (if (eq setting 'text) nil window-system)))
+              (cl-letf (((symbol-function 'pgtk-backend-display-class)
+                         (lambda () (if (eq setting 'x11) "GdkX11Display" "GdkWaylandDisplay"))))
+                (let ((problem (portal-runtime-problem)))
+                  (should (string-match-p pattern problem))
+                  (should (string-match-p "which no runtime or build of Portal changes\\'"
+                                          problem))
+                  (should-not (string-match-p "portal-build" problem))
+                  (should-error (portal-runtime-install) :type 'user-error))))))))))
+
+(ert-deftest portal-runtime-refuses-an-old-glibc-before-any-download ()
+  (portal-runtime-test--with-world
+    (portal-runtime-test--as-linux "x86_64-pc-linux-gnu" "2.41"
+      ;; The server is never asked: it cannot be reached.
+      (portal-runtime-test--refused "needs glibc 2\\.43 or newer, and this Emacs uses glibc 2\\.41"
+                                    "https://127.0.0.1:1/")
+      (should-not (file-exists-p (portal-runtime--target-directory))))))
+
+(ert-deftest portal-runtime-each-linux-cpu-takes-its-own-archive ()
+  ;; Both archives are released; each CPU fetches its own, and keeps it in
+  ;; a directory of its own.  The module load in a disposable Emacs is the
+  ;; system's own, so it is left out here: other tests run it.
+  (skip-unless (and (portal-runtime-test--python) (executable-find "openssl")))
+  (portal-runtime-test--with-world
+    (let ((identity (portal-build-source-identity)))
+      (dolist (target '("linux-x86_64-gnu" "linux-aarch64-gnu"))
+        (portal-runtime-test--release "not a module" target))
+      (pcase-dolist (`(,configuration ,target)
+                     '(("x86_64-pc-linux-gnu" "linux-x86_64-gnu")
+                       ("aarch64-unknown-linux-gnu" "linux-aarch64-gnu")))
+        (ert-info (target)
+          (portal-runtime-test--as-linux configuration "2.43"
+            (cl-letf (((symbol-function 'portal-runtime--probe) #'ignore))
+              (should (string-match-p "runtime of v1\\.2\\.3 is installed"
+                                      (portal-runtime-test--install))))
+            (should (equal (portal-runtime-test--requests)
+                           (portal-runtime-test--paths "/v1.2.3/" target)))
+            (let ((runtime (portal-runtime-installed)))
+              (should (equal runtime
+                             (file-name-as-directory
+                              (expand-file-name (concat target "/" identity)
+                                                portal-runtime-directory))))
+              (should (equal (file-symlink-p
+                              (expand-file-name "ghostty-linux/lib/libghostty.so" runtime))
+                             "ghostty-internal.so"))
+              (should (equal (directory-files (expand-file-name "ghostty-linux" runtime) nil
+                                              directory-files-no-dot-files-regexp)
+                             '("lib" "share"))))))))))
+
+(ert-deftest portal-runtime-a-misjudged-glibc-fails-at-the-probe ()
+  ;; The check before the download says yes, but the runtime needs a
+  ;; glibc this system lacks: as a Nix or Flatpak Emacs might, with a C
+  ;; library that is not the one the check read.  The loader refuses the
+  ;; module in the disposable Emacs, its message is shown, the build is
+  ;; offered, and the runtime already in use stays as it was.
+  (skip-unless (and (eq system-type 'gnu/linux) (portal-runtime-test--can-install)))
+  (portal-runtime-test--with-world
+    (let ((portal-runtime--maps (portal-runtime-test--libc "2.43"))
+          (newer (portal-runtime-test--file "newer glibc module.so"))
+          (working (portal-runtime-test--release)))
+      (portal-runtime-test--install)
+      ;; The test module, needing every glibc version it names as 9.x.
+      (with-temp-buffer
+        (set-buffer-multibyte nil)
+        (insert-file-contents-literally (getenv "PORTAL_TEST_MODULE"))
+        (goto-char (point-min))
+        (should (re-search-forward "GLIBC_2\\.[0-9]+" nil t))
+        (goto-char (point-min))
+        (while (re-search-forward "GLIBC_2\\.\\([0-9]+\\)" nil t)
+          (replace-match (concat "GLIBC_9." (make-string (length (match-string 1)) ?9)) t t))
+        (let ((coding-system-for-write 'no-conversion))
+          (write-region nil nil newer nil 'silent)))
+      (portal-runtime-test--version "1.2.4")
+      (portal-runtime-test--native-change "1.2.4")
+      (portal-runtime-test--release (list :file newer))
+      (let ((message (portal-runtime-test--refused "failed its check in a separate Emacs")))
+        (should (string-match-p "version `GLIBC_9\\.[0-9.]+' not found" message))
+        (should (string-match-p
+                 "\nPortal's runtime for linux-[a-z0-9_]+-gnu needs glibc 2\\.43 or newer, with \
+the system's GTK 3, Wayland and EGL: build it with M-x portal-build\\'"
+                 message)))
+      (should (equal (portal-runtime-test--current) working))
+      (should (equal (portal-runtime-test--runtimes) (list working))))))
+
 ;;; Installing
 
 (ert-deftest portal-runtime-installs-and-reuses-offline ()
@@ -340,16 +584,21 @@ as packed is kept aside, so that the next variant starts from it too."
       (should-not (portal-runtime-installed))
       (should (string-match-p "runtime of v1\\.2\\.3 is installed" (portal-runtime-test--install)))
       (should (equal (portal-runtime-test--requests)
-                     '("/v1.2.3/portal-runtime-v1.2.3-macos-arm64.json"
-                       "/v1.2.3/portal-runtime-v1.2.3-macos-arm64.tar.gz")))
+                     (portal-runtime-test--paths "/v1.2.3/")))
       (let ((runtime (portal-runtime-installed)))
         (should (equal runtime (file-name-as-directory
                                 (expand-file-name identity (portal-runtime--target-directory)))))
         (should (equal (portal-runtime-test--current) identity))
-        (should (file-executable-p (expand-file-name "portal-host" runtime)))
-        (should (equal (file-symlink-p (expand-file-name "portal.bundle/Contents/Resources/Info-link"
-                                                         runtime))
-                       "../Info.plist"))
+        (dolist (file (plist-get (cdr (assoc (portal-runtime--target) portal-runtime--targets))
+                                 :executables))
+          (should (file-executable-p (expand-file-name file runtime))))
+        (if (eq system-type 'darwin)
+            (should (equal (file-symlink-p
+                            (expand-file-name "portal.bundle/Contents/Resources/Info-link" runtime))
+                           "../Info.plist"))
+          (should (equal (file-symlink-p
+                          (expand-file-name "ghostty-linux/lib/libghostty.so" runtime))
+                         "ghostty-internal.so")))
         ;; It is a runtime Portal can use as it is.
         (let ((portal-build-directory runtime))
           (should-not (portal-build-problem))))
@@ -456,7 +705,7 @@ as packed is kept aside, so that the next variant starts from it too."
       (portal-runtime-test--refused "refuses to follow a redirect to http://127\\.0\\.0\\.1"
                                     (concat site "plain-redirect/"))
       (should (equal (portal-runtime-test--requests)
-                     '("/plain-redirect/v1.2.3/portal-runtime-v1.2.3-macos-arm64.json"))))))
+                     (list (car (portal-runtime-test--paths "/plain-redirect/v1.2.3/"))))))))
 
 (ert-deftest portal-runtime-refuses-certificates-it-cannot-verify ()
   (skip-unless (portal-runtime-test--can-install))
@@ -527,7 +776,7 @@ as packed is kept aside, so that the next variant starts from it too."
     (portal-runtime-test--native-change "unreleased")
     (portal-runtime-test--refused "built from other native sources than these.*M-x portal-build")
     (should (equal (portal-runtime-test--requests)
-                   '("/v1.2.3/portal-runtime-v1.2.3-macos-arm64.json")))
+                   (list (car (portal-runtime-test--paths "/v1.2.3/")))))
     ;; An archive whose own record is of other sources than its manifest's.
     (portal-runtime-test--version "1.2.4")
     (portal-runtime-test--release)
@@ -544,7 +793,7 @@ as packed is kept aside, so that the next variant starts from it too."
     (portal-runtime-test--release)
     (let ((site (portal-runtime-test--serve)))
       (pcase-dolist (`(,kind . ,pattern)
-                     '(("parent" . "not a plain path")
+                     `(("parent" . "not a plain path")
                        ("absolute" . "not a plain path")
                        ("foreign" . "extra, which is not of the runtime")
                        ("duplicate" . "licenses/LICENSE twice")
@@ -555,7 +804,10 @@ as packed is kept aside, so that the next variant starts from it too."
                        ("through-link" . "licenses/via")
                        ("hardlink" . "licenses/hard, which is neither")
                        ("fifo" . "licenses/fifo, which is neither")
-                       ("missing" . "holds licenses, portal-build.eld, portal.bundle, not")))
+                       ("beside" . "ghostty-linux/include/ghostty\\.h, which is not of the runtime")
+                       ("missing" . ,(if (eq system-type 'darwin)
+                                         "holds licenses, portal-build.eld, portal.bundle, not"
+                                       "holds ghostty-linux, licenses, portal-build.eld, not"))))
         (portal-runtime-test--vary kind)
         (ert-info (kind)
           (portal-runtime-test--refused pattern site)))
@@ -577,8 +829,10 @@ as packed is kept aside, so that the next variant starts from it too."
 (ert-deftest portal-runtime-interrupted-and-concurrent-installs-leave-the-old-one ()
   (skip-unless (portal-runtime-test--can-install))
   (portal-runtime-test--with-world
-    (let ((old (portal-runtime-test--release))
-          outcomes)
+    (cl-letf* (;; Batch Emacs's frame is a text terminal, which Linux refuses.
+               ((symbol-function 'portal-runtime--display-problem) #'ignore)
+               (old (portal-runtime-test--release))
+               (outcomes nil))
       (setq portal-runtime--releases (portal-runtime-test--serve))
       ;; Through the batch Emacs and its lock, as a user's install runs.
       (portal-runtime-test--wait
@@ -634,17 +888,30 @@ as packed is kept aside, so that the next variant starts from it too."
              (tag (concat "v" (portal-build-version))))
         (portal-runtime-test--run (expand-file-name "scripts/runtime-archive.py"
                                                     portal-build-root)
-                                  "pack" "--tag" tag
+                                  "pack" "--tag" tag "--target" (portal-runtime--target)
                                   "--commit" "0123456789abcdef0123456789abcdef01234567"
                                   build (portal-runtime-test--file (concat "site/" tag)))
         (should (string-match-p "is installed" (portal-runtime-test--install)))
         (let ((portal-build-directory (portal-runtime-installed)))
           (should-not (portal-build-problem)))
-        ;; The same files, modes and links as the reference unpacking.
-        (let ((unpacked (portal-runtime-test--file "unpacked")))
-          (portal-runtime-test--run (expand-file-name "scripts/runtime-archive.py"
-                                                      portal-build-root)
-                                    "unpack" (portal-runtime-test--manifest) unpacked)
+        ;; The same files, modes and links as the reference extraction,
+        ;; runtime-archive.py's own.  Not its unpack, which also audits the
+        ;; binaries as Checks does when it packs: a developer's Linux build,
+        ;; not built for the release's floor, fails that.
+        (let ((unpacked (portal-runtime-test--file "unpacked"))
+              (manifest (portal-runtime-test--manifest)))
+          (make-directory unpacked)
+          (portal-runtime-test--run
+           "-c" "import runpy, sys, tarfile
+from pathlib import Path
+script = runpy.run_path(sys.argv[1])
+with tarfile.open(sys.argv[2], 'r:gz') as tar:
+    script['extract'](tar, tar.getmembers(), Path(sys.argv[3]).resolve())"
+           (expand-file-name "scripts/runtime-archive.py" portal-build-root)
+           (expand-file-name (portal-runtime--asset (concat "v" (portal-build-version))
+                                                    (portal-runtime--target) ".tar.gz")
+                             (file-name-directory manifest))
+           unpacked)
           (let ((listing (lambda (directory)
                            (mapcar (lambda (file)
                                      (let ((attributes (file-attributes file)))
