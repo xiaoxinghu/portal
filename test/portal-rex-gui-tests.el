@@ -475,6 +475,15 @@ and the buffer current."
                                        :payload (:session_id "session:fake-1"
                                                  :event (:type "block_closed"
                                                          :payload (:block_id "block:fake-1")))))
+                      ;; A "rex-block" record sent before all this, as the
+                      ;; one for the block going live may be, is read now,
+                      ;; ahead of the `block_closed' waiting behind it in the
+                      ;; pipe: the module, having had the stream's end, must
+                      ;; not describe it yet.  Only the fake's output was
+                      ;; read so far, and the module given a moment more.
+                      (accept-process-output (portal-fake-rex-process server) 0.05 nil 1)
+                      (should (buffer-live-p buffer))
+                      (portal-view--dispatch (concat "rex-block " target))
                       (portal-rex-gui-tests--wait (lambda () (not (buffer-live-p buffer))))
                       ;; Long past the moment a block that stayed would say so.
                       (let ((deadline (+ (float-time) 0.5)))

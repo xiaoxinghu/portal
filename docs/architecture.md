@@ -629,7 +629,10 @@ Rex's own: its script, else its argv0, else its name. A block's program
 usually ends just before its block closes, which kills its buffer, so the
 core waits a quarter of a second after `child_exited` before it reports
 the exit, or a stream that ended meanwhile, and reports neither once the
-block has closed: a buffer about to go never shows them. The first paint
+block has closed: a buffer about to go never shows them. Until then
+`portal--inspect` describes the stream as it was before it ended, since
+Emacs may read a `rex-block` record sent before the end after it, ahead
+of the `block_closed` behind it. The first paint
 asks for no palette, so the terminal keeps its theme's.
 
 The stream and its terminal stay until the buffer goes, shown or not, so
