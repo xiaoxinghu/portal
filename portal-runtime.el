@@ -227,6 +227,10 @@ DIRECTORY defaults to `portal-runtime-directory'."
    (expand-file-name (portal-runtime--target)
                      (or directory portal-runtime-directory))))
 
+(defun portal-runtime-release ()
+  "Return the release tag whose runtime this Portal downloads, or nil."
+  (portal-runtime--tag))
+
 (defun portal-runtime-installed (&optional identity)
   "Return the directory of the installed runtime of IDENTITY, or nil.
 IDENTITY defaults to that of this Portal's native sources.  Only a runtime
@@ -236,6 +240,26 @@ that was checked and loaded in full ever has such a directory."
               (directory (expand-file-name identity (portal-runtime--target-directory)))
               ((file-directory-p directory)))
     (file-name-as-directory directory)))
+
+(defun portal-runtime-superseded (identity)
+  "Return non-nil when the runtime downloaded last is not for IDENTITY.
+That is when the cache's current runtime was downloaded for other native
+sources, as before an upgrade that changed them, and is still there."
+  (when-let* (((portal-runtime--target))
+              (place (portal-runtime--target-directory))
+              (current (plist-get (portal-runtime--state place) :current)))
+    (and (not (equal current identity))
+         (file-directory-p (expand-file-name current place)))))
+
+(defun portal-runtime-offer-build (text)
+  "Return TEXT, a reason Portal's runtime cannot be had, offering a build.
+Every reason a download fails or is refused is one to build from source,
+except one that already says so or that a build cannot change either."
+  (if (or (string-search "M-x portal-build" text)
+          (string-search "no runtime or build" text))
+      text
+    (concat (string-remove-suffix "." text) (if (string-match-p "[?!]\\'" text) "" ".")
+            "  To build it here instead, run M-x portal-build")))
 
 (defun portal-runtime--lock-command ()
   "Return the command that runs an install under the system's lock, or nil.
@@ -958,7 +982,9 @@ installing, 1 after a refusal, which the last line explains."
              (kill-emacs 1)))))
 
 (defun portal-runtime--finished (process callback)
-  "Report the end of the install PROCESS and call CALLBACK with its outcome."
+  "Report the end of the install PROCESS, through CALLBACK if any.
+CALLBACK is called with whether it succeeded and a sentence saying what
+happened; without one, the sentence is shown."
   (let* ((status (process-exit-status process))
          (buffer (process-buffer process))
          (last (when (buffer-live-p buffer)
@@ -972,8 +998,9 @@ installing, 1 after a refusal, which the last line explains."
                       "Portal's runtime install was interrupted")
                      (t (format "Portal's runtime was not installed: %s" (or last "see *portal-runtime*"))))))
     (when (eq portal-runtime--process process) (setq portal-runtime--process nil))
-    (message "%s" text)
-    (when callback (funcall callback ok text))))
+    (if callback
+        (funcall callback ok text)
+      (message "%s" text))))
 
 (defun portal-runtime-install (&optional callback)
   "Download and install the runtime that this Portal's native sources need.
@@ -985,7 +1012,8 @@ release was built from these native sources.  It checks the archive's size
 and SHA-256 against the manifest, unpacks and checks it, and loads it in a
 disposable Emacs before using it.  Return the install's process.
 When it ends, call CALLBACK, if any, with whether it succeeded and a
-sentence saying what happened.  Signal a `user-error' if it cannot start."
+sentence saying what happened; without one, show the sentence.  Signal a
+`user-error' if it cannot start."
   (when-let* ((problem (portal-runtime-problem)))
     (user-error "%s" problem))
   (when (process-live-p portal-runtime--process)
@@ -1016,6 +1044,49 @@ sentence saying what happened.  Signal a `user-error' if it cannot start."
     ;; Nothing reads its input: a question it asked would get no answer.
     (process-send-eof portal-runtime--process)
     portal-runtime--process))
+
+;;; The command
+
+(defun portal-runtime--report (ok text)
+  "Say what an install that succeeded when OK, as TEXT says, means for Portal.
+After a success, whether the next native command can go on, or must
+wait for a restart because this Emacs loaded the module of another build.
+After a failure, why, and that a build from source remains."
+  (setq portal-build--ready nil
+        portal-build--runtime nil)
+  (message "%s"
+           (if (not ok)
+               (portal-runtime-offer-build text)
+             (pcase (portal-build-problem)
+               ('nil "Portal's runtime is installed: retry your command")
+               ('restart "Portal's runtime is installed: restart Emacs to load its new \
+native module")
+               (problem (format "Portal's runtime is installed, but %s"
+                                (downcase (portal-build--describe problem))))))))
+
+;;;###autoload
+(defun portal-download-runtime ()
+  "Download Portal's native part, its runtime, instead of building it.
+The runtime is that of the release of this Portal's version, from GitHub,
+and only when that release was built from these native sources; one
+already downloaded for them is used again with no network.  The install
+runs in the background, shows its progress in *portal-runtime*, and says
+when it ends whether to retry the command, to restart Emacs because it
+loaded another module, or why it failed and that `portal-build' builds
+from source instead.  It never replaces a module Emacs has loaded.
+Portal uses its own build, when that is ready, before a runtime, and a
+build that `portal-build-directory' names before either: then nothing is
+downloaded.  Return the install's process."
+  (interactive)
+  (when portal-build-directory
+    (user-error "Portal uses the build in %s (`portal-build-directory'), which a \
+download does not replace" portal-build-directory))
+  (when (process-live-p portal-runtime--process)
+    (user-error "Portal's runtime is already being downloaded: see *portal-runtime*"))
+  (when-let* ((problem (portal-runtime-problem)))
+    (user-error "%s" (portal-runtime-offer-build problem)))
+  (message "Downloading Portal's runtime in *portal-runtime*")
+  (portal-runtime-install #'portal-runtime--report))
 
 (provide 'portal-runtime)
 ;;; portal-runtime.el ends here

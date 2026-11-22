@@ -4,9 +4,12 @@
 ;; Portal's native module, and on macOS its app host, are built from this
 ;; package's sources by build.sh, which `portal-build' runs in the background.  Before Portal
 ;; loads its module, `portal-build-ensure' checks that the build is complete
-;; and comes from the current sources, and offers to build it when it is not.
+;; and comes from the current sources.  When it is not, a runtime that
+;; portal-runtime.el downloaded for the same sources serves instead; when
+;; there is none either, the first native command offers to download one,
+;; to build here, or neither, as `portal-build-on-first-use' says.
 ;; Loading this file, compiling it and generating autoloads need no native
-;; code and never start a build.
+;; code and never start a build, a download or a question.
 ;;
 ;; Each build starts by removing the record of the last one and noting the
 ;; identity of its sources: a hash of the files it reads.  It ends by loading
@@ -24,6 +27,13 @@
 (declare-function portal-stop-server "portal-server" ())
 (declare-function portal-server-url "portal-server" ())
 (declare-function lm-header "lisp-mnt" (header))
+(declare-function portal-runtime-installed "portal-runtime" (&optional identity))
+(declare-function portal-runtime-superseded "portal-runtime" (identity))
+(declare-function portal-runtime-problem "portal-runtime" ())
+(declare-function portal-runtime-release "portal-runtime" ())
+(declare-function portal-download-runtime "portal-runtime" ())
+(declare-function portal-runtime-offer-build "portal-runtime" (text))
+(defvar portal-runtime--process)
 
 (defgroup portal nil "Native views and hosted UIs in Emacs." :group 'applications)
 
@@ -39,16 +49,29 @@ as straight.el and Elpaca, resolve to the linked sources.")
 (defcustom portal-build-directory nil
   "Directory holding Portal's built native module and app host.
 nil means the build directory in `portal-build-root', which `portal-build'
-builds.  Set it to use a build made elsewhere, such as a distribution's:
-Portal then reports a missing or stale build instead of offering to build."
+builds, or else a runtime downloaded for these sources.  Set it to use a
+build made elsewhere, such as a distribution's: Portal then reports a
+missing or stale build instead of offering to download or build one."
   :type '(choice (const :tag "Portal's own build" nil) directory))
 
 (defcustom portal-build-on-first-use 'ask
-  "What the first native command does when Portal's build is missing or stale.
-`ask' offers to build it, `always' builds without asking, and `never' only
-reports it.  Batch Emacs never builds or asks."
-  :type '(choice (const :tag "Offer to build" ask)
-                 (const :tag "Build without asking" always)
+  "What the first native command does without a usable native part.
+That is when Portal's native part is missing, or older than its sources.
+`ask' offers to download it, to build it here, or neither.
+`download' downloads it without asking: the runtime of this Portal's
+  release, when that release was built from these native sources.  When
+  it cannot, Portal says why and that `portal-build' can build it here; it
+  never builds instead.
+`build' builds it here without asking.  `always', its former name, still
+  means the same: it never downloads.
+`never' only reports it; `portal-download-runtime' and `portal-build'
+  remain.
+Batch Emacs never downloads, builds or asks, nor does Portal when
+`portal-build-directory' names a build made elsewhere."
+  :type '(choice (const :tag "Offer to download or build" ask)
+                 (const :tag "Download without asking" download)
+                 (const :tag "Build without asking" build)
+                 (const :tag "Build without asking (former name)" always)
                  (const :tag "Only report" never)))
 
 (defcustom portal-build-bun nil
@@ -123,8 +146,13 @@ On Linux, Zig too, which `portal-build--ghostty-problem' checks.")
   "Identity of the build whose module this Emacs loaded, or nil.")
 (defvar portal-build--ready nil
   "Non-nil once this Lisp found Portal's build ready.")
+(defvar portal-build--runtime nil
+  "Directory of the downloaded runtime Portal uses, or nil for its build.
+`portal-build-ensure' sets it when it finds a runtime ready in place of
+Portal's own build.")
 ;; Check again when this file is reloaded, as a package upgrade does.
-(setq portal-build--ready nil)
+(setq portal-build--ready nil
+      portal-build--runtime nil)
 
 (defun portal-build-check-loaded-module ()
   "Signal a `user-error' if Emacs needs a restart to use Portal's module.
@@ -137,9 +165,19 @@ Portal Lisp from before build records, so its build is unknown."
 restart Emacs to use it"))))
 
 (defun portal-build-file (name)
-  "Return the absolute name of NAME in Portal's build directory."
+  "Return the absolute name of NAME in Portal's build directory.
+That is `portal-build-directory', or the build directory in
+`portal-build-root', where `portal-build' builds."
   (expand-file-name name (or portal-build-directory
                              (expand-file-name "build" portal-build-root))))
+
+(defun portal-build-native-file (name)
+  "Return the absolute name of NAME in the native part Portal uses.
+That is Portal's build directory, or the downloaded runtime that
+`portal-build-ensure' chose in its place."
+  (if (and portal-build--runtime (not portal-build-directory))
+      (expand-file-name name portal-build--runtime)
+    (portal-build-file name)))
 
 (defun portal-build--input-files ()
   "Return the files the native build reads, relative to `portal-build-root'.
@@ -255,15 +293,12 @@ Interactively, SHOW is t."
   "Return the identity the last successful build recorded, or nil."
   (plist-get (portal-build--read portal-build--record) :identity))
 
-(defun portal-build-problem ()
-  "Return why Portal's build cannot be used now, or nil when it can.
-The result is `missing' for an absent or incomplete build, `stale' for one
-built from other sources, or `restart' when this Emacs loaded the module of
-another build.  Without native sources, as for a supplied build, a build
-from another version of Portal is stale."
+(defun portal-build--problem-in (current)
+  "Return why the build in Portal's build directory cannot be used, or nil.
+CURRENT is the identity of Portal's native sources, or nil without them.
+The values are those of `portal-build-problem'."
   (let* ((record (portal-build--read portal-build--record))
-         (recorded (plist-get record :identity))
-         (current (portal-build-source-identity)))
+         (recorded (plist-get record :identity)))
     (cond ((not (and recorded
                      (cl-every (lambda (file) (file-exists-p (portal-build-file file)))
                                portal-build--artifacts)))
@@ -274,13 +309,43 @@ from another version of Portal is stale."
            'stale)
           ((and portal-build--loaded (not (equal portal-build--loaded recorded))) 'restart))))
 
+(defun portal-build--state ()
+  "Return (PROBLEM . RUNTIME): what `portal-build-problem' says, and where.
+RUNTIME is the directory of a downloaded runtime to use in place of
+Portal's own build, or nil for that build.  Portal's own build comes
+first; when it cannot be used, a runtime downloaded for these native
+sources can, unless `portal-build-directory' names a build made
+elsewhere.  Without either, the problem is the build's, or `stale' when
+the runtime downloaded last was for other sources."
+  (let* ((current (portal-build-source-identity))
+         (own (portal-build--problem-in current)))
+    (if (or (memq own '(nil restart)) portal-build-directory (not current))
+        (cons own nil)
+      (require 'portal-runtime)
+      (let* ((runtime (portal-runtime-installed current))
+             (problem (and runtime (let ((portal-build-directory runtime))
+                                     (portal-build--problem-in current)))))
+        (cond ((and runtime (memq problem '(nil restart))) (cons problem runtime))
+              ((and (eq own 'missing) (portal-runtime-superseded current)) (cons 'stale nil))
+              (t (cons own nil)))))))
+
+(defun portal-build-problem ()
+  "Return why Portal's native part cannot be used now, or nil when it can.
+The native part is Portal's build or, when that cannot be used, a
+runtime downloaded for the same native sources.  The result is `missing'
+for an absent or incomplete build, `stale' for one built from other
+sources, or `restart' when this Emacs loaded the module of another build.
+Without native sources, as for a supplied build, a build from another
+version of Portal is stale."
+  (car (portal-build--state)))
+
 (defun portal-build--describe (problem)
   "Return a sentence about PROBLEM, a value of `portal-build-problem'."
   (pcase problem
     ('missing (if portal-build--host
                   "Portal's native module and app host are not built"
                 "Portal's native module is not built"))
-    ('stale "Portal's native build is older than its sources")
+    ('stale "Portal's native part is older than its sources")
     ('restart "Portal's native module changed after Emacs loaded it")))
 
 (defun portal-build--exec-path ()
@@ -418,38 +483,103 @@ the new one."
                (portal-build--detached-advice)))))
 
 (defun portal-build-ensure ()
-  "Signal a `user-error' unless Portal's build can be loaded now.
-When the build is missing or stale, start `portal-build' as
-`portal-build-on-first-use' says.  The build runs in the background, so
-the command that needed it stops either way and can be retried after."
+  "Signal a `user-error' unless Portal's native part can be loaded now.
+That is Portal's build or a runtime downloaded for its sources.  When
+neither is ready, download or build one as `portal-build-on-first-use'
+says.  Either runs in the background, so the command that needed it stops
+either way and can be retried after."
   (unless portal-build--ready
-    (let ((problem (portal-build-problem)))
+    (pcase-let ((`(,problem . ,runtime) (portal-build--state)))
       (if (null problem)
-          (setq portal-build--ready t)
+          (setq portal-build--ready t
+                portal-build--runtime runtime)
         (let ((description (portal-build--describe problem)))
           (cond ((eq problem 'restart)
                  (user-error "%s: restart Emacs to use it" description))
                 ((process-live-p portal-build--process)
                  (user-error "%s yet: retry when the build in *portal-build* finishes"
                              description))
+                ((and (boundp 'portal-runtime--process)
+                      (process-live-p portal-runtime--process))
+                 (user-error "%s yet: retry when the download in *portal-runtime* finishes"
+                             description))
                 (portal-build-directory
                  (user-error "%s in %s" description portal-build-directory))
-                ((or noninteractive (eq portal-build-on-first-use 'never)
-                     (not (or this-command (eq portal-build-on-first-use 'always))))
-                 (user-error "%s: run M-x portal-build" description))
-                (t
-                 (portal-build--check-prerequisites)
-                 (unless (or (eq portal-build-on-first-use 'always)
-                             (y-or-n-p (format "%s.  Build now?  The first build \
-downloads its dependencies and takes several minutes " description)))
-                   (user-error "%s: run M-x portal-build when ready" description))
-                 (portal-build)
-                 (user-error "Building Portal in *portal-build*: retry when it finishes"))))))))
+                (t (portal-build--first-use description))))))))
+
+(defun portal-build--first-use (description)
+  "Download or build Portal's native part, as `portal-build-on-first-use' says.
+DESCRIPTION says what is wrong with it.  Always signal a `user-error':
+the command that needed the native part stops, and a download or build
+it started runs in the background."
+  (let ((choice (if (eq portal-build-on-first-use 'always) 'build portal-build-on-first-use)))
+    (when (or noninteractive (eq choice 'never)
+              (not (or this-command (memq choice '(build download)))))
+      (user-error "%s: %s" description (portal-build--routes)))
+    (pcase choice
+      ('build (portal-build--start))
+      ('download
+       (when-let* ((reason (portal-build--download-problem)))
+         (user-error "%s, and Portal cannot download it: %s" description
+                     (portal-runtime-offer-build reason)))
+       (portal-build--download))
+      (_
+       (let ((download (portal-build--download-problem))
+             (build (condition-case err (progn (portal-build--check-prerequisites) nil)
+                      (user-error (cadr err)))))
+         (when (and download build)
+           (user-error "%s, and Portal can neither download it nor build it here.  %s.  %s"
+                       description download build))
+         (pcase (car (read-multiple-choice
+                      (concat description "." (if download (format "  %s." download) "")
+                              "  Get it now?")
+                      (append
+                       (unless download
+                         `((?d "download"
+                               ,(format "Download the runtime of Portal's release %s \
+from GitHub, check it and keep it in `portal-runtime-directory'"
+                                        (portal-runtime-release)))))
+                       (unless build
+                         '((?b "build here"
+                               "Build it from these sources with M-x portal-build.  \
+The first build downloads its dependencies and takes several minutes")))
+                       '((?n "not now"
+                             "Do neither.  M-x portal-download-runtime and \
+M-x portal-build remain")))))
+           (?d (portal-build--download))
+           (?b (portal-build--start))
+           (_ (user-error "%s: %s" description (portal-build--routes)))))))))
+
+(defun portal-build--download-problem ()
+  "Return why Portal cannot download its native part here, or nil.
+It asks no network: only a download can tell whether a release holds
+the runtime these sources need."
+  (require 'portal-runtime)
+  (portal-runtime-problem))
+
+(defun portal-build--routes ()
+  "Return what the user can run to get Portal's native part, as a sentence."
+  (if (portal-build--download-problem)
+      "run M-x portal-build"
+    "run M-x portal-build to build it here, or M-x portal-download-runtime to \
+download it"))
+
+(defun portal-build--start ()
+  "Start `portal-build' and stop the command that needed it."
+  (portal-build--check-prerequisites)
+  (portal-build)
+  (user-error "Building Portal in *portal-build*: retry when it finishes"))
+
+(defun portal-build--download ()
+  "Start `portal-download-runtime' and stop the command that needed it."
+  (portal-download-runtime)
+  (user-error "Downloading Portal's runtime in *portal-runtime*: retry when it finishes"))
 
 (defun portal-build-load-module ()
   "Load Portal's native module, once `portal-build-ensure' finds it ready."
   (portal-build-ensure)
-  (let ((identity (portal-build--recorded-identity)))
+  (let* ((portal-build-directory (file-name-as-directory (portal-build-native-file "")))
+         (identity (portal-build--recorded-identity)))
     (module-load (portal-build-file portal-build--module))
     (setq portal-build--loaded identity)))
 

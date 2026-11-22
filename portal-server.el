@@ -7,7 +7,8 @@
 
 (defcustom portal-server-program nil
   "Standalone UI host executable, including its Bun runtime.
-nil means the host in Portal's build: see `portal-build-directory'."
+nil means the host in Portal's build, or in the runtime downloaded in its
+place: see `portal-build-directory' and `portal-download-runtime'."
   :type '(choice (const :tag "Portal's build" nil) file)
   :group 'portal)
 
@@ -18,7 +19,7 @@ nil means the host in Portal's build: see `portal-build-directory'."
 
 (defun portal-server-program-file ()
   "Return the absolute file name of the UI host that `portal-start-server' runs."
-  (expand-file-name (or portal-server-program (portal-build-file "portal-host"))))
+  (expand-file-name (or portal-server-program (portal-build-native-file "portal-host"))))
 
 (defvar portal-server-ready-hook nil
   "Hook run when the shared UI host is ready, including after a restart.")
@@ -94,15 +95,16 @@ nil means the host in Portal's build: see `portal-build-directory'."
 The ready hook runs after the server has bound its HTTP listener."
   (interactive)
   (unless (and portal--server-process (process-live-p portal--server-process))
+    (unless portal-server-program
+      ;; Linux has no web views yet, so its build makes no host to offer.
+      (unless portal-build--host
+        (user-error "Portal has no web views on %s yet, so it has no app host"
+                    (if (eq system-type 'gnu/linux) "Linux" system-type)))
+      ;; Portal's own host is usable only as part of a complete, current
+      ;; build, or of the runtime that serves in its place.
+      (portal-build-ensure))
     (let* ((program (portal-server-program-file))
            (default-directory (file-name-directory program)))
-      (unless portal-server-program
-        ;; Linux has no web views yet, so its build makes no host to offer.
-        (unless portal-build--host
-          (user-error "Portal has no web views on %s yet, so it has no app host"
-                      (if (eq system-type 'gnu/linux) "Linux" system-type)))
-        ;; Portal's own host is usable only as part of a complete, current build.
-        (portal-build-ensure))
       (unless (file-executable-p program)
         (user-error "Build the Portal UI host with M-x portal-build: %s" program))
       (setq portal--server-process
