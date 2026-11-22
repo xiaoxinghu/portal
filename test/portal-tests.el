@@ -43,7 +43,7 @@ TARGET defaults to the selected pane's view.  Return its state."
              (and (< (float-time) deadline)
                   (not (and (equal (plist-get state :title) title)
                             (not (plist-get state :loading))))))
-      (sleep-for 0.05))
+      (accept-process-output nil 0.01))
     (should (equal (plist-get state :title) title))
     (should-not (plist-get state :loading))
     (should-not (plist-get state :error))
@@ -89,7 +89,7 @@ TARGET defaults to the selected pane's view.  Return its state."
              (and (< (float-time) deadline)
                   (not (and (string-prefix-p "UA " (or (plist-get state :title) ""))
                             (not (plist-get state :loading))))))
-      (sleep-for 0.05))
+      (accept-process-output nil 0.01))
     (should (string-prefix-p "UA " (or (plist-get state :title) "")))
     (substring (plist-get state :title) 3)))
 
@@ -353,7 +353,7 @@ sent before the connection closes."
                                      (re-search-forward pattern nil t)))))
                 (< (float-time) deadline))
       (redisplay t)
-      (sleep-for 0.05))
+      (accept-process-output nil 0.01))
     (should found)))
 
 ;;; Camera and microphone
@@ -575,13 +575,15 @@ return true;" constraints)))
 
 (defun portal-test--scroll-to (id)
   "Scroll the page so that its element with ID is at the top of the view.
-Wait until it stays there: the page may reveal its focused field once."
-  (let ((script (format "const top = document.getElementById('%s').getBoundingClientRect().top;
-                         if (Math.abs(top) > 1) document.getElementById('%s').scrollIntoView();
-                         return Math.abs(top) <= 1;"
-                        id id)))
-    (portal-terminal-test--wait
-     (lambda () (and (portal-excalidraw-gui--js script) (sit-for 0.3) (portal-excalidraw-gui--js script))))))
+Blur any focused field first so WebKit does not scroll back to reveal it."
+  (let ((script (format "const el = document.getElementById('%s');
+                         if (document.activeElement && document.activeElement !== document.body)
+                           document.activeElement.blur();
+                         el.scrollIntoView();
+                         await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+                         return Math.abs(el.getBoundingClientRect().top) <= 1;"
+                        id)))
+    (portal-terminal-test--wait (lambda () (portal-excalidraw-gui--js script)))))
 
 (ert-deftest portal-web-find-starts-from-what-is-on-screen ()
   :tags '(:gui)

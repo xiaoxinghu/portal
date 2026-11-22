@@ -124,6 +124,16 @@ jobs:
           path: ~/Library/Caches/org.swift.swiftpm
           key: swiftpm-${{ steps.env.outputs.image }}-${{ hashFiles('native/Package.resolved', 'native/libghostty-spm.json') }}
 
+      - name: Restore libghostty-spm test build
+        id: libghostty-tests-cache
+        if: env.USE_CACHE == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            build/libghostty-spm
+            build/libghostty-spm-tests
+          key: libghostty-spm-tests-${{ steps.env.outputs.image }}-${{ hashFiles('native/libghostty-spm.json', 'native/patches/libghostty-spm/*.patch', 'tools/patch-libghostty-spm.sh') }}
+
       - name: Restore Bun, host packages and Emacs packages
         id: build-cache
         if: env.USE_CACHE == 'true'
@@ -166,6 +176,7 @@ jobs:
           key: ${{ steps.build-cache.outputs.cache-primary-key }}
 
       - name: CTest
+        id: ctest
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           # The suites' own output, which the job log shows only for a failure,
@@ -174,6 +185,15 @@ jobs:
           ctest --test-dir build -j"$(sysctl -n hw.ncpu)" --output-on-failure || status=$?
           cp build/Testing/Temporary/LastTest.log "$PORTAL_TEST_LOGS/ctest.log" || :
           exit "$status"
+
+      - name: Save libghostty-spm test build
+        if: steps.libghostty-tests-cache.outcome == 'success' && steps.libghostty-tests-cache.outputs.cache-hit != 'true' && steps.ctest.outcome == 'success'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            build/libghostty-spm
+            build/libghostty-spm-tests
+          key: ${{ steps.libghostty-tests-cache.outputs.cache-primary-key }}
 
       - name: Biome
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -186,7 +206,7 @@ jobs:
       - name: Python
         if: ${{ !cancelled() }}
         # Verbose, so that a skipped test is named with its reason.
-        run: python3 -B -m unittest discover -v -s test -p 'test_*.py' 2>&1 | tee "$PORTAL_TEST_LOGS/python.log"
+        run: python3 -B test/run-python-tests.py 2>&1 | tee "$PORTAL_TEST_LOGS/python.log"
 
       - name: Whitespace
         if: ${{ !cancelled() }}
@@ -537,7 +557,7 @@ jobs:
 
       - name: Python
         if: ${{ !cancelled() }}
-        run: python3 -B -m unittest discover -v -s test -p 'test_*.py' 2>&1 | tee "$PORTAL_TEST_LOGS/python.log"
+        run: python3 -B test/run-python-tests.py 2>&1 | tee "$PORTAL_TEST_LOGS/python.log"
 
       # The runtime archive: the build the steps above tested, tarred as it
       # is, only after all of them passed, as on the Mac.

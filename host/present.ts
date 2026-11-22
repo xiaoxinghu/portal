@@ -90,6 +90,14 @@ export function elapsed(ms: number) {
  * it is gone then. */
 export const LASER_FADE = 2000;
 
+/** Effective laser fade duration in milliseconds: LASER_FADE unless a test
+ * overrides `globalThis.__portalLaserFade` with a positive number. */
+export function laserFade(): number {
+	const override = (globalThis as { __portalLaserFade?: unknown })
+		.__portalLaserFade;
+	return typeof override === "number" && override > 0 ? override : LASER_FADE;
+}
+
 /** The laser's one colour. */
 export const LASER_COLOUR = "#e03131";
 
@@ -217,7 +225,7 @@ export function drawLaser(layer: SVGSVGElement, laser?: LaserMessage) {
 		if (stroke.fading && !path.dataset.fading) {
 			path.dataset.fading = "1";
 			path.animate([{ opacity: 1 }, { opacity: 0 }], {
-				duration: LASER_FADE,
+				duration: laserFade(),
 				easing: "ease-in",
 				fill: "forwards",
 			});

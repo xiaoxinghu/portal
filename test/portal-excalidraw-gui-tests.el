@@ -808,6 +808,12 @@ console is in frame CONSOLE, the slide window in FRAME."
         (portal-excalidraw-gui--key 115 (ash 1 23) (string #xF729)) ; Home
         (portal-excalidraw-gui--showing frame main 1)
         (should (portal-view--with-frame-title main #'portal-test-native-target-frame))
+        ;; Shorten the fade in both pages so the test proves mirroring and
+        ;; fading without waiting the 2 s production fade (audience.test.ts
+        ;; checks the 2000 ms default).
+        (should (portal-excalidraw-gui--js "window.__portalLaserFade = 300; return true;"))
+        (should (portal-excalidraw-gui--in-frame
+                 frame "window.__portalLaserFade = 300; return true;" main))
         ;; A line dragged on the console's slide shows in both pages over
         ;; the same part of the slide, though each draws it at its own size.
         (portal-excalidraw-gui--drag-laser frame main)
@@ -818,14 +824,19 @@ console is in frame CONSOLE, the slide window in FRAME."
              (cl-every (lambda (page) (portal-excalidraw-gui--near (nth 2 page) line)) seen)))
           (should (portal-excalidraw-gui--near (nth 2 (nth 0 seen)) line))
           (should (portal-excalidraw-gui--near (nth 2 (nth 1 seen)) line))
-          ;; Each fades once the pointer lifts and is gone 2 seconds later.
+          ;; Each fades once the pointer lifts and is gone once the fade ends.
           (portal-excalidraw-gui--until
            (lambda ()
              (setq seen (portal-excalidraw-gui--laser frame main))
              (cl-every (lambda (page) (nth 1 page)) seen)))
           (dolist (page seen)
             (should (car page))
-            (should (<= 1800 (nth 1 page) 3500))))
+            (should (<= 250 (nth 1 page) 1500))))
+        ;; Restore the default 2 s fade so moving to the next slide proves
+        ;; neither page keeps the line until it fades.
+        (should (portal-excalidraw-gui--js "delete window.__portalLaserFade; return true;"))
+        (should (portal-excalidraw-gui--in-frame
+                 frame "delete window.__portalLaserFade; return true;" main))
         ;; A line drawn, then a move to the next slide: neither page keeps
         ;; it until it fades.
         (portal-excalidraw-gui--drag-laser frame main)

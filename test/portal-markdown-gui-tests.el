@@ -145,6 +145,8 @@ The folder is `portal-markdown-gui--directory'."
                                                      (number-sequence 1 150))
                                           "## Decisions\n"))
       (call-interactively (key-binding "g"))
+      (portal-terminal-test--wait
+       (lambda () (portal-excalidraw-gui--js "return !!document.getElementById('decisions');")))
       (portal-test--wait-for-page "arch notes.md")
       (portal-web-back)
       (portal-test--wait-for-page "README.md")

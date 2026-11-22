@@ -10,6 +10,7 @@ from pathlib import Path
 import hashlib
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -255,7 +256,9 @@ class BuildLockTests(unittest.TestCase):
             shutil.copy(ROOT / "build.sh", checkout / "build.sh")
             (checkout / "build").mkdir()
             holder = subprocess.Popen(
-                [*LOCK, str(checkout / "build" / ".build.lock"), "sleep", "30"])
+                [*LOCK, str(checkout / "build" / ".build.lock"), "sleep", "30"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True)
             try:
                 time.sleep(0.5)
                 started = time.monotonic()
@@ -265,7 +268,10 @@ class BuildLockTests(unittest.TestCase):
                 self.assertIn("another Portal build is running", result.stderr)
                 self.assertLess(time.monotonic() - started, 5)
             finally:
-                holder.kill()
+                try:
+                    os.killpg(holder.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
                 holder.wait()
 
 

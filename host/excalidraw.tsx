@@ -34,8 +34,8 @@ import {
 	type AudienceMessage,
 	drawLaser,
 	elapsed,
-	LASER_FADE,
 	type LaserMessage,
+	laserFade,
 	type PresentKey,
 	presentKey,
 	type ShowMessage,
@@ -999,7 +999,7 @@ function useLaser(current: Frame | undefined, index: number) {
 			timers.current.delete(timer);
 			strokes.current = strokes.current.filter((s) => s !== line.stroke);
 			schedule();
-		}, LASER_FADE);
+		}, laserFade());
 		timers.current.add(timer);
 		schedule();
 	};

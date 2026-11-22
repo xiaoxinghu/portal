@@ -8,6 +8,7 @@ import {
 	elapsed,
 	isLaser,
 	LASER_FADE,
+	laserFade,
 	laserWidth,
 	presentKey,
 	slideBy,
@@ -158,6 +159,7 @@ test("the time presenting is minutes and seconds, the minutes going past an hour
 
 test("a laser line fades for 2 seconds and is as wide as its slide allows", () => {
 	expect(LASER_FADE).toBe(2000);
+	expect(laserFade()).toBe(2000);
 	// Twice the slide, twice the line, so it looks the same at any size.
 	expect(laserWidth(3200, 1800)).toBe(2 * laserWidth(1600, 900));
 	expect(laserWidth(900, 1600)).toBe(laserWidth(1600, 900));

@@ -147,51 +147,68 @@ class Stand_ins(unittest.TestCase):
     """A Ghostty of three commits, a package with releases 1.0 (the first commit)
     and 2.0 (the third), a server on the third, and a checkout pinned to 1.0."""
 
+    @classmethod
+    def _release(cls, package, tag, ghostty, notes):
+        (package / "Ghostty.ref").write_text(ghostty + "\n")
+        (package / "Package.swift").write_text(
+            '.binaryTarget(name: "libghostty", url: "https://example.invalid/'
+            f'upstream.{ghostty[:12]}/GhosttyKit.xcframework.zip", checksum: "00")\n')
+        (package / "NOTES").write_text(notes)
+        git(package, "add", ".")
+        git(package, "commit", "-q", "-m", tag)
+        git(package, "tag", tag)
+
+    @classmethod
+    def setUpClass(cls):
+        cls._template_tmp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls._template_tmp.cleanup)
+        cls._template = Path(cls._template_tmp.name)
+
+        ghostty = cls._template / "ghostty"
+        ghostty.mkdir()
+        git(ghostty, "init", "-q")
+        cls._commits = []
+        for n in range(3):
+            git(ghostty, "commit", "-q", "--allow-empty", "-m", f"g{n}")
+            cls._commits.append(git(ghostty, "rev-parse", "HEAD"))
+
+        package = cls._template / "package"
+        package.mkdir()
+        git(package, "init", "-q")
+        # Far enough apart that a patch to one line has none of another in its context.
+        gap = "".join(f"{n}\n" for n in range(6))
+        cls._release(package, "1.0", cls._commits[0], f"one\n{gap}two\n{gap}three\n")
+        cls._release(package, "2.0", cls._commits[2], f"one\n{gap}TWO\n{gap}three\n")
+        git(package, "tag", f"upstream.{cls._commits[2][:12]}")
+        git(package, "tag", "storage.9.9")
+
+        checkout = cls._template / "portal"
+        (checkout / "native" / "patches" / "libghostty-spm").mkdir(parents=True)
+        (checkout / "native" / "libghostty-spm.json").write_text(json.dumps(
+            {"url": "https://example.invalid/libghostty-spm.git", "version": "1.0",
+             "revision": git(package, "rev-parse", "1.0")}, indent="\t") + "\n")
+
+        rex = cls._template / "rex"
+        record = fixture("ghostty-build-record.txt").strip().replace(
+            "5813c9461", cls._commits[2][:9])
+        rex.write_text(f'#!/bin/sh\necho "rex 0.0.0-test"\nexit 0\n{record}\n')
+        rex.chmod(0o755)
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.dir = Path(self.temporary.name)
+        shutil.copytree(self._template, self.dir, dirs_exist_ok=True)
+        self.commits = list(self._commits)
         self.ghostty = self.dir / "ghostty"
-        self.ghostty.mkdir()
-        git(self.ghostty, "init", "-q")
-        self.commits = []
-        for n in range(3):
-            git(self.ghostty, "commit", "-q", "--allow-empty", "-m", f"g{n}")
-            self.commits.append(git(self.ghostty, "rev-parse", "HEAD"))
-
         self.package = self.dir / "package"
-        self.package.mkdir()
-        git(self.package, "init", "-q")
-        # Far enough apart that a patch to one line has none of another in its context.
-        gap = "".join(f"{n}\n" for n in range(6))
-        self.release("1.0", self.commits[0], f"one\n{gap}two\n{gap}three\n")
-        self.release("2.0", self.commits[2], f"one\n{gap}TWO\n{gap}three\n")
-        git(self.package, "tag", f"upstream.{self.commits[2][:12]}")
-        git(self.package, "tag", "storage.9.9")
-
         self.checkout = self.dir / "portal"
-        (self.checkout / "native" / "patches" / "libghostty-spm").mkdir(parents=True)
-        (self.checkout / "native" / "libghostty-spm.json").write_text(json.dumps(
-            {"url": "https://example.invalid/libghostty-spm.git", "version": "1.0",
-             "revision": git(self.package, "rev-parse", "1.0")}, indent="\t") + "\n")
-
         self.rex = self.dir / "rex"
-        record = fixture("ghostty-build-record.txt").strip().replace(
-            "5813c9461", self.commits[2][:9])
-        self.rex.write_text(f'#!/bin/sh\necho "rex 0.0.0-test"\nexit 0\n{record}\n')
-        self.rex.chmod(0o755)
 
     def tearDown(self):
         self.temporary.cleanup()
 
     def release(self, tag, ghostty, notes):
-        (self.package / "Ghostty.ref").write_text(ghostty + "\n")
-        (self.package / "Package.swift").write_text(
-            '.binaryTarget(name: "libghostty", url: "https://example.invalid/'
-            f'upstream.{ghostty[:12]}/GhosttyKit.xcframework.zip", checksum: "00")\n')
-        (self.package / "NOTES").write_text(notes)
-        git(self.package, "add", ".")
-        git(self.package, "commit", "-q", "-m", tag)
-        git(self.package, "tag", tag)
+        self._release(self.package, tag, ghostty, notes)
 
     def patch(self, name, old, new, at="2.0"):
         """A patch, made with format-patch at AT, that changes NOTES line OLD to NEW."""
@@ -377,41 +394,57 @@ class Linux(unittest.TestCase):
     native/ghostty.json pins v1.0.0, and a Linux server whose library_version is
     1.0.1, without a commit."""
 
+    @classmethod
+    def _write_server(cls, path, version):
+        record = fixture("ghostty-build-record.txt").strip().replace(
+            '"1.1.0-dev+5813c9461","commit":"5813c9461"', f'"{version}","commit":null')
+        assert f'"library_version":"{version}"' in record
+        path.write_text(f'#!/bin/sh\necho "rex 0.0.0-linux"\nexit 0\n{record}\n'
+                        + fixture("go-build-info.txt"))
+        path.chmod(0o755)
+
+    @classmethod
+    def setUpClass(cls):
+        cls._template_tmp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls._template_tmp.cleanup)
+        cls._template = Path(cls._template_tmp.name)
+
+        ghostty = cls._template / "ghostty"
+        ghostty.mkdir()
+        git(ghostty, "init", "-q")
+        cls._commits = []
+        for n in range(3):
+            git(ghostty, "commit", "-q", "--allow-empty", "-m", f"g{n}")
+            cls._commits.append(git(ghostty, "rev-parse", "HEAD"))
+        git(ghostty, "tag", "-a", "-m", "Ghostty 1.0.0", "v1.0.0", cls._commits[0])
+        git(ghostty, "tag", "-a", "-m", "libghostty-vt 1.0.1", "vt-1.0.1", cls._commits[2])
+
+        checkout = cls._template / "portal"
+        (checkout / "native").mkdir(parents=True)
+        (checkout / "native" / "ghostty.json").write_text(json.dumps(
+            {"url": "https://example.invalid/ghostty.git", "version": "v1.0.0",
+             "revision": cls._commits[0], "zig": "0.0.0"}, indent="\t") + "\n")
+
+        bin_dir = cls._template / "bin"
+        bin_dir.mkdir()
+        cls._write_server(bin_dir / "rex", "1.0.1")
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.dir = Path(self.temporary.name)
+        shutil.copytree(self._template, self.dir, dirs_exist_ok=True)
+        self.commits = list(self._commits)
         self.ghostty = self.dir / "ghostty"
-        self.ghostty.mkdir()
-        git(self.ghostty, "init", "-q")
-        self.commits = []
-        for n in range(3):
-            git(self.ghostty, "commit", "-q", "--allow-empty", "-m", f"g{n}")
-            self.commits.append(git(self.ghostty, "rev-parse", "HEAD"))
-        git(self.ghostty, "tag", "-a", "-m", "Ghostty 1.0.0", "v1.0.0", self.commits[0])
-        git(self.ghostty, "tag", "-a", "-m", "libghostty-vt 1.0.1", "vt-1.0.1", self.commits[2])
-
         self.checkout = self.dir / "portal"
-        (self.checkout / "native").mkdir(parents=True)
-        (self.checkout / "native" / "ghostty.json").write_text(json.dumps(
-            {"url": "https://example.invalid/ghostty.git", "version": "v1.0.0",
-             "revision": self.commits[0], "zig": "0.0.0"}, indent="\t") + "\n")
-
         self.bin = self.dir / "bin"
-        self.bin.mkdir()
         self.rex = self.bin / "rex"
-        self.server("1.0.1")
 
     def tearDown(self):
         self.temporary.cleanup()
 
     def server(self, version):
         """The stand-in server, its library_version VERSION, without a commit."""
-        record = fixture("ghostty-build-record.txt").strip().replace(
-            '"1.1.0-dev+5813c9461","commit":"5813c9461"', f'"{version}","commit":null')
-        self.assertIn(f'"library_version":"{version}"', record)
-        self.rex.write_text(f'#!/bin/sh\necho "rex 0.0.0-linux"\nexit 0\n{record}\n'
-                            + fixture("go-build-info.txt"))
-        self.rex.chmod(0o755)
+        self._write_server(self.rex, version)
 
     def run_tool(self, *args, ghostty=True, path=None):
         env = {**GIT_ENV, "PATH": os.pathsep.join([str(self.bin), os.environ["PATH"]])
