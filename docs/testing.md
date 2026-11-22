@@ -673,8 +673,11 @@ graphical one too:
   timers, so a lost connection stays lost; these tests take messages by
   waiting, as `portal-rex-call` does.
 - `test/portal-rex-gui-tests.el`, part of `sh test/views-gui.sh` on macOS
-  and of `sh test/linux-gui.sh` on Linux, proves the record: events, answers and a lost connection reaching an idle Emacs, and
-  blocks' buffers following a server meanwhile. It also shows a block in a
+  and of `sh test/linux-gui.sh` on Linux, proves the record: events,
+  answers and a closed connection reaching an idle Emacs, blocks' buffers
+  following a server meanwhile, and what a block's program says. Those
+  tests come first in the file and wait for no block's screen; the rest
+  show a block in a
   real Ghostty view: the first paint, the stream, a pane's new size, a
   hidden buffer kept current, keys typed in order with one write out at a
   time, and queries in the block's output that the view leaves unanswered.

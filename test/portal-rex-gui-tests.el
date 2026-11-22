@@ -7,6 +7,16 @@
 ;; follow a server while Emacs is idle.  The server is
 ;; test/fake-rex-server.py on a socket of its own, never the user's Rex
 ;; server; test/portal-rex-tests.el covers the client's behavior in batch.
+;;
+;; The tests before the heading "A block's screen" need only a graphical
+;; frame's event loop, where the module's timers and its sockets' wakes
+;; run: the record, answers and events in an idle Emacs, buffers following
+;; the server, and what a block's program says.  Two open a block's view
+;; and wait for nothing it draws.  From that heading on, every test waits
+;; for a block's screen, a fed terminal painted from the block's stream:
+;; among them a lost connection coming back by itself as the same client,
+;; and a restarted server's buffers replacing the old.  The file runs in
+;; test/views-gui.sh on macOS and in test/linux-gui.sh on Linux.
 
 (require 'ert)
 (require 'portal-rex)
@@ -170,6 +180,142 @@ its messages: only the module's record can bring them."
               (portal-fake-rex-command server :close 1002 :reason "protocol error")
               (portal-rex-gui-tests--wait (lambda () (null (portal-rex-connections)))))
             (should-not (funcall completions)))
+        (mapc #'portal-rex-disconnect (portal-rex-connections))))))
+
+(ert-deftest portal-rex-gui-choosing-a-block-shows-it ()
+  :tags '(:gui)
+  (portal-fake-rex-with (server)
+    (portal-fake-rex-command
+     server :blocks '(:session:fake-1
+                      [(:block_id "block:fake-1" :label "shell" :placement "placed")
+                       (:block_id "block:fake-2" :label "logs" :placement "placed")]))
+    (let ((portal-rex-socket (portal-fake-rex-socket server)))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (switch-to-buffer (get-buffer-create "*rex-gui-elsewhere*"))
+            (portal-rex-connect)
+            (let ((logs (get-buffer "*rex: fake/logs*")))
+              ;; Listed among the terminals before any window shows it.
+              (should (memq logs (portal-terminal-buffers)))
+              (should-not (buffer-local-value 'portal-view--target logs))
+              ;; Chosen, it is shown, and so opens its view.
+              (portal-terminal--visit logs)
+              (should (eq (window-buffer) logs))
+              (redisplay t)
+              (should (buffer-local-value 'portal-view--target logs))
+              (should (equal (plist-get (portal-fake-rex-request server "session.own_block")
+                                        :payload)
+                             '(:session_id "session:fake-1" :block_ids ["block:fake-2"]
+                               :mode "request")))
+              ;; It is the terminal the chooser and next and previous go by.
+              (should (memq logs (portal-terminal-buffers)))
+              (portal-terminal-next)
+              (should (equal (buffer-name) "*rex: fake/shell*"))))
+        (mapc #'portal-rex-disconnect (portal-rex-connections))
+        (kill-buffer "*rex-gui-elsewhere*")))))
+
+;;; What a block's program says
+
+(ert-deftest portal-rex-gui-a-blocks-status-is-asked-again-after-a-loss ()
+  :tags '(:gui)
+  ;; Nothing is replayed after a loss: what a block's program reported
+  ;; meanwhile comes from asking the block again once Emacs is back, for
+  ;; a block no window has shown.
+  (portal-fake-rex-with (server)
+    (let* ((portal-rex-socket (portal-fake-rex-socket server))
+           (connection (portal-rex-connect))
+           (buffer (portal-rex-block-buffer connection "block:fake-1"))
+           (state (lambda ()
+                    (plist-get (plist-get (portal-terminal-metadata buffer) :status) :state)))
+           (report (lambda (state stamp)
+                     (portal-fake-rex-command
+                      server :block_event "block:fake-1" :name "program_status_changed"
+                      :payload (list :id "" :record (list :state state :updated_at stamp)
+                                     :reason "report"))))
+           changes
+           (portal-rex-status-functions
+            (list (lambda (_buffer old new)
+                    (push (list (plist-get old :state) (plist-get new :state)) changes))))
+           (inhibit-message t))
+      (unwind-protect
+          (progn
+            (funcall report "working" "1")
+            (portal-rex-gui-tests--wait (lambda () (eq (funcall state) 'working)))
+            (portal-fake-rex-command server :upgrade "refuse")
+            (portal-fake-rex-command server :drop_control t)
+            (portal-rex-gui-tests--wait (lambda () (not (portal-rex-live-p connection))))
+            ;; The turn ends while Emacs is away.
+            (funcall report "done" "2")
+            (should (eq (funcall state) 'working))
+            (portal-fake-rex-command server :upgrade "ok")
+            (portal-rex-gui-tests--wait (lambda () (eq (funcall state) 'done)) 10)
+            (should (equal (reverse changes) '((nil working) (working done))))
+            (should (plist-get (plist-get (portal-terminal-metadata buffer) :status) :waiting)))
+        (mapc #'portal-rex-disconnect (portal-rex-connections))))))
+
+(ert-deftest portal-rex-gui-the-echo-area-says-a-block-asks ()
+  :tags '(:gui)
+  ;; An agent asking in a block no window shows reaches an idle Emacs's
+  ;; echo area, and stays in *Messages*.
+  (portal-fake-rex-with (server)
+    (let* ((portal-rex-socket (portal-fake-rex-socket server))
+           (portal-rex-status-announce t)
+           (connection (portal-rex-connect))
+           (buffer (portal-rex-block-buffer connection "block:fake-1"))
+           (line (format "portal: %s asks: Clean up the task now?" (buffer-name buffer))))
+      (unwind-protect
+          (progn
+            (should-not (eq buffer (window-buffer (selected-window))))
+            (message nil)
+            (should (string-search
+                     line
+                     (portal-rex-gui-tests--messages
+                      (lambda ()
+                        (portal-fake-rex-command
+                         server :block_event "block:fake-1" :name "program_status_changed"
+                         :payload '(:id "" :record (:state "blocked" :kind "question"
+                                                    :msg "Clean up the task now?")
+                                    :reason "report"))
+                        (portal-rex-gui-tests--wait
+                         (lambda () (equal (current-message) line))))))))
+        (message nil)
+        (mapc #'portal-rex-disconnect (portal-rex-connections))))))
+
+(ert-deftest portal-rex-gui-the-list-of-agents-follows-an-idle-emacs ()
+  :tags '(:gui)
+  ;; *Rex agents* left open in a window: an agent at work starts to ask,
+  ;; and its row says so, with no key pressed.
+  (portal-fake-rex-with (server)
+    (let* ((portal-rex-socket (portal-fake-rex-socket server))
+           (connection (portal-rex-connect))
+           (buffer (portal-rex-block-buffer connection "block:fake-1"))
+           (report (lambda (&rest record)
+                     (portal-fake-rex-command
+                      server :block_event "block:fake-1" :name "program_status_changed"
+                      :payload (list :id "" :record record :reason "report"))))
+           (row (lambda ()
+                  (with-current-buffer "*Rex agents*"
+                    (save-excursion
+                      (goto-char (point-min))
+                      (buffer-substring-no-properties (pos-bol) (pos-eol))))))
+           (inhibit-message t))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (portal-rex-list-agents)
+            (redisplay t)
+            (funcall report :state "working" :app "claude-code" :msg "Reading slides.ts")
+            (portal-rex-gui-tests--wait (lambda () (string-search "◌ working" (funcall row))))
+            (should (string-search (buffer-name buffer) (funcall row)))
+            (should (string-search "Reading slides.ts" (funcall row)))
+            (funcall report :state "blocked" :kind "question" :app "claude-code"
+                     :msg "Clean up the task now?")
+            (portal-rex-gui-tests--wait (lambda () (string-search "● question" (funcall row))))
+            (should (string-search "Clean up the task now?" (funcall row)))
+            (redisplay t)
+            (should (eq (window-buffer (selected-window)) (get-buffer "*Rex agents*"))))
+        (when (get-buffer "*Rex agents*") (kill-buffer "*Rex agents*"))
         (mapc #'portal-rex-disconnect (portal-rex-connections))))))
 
 ;;; A block's screen
@@ -636,39 +782,6 @@ Return its grid as (COLUMNS ROWS)."
         (mapc #'portal-rex-disconnect (portal-rex-connections))
         (kill-buffer "*rex-gui-elsewhere*")))))
 
-(ert-deftest portal-rex-gui-choosing-a-block-shows-it ()
-  :tags '(:gui)
-  (portal-fake-rex-with (server)
-    (portal-fake-rex-command
-     server :blocks '(:session:fake-1
-                      [(:block_id "block:fake-1" :label "shell" :placement "placed")
-                       (:block_id "block:fake-2" :label "logs" :placement "placed")]))
-    (let ((portal-rex-socket (portal-fake-rex-socket server)))
-      (unwind-protect
-          (save-window-excursion
-            (delete-other-windows)
-            (switch-to-buffer (get-buffer-create "*rex-gui-elsewhere*"))
-            (portal-rex-connect)
-            (let ((logs (get-buffer "*rex: fake/logs*")))
-              ;; Listed among the terminals before any window shows it.
-              (should (memq logs (portal-terminal-buffers)))
-              (should-not (buffer-local-value 'portal-view--target logs))
-              ;; Chosen, it is shown, and so opens its view.
-              (portal-terminal--visit logs)
-              (should (eq (window-buffer) logs))
-              (redisplay t)
-              (should (buffer-local-value 'portal-view--target logs))
-              (should (equal (plist-get (portal-fake-rex-request server "session.own_block")
-                                        :payload)
-                             '(:session_id "session:fake-1" :block_ids ["block:fake-2"]
-                               :mode "request")))
-              ;; It is the terminal the chooser and next and previous go by.
-              (should (memq logs (portal-terminal-buffers)))
-              (portal-terminal-next)
-              (should (equal (buffer-name) "*rex: fake/shell*"))))
-        (mapc #'portal-rex-disconnect (portal-rex-connections))
-        (kill-buffer "*rex-gui-elsewhere*")))))
-
 (ert-deftest portal-rex-gui-desktop-puts-blocks-back-in-their-panes ()
   :tags '(:gui)
   ;; Three blocks across two tabs and a split; Emacs quits and starts
@@ -1043,42 +1156,7 @@ Return its grid as (COLUMNS ROWS)."
           (redisplay t)))
       (kill-buffer "*rex-gui-elsewhere*"))))
 
-(ert-deftest portal-rex-gui-a-blocks-status-is-asked-again-after-a-loss ()
-  :tags '(:gui)
-  ;; Nothing is replayed after a loss: what a block's program reported
-  ;; meanwhile comes from asking the block again once Emacs is back, for
-  ;; a block no window has shown.
-  (portal-fake-rex-with (server)
-    (let* ((portal-rex-socket (portal-fake-rex-socket server))
-           (connection (portal-rex-connect))
-           (buffer (portal-rex-block-buffer connection "block:fake-1"))
-           (state (lambda ()
-                    (plist-get (plist-get (portal-terminal-metadata buffer) :status) :state)))
-           (report (lambda (state stamp)
-                     (portal-fake-rex-command
-                      server :block_event "block:fake-1" :name "program_status_changed"
-                      :payload (list :id "" :record (list :state state :updated_at stamp)
-                                     :reason "report"))))
-           changes
-           (portal-rex-status-functions
-            (list (lambda (_buffer old new)
-                    (push (list (plist-get old :state) (plist-get new :state)) changes))))
-           (inhibit-message t))
-      (unwind-protect
-          (progn
-            (funcall report "working" "1")
-            (portal-rex-gui-tests--wait (lambda () (eq (funcall state) 'working)))
-            (portal-fake-rex-command server :upgrade "refuse")
-            (portal-fake-rex-command server :drop_control t)
-            (portal-rex-gui-tests--wait (lambda () (not (portal-rex-live-p connection))))
-            ;; The turn ends while Emacs is away.
-            (funcall report "done" "2")
-            (should (eq (funcall state) 'working))
-            (portal-fake-rex-command server :upgrade "ok")
-            (portal-rex-gui-tests--wait (lambda () (eq (funcall state) 'done)) 10)
-            (should (equal (reverse changes) '((nil working) (working done))))
-            (should (plist-get (plist-get (portal-terminal-metadata buffer) :status) :waiting)))
-        (mapc #'portal-rex-disconnect (portal-rex-connections))))))
+;;; A block that waits
 
 (defvar portal-rex-gui-tests--drawn nil
   "What each mode line drawn said of the blocks that wait, newest first.
@@ -1136,70 +1214,6 @@ Each is (WINDOW . MARK).")
               (select-window other)
               (should (equal (funcall draw) "Rex 2● "))))
         (portal-rex-status-mode -1)))))
-
-(ert-deftest portal-rex-gui-the-echo-area-says-a-block-asks ()
-  :tags '(:gui)
-  ;; An agent asking in a block no window shows reaches an idle Emacs's
-  ;; echo area, and stays in *Messages*.
-  (portal-fake-rex-with (server)
-    (let* ((portal-rex-socket (portal-fake-rex-socket server))
-           (portal-rex-status-announce t)
-           (connection (portal-rex-connect))
-           (buffer (portal-rex-block-buffer connection "block:fake-1"))
-           (line (format "portal: %s asks: Clean up the task now?" (buffer-name buffer))))
-      (unwind-protect
-          (progn
-            (should-not (eq buffer (window-buffer (selected-window))))
-            (message nil)
-            (should (string-search
-                     line
-                     (portal-rex-gui-tests--messages
-                      (lambda ()
-                        (portal-fake-rex-command
-                         server :block_event "block:fake-1" :name "program_status_changed"
-                         :payload '(:id "" :record (:state "blocked" :kind "question"
-                                                    :msg "Clean up the task now?")
-                                    :reason "report"))
-                        (portal-rex-gui-tests--wait
-                         (lambda () (equal (current-message) line))))))))
-        (message nil)
-        (mapc #'portal-rex-disconnect (portal-rex-connections))))))
-
-(ert-deftest portal-rex-gui-the-list-of-agents-follows-an-idle-emacs ()
-  :tags '(:gui)
-  ;; *Rex agents* left open in a window: an agent at work starts to ask,
-  ;; and its row says so, with no key pressed.
-  (portal-fake-rex-with (server)
-    (let* ((portal-rex-socket (portal-fake-rex-socket server))
-           (connection (portal-rex-connect))
-           (buffer (portal-rex-block-buffer connection "block:fake-1"))
-           (report (lambda (&rest record)
-                     (portal-fake-rex-command
-                      server :block_event "block:fake-1" :name "program_status_changed"
-                      :payload (list :id "" :record record :reason "report"))))
-           (row (lambda ()
-                  (with-current-buffer "*Rex agents*"
-                    (save-excursion
-                      (goto-char (point-min))
-                      (buffer-substring-no-properties (pos-bol) (pos-eol))))))
-           (inhibit-message t))
-      (unwind-protect
-          (save-window-excursion
-            (delete-other-windows)
-            (portal-rex-list-agents)
-            (redisplay t)
-            (funcall report :state "working" :app "claude-code" :msg "Reading slides.ts")
-            (portal-rex-gui-tests--wait (lambda () (string-search "◌ working" (funcall row))))
-            (should (string-search (buffer-name buffer) (funcall row)))
-            (should (string-search "Reading slides.ts" (funcall row)))
-            (funcall report :state "blocked" :kind "question" :app "claude-code"
-                     :msg "Clean up the task now?")
-            (portal-rex-gui-tests--wait (lambda () (string-search "● question" (funcall row))))
-            (should (string-search "Clean up the task now?" (funcall row)))
-            (redisplay t)
-            (should (eq (window-buffer (selected-window)) (get-buffer "*Rex agents*"))))
-        (when (get-buffer "*Rex agents*") (kill-buffer "*Rex agents*"))
-        (mapc #'portal-rex-disconnect (portal-rex-connections))))))
 
 (provide 'portal-rex-gui-tests)
 ;;; portal-rex-gui-tests.el ends here
