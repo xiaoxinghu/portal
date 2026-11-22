@@ -10,10 +10,16 @@
 ;; flat orange, over a pane that is green underneath, so a terminal that
 ;; covers its pane shows orange at its corners and no green anywhere.  The
 ;; shell is the user's own login shell, as for any terminal.
+;;
+;; One test times a Rex server's events reaching Lisp beside a terminal
+;; that floods, against test/fake-rex-server.py: both share GLib's main
+;; context, where pgtk Emacs runs GTK.
 
 (require 'ert)
 (require 'cl-lib)
 (require 'portal-terminal)
+(require 'portal-rex)
+(require 'portal-fake-rex)
 (require 'portal-linux-gui-tests)
 
 (defconst portal-linux-terminal--theme "Great Pumpkin")
@@ -427,6 +433,81 @@ with open(sys.argv[1], 'wb') as out:
                   (message "Torn frames in %S: %s" box (string-trim (buffer-string)))
                   (should (eql status 0)))))))
       (delete-file flash))))
+
+;;; Beside a Rex connection
+
+(defun portal-linux-terminal--rex-latencies (server count)
+  "Have SERVER send COUNT events, one at a time, and return their latencies.
+Each is the seconds from the fake server's sending the event to its
+reaching Lisp, sorted.  Emacs idles throughout, as between commands, so
+only the module's record brings an event: the socket's thread adds an
+idle source to GLib's default context, at the default priority, which
+calls the core, which writes to the pipe Emacs reads."
+  (let* (arrived latencies
+         (portal-rex-event-functions
+          (list (lambda (_from event)
+                  (let ((sent (plist-get (plist-get event :payload) :sent_at)))
+                    (when sent (setq arrived (- (float-time) sent))))))))
+    (dotimes (_ count)
+      (setq arrived nil)
+      (portal-fake-rex-send server :event '(:type "portal-test") :clock "sent_at")
+      (portal-linux-terminal--until (lambda () arrived) 5)
+      (push arrived latencies)
+      ;; Not in step with the output's frames.
+      (portal-linux-gui--pause (/ (random 50) 1000.0)))
+    (sort latencies #'<)))
+
+(defun portal-linux-terminal--say-latencies (what latencies)
+  "Print LATENCIES, sorted seconds, as WHAT: their median, 90th percentile and longest."
+  (let ((at (lambda (fraction)
+              (* 1000 (nth (min (1- (length latencies))
+                                (floor (* fraction (length latencies))))
+                           latencies)))))
+    (message "A Rex event to Lisp, %s: median %.1f ms, 90th percentile %.1f ms, longest %.1f ms, of %d"
+             what (funcall at 0.5) (funcall at 0.9) (* 1000 (car (last latencies)))
+             (length latencies))))
+
+(ert-deftest portal-linux-gui-terminal-flood-leaves-rex-messages-on-time ()
+  :tags '(:gui)
+  "A Rex server's events reach an idle Emacs while a terminal floods.
+Both run on GLib's default context at its default priority: a terminal's
+frames, presented from Emacs's main thread as fast as the output shows
+them, and the idle source by which a message socket tells the core it
+has something to read."
+  (portal-fake-rex-with (server)
+    (portal-linux-terminal--with
+      (let ((target (portal-linux-terminal--open))
+            (inhibit-message t)
+            (count 60))
+        (portal-rex-connect (portal-fake-rex-socket server))
+        (unwind-protect
+            (let ((idle (portal-linux-terminal--rex-latencies server count))
+                  flood committed seconds)
+              (portal-linux-terminal--run target "yes PORTAL-OUTPUT")
+              (portal-linux-gui--wait (lambda () (> (portal-linux-gui--get :committed target) 20)))
+              (let ((before (portal-linux-gui--get :committed target))
+                    (start (float-time)))
+                (setq flood (portal-linux-terminal--rex-latencies server count)
+                      seconds (- (float-time) start)
+                      committed (- (portal-linux-gui--get :committed target) before)))
+              (portal-linux-gui--type "-M" "ctrl" "-k" "c" "-m" "ctrl")
+              (let ((inhibit-message nil))
+                (portal-linux-terminal--say-latencies "a terminal idle" idle)
+                (portal-linux-terminal--say-latencies
+                 (format "a terminal flooding, %.0f frames committed a second" (/ committed seconds))
+                 flood))
+              ;; The terminal's frames went on meanwhile: the main thread
+              ;; was busy presenting them.
+              (should (> (/ committed seconds) 40))
+              ;; On the test desktop the socket's thread adds the idle
+              ;; source within a millisecond, and GLib runs it typically
+              ;; 10 to 15 ms later with the terminal idle, worst about
+              ;; 60, and 2.5 ms under the flood, worst about 20: the
+              ;; flood wakes the loop sooner, never later.  A wait four
+              ;; times the worst fails.
+              (should (< (car (last idle)) 0.25))
+              (should (< (car (last flood)) 0.25)))
+          (mapc #'portal-rex-disconnect (portal-rex-connections)))))))
 
 (provide 'portal-linux-terminal-tests)
 ;;; portal-linux-terminal-tests.el ends here

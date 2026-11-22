@@ -120,9 +120,11 @@ Commands, on standard input:
         Run these commands once, when the next request for METHOD has been
         answered, held or passed over in silence: for what must happen
         while a client waits.
-    {"event": {"type": ..., "payload": {...}}}
+    {"event": {"type": ..., "payload": {...}}, "clock": KEY}
         Send every client that called session.attach_all this event, with
-        that client's next seq.
+        that client's next seq.  With "clock", the event's KEY is the time
+        it was sent, in seconds since the epoch, for a client on the same
+        machine to time its arrival.
     {"send": TEXT}
         Send every client TEXT as a message, whatever it is.
     {"binary": TEXT}
@@ -212,6 +214,7 @@ import socket
 import struct
 import sys
 import threading
+import time
 
 PROTOCOL = "rex.control.v1"
 RESOURCE = "/api/control"
@@ -1084,7 +1087,10 @@ def command(value):
         elif "after" in value:
             state["after"][value["after"]] = value.get("then", [])
         elif "event" in value:
-            broadcast(value["event"])
+            event = value["event"]
+            if "clock" in value:
+                event = dict(event, **{value["clock"]: time.time()})
+            broadcast(event)
         elif "send" in value:
             for client in everyone:
                 client.message(value["send"].encode())

@@ -545,7 +545,12 @@ other prints 256 MB. That one is recorded, and
 [linux-torn.py](../test/linux-torn.py) reads the recording: the output
 keeps every cell red, then blue, so a frame with both is one drawn into
 while it was shown. It also counts the DMABUFs Emacs has open, which must
-be none once both terminals are closed.
+be none once both terminals are closed. And one times a Rex server's
+events reaching Lisp, [the fake](#rex-checks) stamping each as it sends
+it, with a terminal idle and then printing as fast as it can: the
+message socket's wake and the terminal's frames share GLib's context at
+the default priority. It prints the median, the 90th percentile and the
+longest of each.
 
 `linux-follow.sh` is the check that a view is never out of place.
 [A fresh Emacs](../test/portal-linux-follow.el) changes a view's pane, one
