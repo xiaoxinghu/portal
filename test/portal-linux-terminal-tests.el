@@ -500,9 +500,9 @@ has something to read."
               ;; was busy presenting them.
               (should (> (/ committed seconds) 40))
               ;; On the test desktop the socket's thread adds the idle
-              ;; source within a millisecond, and GLib runs it typically
-              ;; 10 to 15 ms later with the terminal idle, worst about
-              ;; 60, and 2.5 ms under the flood, worst about 20: the
+              ;; source within a millisecond, and GLib runs it about 10 ms
+              ;; later with the terminal idle, worst about 60, and 2.5 ms
+              ;; later under the flood, worst about 20: the
               ;; flood wakes the loop sooner, never later.  A wait four
               ;; times the worst fails.
               (should (< (car (last idle)) 0.25))
