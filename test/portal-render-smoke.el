@@ -239,7 +239,8 @@ A session's path is called on the service's Session interface."
 
 (defun portal-render-smoke--gnome-monitor ()
   "The frame's monitor as Mutter has it: (CONNECTOR WIDTH HEIGHT SCALE), or nil.
-WIDTH and HEIGHT are its current mode's, in device pixels.  Mutter places
+WIDTH and HEIGHT are its current mode's, in device pixels, as it is
+turned.  Mutter places
 its monitors in device pixels or in Emacs's, as its layout mode says, so
 either matches the frame's monitor's top left."
   (pcase-let* ((`(,_serial ,monitors ,logical ,_properties)
@@ -248,7 +249,7 @@ either matches the frame's monitor's top left."
                (`(,fx ,fy) (alist-get 'geometry (frame-monitor-attributes))))
     (catch 'found
       (dolist (entry logical)
-        (pcase-let ((`(,x ,y ,scale ,_transform ,_primary ,specs . ,_) entry))
+        (pcase-let ((`(,x ,y ,scale ,transform ,_primary ,specs . ,_) entry))
           (when (or (and (= x fx) (= y fy))
                     (and (= x (round (* scale fx))) (= y (round (* scale fy)))))
             (let* ((connector (car (car specs)))
@@ -257,7 +258,11 @@ either matches the frame's monitor's top left."
                                      (caar (alist-get "is-current" (car (last mode))
                                                       nil nil #'equal)))
                                    (nth 1 monitor))))
-              (throw 'found (list connector (nth 1 mode) (nth 2 mode) scale)))))))))
+              ;; A turn of 90 or 270 degrees, Wayland's odd transforms,
+              ;; streams the mode turned.
+              (throw 'found (if (cl-oddp transform)
+                                (list connector (nth 2 mode) (nth 1 mode) scale)
+                              (list connector (nth 1 mode) (nth 2 mode) scale))))))))))
 
 (defun portal-render-smoke--gnome-capture (file)
   "Capture the frame's monitor at FILE through Mutter's ScreenCast.
