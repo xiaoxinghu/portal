@@ -10,7 +10,10 @@
 certificates for 127.0.0.1: one it signed; one signed by itself; one it
 signed for another name; and one it signed that bears its own name, which
 GnuTLS accepts and Emacs's Network Security Manager takes as self-signed.
-It needs openssl.
+That last one carries no key identifiers: GnuTLS takes a certificate
+whose authority key identifier is not its own key's as issued by another,
+whatever its names, and OpenSSL 3 adds them unless told not to.  It needs
+OpenSSL 3 or later; LibreSSL cannot be told.
 
 `serve` serves ROOT on 127.0.0.1 with one of them, on a port of its own
 choosing.  It prints {"port": N}, then {"path": P} for each request, one
@@ -67,6 +70,8 @@ extendedKeyUsage = serverAuth
 subjectAltName = DNS:other.invalid
 [same-name]
 basicConstraints = CA:FALSE
+subjectKeyIdentifier = none
+authorityKeyIdentifier = none
 keyUsage = critical,digitalSignature,keyEncipherment
 extendedKeyUsage = serverAuth
 subjectAltName = IP:127.0.0.1
