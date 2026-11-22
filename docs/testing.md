@@ -96,6 +96,13 @@ selects `:gui` tests. `test/vm.sh` passes the variable on to the VM. Register
 a new batch suite with `${ert_batch}` in CMake, and start a graphical one
 through `portal-gui-ert-start`, so that it honours the tiers too.
 
+The Checks workflow sets `PORTAL_TEST_EXPENSIVE` only on the full set's
+runs, those started by hand and those on a `release/` branch; a push to
+`main` runs the default tier, and leaves out `test/package-gui.sh`
+([Contributing](../CONTRIBUTING.md#checks) lists both). So a feature's one
+graphical proof must stay in the default tier, and an `:expensive` test is
+one whose loss on `main` costs nothing a release would not catch.
+
 ## Evidence and safety
 
 Fake-backend tests cannot prove native window behavior. Injected AppKit or Carbon
@@ -789,6 +796,8 @@ sh test/package-gui.sh
 
 It installs and builds its own copy of Portal. In the VM the runner's build
 comes first, so the script raises `PORTAL_TEST_TIMEOUT` to 2,400 seconds.
+It belongs to the full set: the Checks workflow runs it only on a full run,
+as its second build takes about two minutes.
 
 ## Launcher graphical checks
 

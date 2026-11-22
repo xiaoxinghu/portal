@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# The full set of checks, graphical ones and expensive tests included, in one
-# job on one macOS runner, so the downloads and the build serve them all, and
-# the checks that run on Linux in a job on each Linux CPU. Runs on main after a
-# merge, and by hand, as on a release candidate's branch; not on pull requests.
+# The checks in one job on one macOS runner, so the downloads and the build
+# serve them all, and the checks that run on Linux in a job on each Linux CPU.
+# Two tiers, as in CONTRIBUTING.md: a push to main runs the essential set; a
+# run started by hand, as on a release candidate's branch, or any run on a
+# release/ branch, runs the full set, which adds the tests tagged :expensive
+# and the package's first use in graphical Emacs, with its own second build.
+# Not on pull requests.
 # When every check of a job passed, it packs the build they tested as that
 # system's runtime archive, checks it unpacked elsewhere and keeps it as an
 # artifact, which on this public repository any signed-in GitHub user can
@@ -43,8 +46,9 @@ jobs:
       HOMEBREW_NO_INSTALL_CLEANUP: 1
       HOMEBREW_NO_ANALYTICS: 1
       USE_CACHE: ${{ github.event_name != 'workflow_dispatch' || inputs.cache }}
-      # Every ERT runner includes the tests tagged :expensive.
-      PORTAL_TEST_EXPENSIVE: 1
+      # The full set's runs: every ERT runner includes the tests tagged
+      # :expensive, and the package's first use runs. Empty on main's pushes.
+      PORTAL_TEST_EXPENSIVE: ${{ (github.event_name == 'workflow_dispatch' || startsWith(github.ref_name, 'release/')) && '1' || '' }}
       # ERT says why each skipped test skipped, for a release's notes: those
       # are written from the logs alone, so every step that counts tests or
       # describes the machine writes its output there too.
@@ -68,8 +72,9 @@ jobs:
           echo "image=$ImageOS-$ImageVersion" >>"$GITHUB_OUTPUT"
           echo "brew-cache=$(brew --cache)" >>"$GITHUB_OUTPUT"
           {
-            # Only a run with USE_CACHE=false is a release's evidence.
+            # Only a full run with USE_CACHE=false is a release's evidence.
             echo "USE_CACHE=$USE_CACHE"
+            echo "PORTAL_TEST_EXPENSIVE=$PORTAL_TEST_EXPENSIVE"
             echo "Runner image $ImageOS $ImageVersion"
             sw_vers
             uname -m
@@ -257,8 +262,12 @@ jobs:
           mkdir -p "$PORTAL_TEST_LOGS"
           sh test/terminal-shell-startup.sh 2>&1 | tee "$PORTAL_TEST_LOGS/test.log"
 
+      # The full set only: a complete second build, about two minutes. A push
+      # to main has installed the package (CTest package), offered the build
+      # (CTest build), built (Build), and started the host and drawn a terminal
+      # from the runtime unpacked elsewhere.
       - name: Package first use (graphical)
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && env.PORTAL_TEST_EXPENSIVE == '1' }}
         run: |
           export PORTAL_TEST_LOGS=$PORTAL_TEST_LOGS/package
           mkdir -p "$PORTAL_TEST_LOGS"
@@ -380,7 +389,7 @@ jobs:
       # is not: Emacs is built there, and the archive run there.
       UBUNTU_IMAGE: ubuntu:26.04
       USE_CACHE: ${{ github.event_name != 'workflow_dispatch' || inputs.cache }}
-      PORTAL_TEST_EXPENSIVE: 1
+      PORTAL_TEST_EXPENSIVE: ${{ (github.event_name == 'workflow_dispatch' || startsWith(github.ref_name, 'release/')) && '1' || '' }}
       EMACS_TEST_VERBOSE: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -412,6 +421,7 @@ jobs:
           echo "emacs=$(echo "$UBUNTU_IMAGE $EMACS_SHA256 $EMACS_CONFIGURE ${{ matrix.march }}" | sha256sum | cut -c1-16)" >>"$GITHUB_OUTPUT"
           {
             echo "USE_CACHE=$USE_CACHE"
+            echo "PORTAL_TEST_EXPENSIVE=$PORTAL_TEST_EXPENSIVE"
             echo "Runner image $ImageOS $ImageVersion"
             grep PRETTY_NAME /etc/os-release
             uname -srm

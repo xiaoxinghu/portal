@@ -29,7 +29,9 @@ sh .agents/skills/release/release.sh publish X.Y.Z NOTES
 
 - `candidate` works out the version, the next MINOR from `main` unless told a
   level, a version or a base, puts the release commit on a branch
-  `release/vX.Y.Z`, and starts Checks on it without cached downloads. It
+  `release/vX.Y.Z`, and starts Checks on it without cached downloads, a run
+  of the [full set](../CONTRIBUTING.md#full-set) as every run started by hand
+  is. It
   refuses a version that is not above the current one, a base that `stable`
   could not fast-forward to or that has nothing new, and a previous release
   left unfinished.
@@ -41,7 +43,8 @@ sh .agents/skills/release/release.sh publish X.Y.Z NOTES
 The agent chooses the base, reads a red run, finishes the notes, and publishes
 only after you approve them. Until then nothing is published, so a release you
 do not approve was a dry run: the agent deletes the branch. `notes` and
-`publish` refuse a run that failed or that restored cached downloads.
+`publish` refuse a run that failed, that restored cached downloads, or that
+left out the full set's checks: a push to `main` runs only the essential set.
 
 The person releasing still:
 
@@ -104,7 +107,8 @@ narrow the claim in [supported platforms](platforms.md) first.
 
 The evidence is the run's `logs` artifact, which the workflow keeps for 14
 days and the release attaches: `environment.log`, with `USE_CACHE=false` when
-the run restored no cached downloads, `build.log`, CTest's own log
+the run restored no cached downloads and `PORTAL_TEST_EXPENSIVE=1` when it ran
+the full set, `build.log`, CTest's own log
 `ctest.log`, `python.log`, and each graphical suite's `test.log` in a
 directory of its own. Every suite prints its counts and the reasons for its
 skips there, and the notes quote them.

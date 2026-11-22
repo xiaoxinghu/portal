@@ -19,7 +19,7 @@ suites="python views input launcher terminal-shell-startup package"
 largest() { sort -t. -k1,1n -k2,2n -k3,3n | tail -1; }
 
 # Set `release` to the release commit of version $1, `run` to its green Checks
-# run, and put that run's logs in $work/logs; only an uncached run is evidence.
+# run, and put that run's logs in $work/logs; only an uncached full run is evidence.
 evidence() {
     release=$(git rev-parse -q --verify "origin/release/v$1^{commit}") ||
         die "no release/v$1 on GitHub: run candidate first"
@@ -31,6 +31,8 @@ evidence() {
     gh run download "$run" -n logs -D "$work/logs" >&2
     grep -qx 'USE_CACHE=false' "$work/logs/environment.log" ||
         die "Checks run $run restored cached downloads: it is no evidence"
+    grep -qx 'PORTAL_TEST_EXPENSIVE=1' "$work/logs/environment.log" ||
+        die "Checks run $run left out the full set's checks: it is no evidence"
 }
 
 # Set `hash` to the hash of what the native build reads at commit $1, as
