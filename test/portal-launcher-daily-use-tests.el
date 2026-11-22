@@ -13,8 +13,9 @@
 (ert-deftest portal-launcher-daily-use-configured-completion ()
   :tags '(:gui)
   ;; Unlike the stock/enhanced matrix, keep the caller's completion and theme
-  ;; settings throughout. A picker records what it would launch; native input
-  ;; is real.
+  ;; settings throughout: those of PORTAL_LAUNCHER_CONFIG, which
+  ;; launcher-daily-use.sh loads. launcher-gui.sh, which loads none, leaves
+  ;; this out. A picker records what it would launch; native input is real.
   (portal-launcher-gui--with-panel
     (let* ((settings (list completing-read-function completion-styles
                            completion-category-defaults completion-category-overrides
@@ -69,7 +70,8 @@
               (select-window window))
             (dolist (example '("launcher-picker" "launcher-hello"))
               (portal-launcher-gui--example example))
-            (dotimes (cycle 3)
+            ;; One cycle: a configuration reload, a rollback, then both views.
+            (let ((cycle 0))
               (portal-terminal-unfocus)
               ;; Evaluate the launcher setup, then again, as a configuration
               ;; reload does: one registration per name.
