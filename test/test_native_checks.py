@@ -56,7 +56,7 @@ class NativeCheckTests(unittest.TestCase):
         driver.write_text(DRIVER)
         cls.executable = directory / "check-native-failures"
         subprocess.run([
-            "xcrun", "swiftc", "-swift-version", "6", "-warnings-as-errors", "-O",
+            "xcrun", "swiftc", "-swift-version", "6", "-warnings-as-errors",
             str(ROOT / "test/native-checks.swift"), str(driver), "-o", str(cls.executable),
         ], check=True, capture_output=True, text=True, timeout=60)
 

@@ -570,6 +570,10 @@ Restore the frame's appearance and `portal-terminal-theme' after."
             ;; last output and the keyboard until a key returns it to Emacs.
             (switch-to-buffer buffer)
             (portal-terminal-focus)
+            (when (fboundp 'portal-test-native-key)
+              (should (portal-test-native-key 8 (ash 1 18) "\C-c"))
+              (portal-terminal-test--wait
+               (lambda () (not (string-suffix-p "/sleep" (or (funcall metadata :program) ""))))))
             (portal-terminal-test--paste "exit" t)
             (portal-terminal-test--wait (lambda () (funcall metadata :exited)))
             (should-not (funcall metadata :program))

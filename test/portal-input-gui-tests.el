@@ -262,16 +262,16 @@ from that thread."
 (ert-deftest portal-input-gui-web-double-escape-returns-to-emacs ()
   :tags '(:gui)
   (portal-input-gui--page
-    (let ((portal-input-double-escape 0.5))
+    (let ((portal-input-double-escape 0.15))
       ;; Escape typed slowly twice is the page's both times.
       (portal-test-native-key 53 0 "\e")
       (portal-input-gui--settled 1)
-      (sleep-for 0.6)
+      (sleep-for 0.2)
       (portal-test-native-key 53 0 "\e")
       (portal-input-gui--settled 2)
       (should (portal-input--action "focused"))
       ;; Typed quickly, the page gets the first, and the second returns to Emacs.
-      (sleep-for 0.6)
+      (sleep-for 0.2)
       (portal-test-native-key 53 0 "\e")
       (portal-test-native-key 53 0 "\e")
       (portal-input-gui--settled 3)
@@ -342,13 +342,20 @@ page to or from its fullscreen window."
                         (portal-input-gui--key-window-js "return keys;") key
                         (portal-test-responder))))))
 
+(defvar portal-input-gui--fullscreen-refused nil
+  "Why WebKit refused fullscreen in this Emacs session, or nil.")
+
 (defmacro portal-input-gui--fullscreen-page (&rest body)
   "Run BODY with an app-host page whose button fills it and goes fullscreen.
 The page records each key press in `keys'.  Its `goFullscreen' asks for
-fullscreen, recording in `refused' why WebKit refused, if it did.  Leave fullscreen afterwards,
-so that no fullscreen window outlives the test."
+fullscreen, recording in `refused' and the page's title why WebKit refused,
+if it did.  Leave fullscreen afterwards, so that no fullscreen window
+outlives the test."
   (declare (indent 0))
   `(portal-test--with-web
+     (when portal-input-gui--fullscreen-refused
+       (ert-skip (format "WebKit refuses fullscreen here: %s"
+                         portal-input-gui--fullscreen-refused)))
      (skip-unless (file-executable-p (portal-server-program-file)))
      (unwind-protect
          (progn
@@ -361,7 +368,12 @@ so that no fullscreen window outlives the test."
              button.style.cssText = 'position:fixed;inset:0;width:100%;height:100%';
              window.refused = null;
              window.goFullscreen = () => document.documentElement.requestFullscreen()
-               .catch((e) => { if (e.name === 'InvalidStateError') refused = e.message; });
+               .catch((e) => {
+                 if (e.name === 'InvalidStateError') {
+                   refused = e.message;
+                   document.title = 'Fullscreen refused: ' + e.message;
+                 }
+               });
              button.onclick = goFullscreen;
              document.body.append(button);
              window.keys = [];
@@ -402,21 +414,32 @@ so hide those apps if the page stays hidden."
 Fullscreen, that is WebKit's window, done entering, with the page focused
 in it; otherwise the page is back in its pane in the key window.
 Skip the test where WebKit refused fullscreen outright, as on GitHub's
-macOS runners.  Ask the page only then: running a script in it meanwhile
-would spend the click that asked for fullscreen."
-  (let ((target (portal-view-target)))
+macOS runners.  Notice refusal through the page's title, never by running
+a script while the click that asked for fullscreen is pending, and
+remember it for the session."
+  (let ((target (portal-view-target))
+        (prefix "Fullscreen refused: "))
     (condition-case failure
         (portal-terminal-test--wait
          (lambda ()
-           (and (equal (plist-get (portal--inspect target) :fullscreen) (and fullscreen "in"))
-                (eq (portal-input-gui--key-window-js
-                     "return !!document.fullscreenElement && document.hasFocus();")
-                    fullscreen))))
+           (let* ((state (portal--inspect target))
+                  (title (and fullscreen (plist-get state :title))))
+             (when (and (stringp title) (string-prefix-p prefix title))
+               (setq portal-input-gui--fullscreen-refused
+                     (substring title (length prefix)))
+               (ert-skip (format "WebKit refuses fullscreen here: %s"
+                                 portal-input-gui--fullscreen-refused)))
+             (and (equal (plist-get state :fullscreen) (and fullscreen "in"))
+                  (eq (portal-input-gui--key-window-js
+                       "return !!document.fullscreenElement && document.hasFocus();")
+                      fullscreen)))))
       (ert-test-failed
        (let ((refused (and fullscreen (portal-input-gui--key-window-js
                                        "return window.refused ?? null;"))))
          (if (stringp refused)
-             (ert-skip (format "WebKit refuses fullscreen here: %s" refused))
+             (progn
+               (setq portal-input-gui--fullscreen-refused refused)
+               (ert-skip (format "WebKit refuses fullscreen here: %s" refused)))
            (signal (car failure) (cdr failure))))))))
 
 (defun portal-input-gui--emacs-got-nothing ()

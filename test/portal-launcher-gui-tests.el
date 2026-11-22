@@ -80,12 +80,12 @@ watch focus. `sit-for' would return at once while input is pending."
 (defun portal-launcher-gui--once-fitted (predicate function)
   "Call FUNCTION from a timer once the panel has fitted and PREDICATE holds.
 Fitted: Emacs waits for input with none pending, its launcher frame at
-the panel's native size. Poll every 0.05 s; after 10 s give up, leaving
+the panel's native size. Poll every 0.01 s; after 10 s give up, leaving
 the presentation's own timeout to report it."
   (let ((deadline (+ (float-time) 10)) timer)
     (setq timer
           (run-with-timer
-           0.05 0.05
+           0.01 0.01
            (lambda ()
              (cond
               ((and (current-idle-time) (not (input-pending-p))
@@ -281,7 +281,7 @@ the command loop waits with no session.  Return START's value, or nil."
          ;; A delayed timer must not catch up with several strokes at once.
          (timer-max-repeats 1)
          (timer (run-with-timer
-                 0.05 0.05
+                 0.01 0.01
                  (lambda ()
                    (cond
                     ;; Deeper means a prompt, or a persistent panel's buffer.
@@ -291,14 +291,17 @@ the command loop waits with no session.  Return START's value, or nil."
                     ;; input waits, and an error report discards queued input.
                     ((and strokes (> (recursion-depth) base)
                           (current-idle-time) (not (input-pending-p)))
-                     (portal-view--with-frame-title portal-launcher--frame #'portal-test-native-target-frame)
-                     (let ((stroke (pop strokes)))
-                       ;; Synthetic AppKit C-g gets held by this Emacs build
-                       ;; even in an ordinary read-string. Queue the Emacs
-                       ;; event for this one key; other strokes are native.
-                       (if (eq stroke 'quit)
-                           (setq unread-command-events (append unread-command-events '(7)))
-                         (apply #'portal-test-native-post-key stroke))))
+                     (if (eq (car-safe (car strokes)) 'wait)
+                         (when (funcall (cdar strokes))
+                           (pop strokes))
+                       (portal-view--with-frame-title portal-launcher--frame #'portal-test-native-target-frame)
+                       (let ((stroke (pop strokes)))
+                         ;; Synthetic AppKit C-g gets held by this Emacs build
+                         ;; even in an ordinary read-string. Queue the Emacs
+                         ;; event for this one key; other strokes are native.
+                         (if (eq stroke 'quit)
+                             (setq unread-command-events (append unread-command-events '(7)))
+                           (apply #'portal-test-native-post-key stroke)))))
                     ((and loop (null strokes) (= (recursion-depth) base)
                           (null unread-command-events) (not portal-launcher--session))
                      (exit-recursive-edit)))))))
@@ -1748,6 +1751,7 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
     (let* ((portal-launcher-size nil)
            (portal-launcher-font "Menlo 24")
            (portal-launcher-gui--row-limit 5)
+           (fired nil)
            (echo nil)
            (result
             (portal-launcher-gui--fit
@@ -1758,7 +1762,9 @@ unless `max-mini-window-height' kept the minibuffer below its prompt."
                       (interactive)
                       (run-with-timer 0.01 nil (lambda ()
                                                  (setq portal-launcher-gui--row-limit 2)
-                                                 (funcall portal-launcher-gui--refresh))))
+                                                 (funcall portal-launcher-gui--refresh)
+                                                 (setq fired (float-time)))))
+                    (cons 'wait (lambda () (and fired (>= (- (float-time) fired) 0.05))))
                     #'portal-launcher-gui--record
                     (lambda ()
                       (interactive)
@@ -2414,7 +2420,7 @@ ends once Emacs waits for input. A presentation that read no input left
 that event queued, and Emacs's `handle-focus-in' then switched to the
 hidden frame."
   (let* ((depth (1+ (recursion-depth)))
-         (timer (run-with-timer 0.05 0.05
+         (timer (run-with-timer 0.01 0.01
                                 (lambda ()
                                   (when (and (= (recursion-depth) depth) (current-idle-time)
                                              (not (input-pending-p)))

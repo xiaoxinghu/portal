@@ -31,16 +31,16 @@
 
 (defun portal-pointer-gui--glide (x y &optional flags)
   "Move the pointer to X Y, frame pixels, as a mouse does, holding FLAGS.
-It goes in ten moves 12 ms apart from where it last went."
+It goes in four moves 10 ms apart from where it last went."
   (let ((from (or portal-pointer-gui--at (cons x y))))
-    (dotimes (i 11)
-      (should (portal-test-mouse-move (+ (car from) (/ (* (- x (car from)) i) 10))
-                                      (+ (cdr from) (/ (* (- y (cdr from)) i) 10))
+    (dotimes (i 5)
+      (should (portal-test-mouse-move (+ (car from) (/ (* (- x (car from)) i) 4))
+                                      (+ (cdr from) (/ (* (- y (cdr from)) i) 4))
                                       flags))
       ;; Emacs redraws between moves, as it does when idle, and so
       ;; redoes its cursor rectangle as its own pointer changes.
       (redisplay t)
-      (accept-process-output nil 0.012))
+      (accept-process-output nil 0.01))
     (setq portal-pointer-gui--at (cons x y))))
 
 (defun portal-pointer-gui--in (target x y)
@@ -171,8 +171,10 @@ TEXT is bound to the left window and TARGET to the page's view."
              (format "clear; printf 'https://example.com/pointer\\n'; : > %s"
                      (shell-quote-argument printed))
              t)
-            (portal-terminal-test--wait (lambda () (file-exists-p printed)))
-            (sit-for 0.3)
+            (portal-terminal-test--wait
+             (lambda () (and (file-exists-p printed)
+                             (string-match-p "^https://example\\.com/pointer$"
+                                             (portal-terminal-test--text)))))
             ;; Over the link with Command, the hand Ghostty asks for.
             (portal-pointer-gui--glide-to-cell 30 8)
             (portal-pointer-gui--glide-to-cell 8 0 portal-pointer-gui--command)
@@ -183,11 +185,12 @@ TEXT is bound to the left window and TARGET to the page's view."
             ;; A program with the mouse gets Ghostty's arrow, where Emacs
             ;; would show its I-beam. Its mouse reports go to cat.
             (portal-terminal-test--paste
-             (format "printf '\\033[?1003h'; : > %s; cat > /dev/null"
+             (format "printf '\\033[?1003hMOUSE_ON\\n'; : > %s; cat > /dev/null"
                      (shell-quote-argument moused))
              t)
-            (portal-terminal-test--wait (lambda () (file-exists-p moused)))
-            (sit-for 0.3)
+            (portal-terminal-test--wait
+             (lambda () (and (file-exists-p moused)
+                             (string-search "MOUSE_ON" (portal-terminal-test--text)))))
             (portal-pointer-gui--glide-to-cell 20 6)
             (portal-pointer-gui--expect "arrow"))
         (portal-test-native-target-frame nil)
