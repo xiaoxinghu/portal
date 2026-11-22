@@ -217,7 +217,9 @@ struct shown {
     bool child_exited;    /* The server said its program exited. */
     bool closed;          /* The server said the block closed. */
     bool exiting;         /* Either: EXIT_TIMER runs, and the stream's end waits. */
-    bool end_waits;       /* The stream ended while exiting: told after it. */
+    bool end_waits;       /* The stream ended while exiting: told after it,
+                             and never once the block has closed. */
+    enum stage before_end; /* While the end waits, the stage it ended. */
     uint64_t exit_timer;
     /* Who owns the block, as the server last said: a client's ID, "" for
        no client, unknown until the server has said. */
@@ -597,6 +599,7 @@ static void end_show(struct shown *shown, enum stage stage, const char *reason,
 {
     if (shown->stage >= FAILED)
         return;
+    shown->before_end = shown->stage;
     shown->stage = stage;
     free(shown->reason.data);
     shown->reason = (portal_text) {0};
@@ -620,7 +623,8 @@ static void end_show(struct shown *shown, enum stage stage, const char *reason,
     clear(&shown->paint);
     clear(&shown->tail);
     /* A block whose program has exited closes, and its buffer goes: its
-       stream's end is news only if it stays. */
+       stream's end is news only if it stays, and until it is told, SHOWN
+       is described as before it (see said_stage). */
     if (shown->exiting)
         shown->end_waits = true;
     else
@@ -828,7 +832,10 @@ static void exit_later(struct shown *shown)
     }
 }
 
-/* The moment is over: a block that stayed says its program exited. */
+/* The moment is over: a block that stayed says its program exited, and
+   that its stream ended.  A block that closed says neither, ever: its
+   buffer goes with the block_closed that Emacs has had, or has waiting,
+   ahead of anything said from here. */
 static void exited(struct shown *shown)
 {
     shown->exiting = false;
@@ -838,7 +845,7 @@ static void exited(struct shown *shown)
         set_text(&shown->program, literal(""));
         changed(shown);
     }
-    if (shown->end_waits) {
+    if (shown->end_waits && !shown->closed) {
         shown->end_waits = false;
         announce(shown);
     }
@@ -1985,6 +1992,16 @@ static const char *const states[] = {
     [FAILED] = "failed",      [ENDED] = "ended",
 };
 
+/* SHOWN's stage as its description gives it: while its stream's end is
+   held, the stage that end ended.  A "rex-block" record is only a bell,
+   and Emacs describes the show when it reads one, which may be after the
+   stream ended: a record sent before the end, still unread, must not tell
+   of an end held back. */
+static enum stage said_stage(const struct shown *shown)
+{
+    return shown->end_waits ? shown->before_end : shown->stage;
+}
+
 void portal_rex_describe(portal_string target, struct json *json)
 {
     struct shown *shown = shown_in(target);
@@ -2001,8 +2018,8 @@ void portal_rex_describe(portal_string target, struct json *json)
     put_string(json, shown->program.data ? view(shown->program) : literal(""));
     put_text(json, shown->exited ? ",\"exited\":true" : ",\"exited\":false");
     put_text(json, ",\"rex\":{\"state\":");
-    put_string(json, literal(shown->offline && shown->stage < FAILED ? "disconnected"
-                                                                      : states[shown->stage]));
+    enum stage stage = said_stage(shown);
+    put_string(json, literal(shown->offline && stage < FAILED ? "disconnected" : states[stage]));
     if (shown->typed)
         put_text(json, ",\"typed\":true");
     shown->typed = false;
@@ -2019,7 +2036,7 @@ void portal_rex_describe(portal_string target, struct json *json)
     put_string(json, shown->owner_name.data ? view(shown->owner_name) : literal(""));
     put_text(json, ",\"directory\":");
     put_string(json, directory(shown));
-    if (shown->stage >= FAILED) {
+    if (stage >= FAILED) {
         put_text(json, ",\"reason\":");
         put_string(json, shown->reason.data ? view(shown->reason) : literal(""));
     }

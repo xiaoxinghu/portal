@@ -709,6 +709,18 @@ static void block_event(uint64_t id, int seq, const char *block, const char *nam
     portal_fake_socket_deliver(id, event);
 }
 
+/* The event at SEQ on ID: BLOCK has closed. */
+static void block_closed(uint64_t id, int seq)
+{
+    char event[512];
+    snprintf(event, sizeof event,
+             "{\"type\":\"event\",\"seq\":%d,\"payload\":{\"type\":\"session_event\","
+             "\"payload\":{\"session_id\":\"" SESSION "\",\"event\":{\"type\":\"block_closed\","
+             "\"payload\":{\"block_id\":\"" BLOCK "\"}}}}}",
+             seq);
+    portal_fake_socket_deliver(id, event);
+}
+
 /* Answer request NUMBER on ID with RESULT, written at SEQ. */
 static void answer_at(uint64_t id, int number, int seq, const char *result)
 {
@@ -822,7 +834,7 @@ static void test_details(void)
     free(target);
 
     /* A block whose program exits and which closes never says it exited,
-       nor that its stream ended, before it has had its moment. */
+       nor that its show ended, even once it has had its moment. */
     target = fed_terminal(&error);
     snprintf(terminal, sizeof terminal, "terminal %s\n", target);
     CHECK(portal_rex_show(id, text(target), text(SESSION), text(BLOCK), &error));
@@ -831,15 +843,12 @@ static void test_details(void)
     CHECK(is_text(sent(), terminal));
     CHECK(is_text(details(target), "\"title\":\"\",\"pwd\":\"/\",\"program\":\"sh\",\"exited\":false"));
     block_event(id, 14, BLOCK, "child_exited", "{\"exit_code\":3,\"error\":\"exit status 3\"}");
-    portal_fake_socket_deliver(id, "{\"type\":\"event\",\"seq\":15,\"payload\":{\"type\":"
-                                   "\"session_event\",\"payload\":{\"session_id\":\"" SESSION
-                                   "\",\"event\":{\"type\":\"block_closed\",\"payload\":"
-                                   "{\"block_id\":\"" BLOCK "\"}}}}}");
+    block_closed(id, 15);
     portal_fake_socket_end(id, "The connection to the server was lost");
     CHECK(is_text(sent(), lisp));
-    snprintf(expected, sizeof expected, "rex-block %s\n", target);
     portal_fake_fire_timers();
-    CHECK(is_text(sent(), expected));
+    CHECK(is_text(sent(), ""));
+    CHECK(strstr(rex_state(target), "\"state\":\"starting\"") != NULL);
     CHECK(is_text(details(target), "\"title\":\"\",\"pwd\":\"/\",\"program\":\"sh\",\"exited\":false"));
     CHECK(portal_views_close(text(target), &error));
     free(target);
@@ -1209,6 +1218,62 @@ static void test_backlog(void)
     sent();
 }
 
+/* A block's stream that ends just after its program exits: its end is told
+   once the block has had its moment to close, and never if it closes.
+   Until then the block is described as it was, live: a record sent
+   before the end and read after it must not tell of it. */
+static void test_held_end(void)
+{
+    portal_text error = {0};
+    char lisp[32], expected[128];
+    uint64_t id = open_connection("/tmp/rex/server.sock", &error);
+    snprintf(lisp, sizeof lisp, "rex %llu\n", (unsigned long long) id);
+    int number = 1;
+    char *target = fed_terminal(&error);
+    uint64_t data = show_live(id, target, &number, false, true, "P");
+    const char *live = "\"rex\":{\"state\":\"live\",\"columns\":80,\"rows\":24,"
+                       "\"owner\":\"unknown\",\"owner_name\":\"\",\"directory\":\"\"}";
+    /* The program exits, the stream ends and the block closes. */
+    block_event(id, 20, BLOCK, "child_exited", "{\"exit_code\":0}");
+    CHECK(is_text(sent(), lisp));
+    portal_fake_socket_closed(data, 4000, "The server closed the connection (4000: block closed)");
+    CHECK(is_text(sent(), ""));
+    CHECK(is_text(rex_state(target), live));
+    received(id);
+    block_closed(id, 21);
+    CHECK(is_text(sent(), lisp));
+    received(id);
+    /* Its moment over, it says nothing, and is described as before. */
+    portal_fake_fire_timers();
+    CHECK(is_text(sent(), ""));
+    CHECK(is_text(rex_state(target), live));
+    CHECK(strstr(details(target), "\"exited\":false") != NULL);
+    CHECK(portal_views_close(text(target), &error));
+    free(target);
+
+    /* A block that stays: its program's exit and its stream's end are
+       told together once the moment is over. */
+    target = fed_terminal(&error);
+    data = show_live(id, target, &number, false, false, "P");
+    block_event(id, 22, BLOCK, "child_exited", "{\"exit_code\":0}");
+    received(id);
+    sent();
+    portal_fake_socket_closed(data, 1000, "The server closed the connection (1000)");
+    CHECK(is_text(sent(), ""));
+    CHECK(is_text(rex_state(target), live));
+    portal_fake_fire_timers();
+    snprintf(expected, sizeof expected, "terminal %s\nrex-block %s\n", target, target);
+    CHECK(is_text(sent(), expected));
+    CHECK(strstr(rex_state(target), "\"state\":\"ended\"") != NULL);
+    CHECK(strstr(rex_state(target), "\"reason\":\"The block's stream ended: The server closed "
+                                    "the connection (1000)\"") != NULL);
+    CHECK(strstr(details(target), "\"exited\":true") != NULL);
+    CHECK(portal_views_close(text(target), &error));
+    free(target);
+    CHECK(portal_rex_close(id, &error));
+    sent();
+}
+
 static void test_resuming(void)
 {
     portal_text error = {0};
@@ -1548,6 +1613,7 @@ int main(void)
     test_owning();
     test_resizing_while_painting();
     test_backlog();
+    test_held_end();
     test_resuming();
     test_coming_back();
     test_giving_up();
