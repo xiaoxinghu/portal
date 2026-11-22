@@ -476,8 +476,16 @@ For distribution alternatives and size measurements, see
 ## Checks
 
 The checks come in two tiers. Run the default loop while working: about two
-minutes after an incremental build. Run the full set once before merging; CI
-runs it again on `main` after each merge.
+minutes after an incremental build. Run the full set once before merging.
+
+The Checks workflow runs the same two tiers. A push to `main` runs the
+essential set: the default loop's checks, then the launcher, rendering smoke
+and terminal shell startup suites, without `PORTAL_TEST_EXPENSIVE`. A run
+started by hand (`gh workflow run checks.yml`), as a release candidate's is,
+and any run on a `release/` branch run the full set: `PORTAL_TEST_EXPENSIVE=1`
+and `test/package-gui.sh` besides; `-f full=false` makes a run by hand
+essential, to try that tier on a branch. Only a full run without cached
+downloads is a [release's evidence](docs/releasing.md#evidence).
 
 ### Default loop
 

@@ -104,41 +104,16 @@ from that thread."
       (should (portal-input--action "focused"))
       (should (= (portal-excalidraw-gui--js "return keys.length") 1)))))
 
-(ert-deftest portal-input-gui-web-command-f-finds-while-emacs-has-the-keyboard ()
-  :tags '(:gui)
-  (portal-test--with-web
-    (select-frame-set-input-focus (selected-frame))
-    (portal-open-url "data:text/html,<title>Find ready</title><p>apple pie</p><input autofocus spellcheck=false>")
-    (portal-test--wait-for-page "Find ready")
-    (let ((target (portal-view-target))
-          (portal-web-find-history nil)
-          (reading 'never))
-      (portal-integration-test--focus-web (selected-window) target)
-      (portal-test-native-key 3 portal-input-gui--command "f")
-      (let ((event (aref (with-timeout (5 (ert-fail "Command-F did not reach Emacs"))
-                           (read-key-sequence-vector nil))
-                         0)))
-        (should (eq (car-safe event) 'portal-input-key))
-        ;; The minibuffer reads with Emacs holding the keyboard.
-        (minibuffer-with-setup-hook
-            (lambda () (setq reading (portal-input--action "focused" target)))
-          (setq unread-command-events (listify-key-sequence (kbd "pie RET")))
-          (with-timeout (5 (ert-fail "Finding stalled"))
-            (portal-input--dispatch event))))
-      (should-not reading)
-      (portal-terminal-test--wait
-       (lambda () (equal (portal-excalidraw-gui--js "return getSelection().toString();") "pie")))
-      ;; Once the text is found, the page has the keyboard back.
-      (should (portal-input--action "focused" target)))))
-
-(ert-deftest portal-input-gui-web-command-g-finds-again-while-the-page-has-the-keyboard ()
+(ert-deftest portal-input-gui-web-command-f-and-g-find-from-the-page ()
   :tags '(:gui)
   (portal-test--with-web
     (portal-test--with-page-scripts
+      (select-frame-set-input-focus (selected-frame))
       (portal-open-url portal-test--gap-page)
       (portal-test--wait-for-page "Gap")
       (let ((target (portal-view-target))
-            (portal-web-find-history (list "apple"))
+            (portal-web-find-history nil)
+            (reading 'never)
             (next `(5 ,portal-input-gui--command "g"))
             (previous `(5 ,(logior portal-input-gui--command (ash 1 17)) "G")))
         (cl-flet ((step (key match echo)
@@ -146,20 +121,35 @@ from that thread."
                     (portal-input-gui--dispatch)
                     (portal-test--wait-for-match match)
                     (portal-test--wait-for-echo echo)))
+          ;; Command-F reaches Emacs from the page, and the minibuffer reads
+          ;; with Emacs holding the keyboard.
+          (portal-integration-test--focus-web (selected-window) target)
+          (portal-test-native-key 3 portal-input-gui--command "f")
+          (let ((event (aref (with-timeout (5 (ert-fail "Command-F did not reach Emacs"))
+                               (read-key-sequence-vector nil))
+                             0)))
+            (should (eq (car-safe event) 'portal-input-key))
+            (minibuffer-with-setup-hook
+                (lambda () (setq reading (portal-input--action "focused" target)))
+              (setq unread-command-events (listify-key-sequence (kbd "apple RET")))
+              (with-timeout (5 (ert-fail "Finding stalled"))
+                (portal-input--dispatch event))))
+          (should-not reading)
+          (portal-test--wait-for-match "a")
+          (portal-test--wait-for-echo "1/5 apple")
+          ;; Once the text is found, the page has the keyboard back.
+          (should (portal-input--action "focused" target))
           ;; Command-G and Command-Shift-G reach Emacs from the page, which
           ;; keeps its selection while Emacs finds, and gets the keyboard
           ;; back: each one moves on from the match before.
-          (portal-integration-test--focus-web (selected-window) target)
-          (step next "a" "1/5 apple")
-          (should (portal-input--action "focused" target))
           (step next "b" "2/5 apple")
-          (step next "c" "3/5 apple")
+          (should (portal-input--action "focused" target))
           ;; Escaping to Emacs and coming back keeps it too.
           (portal-input-unfocus)
           (should-not (portal-input--action "focused" target))
           (portal-integration-test--focus-web (selected-window) target)
-          (step next "d" "4/5 apple")
-          (step previous "c" "3/5 apple"))))))
+          (step next "c" "3/5 apple")
+          (step previous "b" "2/5 apple"))))))
 
 (ert-deftest portal-input-gui-web-command-p-shows-the-print-panel ()
   :tags '(:gui)

@@ -24,7 +24,7 @@ case "$1 $2" in
 esac
 """
 LOGS = {
-    "environment.log": "ProductVersion: 27.0.1\nUSE_CACHE=false\n",
+    "environment.log": "ProductVersion: 27.0.1\nUSE_CACHE=false\nPORTAL_TEST_EXPENSIVE=1\n",
     "build.log": "resolve-bun: using Bun 1.3.14 at /somewhere (downloaded)\n",
     "ctest.log": "1/3 Test: input\nRan 21 tests, 19 results as expected, 0 unexpected, 2 skipped\n"
     '  SKIPPED  portal-input-evil  ((skip-unless (locate-library "evil")))\nTest Passed.\n'
@@ -136,7 +136,10 @@ class ReleaseTests(unittest.TestCase):
         (logs / "ctest.log").write_text(LOGS["ctest.log"] + "4/4 Test: quiet\nTest Passed.\n")
         self.assertIn("no count for the CTest suite quiet", self.release("notes", "0.2.0", ok=False))
         (logs / "ctest.log").write_text(LOGS["ctest.log"])
-        (self.stub / "logs" / "environment.log").write_text("USE_CACHE=true\n")
+        # A run that left out the full set's checks is no evidence either.
+        (self.stub / "logs" / "environment.log").write_text("USE_CACHE=false\nPORTAL_TEST_EXPENSIVE=\n")
+        self.assertIn("left out the full set's checks", self.release("notes", "0.2.0", ok=False))
+        (self.stub / "logs" / "environment.log").write_text("USE_CACHE=true\nPORTAL_TEST_EXPENSIVE=1\n")
         self.assertIn("no evidence", self.release("notes", "0.2.0", ok=False))
         self.assertIn("no evidence", self.release("publish", "0.2.0", "notes.md", ok=False))
 

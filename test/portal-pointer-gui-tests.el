@@ -97,33 +97,27 @@ TEXT is bound to the left window and TARGET to the page's view."
 (ert-deftest portal-pointer-gui-a-page-sets-its-pointer-and-emacs-gets-it-back ()
   :tags '(:gui)
   (portal-pointer-gui--with-page
-    (portal-pointer-gui--glide-onto-text text)
-    (portal-pointer-gui--expect "ibeam")
-    ;; Over the page, what it asks for, not Emacs's I-beam.
-    (portal-pointer-gui--glide-in target 100 30)
-    (portal-pointer-gui--expect "hand")
-    ;; Emacs redraws with the mouse at rest, and redoes its rectangle.
-    (message "Redrawn under the page")
-    (redisplay t)
-    (portal-pointer-gui--expect "hand")
-    (portal-pointer-gui--glide-in target 100 130)
-    (portal-pointer-gui--expect "crosshair")
-    ;; Off the view, Emacs's again.
-    (portal-pointer-gui--glide-onto-text text)
-    (portal-pointer-gui--expect "ibeam")
-    (portal-pointer-gui--glide-in target 100 30)
-    (portal-pointer-gui--expect "hand")))
-
-(ert-deftest portal-pointer-gui-emacs-gets-its-pointer-back-when-a-page-goes ()
-  :tags '(:gui)
-  (portal-pointer-gui--with-page
     (let ((page (current-buffer))
           (other (get-buffer-create " *portal-pointer-other*")))
       (unwind-protect
           (progn
-            ;; Hidden with the mouse in it: no exit comes.
+            (portal-pointer-gui--glide-onto-text text)
+            (portal-pointer-gui--expect "ibeam")
+            ;; Over the page, what it asks for, not Emacs's I-beam.
             (portal-pointer-gui--glide-in target 100 30)
             (portal-pointer-gui--expect "hand")
+            ;; Emacs redraws with the mouse at rest, and redoes its rectangle.
+            (message "Redrawn under the page")
+            (redisplay t)
+            (portal-pointer-gui--expect "hand")
+            (portal-pointer-gui--glide-in target 100 130)
+            (portal-pointer-gui--expect "crosshair")
+            ;; Off the view, Emacs's again.
+            (portal-pointer-gui--glide-onto-text text)
+            (portal-pointer-gui--expect "ibeam")
+            (portal-pointer-gui--glide-in target 100 30)
+            (portal-pointer-gui--expect "hand")
+            ;; Hidden with the mouse in it: no exit comes.
             (set-window-buffer (selected-window) other)
             (redisplay t)
             (should-not (plist-get (portal--inspect target) :visible))

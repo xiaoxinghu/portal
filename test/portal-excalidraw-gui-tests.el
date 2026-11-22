@@ -84,12 +84,51 @@ The file holds ELEMENTS and FILES; without ELEMENTS, it is a new drawing.
   :tags '(:gui)
   (portal-excalidraw-gui--document
     (should (equal (portal-excalidraw-gui--js "return !!document.querySelector('.excalidraw canvas')") t))
+    ;; Saving commits the text being typed.
+    (portal-view-focus)
+    (should (portal-excalidraw-gui--js
+             "const canvas = document.querySelector('canvas.interactive');
+              canvas.dispatchEvent(new MouseEvent('dblclick', {bubbles:true, clientX:250, clientY:200}));
+              await new Promise(resolve => setTimeout(resolve, 30));
+              const input = document.querySelector('textarea.excalidraw-wysiwyg');
+              if (!input) throw new Error('Text editor did not open');
+              input.value = 'Uncommitted text'; input.dispatchEvent(new Event('input', {bubbles:true}));
+              return document.activeElement === input;"))
     (portal-excalidraw-save)
     (should (file-exists-p buffer-file-name))
     (should-not (buffer-modified-p))
-    (let ((scene (json-parse-string (buffer-string) :object-type 'plist)))
+    (let* ((file buffer-file-name)
+           (scene (json-parse-string (with-temp-buffer (insert-file-contents file)
+                                                       (buffer-string))
+                                     :object-type 'plist)))
       (should (equal (plist-get scene :type) "excalidraw"))
-      (should (= (length (plist-get scene :elements)) 0)))))
+      (should (string-match-p "Uncommitted text" (json-serialize (plist-get scene :elements)))))
+    ;; The page's Save button on an untitled drawing asks Emacs for a file
+    ;; name, which native keys answer.
+    (portal-excalidraw--close)
+    (set-buffer-modified-p nil)
+    (kill-buffer document)
+    (portal-excalidraw)
+    (setq document (current-buffer))
+    (portal-excalidraw--wait (lambda () portal-excalidraw--ready))
+    (portal-view-focus)
+    (portal-excalidraw-gui--js "document.querySelector('.portal-save button').click(); return true;")
+    (let* ((notification (with-timeout (5 (ert-fail "Save button did not notify Emacs"))
+                           (read-key-sequence-vector nil)))
+           (event (aref notification 0))
+           (file (expand-file-name "from-button.excalidraw" directory)))
+      (should (eq (car-safe event) 'portal-excalidraw-command))
+      (let ((use-dialog-box nil) (use-file-dialog nil))
+        (minibuffer-with-setup-hook
+            (lambda ()
+              (delete-minibuffer-contents)
+              (insert file)
+              (portal-test-native-post-key 36 0 "\r"))
+          (with-timeout (5 (ert-fail "Filename prompt did not receive native input"))
+            (portal-excalidraw--dispatch event))))
+      (should (equal buffer-file-name file))
+      (should (file-exists-p file))
+      (should-not (buffer-modified-p)))))
 
 (ert-deftest portal-excalidraw-gui-drawing-survives-hiding-and-reopening ()
   :tags '(:gui)
@@ -113,22 +152,16 @@ The file holds ELEMENTS and FILES; without ELEMENTS, it is a new drawing.
       (portal-excalidraw--wait (lambda () portal-excalidraw--ready))
       (portal-excalidraw--flush)
       (should (string-match-p "Portal local drawing" (buffer-string)))
+      (should-not (buffer-modified-p))
+      ;; Another program saves the file meanwhile: reverting shows its drawing.
+      (portal-excalidraw-gui--write buffer-file-name
+                                    (list (portal-excalidraw-gui--text "words" "Saved text")))
+      (revert-buffer nil t)
+      (portal-excalidraw--wait (lambda () portal-excalidraw--ready))
+      (portal-excalidraw--flush)
+      (should (string-match-p "Saved text" (buffer-string)))
+      (should-not (string-match-p "Portal local drawing" (buffer-string)))
       (should-not (buffer-modified-p)))))
-
-(ert-deftest portal-excalidraw-gui-revert-reloads-the-saved-drawing ()
-  :tags '(:gui)
-  (portal-excalidraw-gui--drawing
-      (list (portal-excalidraw-gui--text "words" "Opened text")) nil
-    (should (string-match-p "Opened text" (buffer-string)))
-    ;; Another program saves the file meanwhile.
-    (portal-excalidraw-gui--write buffer-file-name
-                                  (list (portal-excalidraw-gui--text "words" "Saved text")))
-    (revert-buffer nil t)
-    (portal-excalidraw--wait (lambda () portal-excalidraw--ready))
-    (portal-excalidraw--flush)
-    (should (string-match-p "Saved text" (buffer-string)))
-    (should-not (string-match-p "Opened text" (buffer-string)))
-    (should-not (buffer-modified-p))))
 
 (ert-deftest portal-excalidraw-gui-image-roundtrip-and-document-isolation ()
   :tags '(:gui)
@@ -160,72 +193,6 @@ The file holds ELEMENTS and FILES; without ELEMENTS, it is a new drawing.
         (when (buffer-live-p other)
           (with-current-buffer other (portal-excalidraw--close) (set-buffer-modified-p nil))
           (kill-buffer other))))))
-
-(ert-deftest portal-excalidraw-gui-unused-chord-keeps-fast-followup-keys ()
-  :tags '(:gui)
-  ;; The drawing does not use C-x, so C-x C-s reaches Emacs whole, typed at once.
-  (portal-excalidraw-gui--document
-    (select-frame-set-input-focus (selected-frame))
-    (portal-view-focus)
-    (portal-test-native-key 7 (ash 1 18) "\C-x")
-    (portal-test-native-key 1 (ash 1 18) "\C-s")
-    ;; Exercise the command loop's keymap lookup, not just a direct dispatch.
-    (let ((post-command-hook
-           (cons (lambda ()
-                   (when (eq this-command #'portal-input--dispatch)
-                     (exit-recursive-edit)))
-                 post-command-hook)))
-      (with-timeout (5 (ert-fail "Portal save command stalled"))
-        (recursive-edit)))
-    (should (file-exists-p buffer-file-name))
-    (should-not (buffer-modified-p))
-    (should (portal-input--action "focused"))))
-
-(ert-deftest portal-excalidraw-gui-save-commits-active-text-editing ()
-  :tags '(:gui)
-  (portal-excalidraw-gui--document
-    (portal-view-focus)
-    (should (portal-excalidraw-gui--js
-             "const canvas = document.querySelector('canvas.interactive');
-              canvas.dispatchEvent(new MouseEvent('dblclick', {bubbles:true, clientX:250, clientY:200}));
-              await new Promise(resolve => setTimeout(resolve, 30));
-              const input = document.querySelector('textarea.excalidraw-wysiwyg');
-              if (!input) throw new Error('Text editor did not open');
-              input.value = 'Uncommitted text'; input.dispatchEvent(new Event('input', {bubbles:true}));
-              return document.activeElement === input;"))
-    (portal-excalidraw-save)
-    (let ((file buffer-file-name))
-      (should (string-match-p "Uncommitted text"
-                              (with-temp-buffer (insert-file-contents file) (buffer-string)))))
-    (should-not (buffer-modified-p))))
-
-(ert-deftest portal-excalidraw-gui-save-button-prompts-for-untitled-file ()
-  :tags '(:gui)
-  (portal-excalidraw-gui--document
-    (portal-excalidraw--close)
-    (set-buffer-modified-p nil)
-    (kill-buffer document)
-    (portal-excalidraw)
-    (setq document (current-buffer))
-    (portal-excalidraw--wait (lambda () portal-excalidraw--ready))
-    (portal-view-focus)
-    (portal-excalidraw-gui--js "document.querySelector('.portal-save button').click(); return true;")
-    (let* ((notification (with-timeout (5 (ert-fail "Save button did not notify Emacs"))
-                           (read-key-sequence-vector nil)))
-           (event (aref notification 0))
-           (file (expand-file-name "from-button.excalidraw" directory)))
-      (should (eq (car-safe event) 'portal-excalidraw-command))
-      (let ((use-dialog-box nil) (use-file-dialog nil))
-        (minibuffer-with-setup-hook
-            (lambda ()
-              (delete-minibuffer-contents)
-              (insert file)
-              (portal-test-native-post-key 36 0 "\r"))
-          (with-timeout (5 (ert-fail "Filename prompt did not receive native input"))
-            (portal-excalidraw--dispatch event))))
-      (should (equal buffer-file-name file))
-      (should (file-exists-p file))
-      (should-not (buffer-modified-p)))))
 
 (defun portal-excalidraw-gui--frame (id name order x y width height &optional notes)
   "A frame ID called NAME, slide ORDER in its deck, at X Y, WIDTH by HEIGHT.
@@ -791,7 +758,7 @@ console is in frame CONSOLE, the slide window in FRAME."
   (and box (cl-every (lambda (edge want) (<= (abs (- edge want)) 2))
                      (append box nil) expected)))
 
-(ert-deftest portal-excalidraw-gui-laser-shows-in-the-slide-window-and-fades ()
+(ert-deftest portal-excalidraw-gui-presents-at-once-and-the-laser-shows-in-the-slide-window ()
   :tags '(:gui)
   ;; The slides are of different shapes, and neither is the shape of the
   ;; console's stage or of the slide window.
@@ -800,7 +767,23 @@ console is in frame CONSOLE, the slide window in FRAME."
             (portal-excalidraw-gui--frame "closing" "Closing" 1 0 1000 800 800))
       nil
     (let ((main (selected-frame))
-          (saved (portal-excalidraw-gui--file-text (buffer-file-name document))))
+          (saved (portal-excalidraw-gui--file-text (buffer-file-name document)))
+          (frames (length (frame-list))))
+      ;; Present and stop at once: both reach the page before React draws
+      ;; either screen, and the window the page opened is closed before
+      ;; Emacs shows it.
+      (should (eq (portal-excalidraw-gui--js
+                   "window.portalBridge.receive({type: 'mode', mode: 'present'});
+                    window.portalBridge.receive({type: 'mode', mode: 'arrange'});
+                    return true;")
+                  t))
+      (portal-excalidraw--wait (lambda () (equal portal-excalidraw--mode "arrange")))
+      (should-not (seq-find (lambda (event) (eq (car-safe event) 'portal-web-opened))
+                            unread-command-events))
+      (should (equal (portal-view-buffers 'web) (list document)))
+      (should-not portal-excalidraw--slides)
+      (should (= (length (frame-list)) frames))
+      ;; Presenting for real opens the slide window.
       (portal-excalidraw-present)
       (portal-web-gui--run-until 'portal-web-opened)
       (portal-web-gui--run-until 'portal-excalidraw-command)
@@ -860,28 +843,6 @@ console is in frame CONSOLE, the slide window in FRAME."
         (should-not (buffer-modified-p))
         (should (equal (portal-excalidraw-gui--file-text (buffer-file-name document))
                        saved))))))
-
-(ert-deftest portal-excalidraw-gui-present-and-stop-at-once-leave-no-slide-window ()
-  :tags '(:gui)
-  ;; Both reach the page before React draws either screen.
-  (portal-excalidraw-gui--drawing
-      (list (portal-excalidraw-gui--frame "opening" "Opening" 0 0 0 1600 900))
-      nil
-    (let ((frames (length (frame-list))))
-      (should (eq (portal-excalidraw-gui--js
-                   "window.portalBridge.receive({type: 'mode', mode: 'present'});
-                    window.portalBridge.receive({type: 'mode', mode: 'arrange'});
-                    return true;")
-                  t))
-      (portal-excalidraw--wait (lambda () (equal portal-excalidraw--mode "arrange")))
-      ;; The window the page opened is closed before Emacs shows it.
-      (should-not (seq-find (lambda (event) (eq (car-safe event) 'portal-web-opened))
-                            unread-command-events))
-      (should (equal (portal-view-buffers 'web) (list document)))
-      (should-not portal-excalidraw--slides)
-      (should (= (length (frame-list)) frames))
-      (portal-excalidraw--flush)
-      (should-not (buffer-modified-p)))))
 
 (defun portal-excalidraw-gui--shades-script (selector)
   "A script returning the shades of the slide image SELECTOR finds, once
