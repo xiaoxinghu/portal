@@ -101,9 +101,10 @@ Change it live with Customize or, for example:
 (setq portal-input-escape-key "C-s-g") ; Control-Command-G
 ```
 
-Use a single printable ASCII key or `<escape>` with Control (`C`), Option (`M`)
-or Command (`s`). Multi-key sequences, function keys, and bare or Shift-only
-keys are not supported. Write shifted punctuation as `"s-!"`, not `"s-S-1"`.
+Use a single printable ASCII key, `<escape>` or `<return>` with Control (`C`),
+Option (`M`) or Command (`s`). Multi-key sequences, function keys, and bare or
+Shift-only keys are not supported. Write shifted punctuation as `"s-!"`, not
+`"s-S-1"`.
 The previous chord stops being reserved when the setting changes. The escape
 works during pending handoffs too, without waiting for Lisp or the app. macOS
 and system-wide shortcut utilities can still intercept keys before Portal.

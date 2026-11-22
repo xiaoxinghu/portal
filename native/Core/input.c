@@ -91,10 +91,10 @@ static bool first_chord(portal_chord chord)
 
 bool portal_input_set_escape(portal_chord chord, portal_text *error)
 {
-    if ((!first_chord(chord) && chord.character != 27)
+    if ((!first_chord(chord) && chord.character != 27 && chord.character != '\r')
         || !(chord.modifiers & (PORTAL_CONTROL | PORTAL_META | PORTAL_SUPER))
         || (chord.modifiers & ~(uint32_t) MODIFIERS))
-        return fail_with(error, "Escape must be modified ASCII or Escape with Control, Meta or Super");
+        return fail_with(error, "Escape must be modified ASCII, Escape or Return with Control, Meta or Super");
     escape = normalize(chord);
     return true;
 }

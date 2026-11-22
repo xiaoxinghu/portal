@@ -307,9 +307,11 @@ A lit light is the lit character, and a dimmed one the dimmed character."
 
 (ert-deftest portal-input-escape-key-validation ()
   (dolist (case '(("s-." "." 8) ("C-s-g" "g" 10) ("s-!" "!" 8)
-                  ("C-<escape>" "\e" 2) ("s-<escape>" "\e" 8)))
+                  ("C-<escape>" "\e" 2) ("s-<escape>" "\e" 8)
+                  ("M-<return>" "\r" 4) ("C-<return>" "\r" 2)
+                  ("s-<return>" "\r" 8) ("M-S-<return>" "\r" 5)))
     (should (equal (portal-input--escape-chord (car case)) (cdr case))))
-  (dolist (bad '("." "<escape>" "S-a" "s-. x" "s-<f5>" "s-S-1" "C-é"))
+  (dolist (bad '("." "<escape>" "<return>" "S-<return>" "S-a" "s-. x" "s-<f5>" "s-S-1" "C-é"))
     (should-error (portal-input--escape-chord bad))))
 
 (ert-deftest portal-input-escape-key-updates-live-and-on-module-load ()
@@ -323,9 +325,13 @@ A lit light is the lit character, and a dimmed one the dimmed character."
         (setq sent nil)
         (portal-input--initialize)
         (should (equal sent '(("g" 10))))
+        (setq portal-input-escape-key "M-<return>")
+        (should (equal (car sent) '("\r" 4)))
+        (should (eq (keymap-lookup portal-input-mode-map "M-<return>") #'portal-input-unfocus))
+        (should-not (keymap-lookup portal-input-mode-map "C-s-g"))
         (setq portal-input-escape-key "M-<escape>")
         (should (equal (car sent) '("\e" 4)))
-        (should-not (keymap-lookup portal-input-mode-map "C-s-g"))
+        (should-not (keymap-lookup portal-input-mode-map "M-<return>"))
         (should-error (customize-set-variable 'portal-input-escape-key "a"))
         (should (equal portal-input-escape-key "M-<escape>")))
       ;; Both platforms restore Control-backtick.

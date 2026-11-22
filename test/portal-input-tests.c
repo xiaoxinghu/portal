@@ -750,7 +750,7 @@ static void test_configurable_escape(void)
     CHECK(!portal_input_is_escape((portal_chord) {'`', C}));
     CHECK(portal_input_is_escape((portal_chord) {'g', C | S}));
     CHECK(!portal_input_is_escape((portal_chord) {'g', C | S | SHIFT}));
-    const portal_chord bad[] = {{'g', 0}, {'g', SHIFT}, {0, S}, {'g', 128}, {27, 0}};
+    const portal_chord bad[] = {{'g', 0}, {'g', SHIFT}, {0, S}, {'g', 128}, {27, 0}, {'\r', 0}, {'\r', SHIFT}};
     for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) {
         CHECK(!portal_input_set_escape(bad[i], &error));
         free(error.data);
@@ -772,6 +772,9 @@ static void test_configurable_escape(void)
 
     CHECK(portal_input_set_escape((portal_chord) {27, C}, &error));
     CHECK(portal_input_is_escape((portal_chord) {27, C}));
+    CHECK(portal_input_set_escape((portal_chord) {'\r', M}, &error));
+    CHECK(portal_input_is_escape((portal_chord) {'\r', M}));
+    CHECK(!portal_input_is_escape((portal_chord) {'\r', M | SHIFT}));
     CHECK(portal_input_set_escape((portal_chord) {'!', S}, &error));
     CHECK(portal_input_is_escape((portal_chord) {'!', S | SHIFT}));
     CHECK(portal_input_set_escape((portal_chord) {'`', C}, &error));

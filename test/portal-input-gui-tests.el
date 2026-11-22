@@ -6,6 +6,7 @@
 (declare-function portal-test-responder "test-terminal-input" ())
 
 (defconst portal-input-gui--control (ash 1 18))
+(defconst portal-input-gui--option (ash 1 19))
 (defconst portal-input-gui--command (ash 1 20))
 
 (defmacro portal-input-gui--page (&rest body)
@@ -250,6 +251,11 @@ from that thread."
     ;; This page explicitly claims C-k. Reserving it must bypass the page.
     (let ((portal-input-escape-key "C-k"))
       (portal-test-native-key 40 portal-input-gui--control "\C-k")
+      (should-not (portal-input--action "focused"))
+      (should (= (portal-excalidraw-gui--js "return keys.length") 0)))
+    (portal-input-focus)
+    (let ((portal-input-escape-key "M-<return>"))
+      (portal-test-native-key 36 portal-input-gui--option "\r")
       (should-not (portal-input--action "focused"))
       (should (= (portal-excalidraw-gui--js "return keys.length") 0)))
     (portal-input-focus)

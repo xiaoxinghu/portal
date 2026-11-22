@@ -61,6 +61,19 @@ struct CheckFocus {
         app.sendEvent(escape)
         check(window.firstResponder === editor, "Configured chord did not return focus")
         check(Views.owner(target) == PORTAL_OWNER_EMACS)
+        check(portal_input_set_escape(portal_chord(character: 13, modifiers: 4), &error))
+        for (code, characters) in [(UInt16(36), "\r"), (UInt16(76), "\u{03}")] {
+            check(window.makeFirstResponder(input))
+            app.updateWindows()
+            check(Views.owner(target) == PORTAL_OWNER_VIEW)
+            let enter = require(NSEvent.keyEvent(with: .keyDown, location: .zero,
+                modifierFlags: .option, timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                isARepeat: false, keyCode: code))
+            app.sendEvent(enter)
+            check(window.firstResponder === editor, "Option-Return did not return focus")
+            check(Views.owner(target) == PORTAL_OWNER_EMACS)
+        }
         check(portal_input_set_escape(portal_chord(character: 46, modifiers: 8), &error))
         check(window.makeFirstResponder(input))
         try Views.hide(target)

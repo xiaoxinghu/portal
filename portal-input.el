@@ -70,15 +70,17 @@ reads it: a character and a sum of `portal-input--modifiers' values."
   "Validate escape key VALUE and return its native character and modifiers."
   (let* ((keys (kbd value))
          (event (and (= (length keys) 1) (aref keys 0)))
-         (mods (and event (event-modifiers event))))
+         (mods (and event (event-modifiers event)))
+         (basic (and event (event-basic-type event))))
     (unless (cl-intersection mods '(control meta super))
       (error "Portal's escape key needs Control, Meta or Super"))
-    (if (eq (event-basic-type event) 'escape)
+    (if (memq basic '(escape return))
         (progn
           (unless (cl-every (lambda (mod) (memq mod '(control meta super shift))) mods)
             (error "Unsupported escape key modifiers"))
-          (list "\e" (cl-loop for (mod . bit) in portal-input--modifiers
-                              when (memq mod mods) sum bit)))
+          (list (if (eq basic 'escape) "\e" "\r")
+                (cl-loop for (mod . bit) in portal-input--modifiers
+                         when (memq mod mods) sum bit)))
       (portal-input--chord value))))
 
 (defvar portal-input--escape-installed portal-input--default-escape-key
@@ -106,8 +108,9 @@ reads it: a character and a sum of `portal-input--modifiers' values."
 This key is reserved before the embedded app or terminal sees it, even
 while a command handoff is pending.  RET enters the view again.
 The default is Control-backtick on both macOS and Linux.
-Use one modified printable ASCII key or <escape>, with Control, Meta
-or Super: for example \"s-.\", \"C-s-g\" or \"C-<escape>\".
+Use one modified printable ASCII key, <escape> or <return>, with Control,
+Meta or Super: for example \"s-.\", \"C-s-g\", \"C-<escape>\" or
+\"M-<return>\".
 Use resulting punctuation, such as \"s-!\", not \"s-S-1\".
 The system's and the desktop's own shortcuts still take precedence.
 Changes apply live."

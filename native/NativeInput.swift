@@ -5,6 +5,7 @@ import PortalCore
 extension portal_chord {
     /// EVENT's key as the core sees it: the character it types with Shift but
     /// no other modifier, and Portal's modifiers. Option is Meta, Command Super.
+    /// Keypad Enter (0x03) maps to Return ('\r'), as on Linux.
     /// A key that types no character, such as an arrow, whose character AppKit
     /// gives from the private-use range, is 0.
     @MainActor init(_ event: NSEvent) {
@@ -15,8 +16,9 @@ extension portal_chord {
                                  (.option, PORTAL_META), (.command, PORTAL_SUPER)] where flags.contains(flag) {
             modifiers |= modifier.rawValue
         }
-        let character = scalars.count == 1 ? scalars.first!.value : 0
-        self.init(character: (0xF700...0xF8FF).contains(character) ? 0 : character, modifiers: modifiers)
+        let raw = scalars.count == 1 ? scalars.first!.value : 0
+        let character: UInt32 = raw == 3 ? 13 : (0xF700...0xF8FF).contains(raw) ? 0 : raw
+        self.init(character: character, modifiers: modifiers)
     }
 }
 
