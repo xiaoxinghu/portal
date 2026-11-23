@@ -7,6 +7,8 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'portal-build)
+;; Loaded now, so that loading it later cannot undo a test's stand-in.
+(require 'portal-runtime)
 (require 'portal-server)
 
 (defvar compilation-finish-functions)
@@ -54,10 +56,14 @@ and no ZIG names the Zig, which would hide the tests' stand-ins."
                                    :version (portal-build-version)))))
 
 (defmacro portal-build-test--interactive (&rest body)
-  "Run BODY as if from an interactive command in a graphical session."
+  "Run BODY as if from an interactive command in a graphical session.
+Off macOS the runtime asks the selected frame first, and batch Emacs's is
+a text terminal, which no download or build cures: as a graphical frame,
+it has nothing to say."
   (declare (indent 0))
   `(let ((noninteractive nil) (this-command 'portal-terminal))
-     ,@body))
+     (cl-letf (((symbol-function 'portal-runtime--display-problem) #'ignore))
+       ,@body)))
 
 (ert-deftest portal-build-problem-follows-the-record-and-sources ()
   (portal-build-test--with-root
