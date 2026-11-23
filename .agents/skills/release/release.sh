@@ -145,12 +145,23 @@ EOF
     if [ "$new" = "$current" ] || [ "$(printf '%s\n' "$current" "$new" | largest)" != "$new" ]; then
         die "$new is not above $current, the current version"
     fi
-    if [ -n "$last" ]; then
-        [ "$(gh release view "v$last" --json isDraft --jq .isDraft 2>/dev/null)" = false ] ||
-            die "v$last has no published GitHub release: publish it first"
-        [ "$(git rev-parse -q --verify origin/stable || :)" = "$(git rev-parse "v$last^{commit}")" ] ||
-            die "stable is not at v$last: publish v$last again to finish it"
-        [ -n "$(git rev-list -1 "v$last..$base")" ] || die "$from has nothing new since v$last"
+    # The last finished release, newest first: one the owner marked a
+    # pre-release is abandoned, passed over; any other unfinished one stops it.
+    finished=''
+    for version in $(git tag -l | sed -n 's/^v\([0-9]*\.[0-9]*\.[0-9]*\)$/\1/p' |
+        sort -t. -k1,1nr -k2,2nr -k3,3nr); do
+        case $(gh release view "v$version" --json isDraft,isPrerelease \
+            --jq '"\(.isDraft) \(.isPrerelease)"' 2>/dev/null) in
+            'false false') finished=$version; break ;;
+            'false true') echo "release: v$version is a pre-release: passed over as abandoned" >&2 ;;
+            *) die "v$version has no published GitHub release: publish it first" ;;
+        esac
+    done
+    if [ -n "$finished" ]; then
+        [ "$(git rev-parse -q --verify origin/stable || :)" = "$(git rev-parse "v$finished^{commit}")" ] ||
+            die "stable is not at v$finished: publish v$finished again to finish it, or" \
+                "mark it a pre-release to abandon it"
+        [ -n "$(git rev-list -1 "v$finished..$base")" ] || die "$from has nothing new since v$finished"
     fi
     if git rev-parse -q --verify origin/stable >/dev/null; then
         git merge-base --is-ancestor origin/stable "$base" ||

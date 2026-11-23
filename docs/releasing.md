@@ -232,11 +232,14 @@ the release:
 - **A published release is not what was tested**, short of a file, not
   immutable, or a download differs. `publish` refuses and `stable` stays.
   The release cannot be mended and its tag never reused: take it to the
-  owner, who can mark it a pre-release in its notes, and release the next
-  PATCH version.
+  owner. To abandon it, the owner marks it a pre-release on GitHub, which an
+  immutable release allows, and says why in its notes; then release the
+  next PATCH version.
 
 `candidate` refuses a new version while the last one is a draft or
-`stable` is not at it: finish that release first. Older releases are never
+`stable` is not at it: finish that release first. It passes over a
+published pre-release as abandoned: the next version goes above it, and
+`stable` must be at the last release before it. Older releases are never
 touched, so a Portal pinned to a tag downloads that tag's runtime for as
 long as GitHub keeps the release.
 

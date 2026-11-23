@@ -58,7 +58,7 @@ if command == "release view":
     release = of_tag(args[2])[0]
     if release is None:
         sys.exit(1)
-    print("true" if release["draft"] else "false")
+    print(str(release["draft"]).lower(), str(release.get("prerelease", False)).lower())
 elif command == "run list":
     runs = stub / "runs"
     print(runs.read_text().split("\\n")[0] if runs.exists() else "")
@@ -496,6 +496,22 @@ class ReleaseTests(unittest.TestCase):
                       self.release("publish", "0.2.0", "notes.md", ok=False))
         self.assertNotIn("release upload v0.2.0 ", self.asked().split("--draft=false")[1])
         self.assert_unmoved(base)
+
+        # It cannot be mended, nor passed over by accident.
+        self.assertIn("stable is not at v0.2.0", self.release("candidate", "patch", ok=False))
+        # The owner marks it a pre-release, which abandons it: the next PATCH
+        # goes above it, from main, and stable can move to that.
+        releases[0]["prerelease"] = True
+        (self.stub / "releases.json").write_text(json.dumps(releases))
+        (self.stub / "runs").write_text("9\n")
+        output = self.release("candidate", "patch")
+        self.assertIn("v0.2.0 is a pre-release: passed over as abandoned", output)
+        self.assertEqual(self.git("rev-parse", "origin/release/v0.2.1^"), base)
+        self.run_kept("0.2.1", run="9")
+        (self.root / "notes.md").write_text(self.release("notes", "0.2.1"))
+        self.release("publish", "0.2.1", "notes.md")
+        self.assertEqual(self.git("rev-parse", "origin/stable"),
+                         self.git("rev-parse", "v0.2.1^{commit}"))
 
     def test_a_tag_on_another_commit_is_refused(self):
         base = self.git("rev-parse", "HEAD")
