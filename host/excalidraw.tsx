@@ -738,7 +738,7 @@ function Arrange({
 	// events back to back, with no render between them to give the handlers
 	// the state the previous one set. The state draws the drop mark.
 	const [drag, setDrag] = useState<Drag>();
-	const current = useRef<Drag>();
+	const current = useRef<Drag | undefined>(undefined);
 	const updateDrag = (next: Drag | undefined) => {
 		current.current = next;
 		setDrag(next);
