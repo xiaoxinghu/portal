@@ -233,8 +233,8 @@ last one started from Emacs.
 
 On Apple Silicon, Portal can download its native part instead of building it:
 the runtime archive a release attaches, holding the module, the app host and
-Ghostty's resources. No release attaches one yet: until one does, Download
-says the runtime is not released, and Build here remains. Choose **Download**
+Ghostty's resources. Every release after 0.2.0 attaches one; for 0.2.0,
+Download says the runtime is not released, and Build here remains. Choose **Download**
 when the first native command asks, or run `M-x portal-download-runtime` at
 any time. The install runs in the
 background, shows its progress in `*portal-runtime*`, and ends by saying one
