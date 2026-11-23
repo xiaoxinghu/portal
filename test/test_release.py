@@ -423,6 +423,11 @@ class ReleaseTests(unittest.TestCase):
         # The candidate cannot be passed over while it is unfinished.
         self.assertIn("v0.2.0 has no published GitHub release",
                       self.release("candidate", "0.3.0", ok=False))
+        # Notes drafted again, as after a new run, do not take the pushed
+        # tag for the previous release.
+        notes = self.release("notes", "0.2.0")
+        self.assertIn("The first release.", notes)
+        self.assertIn("Nothing to upgrade from", notes)
 
         output = self.release("publish", "0.2.0", "notes.md")
         self.assertIn(f"removing {archive} from the draft of v0.2.0", output)

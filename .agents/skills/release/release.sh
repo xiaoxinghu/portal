@@ -193,7 +193,8 @@ EOF
 
 notes() {
     evidence "$1"
-    previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$release" 2>/dev/null || :)
+    # From the base: once publish has pushed the tag, the release commit has its own.
+    previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$release^" 2>/dev/null || :)
     echo "## What is new"
     echo
     if [ -z "$previous" ]; then
