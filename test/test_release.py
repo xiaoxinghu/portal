@@ -216,7 +216,8 @@ class ReleaseTests(unittest.TestCase):
         """Make RUN the green run of release/vVERSION, keeping its runtime artifacts.
 
         It packs an archive for each of the three systems, as Checks does, and
-        writes their manifests; SEED changes the archives' bytes."""
+        writes their manifests, the Mac's copied into the run's logs; SEED changes
+        the archives' bytes."""
         commit = self.git("rev-parse", f"origin/release/v{version}")
         runs = self.stub / "runs"
         listed = runs.read_text() if runs.exists() else ""
@@ -233,7 +234,14 @@ class ReleaseTests(unittest.TestCase):
                 "identity": "0" * 64, "archives": [{
                     "target": target, "floor": {}, "name": f"{name}.tar.gz", "size": len(data),
                     "sha256": hashlib.sha256(data).hexdigest()}]}))
+        self.logs_from(kept, version)
         return kept
+
+    def logs_from(self, kept, version):
+        """Make the logs the green run gives those of the run that kept KEPT."""
+        (self.stub / "logs" / "runtime").mkdir(exist_ok=True)
+        name = f"portal-runtime-v{version}-macos-arm64.json"
+        shutil.copy(kept / name, self.stub / "logs" / "runtime" / name)
 
     def releases(self):
         return json.loads((self.stub / "releases.json").read_text())
@@ -437,10 +445,17 @@ class ReleaseTests(unittest.TestCase):
         published = (self.stub / "public" / "v0.2.0").iterdir()
         before = {p.name: p.read_bytes() for p in published}
 
-        # A later run of the release commit kept other bytes: they go nowhere.
+        # A later run of the release commit tested other bytes: what is
+        # published is not its evidence, so stable stays.
         (self.stub / "refuse-stable").unlink()
         self.run_kept("0.2.0", run="8", seed=b"rebuilt")
         (self.stub / "asked").write_text("")
+        self.assertIn("other than the one Checks run 8 packed",
+                      self.release("publish", "0.2.0", "notes.md", ok=False))
+        self.assert_unmoved(base)
+        # With the run that tested them, it checks and finishes, changing nothing.
+        (self.stub / "runs").write_text("7\n")
+        self.logs_from(kept, "0.2.0")
         output = self.release("publish", "0.2.0", "notes.md")
         self.assertIn("v0.2.0 is published already: checking it, changing nothing", output)
         self.assertNotIn("release upload", self.asked())

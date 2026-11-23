@@ -203,7 +203,10 @@ changed again:
 5. It checks that the release is immutable, holds exactly those files, and
    that each downloads by the tag, without signing in, as the bytes GitHub
    holds and the run tested, the runtime as its manifest says; and
-   `gh release verify` checks GitHub's attestation of the release.
+   `gh release verify` checks GitHub's attestation of the release. The
+   manifest must be the one the run packed, a copy of which its `logs` keep
+   in `runtime/`: so even a release found published, whose artifacts are not
+   fetched again, is tied to the archive that run tested.
 6. Only then does it move `stable` and `main` in one push, and delete
    the candidate's branch.
 
@@ -224,7 +227,8 @@ the release:
 - **Something after publishing failed**, a download, the push of `stable`
   and `main` (as when `main` moved). Run `publish` again: it finds the
   release published, uploads and removes nothing, checks it as in step 5
-  and moves the branches.
+  and moves the branches. It needs the run that tested it, the newest green
+  one of the release commit, with its `logs` still kept.
 - **A published release is not what was tested**, short of a file, not
   immutable, or a download differs. `publish` refuses and `stable` stays.
   The release cannot be mended and its tag never reused: take it to the

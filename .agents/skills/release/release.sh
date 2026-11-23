@@ -89,9 +89,14 @@ runtimes() {
 }
 
 # Check the manifest of version $2's runtime for target $3 in directory $1,
-# and the archive beside it: the tag, the version, the release commit, and
-# the archive's name, size and SHA-256.
+# and the archive beside it: the manifest is the one run $run packed after
+# its checks passed, a copy of which its logs keep, so the archive's SHA-256
+# in it is that of the archive they tested; then the tag, the version, the
+# release commit, and the archive's name, size and SHA-256. (A Linux
+# target's copy is in its job's logs-TARGET, which evidence does not fetch.)
 check_runtime() {
+    cmp -s "$1/portal-runtime-v$2-$3.json" "$work/logs/runtime/portal-runtime-v$2-$3.json" ||
+        die "$1 holds a manifest of v$2 for $3 other than the one Checks run $run packed"
     python3 -I - "$1" "$2" "$3" "$release" <<'PYTHON' || die "$1 holds no runtime of v$2 for $3"
 import hashlib, json, sys
 from pathlib import Path
@@ -338,15 +343,18 @@ publish() {
     [ "$(echo "$found" | grep -c .)" -le 1 ] ||
         die "$tag has several releases on GitHub, which the owner must settle:" $found
     id=${found%% *}
+    if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+        [ "$(git rev-parse "$tag^{commit}")" = "$release" ] ||
+            die "$tag on GitHub is not $release, the release commit"
+    elif [ -n "$found" ]; then
+        die "$tag has a release on GitHub but no tag"
+    fi
     if [ "$(echo "$found" | cut -d' ' -f2)" = false ]; then
         echo "release: $tag is published already: checking it, changing nothing" >&2
     else
         runtimes "$1"
         (cd "$work" && zip -qr assets/logs.zip logs)
-        if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            [ "$(git rev-parse "$tag^{commit}")" = "$release" ] ||
-                die "$tag on GitHub is not $release, the release commit"
-        else
+        if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
             git tag -a "$tag" -m "Portal $1" "$release"
             git push -q origin "refs/tags/$tag"
         fi
