@@ -35,6 +35,9 @@
 (declare-function portal--inspect "portal-view" (target))
 (declare-function portal--place "portal-view" (target edges title))
 (declare-function portal--terminal-text "portal-terminal" (target))
+(declare-function dbus-call-method "dbus" (bus service path interface method &rest args))
+(declare-function dbus-ping "dbus" (bus service &optional timeout))
+(declare-function dbus-register-signal "dbus" (bus service path interface signal handler &rest args))
 (declare-function portal-test-capture-window "test-window-capture" (file))
 (declare-function portal-test-native-key "test-terminal-input" (code flags text &optional windowless))
 (declare-function portal-test-responder "test-terminal-input" ())
@@ -107,23 +110,318 @@
                             0 (string character))
     (portal-render-smoke--pause 0.03)))
 
-(defun portal-render-smoke--mac-keyboard ()
+(defun portal-render-smoke--mac-keyboard (_target)
   "Whether the frame's window is the key window of the active app."
   (string-match-p " (active)\\'" (portal-test-responder)))
+
+;; On Linux the frame fills its output, and each place captures it and
+;; types into it through the compositor, as a person's screenshot and
+;; keys go.
+
+(defun portal-render-smoke--program-output (program &rest arguments)
+  "Run PROGRAM with ARGUMENTS; return (STATUS . OUTPUT), its two streams."
+  (with-temp-buffer
+    (let ((status (condition-case err
+                      (apply #'call-process program nil t nil arguments)
+                    (file-error (error-message-string err)))))
+      (cons status (string-trim (buffer-string))))))
+
+(defun portal-render-smoke--missing (&rest programs)
+  "Say which of PROGRAMS are not on PATH, or nil when none is missing."
+  (when-let* ((missing (seq-remove #'executable-find programs)))
+    (format "%s not found" (string-join missing ", "))))
+
+(defun portal-render-smoke--write-ppm (file width height raw)
+  "Write RAW, rows of 24-bit RGB padded to 4 bytes, at FILE as a PPM.
+Return nil, or why not."
+  (let* ((row (* 3 width))
+         (stride (* 4 (/ (+ row 3) 4))))
+    (if (/= (length raw) (* stride height))
+        (format "%d bytes, not %dx%d RGB" (length raw) width height)
+      (with-temp-file file
+        (set-buffer-multibyte nil)
+        (insert (format "P6\n%d %d\n255\n" width height))
+        (if (= stride row)
+            (insert raw)
+          (dotimes (y height)
+            (insert (substring raw (* y stride) (+ (* y stride) row))))))
+      nil)))
+
+;;;; Hyprland: grim and wtype, which its wlr protocols serve
+
+(defun portal-render-smoke--hyprctl (&rest arguments)
+  "What hyprctl answers to ARGUMENTS, parsed from its JSON, or nil."
+  (pcase (apply #'portal-render-smoke--program-output "hyprctl" "-j" arguments)
+    (`(0 . ,json)
+     (ignore-errors (json-parse-string json :object-type 'alist :array-type 'list
+                                       :null-object nil :false-object nil)))))
+
+(defun portal-render-smoke--hyprland-window ()
+  "This Emacs's window as Hyprland lists it, or nil."
+  (seq-find (lambda (client) (eql (alist-get 'pid client) (emacs-pid)))
+            (portal-render-smoke--hyprctl "clients")))
+
+(defun portal-render-smoke--hyprland-ready ()
+  "Nil when this Hyprland can be captured and typed into, else why not."
+  (portal-render-smoke--missing "hyprctl" "grim" "wtype"))
+
+(defun portal-render-smoke--hyprland-capture (file)
+  "Capture the frame's window at FILE with grim; return its scale, or why not.
+The region is the window's on its monitor, at the monitor's scale."
+  (let* ((window (portal-render-smoke--hyprland-window))
+         (monitor (seq-find (lambda (monitor) (eql (alist-get 'id monitor)
+                                                   (alist-get 'monitor window)))
+                            (portal-render-smoke--hyprctl "monitors")))
+         (scale (alist-get 'scale monitor))
+         (start (float-time)))
+    (if (not (and window scale))
+        "Hyprland lists no window of this Emacs, or not its monitor"
+      (pcase-let* ((`(,x ,y) (alist-get 'at window))
+                   (`(,width ,height) (alist-get 'size window))
+                   (`(,status . ,output)
+                    (portal-render-smoke--program-output
+                     "grim" "-t" "ppm" "-s" (number-to-string scale)
+                     "-g" (format "%d,%d %dx%d" x y width height) file)))
+        (if (not (eql status 0))
+            (format "grim exited %s: %s" status output)
+          (portal-render-smoke--note "captured %dx%d at %d,%d of %s, scale %s, in %.3fs by grim"
+                                     width height x y (alist-get 'name monitor) scale
+                                     (- (float-time) start))
+          scale)))))
+
+(defun portal-render-smoke--hyprland-type (text)
+  "Type TEXT and Return with wtype, into the window with the keyboard."
+  (let ((start (float-time)))
+    (pcase (portal-render-smoke--program-output "wtype" text)
+      (`(0 . ,_)
+       (pcase (portal-render-smoke--program-output "wtype" "-k" "Return")
+         (`(0 . ,_) (portal-render-smoke--note "typed in %.3fs by wtype" (- (float-time) start))
+          nil)
+         (`(,status . ,output) (format "wtype exited %s: %s" status output))))
+      (`(,status . ,output) (format "wtype exited %s: %s" status output)))))
+
+(defun portal-render-smoke--hyprland-keyboard (_target)
+  "Whether Hyprland's active window is this Emacs's."
+  (eql (alist-get 'pid (portal-render-smoke--hyprctl "activewindow")) (emacs-pid)))
+
+(defun portal-render-smoke--hyprland-describe ()
+  "Hyprland's active window, for the record."
+  (let ((active (portal-render-smoke--hyprctl "activewindow")))
+    (format "the active window is %S of %S, pid %s; this Emacs is %s"
+            (alist-get 'title active) (alist-get 'class active)
+            (alist-get 'pid active) (emacs-pid))))
+
+;;;; GNOME: Mutter's own ScreenCast and RemoteDesktop, over D-Bus
+
+(defconst portal-render-smoke--mutter "org.gnome.Mutter" "Mutter's D-Bus prefix.")
+
+(defvar portal-render-smoke--mutter-typing nil
+  "The path of the RemoteDesktop session that types, once it has started.")
+
+(defun portal-render-smoke--mutter-call (service path method &rest arguments)
+  "Call METHOD on Mutter's SERVICE at its object PATH, with ARGUMENTS.
+A session's path is called on the service's Session interface."
+  (let ((name (concat portal-render-smoke--mutter "." service)))
+    (apply #'dbus-call-method :session name path
+           (if (string-match-p "/Session" path) (concat name ".Session") name)
+           method arguments)))
+
+(defun portal-render-smoke--gnome-ready ()
+  "Nil when this GNOME can be captured and typed into, else why not."
+  (require 'dbus)
+  (or (portal-render-smoke--missing "gst-launch-1.0")
+      (unless (featurep 'dbusbind) "this Emacs has no D-Bus")
+      (seq-some (lambda (service)
+                  (let ((name (concat portal-render-smoke--mutter "." service)))
+                    (unless (dbus-ping :session name 1000)
+                      (format "no %s on the session bus" name))))
+                '("ScreenCast" "RemoteDesktop" "DisplayConfig"))))
+
+(defun portal-render-smoke--gnome-monitor ()
+  "The frame's monitor as Mutter has it: (CONNECTOR WIDTH HEIGHT SCALE), or nil.
+WIDTH and HEIGHT are its current mode's, in device pixels, as it is
+turned.  Mutter places
+its monitors in device pixels or in Emacs's, as its layout mode says, so
+either matches the frame's monitor's top left."
+  (pcase-let* ((`(,_serial ,monitors ,logical ,_properties)
+                (portal-render-smoke--mutter-call
+                 "DisplayConfig" "/org/gnome/Mutter/DisplayConfig" "GetCurrentState"))
+               (`(,fx ,fy) (alist-get 'geometry (frame-monitor-attributes))))
+    (catch 'found
+      (dolist (entry logical)
+        (pcase-let ((`(,x ,y ,scale ,transform ,_primary ,specs . ,_) entry))
+          (when (or (and (= x fx) (= y fy))
+                    (and (= x (round (* scale fx))) (= y (round (* scale fy)))))
+            (let* ((connector (car (car specs)))
+                   (monitor (seq-find (lambda (m) (equal (car (car m)) connector)) monitors))
+                   (mode (seq-find (lambda (mode)
+                                     (caar (alist-get "is-current" (car (last mode))
+                                                      nil nil #'equal)))
+                                   (nth 1 monitor))))
+              ;; A turn of 90 or 270 degrees, Wayland's odd transforms,
+              ;; streams the mode turned.
+              (throw 'found (if (cl-oddp transform)
+                                (list connector (nth 2 mode) (nth 1 mode) scale)
+                              (list connector (nth 1 mode) (nth 2 mode) scale))))))))))
+
+(defun portal-render-smoke--gnome-capture (file)
+  "Capture the frame's monitor at FILE through Mutter's ScreenCast.
+One frame of its PipeWire stream, read with GStreamer.  Return the scale,
+or why not."
+  (let ((start (float-time)) node session)
+    (unwind-protect
+        (condition-case err
+            (pcase-let ((`(,connector ,width ,height ,scale) (portal-render-smoke--gnome-monitor)))
+              (if (not (and connector width))
+                  "Mutter has no monitor where the frame is"
+                (setq session (portal-render-smoke--mutter-call
+                               "ScreenCast" "/org/gnome/Mutter/ScreenCast" "CreateSession"
+                               '(:array :signature "{sv}")))
+                (let ((stream (portal-render-smoke--mutter-call
+                               "ScreenCast" session "RecordMonitor" connector
+                               '(:array (:dict-entry "cursor-mode" (:variant :uint32 0)))))
+                      (raw (concat file ".raw")))
+                  (dbus-register-signal :session nil stream
+                                        (concat portal-render-smoke--mutter ".ScreenCast.Stream")
+                                        "PipeWireStreamAdded" (lambda (id) (setq node id)))
+                  (portal-render-smoke--mutter-call "ScreenCast" session "Start")
+                  ;; D-Bus signals arrive as events, which reading handles.
+                  (let ((deadline (+ (float-time) 10)))
+                    (while (and (not node) (< (float-time) deadline))
+                      (read-event nil nil 0.05)))
+                  (if (not node)
+                      "Mutter's ScreenCast gave no PipeWire stream in 10 s"
+                    (pcase (portal-render-smoke--program-output
+                            "gst-launch-1.0" "-q" "pipewiresrc" (format "path=%d" node)
+                            "num-buffers=1" "!" "videoconvert" "!"
+                            (format "video/x-raw,format=RGB,width=%d,height=%d" width height)
+                            "!" "filesink" (concat "location=" raw))
+                      (`(0 . ,_)
+                       (or (portal-render-smoke--write-ppm
+                            file width height
+                            (with-temp-buffer
+                              (set-buffer-multibyte nil)
+                              (insert-file-contents-literally raw)
+                              (buffer-string)))
+                           (progn
+                             (portal-render-smoke--note
+                              "captured %s, %dx%d at scale %s, in %.3fs by Mutter's ScreenCast"
+                              connector width height scale (- (float-time) start))
+                             scale)))
+                      (`(,status . ,output)
+                       (format "GStreamer exited %s on stream %s: %s" status node output)))))))
+          (dbus-error (format "Mutter's ScreenCast: %s" (error-message-string err))))
+      ;; Stopping a session ends its stream.
+      (when session
+        (ignore-errors (portal-render-smoke--mutter-call "ScreenCast" session "Stop"))))))
+
+(defun portal-render-smoke--gnome-type (text)
+  "Type TEXT and Return as keysyms through Mutter's RemoteDesktop; nil, or why not."
+  (condition-case err
+      (let ((start (float-time)))
+        (unless portal-render-smoke--mutter-typing
+          (let ((session (portal-render-smoke--mutter-call
+                          "RemoteDesktop" "/org/gnome/Mutter/RemoteDesktop" "CreateSession")))
+            (portal-render-smoke--mutter-call "RemoteDesktop" session "Start")
+            (setq portal-render-smoke--mutter-typing session)
+            ;; A key sent straight after Start is lost.
+            (portal-render-smoke--pause 0.3)))
+        (dolist (character (append text "\r" nil))
+          (let ((keysym (if (eq character ?\r) #xff0d character)))
+            (dolist (down '(t nil))
+              (portal-render-smoke--mutter-call
+               "RemoteDesktop" portal-render-smoke--mutter-typing
+               "NotifyKeyboardKeysym" :uint32 keysym down)))
+          (portal-render-smoke--pause 0.01))
+        (portal-render-smoke--note "typed in %.3fs by Mutter's RemoteDesktop"
+                                   (- (float-time) start))
+        nil)
+    (dbus-error (format "Mutter's RemoteDesktop: %s" (error-message-string err)))))
+
+(defun portal-render-smoke--active (target)
+  "Whether GTK says the window of TARGET's frame has the keyboard."
+  (plist-get (portal--inspect target) :active))
+
+(defun portal-render-smoke--linux-describe ()
+  "What Emacs knows of the keyboard, for the record."
+  (format "the frame's focus state is %S" (frame-focus-state)))
+
+;;;; Plasma: KWin's ScreenShot2 through Spectacle, and its EIS
+
+(defun portal-render-smoke--plasma-ready ()
+  "Nil when this Plasma can be captured and typed into, else why not."
+  (require 'dbus)
+  (let ((typer (getenv "PORTAL_SMOKE_EI_TYPE")))
+    (or (portal-render-smoke--missing "spectacle")
+        (unless (featurep 'dbusbind) "this Emacs has no D-Bus")
+        (unless (dbus-ping :session "org.kde.KWin" 1000) "no org.kde.KWin on the session bus")
+        (unless (and typer (file-executable-p typer))
+          (format "no EIS typer: %s" (or (getenv "PORTAL_SMOKE_EI_WHY") "not built"))))))
+
+(defun portal-render-smoke--plasma-capture (file)
+  "Capture the active window, the frame's, at FILE with Spectacle.
+KWin's ScreenShot2 answers only the programs its desktop files authorise,
+and Spectacle is one.  It writes a PPM, a format of Qt's own.  Return the
+frame's scale, or why not."
+  (let ((start (float-time)))
+    (pcase (portal-render-smoke--program-output
+            "spectacle" "--background" "--nonotify" "--activewindow" "--output" file)
+      (`(0 . ,_)
+       (if (not (file-exists-p file))
+           "Spectacle wrote no capture"
+         (portal-render-smoke--note "captured the active window in %.3fs by Spectacle"
+                                    (- (float-time) start))
+         (frame-scale-factor)))
+      (`(,status . ,output) (format "Spectacle exited %s: %s" status output)))))
+
+(defun portal-render-smoke--plasma-type (text)
+  "Type TEXT and Return through KWin's EIS; nil, or why not."
+  (let ((start (float-time)))
+    (pcase (portal-render-smoke--program-output (getenv "PORTAL_SMOKE_EI_TYPE") text)
+      (`(0 . ,_) (portal-render-smoke--note "typed in %.3fs through KWin's EIS"
+                                            (- (float-time) start))
+       nil)
+      (`(,status . ,output) (format "the EIS typer exited %s: %s" status output)))))
 
 (defvar portal-render-smoke--adapters
   `((mac :window-system ns
          :capture portal-render-smoke--mac-capture
          :type portal-render-smoke--mac-type
          :keyboard portal-render-smoke--mac-keyboard
-         :describe portal-test-responder))
+         :describe portal-test-responder)
+    (hyprland :window-system pgtk
+              :ready portal-render-smoke--hyprland-ready
+              :capture portal-render-smoke--hyprland-capture
+              :type portal-render-smoke--hyprland-type
+              :keyboard portal-render-smoke--hyprland-keyboard
+              :describe portal-render-smoke--hyprland-describe)
+    (gnome :window-system pgtk
+           :ready portal-render-smoke--gnome-ready
+           :capture portal-render-smoke--gnome-capture
+           :type portal-render-smoke--gnome-type
+           :keyboard portal-render-smoke--active
+           :click t
+           :describe portal-render-smoke--linux-describe)
+    (plasma :window-system pgtk
+            :ready portal-render-smoke--plasma-ready
+            :capture portal-render-smoke--plasma-capture
+            :type portal-render-smoke--plasma-type
+            :keyboard portal-render-smoke--active
+            :describe portal-render-smoke--linux-describe))
   "Each place's adapter: its name, then its window system and functions.
-:capture writes the frame's content area as it is shown, a binary PPM in
-device pixels whose origin is the frame's top left, at the file it is
-given, and returns the device scale, or a string saying why it could not:
-the test is then not run.  :type types a string of lowercase letters and
-Return.  :keyboard says whether the frame's window has the keyboard,
-which `frame-focus-state' cannot: it stays nil while a view has the keys.
+:ready, when there is one, returns nil when the place offers a way to
+capture and to type, or a string saying why not: the test is then not
+run.  :capture writes the frame's content area as it is shown, a binary
+PPM in device pixels whose origin is the frame's top left, at the file it
+is given, and returns the device scale, or a string saying why it could
+not: the test is then not run.  :type types a string of lowercase letters
+and Return, and returns nil, or a string saying why it could not: the test
+is then not run.  :keyboard says whether the frame's window has the
+keyboard, given the terminal's view, which `frame-focus-state' cannot: it
+stays nil while a view has the keys.  :click, when non-nil, says the
+place does not give a window a script started the keyboard: when the
+window has not had it for 3 seconds, the test asks the person at the
+desktop to click it, and waits PORTAL_SMOKE_CLICK_WAIT seconds (30).
 :describe returns a string for the record when :keyboard fails.")
 
 (defun portal-render-smoke--place ()
@@ -157,35 +455,43 @@ which `frame-focus-state' cannot: it stays nil while a view has the keys.
     (let ((at (+ start (* 3 (+ x (* y width))))))
       (list (aref bytes at) (aref bytes (+ at 1)) (aref bytes (+ at 2))))))
 
+(defun portal-render-smoke--rgb-kind (r g b)
+  "Which of the test's colours R, G and B make, or nil."
+  (cond ((and (> r 220) (< g 40) (< b 40)) 'red)
+        ((and (< r 40) (< g 40) (> b 220)) 'blue)
+        ((and (< r 40) (> g 220) (< b 40)) 'green)
+        ((and (< (abs (- r #xf9)) 24) (< (abs (- g #x81)) 24) (< (abs (- b #x28)) 24))
+         'orange)))
+
 (defun portal-render-smoke--kind (color)
-  "Which of the test's colours COLOR is, or nil."
-  (pcase-let ((`(,r ,g ,b) color))
-    (cond ((and (> r 220) (< g 40) (< b 40)) 'red)
-          ((and (< r 40) (< g 40) (> b 220)) 'blue)
-          ((and (< r 40) (> g 220) (< b 40)) 'green)
-          ((and (< (abs (- r #xf9)) 24) (< (abs (- g #x81)) 24) (< (abs (- b #x28)) 24))
-           'orange))))
+  "Which of the test's colours COLOR, (R G B), is, or nil."
+  (apply #'portal-render-smoke--rgb-kind color))
 
 (defun portal-render-smoke--boxes (screen box)
   "Each colour's bounding box and count in BOX of SCREEN, every pixel read.
 An alist of (KIND LEFT TOP RIGHT BOTTOM COUNT)."
   (pcase-let ((`(,left ,top ,right ,bottom) box)
+              (`(,width ,_ ,start ,bytes) screen)
               (found nil))
     (cl-loop for y from top below bottom
              do (cl-loop for x from left below right
-                         for kind = (portal-render-smoke--kind (portal-render-smoke--pixel screen x y))
+                         for at = (+ start (* 3 (+ x (* y width))))
+                         for kind = (portal-render-smoke--rgb-kind
+                                     (aref bytes at) (aref bytes (+ at 1)) (aref bytes (+ at 2)))
                          when kind
                          do (let ((have (alist-get kind found)))
-                              (setf (alist-get kind found)
-                                    (if have
-                                        (list (min (nth 0 have) x) (min (nth 1 have) y)
-                                              (max (nth 2 have) (1+ x)) (max (nth 3 have) (1+ y))
-                                              (1+ (nth 4 have)))
-                                      (list x y (1+ x) (1+ y) 1))))))
-    found))
+                              (if (not have)
+                                  (push (cons kind (vector x y (1+ x) (1+ y) 1)) found)
+                                (aset have 0 (min (aref have 0) x))
+                                (aset have 1 (min (aref have 1) y))
+                                (aset have 2 (max (aref have 2) (1+ x)))
+                                (aset have 3 (max (aref have 3) (1+ y)))
+                                (aset have 4 (1+ (aref have 4)))))))
+    (mapcar (lambda (entry) (cons (car entry) (append (cdr entry) nil))) found)))
 
 ;; Every pixel of a pane is read: compiled, that takes a fraction of a second.
 (byte-compile 'portal-render-smoke--pixel)
+(byte-compile 'portal-render-smoke--rgb-kind)
 (byte-compile 'portal-render-smoke--kind)
 (byte-compile 'portal-render-smoke--boxes)
 
@@ -206,6 +512,16 @@ An alist of (KIND LEFT TOP RIGHT BOTTOM COUNT)."
         (portal-render-smoke--check (format "%s: the pane is in the capture" name)
                                     (and (<= 0 left) (<= right width) (<= 0 top) (<= bottom height))
                                     (list :pane box :capture (list width height)))
+        ;; A Linux capture is the frame's window or its output, which the
+        ;; frame fills: either way the frame's size, or the pane's edges
+        ;; are not the capture's coordinates.
+        (unless (eq window-system 'ns)
+          (portal-render-smoke--check
+           (format "%s: the capture is the frame" name)
+           (and (= width (round (* scale (frame-pixel-width))))
+                (= height (round (* scale (frame-pixel-height)))))
+           (list :capture (list width height) :scale scale
+                 :frame (list (frame-pixel-width) (frame-pixel-height)))))
         ;; The terminal's background at the pane's corners, and not just
         ;; outside them.
         (dolist (corner `((,left ,top -1 -1) (,(1- right) ,top 1 -1)
@@ -248,6 +564,36 @@ An alist of (KIND LEFT TOP RIGHT BOTTOM COUNT)."
                                              (< (- (nth 3 blue) (nth 1 blue))
                                                 (- (nth 3 red) (nth 1 red))))
                                         (list :red red :blue blue))))))))
+
+(defun portal-render-smoke--renderer ()
+  "Record what draws the terminal on Linux, once it has drawn.
+Ghostty's engine as the module reports it, the OpenGL drivers this Emacs
+has loaded and the GPU devices it holds open: a hardware renderer opens
+a DRM node, software rendering need not."
+  (unless (eq window-system 'ns)
+    (when (fboundp 'portal--terminal-engine)
+      (portal-render-smoke--note "engine %s" (portal--terminal-engine)))
+    (let* ((case-fold-search nil)
+           (maps (with-temp-buffer
+                   (ignore-errors (insert-file-contents "/proc/self/maps"))
+                   (buffer-string)))
+           (drivers (seq-uniq
+                     (seq-filter (lambda (file)
+                                   (string-match-p
+                                    "\\`lib\\(EGL\\|GL\\|gallium\\|nvidia\\|vulkan_\\)\\|_dri\\.so"
+                                    (file-name-nondirectory file)))
+                                 (mapcar (lambda (line) (car (last (split-string line))))
+                                         (split-string maps "\n" t)))))
+           (devices (seq-uniq
+                     (seq-filter (lambda (file) (string-prefix-p "/dev/dri/" file))
+                                 (mapcar (lambda (fd) (file-truename fd))
+                                         (ignore-errors
+                                           (directory-files "/proc/self/fd" t "\\`[0-9]+\\'")))))))
+      (portal-render-smoke--note "OpenGL drivers loaded: %s"
+                                 (if drivers (mapconcat #'file-name-nondirectory drivers ", ")
+                                   "none"))
+      (portal-render-smoke--note "GPU devices open: %s"
+                                 (if devices (string-join devices ", ") "none")))))
 
 ;;; Faults, for checking the test itself
 
@@ -343,9 +689,17 @@ Return its view's target."
      (portal--inspect target))
     (portal-render-smoke--check
      "the frame's window has the keyboard"
-     (portal-render-smoke--until (plist-get adapter :keyboard) 5)
+     (let ((keyboard (lambda () (funcall (plist-get adapter :keyboard) target))))
+       (if (not (plist-get adapter :click))
+           (portal-render-smoke--until keyboard 5)
+         (or (portal-render-smoke--until keyboard 3)
+             (let ((wait (string-to-number (or (getenv "PORTAL_SMOKE_CLICK_WAIT") "30"))))
+               (portal-render-smoke--note "asking for a click on the window, for %ds" wait)
+               (message "Portal's smoke test: click this window to give it the keyboard")
+               (portal-render-smoke--until keyboard wait)))))
      (funcall (plist-get adapter :describe)))
-    (funcall (plist-get adapter :type) token)
+    (when-let* ((why (funcall (plist-get adapter :type) token)))
+      (portal-render-smoke--not-run "cannot type here: %s" why))
     (portal-render-smoke--check
      (format "the typed %s reached the program" token)
      (portal-render-smoke--until
@@ -357,6 +711,7 @@ Return its view's target."
                         (split-string (portal--terminal-text target) "\n"))
               "the program printed no term= line"))
     (portal-render-smoke--pause 0.3)
+    (portal-render-smoke--renderer)
     (portal-render-smoke--fault target)
     (portal-render-smoke--examine adapter "whole" (selected-window) target)
     ;; Split under output: the terminal keeps the left pane, green beside it.
@@ -391,6 +746,9 @@ Return its view's target."
                  (portal-render-smoke--not-run "Emacs has no graphical display"))
                (unless adapter
                  (portal-render-smoke--not-run "no adapter for %s" place))
+               (when-let* ((ready (plist-get adapter :ready))
+                           (why (funcall ready)))
+                 (portal-render-smoke--not-run "no way to capture or type on %s: %s" place why))
                (portal-render-smoke--check
                 (format "the frame is %s's" (plist-get adapter :window-system))
                 (eq window-system (plist-get adapter :window-system))
