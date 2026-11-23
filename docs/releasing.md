@@ -55,9 +55,6 @@ The person releasing still:
   - physical-key delivery, by hand, which injected events cannot prove;
   - the fullscreen input tests, `sh test/input-gui.sh fullscreen`, which
     skip on GitHub's runners;
-  - the four Excalidraw slide tests, `sh test/views-gui.sh
-    'excalidraw-gui-\(arrange\|presents\|slides-follow\)'`, which skip
-    there too;
 - runs **native acceptance** for each [platform row](platforms.md#acceptance-checks)
   the release claims beyond the runner's, macOS 27.0.1 with the pinned
   emacs-plus cask, and adds that evidence to the release's notes.
@@ -98,10 +95,8 @@ Name every skipped test and say why it skipped. A graphical suite fails when
 a test skips that its script does not allow, so a green run's graphical skips
 are these: `portal-launcher-gui-minibuffer-panel-stays-on-its-display`, which
 needs a second display and may skip, and on GitHub's runners, where WebKit
-refuses fullscreen, the four `portal-input-gui-web-fullscreen-` tests, and the
-four Excalidraw slide tests that
-[skip themselves there](testing.md#view-graphical-checks); those eight are
-checks not run until they pass in the VM. Any other skip, failure or check
+refuses fullscreen, the four `portal-input-gui-web-fullscreen-` tests; those
+four are checks not run until they pass in the VM. Any other skip, failure or check
 not run means the release cannot claim what that check covers: fix it, or
 narrow the claim in [supported platforms](platforms.md) first.
 
