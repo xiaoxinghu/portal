@@ -175,8 +175,7 @@ notes() {
     echo "## Checks outside CI"
     echo
     echo "Not run: the standalone AppKit checks, physical-key delivery, and the" \
-        "fullscreen input tests and the four Excalidraw slide tests, which skip on" \
-        "GitHub's runners."
+        "fullscreen input tests, which skip on GitHub's runners."
 }
 
 publish() {

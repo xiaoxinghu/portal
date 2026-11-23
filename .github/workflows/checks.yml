@@ -57,6 +57,11 @@ jobs:
       # are written from the logs alone, so every step that counts tests or
       # describes the machine writes its output there too.
       EMACS_TEST_VERBOSE: 1
+      # The graphical suites' web views draw canvases in their own web
+      # process, not WebKit's GPU process, which on this runner now and then
+      # hangs making a canvas's buffer (docs/testing.md, "View graphical
+      # checks"). The test module sets it; Portal itself does not.
+      PORTAL_TEST_WEBKIT_FEATURES: UseGPUProcessForCanvasRenderingEnabled=0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -79,6 +84,7 @@ jobs:
             # Only a full run with USE_CACHE=false is a release's evidence.
             echo "USE_CACHE=$USE_CACHE"
             echo "PORTAL_TEST_EXPENSIVE=$PORTAL_TEST_EXPENSIVE"
+            echo "PORTAL_TEST_WEBKIT_FEATURES=$PORTAL_TEST_WEBKIT_FEATURES"
             echo "Runner image $ImageOS $ImageVersion"
             sw_vers
             uname -m
