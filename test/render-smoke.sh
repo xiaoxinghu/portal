@@ -17,6 +17,9 @@
 # the end.  --fault breaks the pane after the token is typed, to check that
 # the test finds it: blank hides the view, shift moves it a pixel right and down.
 # --adapter names the place's adapter in place of the one the session says.
+# On a Mac with no compiler, PORTAL_SMOKE_HELPERS names a directory holding
+# the injector and the window capture, test-terminal-input.dylib and
+# test-window-capture.dylib, built elsewhere for the same Emacs.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$root/test/gui-desktop.sh"
@@ -55,7 +58,11 @@ budget=${PORTAL_SMOKE_TIMEOUT:-60}
 
 # What ran where, for the record.
 note "$(date -u +%Y-%m-%dT%H:%M:%SZ) in $(hostname -s 2>/dev/null || hostname)"
-note "checkout $root at $(git -C "$root" rev-parse --short HEAD 2>/dev/null || echo 'no Git metadata')"
+# Only in a checkout: on a Mac with no developer tools, git is a stub that
+# offers to install them.
+commit=
+[ -e "$root/.git" ] && commit=$(git -C "$root" rev-parse --short HEAD 2>/dev/null || :)
+note "checkout $root at ${commit:-no Git metadata}"
 note "runtime $build"
 if [ -f "$build/portal-build.eld" ]; then
     note "build record $(tr '\n' ' ' <"$build/portal-build.eld")"
@@ -125,13 +132,22 @@ if [ "$(uname -s)" = Darwin ]; then
     include=${include:-$(dirname "$emacs")/../Resources/include}
     set -- --eval "(module-load \"$out/test-terminal-input.dylib\")" \
         --eval "(module-load \"$out/test-window-capture.dylib\")"
-    xcrun clang -fobjc-arc -Wall -Wextra -Werror -bundle -I "$include" \
-        "$root/test/terminal-input.m" \
-        -framework AppKit -framework WebKit -framework Carbon -framework IOSurface \
-        -o "$out/test-terminal-input.dylib"
-    xcrun clang -fobjc-arc -Wall -Wextra -Werror -bundle -I "$include" \
-        "$root/test/window-capture.m" -framework AppKit -framework ScreenCaptureKit \
-        -o "$out/test-window-capture.dylib"
+    if [ -n "${PORTAL_SMOKE_HELPERS:-}" ]; then
+        # Built beforehand, for a Mac with no compiler, such as one that
+        # only downloads its runtime.
+        for helper in test-terminal-input.dylib test-window-capture.dylib; do
+            cp "$PORTAL_SMOKE_HELPERS/$helper" "$out/$helper"
+        done
+        note "helpers from $PORTAL_SMOKE_HELPERS"
+    else
+        xcrun clang -fobjc-arc -Wall -Wextra -Werror -bundle -I "$include" \
+            "$root/test/terminal-input.m" \
+            -framework AppKit -framework WebKit -framework Carbon -framework IOSurface \
+            -o "$out/test-terminal-input.dylib"
+        xcrun clang -fobjc-arc -Wall -Wextra -Werror -bundle -I "$include" \
+            "$root/test/window-capture.m" -framework AppKit -framework ScreenCaptureKit \
+            -o "$out/test-window-capture.dylib"
+    fi
 else
     if [ -z "${WAYLAND_DISPLAY:-}" ]; then
         note "NOT RUN: no Wayland session: WAYLAND_DISPLAY is not set"

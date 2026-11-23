@@ -43,6 +43,21 @@ with native subroutine trampolines enabled. Builds whose
 the launcher's native review in [its design notes](launcher-native-panel.md),
 not only passing checks; see [launcher safety](launcher.md#set-up-safely).
 
+## The downloaded runtime
+
+The Apple Silicon [runtime download](install.md#downloaded-runtimes) is
+claimed only on the macOS versions it has run on:
+
+| macOS | Emacs | CPU | Download, terminal, web views and preview |
+| --- | --- | --- | --- |
+| 27.2.1 (26B131) | GNU Emacs 31.1 NS, revision `a360712c` | Apple Silicon | **Verified**, on a Mac with no developer tools |
+| Any other, 13.0 or newer | GNU Emacs 31.1 NS | Apple Silicon | Unverified |
+
+Its binaries are built for macOS 13, as a build's are, but no download has run
+on any other version, and no Ventura guest is set up to run one. A version is
+added here once the [download's acceptance](#the-download) passes on it. The
+rows of the [matrix](#matrix) above are about Portal built from source.
+
 ## Linux
 
 On Linux Portal has terminals and no web views yet. Its native module
@@ -141,7 +156,63 @@ A combination is verified when, at one Portal commit:
 Physical keys, Accessibility and manual checks are outside these claims too.
 Record each run below; older results are not evidence for later changes.
 
+### The download
+
+A macOS version is verified for [the downloaded runtime](#the-downloaded-runtime)
+when, on a Mac or guest of that version with graphical Emacs and no build
+of Portal on it, the Lisp installed as
+[the install guide](install.md#with-use-package-and-package-vc) says, and then
+none of Xcode, the Command Line Tools, CMake, Ninja, Zig or Bun left on it
+(installing needs Git, which a Mac has only with Xcode or the Command Line
+Tools):
+
+1. the first native command offers Download, and the install fetches a green
+   Checks run's runtime archive and manifest, the files a release attaches,
+   served at a release's address;
+2. the retried command opens a terminal; an ordinary page opens without
+   starting the app host; a Markdown preview starts the runtime's host;
+3. `sh test/render-smoke.sh` passes on the downloaded runtime, with
+   `PORTAL_SMOKE_HELPERS`;
+4. no file of the runtime carries `com.apple.quarantine`, and nothing asks
+   about it or about developer tools;
+5. a fresh Emacs with no release reachable uses the cached runtime without
+   asking;
+6. with the developer tools back and no runtime cached, Build here builds
+   from the sources and the retried command uses that build.
+
 ## Evidence
+
+Recorded 2026-11-23, [the download's acceptance](#the-download), the first
+download of a runtime on a Mac that never built Portal: a fresh clone of the
+VM recipe's base image, never used by the test runner.
+
+| | VM guest |
+| --- | --- |
+| Machine | Tart guest, Apple M1 Pro (Virtual), 4 cores, AppleParavirtGPU, scale 1 |
+| macOS | 27.2.1 (26B131), Gatekeeper on |
+| Emacs | GNU Emacs 31.1, revision `a360712c`, NS, the recipe's emacs-plus app, started with `open -a Emacs` |
+| Tools | none of Xcode, the Command Line Tools, CMake, Ninja, Zig or Bun once the Lisp was installed (Xcode was there for Git and native compilation, then moved away) |
+| Lisp | the install guide's use-package form with `:rev :newest`: `main` at `16f31d1` |
+| Runtime | Checks run 45102309512's archive of `16f31d1`, 45,804,467 bytes, SHA-256 `e5afad28403840a573a48bbb5883d54476e6fb8d94a6dbfbef23f0ea0e8fa775`, identity `abe1ac93…`, served under the v0.2.0 release's names from 127.0.0.1 with a test certificate authority |
+
+- Download: offered with Not now and no Build here, installed in 2.4 s with
+  two requests; the retried command opened a terminal from the runtime; an
+  ordinary page opened with no app host; a Markdown preview started the
+  runtime's `portal-host`.
+- `sh test/render-smoke.sh` on the runtime: every check passed, done 4.2 s
+  from Emacs's start.
+- No file of the runtime had any extended attribute. Gatekeeper's exec check
+  evaluated the module, as it does a local build's, and nothing asked. No
+  dialog about developer tools opened.
+- Offline, with nothing serving: no question, no install; terminal, a local
+  page and a Markdown preview from the cache.
+- Build here, with the tools back and no runtime: `build.sh --prune` built
+  in 71 s, and the retried command loaded `build/`'s module.
+
+`codesign --verify` fails the archive's `portal-host` ("invalid signature")
+and `portal.bundle` ("code has no resources"), as it does a local build's;
+both are ad-hoc and linker-signed. Loading them needs no more; a Developer
+ID signature would need both fixed.
 
 Recorded 2026-11-20, the first run on a Mac since Linux gained views,
 terminals, Rex connections and blocks' screens, which changed Lisp, tests and

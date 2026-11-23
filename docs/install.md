@@ -12,8 +12,10 @@ package installation test runs them. Keep their markers when editing them.
 
 - Graphical macOS Emacs 31.1 or newer, built with module support. See
   [supported platforms](platforms.md) for what has been verified.
-- Xcode with Swift 6.2 or newer, CMake 3.29 or newer and Ninja. Install CMake
-  and Ninja with `brew install cmake ninja` or your tool manager.
+- To build Portal here: Xcode with Swift 6.2 or newer, CMake 3.29 or newer
+  and Ninja. Install CMake and Ninja with `brew install cmake ninja` or your
+  tool manager. A [downloaded runtime](#downloaded-runtimes) needs none of
+  them.
 - Bun is optional. A build compiles the app host with Portal's pinned Bun,
   which it downloads once, unless you name another (see [Bun](#bun)).
 
@@ -260,6 +262,17 @@ Which native part Portal uses, checked once per session:
 
 So a build from source stays the alternative at any time: `M-x portal-build`
 makes `build/`, which then comes first.
+
+**On the Mac, Portal's own download is the only supported way to get a
+runtime.** A file Emacs writes carries no quarantine attribute, as a file a
+web browser saves does, so macOS's Gatekeeper loads the module and starts the
+app host with no prompt and nothing for you to clear. This was tested on the
+macOS versions [supported platforms](platforms.md#the-downloaded-runtime)
+names, on a Mac with no developer tools. Portal's binaries are not signed
+with a Developer ID or notarized. So a runtime archive downloaded by hand in
+a browser, unpacked and named with `portal-build-directory`, is not a
+supported route: Gatekeeper sees every file in it as quarantined. Use
+`M-x portal-download-runtime` instead.
 
 On Linux the same install takes one of two archives, for x86-64 and for
 aarch64, each holding the module and Ghostty's library and resources, and no
