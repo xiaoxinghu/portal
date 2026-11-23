@@ -391,7 +391,11 @@ ScreenCaptureKit. Capturing a process's own window needs no Screen Recording
 permission: none was asked for in the VM or on GitHub's
 `xcode-27` runner, where the Checks workflow runs it on the checkout's build,
 then on [the runtime archive](releasing.md#the-runtime-archive) unpacked
-elsewhere.
+elsewhere. The script compiles both with Xcode's Clang. On a Mac with no
+compiler, as when checking a [downloaded runtime](install.md#downloaded-runtimes)
+on a machine that has never built Portal, build them first on a Mac with the
+same Emacs, with the two `xcrun clang` lines of the script, and name their
+directory with `PORTAL_SMOKE_HELPERS`.
 
 On Linux, Emacs built with pgtk on Wayland, the frame fills its output and
 the compositor captures it and types into it, as a person's screenshot and
