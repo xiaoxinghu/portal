@@ -485,16 +485,21 @@ coexistence, Markdown previews and Excalidraw) in one fresh Emacs:
 sh test/views-gui.sh
 ```
 
-Pass an ERT selector regexp to run part of its tier. It fails on any skip but
-one kind: on GitHub's runners four Excalidraw slide tests skip themselves,
-`portal-excalidraw-gui-arrange-edits-reach-the-file`,
-`-arrange-shows-the-slides-and-edits-one`,
-`-presents-in-a-slide-window-and-stops` and
-`-slides-follow-the-appearance-and-the-switch`. WebKit's GPU process hangs
-there now and then while a page draws slide images, and the page with it for
-15 s, which fails whichever of them is waiting; `portal-excalidraw-gui--skip-on-github`
-in their file says what is known. Everywhere else they run, and the
-[platform matrix](platforms.md) uses the suite as the view acceptance check.
+Pass an ERT selector regexp to run part of its tier. It fails on any skip.
+The [platform matrix](platforms.md) uses the suite as the view acceptance check.
+
+`PORTAL_TEST_WEBKIT_FEATURES` sets features of WebKit's private list on every
+web view the graphical suites make, before it makes its page: keys with 0 or
+1, as `Key=0,Other=1`. The test module sets them; Portal never does. It also
+writes `webkit-features.txt` to `PORTAL_TEST_LOGS`, the features about the
+GPU, accelerated drawing, IOSurface and compositing with what each was. The
+Checks workflow's Mac job sets `UseGPUProcessForCanvasRenderingEnabled=0`, so
+that canvases are drawn in the web process: on GitHub's runners, macOS 27.0.1
+in a VM, WebKit's GPU process now and then hangs making a canvas's buffer, the
+page waits 15 s for it and WebKit kills the process, and the Excalidraw tests
+that show slides failed in more than half their rounds. There WebKit already
+draws the page itself in the web process; on a Mac, and in the test VM, it
+draws both in the GPU process, and the suites run with WebKit's defaults.
 
 ## Input graphical checks
 

@@ -221,7 +221,6 @@ NOTES are its presenter notes."
 
 (ert-deftest portal-excalidraw-gui-arrange-shows-the-slides-and-edits-one ()
   :tags '(:gui)
-  (portal-excalidraw-gui--skip-on-github)
   ;; The second slide comes first on the page and is small, so the view the
   ;; drawing opens at is nearest the first.
   (portal-excalidraw-gui--drawing
@@ -335,7 +334,6 @@ The page sends it on its own; nothing here asks it to."
 
 (ert-deftest portal-excalidraw-gui-arrange-edits-reach-the-file ()
   :tags '(:gui)
-  (portal-excalidraw-gui--skip-on-github)
   (portal-excalidraw-gui--drawing
       (list (portal-excalidraw-gui--frame "opening" "Opening" 0 0 0 1600 900 "Welcome")
             (portal-excalidraw-gui--frame "middle" "Middle" 1 2000 0 400 225)
@@ -464,20 +462,6 @@ The page sends it on its own; nothing here asks it to."
   (list 124 (logior (ash 1 23) (ash 1 21)) (string #xF703))
   "The Right arrow, as AppKit reports it.")
 
-(defun portal-excalidraw-gui--skip-on-github ()
-  "Skip the running test on GitHub's runners; it runs everywhere else.
-FIXME: make these tests pass there, then take this out, with their names in
-test/views-gui.sh and docs/releasing.md.  On the runners, macOS 27.0.1,
-WebKit's GPU process now and then hangs while a page draws slide images:
-the page waits 15 s for an image buffer, WebKit kills the GPU process
-(\"became unresponsive, terminating it\" in its log, among thousands of
-\"IOSurface creation failed\"), and whatever the test was waiting for, a
-script's answer or the page's edit, is 10 s late.  In fifty rounds of the
-fifteen Excalidraw tests it struck the four that call this, in one round
-of three, and no other; in the test VM, macOS 27.2.1, never."
-  (when (getenv "GITHUB_ACTIONS")
-    (ert-skip "On GitHub's runners WebKit's GPU process hangs while slides are drawn")))
-
 (defun portal-excalidraw-gui--until (predicate)
   "Service events until PREDICATE succeeds, for up to 10 s; return its value."
   (let ((deadline (+ (float-time) 10)) value)
@@ -570,7 +554,6 @@ A slide is drawn as large as fits its image's box, at its own shape."
 
 (ert-deftest portal-excalidraw-gui-presents-in-a-slide-window-and-stops ()
   :tags '(:gui)
-  (portal-excalidraw-gui--skip-on-github)
   ;; The closing slide's frame is smaller than the console's every space
   ;; for a slide, the opening slide's larger.
   (portal-excalidraw-gui--drawing
@@ -893,7 +876,6 @@ label; and check it."
 
 (ert-deftest portal-excalidraw-gui-slides-follow-the-appearance-and-the-switch ()
   :tags '(:gui)
-  (portal-excalidraw-gui--skip-on-github)
   ;; A white picture in the first slide: it stays white in a dark slide.
   (portal-excalidraw-gui--drawing
       (list (portal-excalidraw-gui--frame "opening" "Opening" 0 0 0 320 180)
