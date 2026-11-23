@@ -36,15 +36,20 @@ sh .agents/skills/release/release.sh publish X.Y.Z NOTES
   could not fast-forward to or that has nothing new, and a previous release
   left unfinished.
 - `notes` drafts the notes from the logs of that branch's green run: what is
-  new, what upgrading costs, and the [evidence](#evidence).
-- `publish` pushes the tag, `stable` and `main` in one push, creates the
-  GitHub release with the logs attached, and deletes the branch.
+  new, what upgrading costs, the [runtime](#the-runtime-archive) it attaches,
+  and the [evidence](#evidence).
+- `publish` attaches the logs and the run's tested runtime to an immutable
+  release, then moves `stable` and `main`, and deletes the branch; see
+  [publishing](#publishing).
 
 The agent chooses the base, reads a red run, finishes the notes, and publishes
-only after you approve them. Until then nothing is published, so a release you
-do not approve was a dry run: the agent deletes the branch. `notes` and
-`publish` refuse a run that failed, that restored cached downloads, or that
-left out the full set's checks: a push to `main` runs only the essential set.
+only after you approve them. Your yes is the approval of the release step:
+the workflow's jobs only read the repository, and `publish`, run by the agent
+with your credentials, is what writes the tag, the release and the branches.
+Until then nothing is published, so a release you do not approve was a dry
+run: the agent deletes the branch. `notes` and `publish` refuse a run that
+failed, that restored cached downloads, or that left out the full set's
+checks: a push to `main` runs only the essential set.
 
 The person releasing still:
 
@@ -131,7 +136,9 @@ Emacs, `portal-build--probe-batch`, and a terminal drawn by the
 archive and the manifest kept, as two artifacts for 14 days; their record is
 `runtime/` in `logs`. Portal's repository is public, so any signed-in GitHub
 user can download them: the archive's `licenses/` is the notice and the
-pointer to the source. A release does not attach them yet. When it does,
+pointer to the source. Every release attaches them, also one that changed
+only Lisp: the run packs them anyway, and an install that already has the
+runtime of the same native sources downloads nothing.
 `M-x portal-download-runtime`, and the first native command when asked to
 download, fetch them by the release's tag, under these names; see
 [downloaded runtimes](install.md#downloaded-runtimes).
@@ -168,7 +175,115 @@ and its loader stops on an older CPU before any program starts. `readelf`'s own 
 binaries is `runtime/abi.log` in the job's `logs-TARGET`. No terminal is
 drawn: Linux renders are checked on desktops, not here.
 
+A release attaches the Apple Silicon archive alone for now: an install on
+Linux downloads as soon as its release holds a Linux manifest, so the Linux
+archives stay out, though the run must still pass its Linux jobs, until their
+[download on desktops](platforms.md#linux) is accepted. `targets` in
+`release.sh` names what a release attaches.
+
+## Publishing
+
+`publish` releases the commit and the files that run tested, in an order
+that never shows a release half done, and nothing it published is ever
+changed again:
+
+1. It refuses unless the repository has
+   [immutable releases](#guard-rails-on-github) on.
+2. It downloads the run's runtime archive and manifest, checks each against
+   GitHub's digest of the artifact, and the manifest against the tag, the
+   version, the release commit and the archive's size and SHA-256. No
+   archive is ever built here.
+3. It pushes the tag alone, creates the release as a draft, and uploads the
+   logs, the archive and the manifest to it. A draft is visible only to the
+   repository's writers, and `stable` has not moved, so no install sees it.
+4. When the draft holds exactly those files, it publishes it. GitHub then
+   locks the tag and the assets: they cannot be replaced, added to or
+   deleted, and the tag of a deleted release cannot be used again. The
+   title and notes can still be edited.
+5. It checks that the release is immutable, holds exactly those files, and
+   that each downloads by the tag, without signing in, as the bytes GitHub
+   holds and the run tested, the runtime as its manifest says; and
+   `gh release verify` checks GitHub's attestation of the release. The
+   manifest must be the one the run packed, a copy of which its `logs` keep
+   in `runtime/`: so even a release found published, whose artifacts are not
+   fetched again, is tied to the archive that run tested.
+6. Only then does it move `stable` and `main` in one push, and delete
+   the candidate's branch.
+
+When a step fails, `publish` says what it left, and run again it finishes
+the release:
+
+- **The run's archive has expired.** A run keeps its artifacts 14 days,
+  after which GitHub no longer lists them. `publish` refuses before pushing
+  anything. Start Checks again on the candidate's branch, uncached, with
+  `gh workflow run checks.yml -R xiaoxinghu/portal --ref release/vX.Y.Z -f cache=false`,
+  then draft the notes and publish from that run: the release commit stays,
+  and its newest green run is the evidence.
+- **An upload failed, or anything before publishing did.** The tag and a
+  draft remain. Run `publish` again: it keeps what the draft holds that
+  matches, removes the rest, a half-uploaded file among them, and uploads
+  what is missing. A draft whose run has since expired needs a new run, as
+  above.
+- **Something after publishing failed**, a download, the push of `stable`
+  and `main` (as when `main` moved). Run `publish` again: it finds the
+  release published, uploads and removes nothing, checks it as in step 5
+  and moves the branches. It needs the run that tested it, the newest green
+  one of the release commit, with its `logs` still kept.
+- **A published release is not what was tested**, short of a file, not
+  immutable, or a download differs. `publish` refuses and `stable` stays.
+  The release cannot be mended and its tag never reused: take it to the
+  owner. To abandon it, the owner marks it a pre-release on GitHub, which an
+  immutable release allows, and says why in its notes; then release the
+  next PATCH version.
+
+`candidate` refuses a new version while the last one is a draft or
+`stable` is not at it: finish that release first. It passes over a
+published pre-release as abandoned: the next version goes above it, and
+`stable` must be at the last release before it. Older releases are never
+touched, so a Portal pinned to a tag downloads that tag's runtime for as
+long as GitHub keeps the release.
+
+`test/test_release.py` rehearses each of these with a stand-in GitHub, and
+most were rehearsed once on GitHub itself, in a test repository: see
+[the rehearsal](#the-rehearsal).
+
+GitHub lists a change a few seconds after making it: a new draft, a
+release just published, the immutable-releases setting just turned on. So
+`publish` asks again, 2 s apart, before calling something missing, and
+tries a download again, as the first one of a release just published can
+answer 404.
+
+### The rehearsal
+
+On 2026-11-23 Portal 0.3.0 was released, with this script, in a public copy
+of the repository, `xiaoxinghu/portal-release-rehearsal`, with immutable
+releases on and `stable`, `v0.2.0` and its release as in Portal:
+
+| Case | How | What happened |
+| --- | --- | --- |
+| Missing archive | The run's Mac manifest artifact deleted, as GitHub lists an expired one | Refused, nothing pushed; Checks again on the branch was the cure |
+| A draft GitHub did not list yet | Found by chance | Stopped after the tag, before uploading; now waited for |
+| Upload cut off | The archive's upload killed after 2 s | The draft kept it as `starter`, with no digest; nothing public, `stable` unmoved |
+| Publishing again | `publish` run again | Removed the cut archive, uploaded it, published; `stable` and `main` moved |
+| Changing it after | Replace, add or delete an asset; delete or move the tag | GitHub refused each; editing the notes was allowed |
+| The client | `portal-runtime-install` from a clone of `stable`, batch Emacs | Fetched the archive by the tag through GitHub's redirect, digest as the manifest, installed in 4.1 s |
+
+Not rehearsed on GitHub, only with the stand-in: a push of `stable` refused
+after publishing, a published release short of a file, not immutable or
+downloading other bytes, a tag on another commit, and immutable releases off.
+
 ## Guard rails on GitHub
+
+Immutable releases keep a published release's tag and assets from being
+replaced, which is what makes a runtime's digest worth checking: nothing is
+signed, and an install trusts GitHub over TLS, as it does for the Lisp. It
+applies to releases published after it is turned on. `publish` refuses
+without it. Turn it on once, as the repository's owner:
+
+```sh
+gh api -X PUT repos/xiaoxinghu/portal/immutable-releases
+gh api repos/xiaoxinghu/portal/immutable-releases   # {"enabled":true,...}
+```
 
 Two rulesets keep `stable` and the tags from being rewritten, whoever pushes.
 Neither stops a release, which only fast-forwards `stable` and creates tags.
