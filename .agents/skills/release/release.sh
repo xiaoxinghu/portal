@@ -13,8 +13,9 @@
 # hashes that directory.
 # PORTAL_RELEASE_REMOTE and GH_REPO name another repository to release, for
 # the tests and a rehearsal, PORTAL_RELEASE_DOWNLOADS where anyone downloads
-# its releases' assets, and PORTAL_RELEASE_RETRIES how often a download is
-# tried again.
+# its releases' assets, PORTAL_RELEASE_RETRIES how often a download is
+# tried again, and PORTAL_RELEASE_SETTLE how often GitHub is asked again
+# for a change it does not list yet.
 set -eu
 
 die() { echo "release: $*" >&2; exit 1; }
@@ -279,10 +280,38 @@ assets_of() {
         die "cannot list the assets of $tag"
 }
 
-# Die unless release $1 holds exactly the assets $work/expected names.
-whole() {
+# GitHub's lists catch up with a change a few seconds after it: run "$@"
+# until it succeeds, PORTAL_RELEASE_SETTLE times at most, 2 s apart.
+settle() {
+    tries=1
+    until "$@"; do
+        [ "$tries" -lt "${PORTAL_RELEASE_SETTLE:-15}" ] || return 1
+        tries=$((tries + 1))
+        sleep 2
+    done
+}
+
+# Whether GitHub lists a release of $tag, whose ID it then puts in `id`.
+listed() {
+    id=$(releases_of "$tag" | cut -d' ' -f1)
+    [ -n "$id" ]
+}
+
+# Whether release $id is published and immutable.
+published() {
+    [ "$(releases_of "$tag")" = "$id false true" ]
+}
+
+# Whether release $1 holds exactly the assets $work/expected names.
+holds() {
     assets_of "$1" "$work/held"
-    awk '{ print $5 }' "$work/held" | sort | cmp -s "$work/expected" - ||
+    awk '{ print $5 }' "$work/held" | sort | cmp -s "$work/expected" -
+}
+
+# Die, saying $2, unless release $1 holds exactly the assets $work/expected
+# names.
+whole() {
+    settle holds "$1" ||
         die "$2: $tag holds $(awk '{ printf "%s ", $5 }' "$work/held")and should hold" \
             "$(tr '\n' ' ' <"$work/expected")"
 }
@@ -324,8 +353,7 @@ publish() {
         if [ -z "$found" ]; then
             gh release create "$tag" --verify-tag --draft --title "Portal $1" \
                 --notes-file "$2" >/dev/null || die "GitHub made no draft of $tag"
-            id=$(releases_of "$tag" | cut -d' ' -f1)
-            [ -n "$id" ] || die "GitHub shows no draft of $tag"
+            settle listed || die "GitHub shows no draft of $tag"
         else
             echo "release: finishing the draft of $tag that an earlier attempt left" >&2
             gh release edit "$tag" --notes-file "$2" >/dev/null
@@ -354,7 +382,7 @@ publish() {
     fi
 
     # Published: what anyone downloads by the tag must be what was tested.
-    [ "$(releases_of "$tag")" = "$id false true" ] ||
+    settle published ||
         die "$tag is published but not immutable, so stable stays: settle it with the owner"
     whole "$id" "$tag is published and stays so, but stable stays: settle it with the owner"
     rm -rf "$work/public" && mkdir "$work/public"

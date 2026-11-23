@@ -29,10 +29,15 @@ branch on GitHub, for `main` as of an earlier commit or a fix branch made from `
 5. **Approval.** Show the owner the notes, and each skipped test against the
    [evidence rules](../../../docs/releasing.md#evidence). Without a yes the release ends:
    `gh api -X DELETE repos/xiaoxinghu/portal/git/refs/heads/release/vX.Y.Z`.
-6. **Publish.** `release.sh publish X.Y.Z NOTES` pushes the tag, `stable` and `main` in one
-   push, creates the GitHub release with the logs attached, and deletes the candidate.
-   Refused because `main` moved: run it again. Done when the release page shows the tag,
-   `stable` is at the release commit and `main` contains it.
+6. **Publish.** `release.sh publish X.Y.Z NOTES` pushes the tag, fills a draft release
+   with the logs and the run's tested Mac runtime, publishes it, checks that anyone
+   downloads each file by the tag unchanged, then moves `stable` and `main` and deletes the
+   candidate. When it fails, it says what it left: run it again, which finishes a draft and
+   never changes a published release. An expired archive needs Checks again on the
+   candidate's branch, uncached; a published release it refuses goes to the owner.
+   [Publishing](../../../docs/releasing.md#publishing) says what each failure leaves. Done
+   when the release page shows the tag, immutable, with its three files, `stable` is at the
+   release commit and `main` contains it.
 
 When `release.sh` refuses, report what it said and that nothing was published. Never do by
 hand what it refused: no tag, branch or release is made, moved or deleted outside it, but

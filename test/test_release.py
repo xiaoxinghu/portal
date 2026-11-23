@@ -179,7 +179,7 @@ class ReleaseTests(unittest.TestCase):
                     "PATH": f"{self.root / 'bin'}:{os.environ['PATH']}",
                     "PORTAL_RELEASE_REMOTE": str(self.root / "github.git"),
                     "PORTAL_RELEASE_DOWNLOADS": (self.stub / "public").as_uri(),
-                    "PORTAL_RELEASE_RETRIES": "0"}
+                    "PORTAL_RELEASE_RETRIES": "0", "PORTAL_RELEASE_SETTLE": "1"}
         self.git("init", "-q", "--bare", "-b", "main", self.root / "github.git", cwd=self.root)
         hook = self.root / "github.git" / "hooks" / "pre-receive"
         hook.write_text(HOOK)
