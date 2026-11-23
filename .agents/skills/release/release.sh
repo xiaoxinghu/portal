@@ -8,15 +8,25 @@
 # clone of the repository on GitHub and deletes it when done, so the checkout
 # it is started from never matters, and what one part leaves for the next is
 # on GitHub: the branch release/vX.Y.Z and its Checks run. Nothing is forced;
-# the one branch ever deleted is release/vX.Y.Z. It lives here, outside
-# tools/, because the native build hashes that directory.
-# PORTAL_RELEASE_REMOTE names another repository to release, for the tests.
+# the one branch ever deleted is release/vX.Y.Z, and nothing published is
+# ever changed. It lives here, outside tools/, because the native build
+# hashes that directory.
+# PORTAL_RELEASE_REMOTE and GH_REPO name another repository to release, for
+# the tests and a rehearsal, PORTAL_RELEASE_DOWNLOADS where anyone downloads
+# its releases' assets, and PORTAL_RELEASE_RETRIES how often a download is
+# tried again.
 set -eu
 
 die() { echo "release: $*" >&2; exit 1; }
 # The steps of Checks, besides CTest, whose logs must count their tests.
 suites="python views input launcher terminal-shell-startup package"
 largest() { sort -t. -k1,1n -k2,2n -k3,3n | tail -1; }
+sha256() { { sha256sum "$1" 2>/dev/null || shasum -a 256 "$1"; } | cut -d' ' -f1; }
+# The runtimes a release attaches, an archive and its manifest each. The
+# candidate's run packs Linux's too, but an install on Linux downloads as
+# soon as its release holds a Linux manifest, so they stay out until
+# runtime-linux-download-rollout adds linux-x86_64-gnu and linux-aarch64-gnu.
+targets=macos-arm64
 
 # Set `release` to the release commit of version $1, `run` to its green Checks
 # run, and put that run's logs in $work/logs; only an uncached full run is evidence.
@@ -47,6 +57,67 @@ identity() {
     esac
 }
 
+# Put in $work/assets the runtime archives and manifests that run $run kept
+# for version $1, each checked against GitHub's digest of its artifact, and
+# each manifest against the release commit and its archive. A release
+# attaches the archive its checks tested or none: one the workflow no longer
+# keeps, after its 14 days, is never built again here.
+runtimes() {
+    mkdir -p "$work/assets"
+    # An expired artifact is listed as expired, or not at all.
+    gh api "repos/$GH_REPO/actions/runs/$run/artifacts?per_page=100" --paginate \
+        --jq '.artifacts[] | select(.expired | not) | "\(.id) \(.digest) \(.name)"' \
+        >"$work/artifacts" || die "cannot list the artifacts of Checks run $run"
+    for target in $targets; do
+        for name in "portal-runtime-v$1-$target.json" "portal-runtime-v$1-$target.tar.gz"; do
+            kept=$(awk -v name="$name" '$3 == name { print $1, $2 }' "$work/artifacts")
+            [ -n "$kept" ] || die "Checks run $run keeps no $name: a run keeps its archives" \
+                "14 days, and a release attaches the archive its checks tested. Run Checks" \
+                "again on release/v$1, uncached, then notes and publish; nothing is built here"
+            # Kept unzipped, an artifact's zip is the file itself.
+            gh api "repos/$GH_REPO/actions/artifacts/${kept%% *}/zip" >"$work/assets/$name" ||
+                die "cannot download $name from Checks run $run"
+            case ${kept#* } in
+                null) ;;
+                "sha256:$(sha256 "$work/assets/$name")") ;;
+                *) die "$name from Checks run $run is not what GitHub kept: its digest differs" ;;
+            esac
+        done
+        check_runtime "$work/assets" "$1" "$target"
+    done
+}
+
+# Check the manifest of version $2's runtime for target $3 in directory $1,
+# and the archive beside it: the tag, the version, the release commit, and
+# the archive's name, size and SHA-256.
+check_runtime() {
+    python3 -I - "$1" "$2" "$3" "$release" <<'PYTHON' || die "$1 holds no runtime of v$2 for $3"
+import hashlib, json, sys
+from pathlib import Path
+directory, version, target, commit = Path(sys.argv[1]), *sys.argv[2:]
+name = f"portal-runtime-v{version}-{target}"
+manifest = json.loads((directory / f"{name}.json").read_text())
+archives = manifest.get("archives") or [{}]
+archive = archives[0]
+wrong = [what for what, good in (
+    ("format", manifest.get("format") == 1),
+    ("tag", manifest.get("tag") == f"v{version}"),
+    ("version", manifest.get("version") == version),
+    ("commit", manifest.get("commit") == commit),
+    ("archives", len(archives) == 1 and archive.get("target") == target),
+    ("archive name", archive.get("name") == f"{name}.tar.gz")) if not good]
+if not wrong:
+    data = (directory / archive["name"]).read_bytes()
+    if len(data) != archive.get("size"):
+        wrong.append(f"size, {len(data)} bytes")
+    elif hashlib.sha256(data).hexdigest() != archive.get("sha256"):
+        wrong.append("SHA-256")
+for what in wrong:
+    print(f"release: {name}: not the manifest's {what}", file=sys.stderr)
+sys.exit(1 if wrong else 0)
+PYTHON
+}
+
 candidate() {
     want=${1:-minor} from=${2:-main}
     base=$(git rev-parse -q --verify "origin/$from^{commit}" ||
@@ -69,8 +140,10 @@ EOF
         die "$new is not above $current, the current version"
     fi
     if [ -n "$last" ]; then
-        gh release view "v$last" >/dev/null 2>&1 ||
-            die "v$last has no GitHub release: publish it first"
+        [ "$(gh release view "v$last" --json isDraft --jq .isDraft 2>/dev/null)" = false ] ||
+            die "v$last has no published GitHub release: publish it first"
+        [ "$(git rev-parse -q --verify origin/stable || :)" = "$(git rev-parse "v$last^{commit}")" ] ||
+            die "stable is not at v$last: publish v$last again to finish it"
         [ -n "$(git rev-list -1 "v$last..$base")" ] || die "$from has nothing new since v$last"
     fi
     if git rev-parse -q --verify origin/stable >/dev/null; then
@@ -125,10 +198,22 @@ notes() {
         if [ "$before" = "$hash" ]; then
             echo "Lisp only, no rebuild."
         else
-            echo "The first native command after upgrading offers a rebuild of several" \
-                "minutes; restart Emacs after it."
+            echo "The first native command after upgrading offers this release's runtime," \
+                "below, or a build of several minutes; restart Emacs after it."
         fi
     fi
+    echo
+    echo "## Downloads"
+    echo
+    runtimes "$1"
+    echo "The first native command offers to download this release's runtime where it" \
+        "attaches one, checked against its manifest; elsewhere it offers a build."
+    echo
+    for target in $targets; do
+        name=portal-runtime-v$1-$target.tar.gz
+        echo "- \`$name\`, $(wc -c <"$work/assets/$name" | tr -d ' ') bytes," \
+            "SHA-256 \`$(sha256 "$work/assets/$name")\`"
+    done
     echo
     echo "## Evidence"
     echo
@@ -178,24 +263,128 @@ notes() {
         "fullscreen input tests, which skip on GitHub's runners."
 }
 
+# Print the releases of tag $1 on GitHub, drafts too, one a line: ID, draft
+# and immutable.
+releases_of() {
+    gh api "repos/$GH_REPO/releases?per_page=100" --paginate \
+        --jq '.[] | "\(.id) \(.tag_name) \(.draft) \(.immutable)"' |
+        awk -v tag="$1" '$2 == tag { print $1, $3, $4 }'
+}
+
+# Write to $2 the assets of release $1, one a line: ID, size, digest, state
+# and name.
+assets_of() {
+    gh api "repos/$GH_REPO/releases/$1/assets?per_page=100" --paginate \
+        --jq '.[] | "\(.id) \(.size) \(.digest) \(.state) \(.name)"' >"$2" ||
+        die "cannot list the assets of $tag"
+}
+
+# Die unless release $1 holds exactly the assets $work/expected names.
+whole() {
+    assets_of "$1" "$work/held"
+    awk '{ print $5 }' "$work/held" | sort | cmp -s "$work/expected" - ||
+        die "$2: $tag holds $(awk '{ printf "%s ", $5 }' "$work/held")and should hold" \
+            "$(tr '\n' ' ' <"$work/expected")"
+}
+
+# The release of version $1, in an order that leaves nothing half done in
+# view: the tag, then a draft that gets every asset and is published only
+# when whole, whereupon GitHub's immutable releases fix its tag and assets;
+# then, once anyone can download each asset by the tag, stable and main. Run
+# again after a failure, it finishes the release: it completes a draft, and
+# checks a published release without ever changing it.
 publish() {
     [ -s "$2" ] || die "no notes in $2"
     evidence "$1"
     tag=v$1
-    # A second run after the push went through only finishes the release.
-    if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-        git tag -a "$tag" -m "Portal $1" "$release"
+    [ "$(gh api "repos/$GH_REPO/immutable-releases" --jq .enabled 2>/dev/null)" = true ] ||
+        die "immutable releases are off on $GH_REPO, so a published asset could be" \
+            "replaced: turn them on (docs/releasing.md) and run publish again"
+    { echo logs.zip
+      for target in $targets; do
+          echo "portal-runtime-$tag-$target.json"
+          echo "portal-runtime-$tag-$target.tar.gz"
+      done; } | sort >"$work/expected"
+    found=$(releases_of "$tag")
+    [ "$(echo "$found" | grep -c .)" -le 1 ] ||
+        die "$tag has several releases on GitHub, which the owner must settle:" $found
+    id=${found%% *}
+    if [ "$(echo "$found" | cut -d' ' -f2)" = false ]; then
+        echo "release: $tag is published already: checking it, changing nothing" >&2
+    else
+        runtimes "$1"
+        (cd "$work" && zip -qr assets/logs.zip logs)
+        if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            [ "$(git rev-parse "$tag^{commit}")" = "$release" ] ||
+                die "$tag on GitHub is not $release, the release commit"
+        else
+            git tag -a "$tag" -m "Portal $1" "$release"
+            git push -q origin "refs/tags/$tag"
+        fi
+        if [ -z "$found" ]; then
+            gh release create "$tag" --verify-tag --draft --title "Portal $1" \
+                --notes-file "$2" >/dev/null || die "GitHub made no draft of $tag"
+            id=$(releases_of "$tag" | cut -d' ' -f1)
+            [ -n "$id" ] || die "GitHub shows no draft of $tag"
+        else
+            echo "release: finishing the draft of $tag that an earlier attempt left" >&2
+            gh release edit "$tag" --notes-file "$2" >/dev/null
+        fi
+        # A draft is nobody's yet: what an earlier attempt left in it that is
+        # not this run's goes, and every asset it lacks is uploaded.
+        assets_of "$id" "$work/held"
+        while read -r asset size digest state name; do
+            if grep -qx "$name" "$work/expected" && [ "$state" = uploaded ] &&
+                [ "$size $digest" = "$(wc -c <"$work/assets/$name" | tr -d ' ') sha256:$(sha256 "$work/assets/$name")" ]; then
+                echo "$name" >>"$work/kept"
+                continue
+            fi
+            echo "release: removing $name from the draft of $tag" >&2
+            gh api -X DELETE "repos/$GH_REPO/releases/assets/$asset" ||
+                die "cannot remove $name from the draft of $tag"
+        done <"$work/held"
+        while read -r name; do
+            grep -qx "$name" "$work/kept" 2>/dev/null && continue
+            gh release upload "$tag" "$work/assets/$name" ||
+                die "uploading $name to the draft of $tag failed: nothing is published;" \
+                    "run publish again"
+        done <"$work/expected"
+        whole "$id" "the draft is not whole, so nothing is published; run publish again"
+        gh release edit "$tag" --draft=false >/dev/null || die "GitHub did not publish $tag"
+    fi
+
+    # Published: what anyone downloads by the tag must be what was tested.
+    [ "$(releases_of "$tag")" = "$id false true" ] ||
+        die "$tag is published but not immutable, so stable stays: settle it with the owner"
+    whole "$id" "$tag is published and stays so, but stable stays: settle it with the owner"
+    rm -rf "$work/public" && mkdir "$work/public"
+    while read -r name; do
+        curl -fsSL --retry "${PORTAL_RELEASE_RETRIES:-5}" --retry-all-errors -o "$work/public/$name" "$downloads/$tag/$name" ||
+            die "nobody can download $name by $tag from $downloads, so stable stays"
+        [ "$(awk -v name="$name" '$5 == name { print $3 }' "$work/held")" = \
+            "sha256:$(sha256 "$work/public/$name")" ] ||
+            die "$name downloaded by $tag is not the asset GitHub holds, so stable stays"
+        if [ -e "$work/assets/$name" ] && ! cmp -s "$work/assets/$name" "$work/public/$name"; then
+            die "$name downloaded by $tag is not what Checks run $run tested, so stable stays"
+        fi
+    done <"$work/expected"
+    for target in $targets; do
+        check_runtime "$work/public" "$1" "$target"
+    done
+    gh release verify "$tag" >&2 || die "GitHub cannot verify $tag, so stable stays"
+
+    if [ "$(git rev-parse -q --verify origin/stable || :)" != "$release" ]; then
         main=$release
         if ! git merge-base --is-ancestor origin/main "$release"; then
             git checkout -q --detach origin/main
             git merge -q --no-ff -m "release: merge Portal $1 into main" "$release"
             main=$(git rev-parse HEAD)
         fi
-        git push -q --atomic origin "$tag" "$release:refs/heads/stable" "$main:refs/heads/main"
+        git push -q --atomic origin "$release:refs/heads/stable" "$main:refs/heads/main" ||
+            die "stable and main did not move: $tag is published; run publish again"
     fi
-    (cd "$work" && zip -qr logs.zip logs)
-    gh release create "$tag" --verify-tag --title "Portal $1" --notes-file "$2" "$work/logs.zip"
     git push -q origin --delete "release/$tag"
+    echo "Portal $1: $tag published, stable at $release"
 }
 
 [ $# -ge 2 ] || [ "${1:-}" = candidate ] || die "see the top of $0 for the arguments"
@@ -207,6 +396,7 @@ case $command in
     *) die "no part named $command" ;;
 esac
 export GH_REPO="${GH_REPO:-xiaoxinghu/portal}"
+downloads=${PORTAL_RELEASE_DOWNLOADS:-https://github.com/$GH_REPO/releases/download}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 git clone -q "${PORTAL_RELEASE_REMOTE:-https://github.com/xiaoxinghu/portal}" "$work/portal"
