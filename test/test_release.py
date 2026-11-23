@@ -125,7 +125,7 @@ elif command == "release upload":
     if halfway:
         failing.unlink()
         data = data[: len(data) // 2]
-    asset = {{"id": 1000 + sum(len(r["assets"]) for r in releases) + len(releases) * 10,
+    asset = {{"id": 1 + max([1000, *(a["id"] for r in releases for a in r["assets"])]),
              "name": file.name, "size": len(data), "digest": digest(data),
              "state": "starter" if halfway else "uploaded"}}
     (stub / "assets").mkdir(exist_ok=True)
