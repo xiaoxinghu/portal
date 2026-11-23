@@ -545,7 +545,12 @@ other prints 256 MB. That one is recorded, and
 [linux-torn.py](../test/linux-torn.py) reads the recording: the output
 keeps every cell red, then blue, so a frame with both is one drawn into
 while it was shown. It also counts the DMABUFs Emacs has open, which must
-be none once both terminals are closed.
+be none once both terminals are closed. And one times a Rex server's
+events reaching Lisp, [the fake](#rex-checks) stamping each as it sends
+it, with a terminal idle and then printing as fast as it can: the
+message socket's wake and the terminal's frames share GLib's context at
+the default priority. It prints the median, the 90th percentile and the
+longest of each.
 
 `linux-follow.sh` is the check that a view is never out of place.
 [A fresh Emacs](../test/portal-linux-follow.el) changes a view's pane, one
@@ -673,8 +678,11 @@ graphical one too:
   timers, so a lost connection stays lost; these tests take messages by
   waiting, as `portal-rex-call` does.
 - `test/portal-rex-gui-tests.el`, part of `sh test/views-gui.sh` on macOS
-  and of `sh test/linux-gui.sh` on Linux, proves the record: events, answers and a lost connection reaching an idle Emacs, and
-  blocks' buffers following a server meanwhile. It also shows a block in a
+  and of `sh test/linux-gui.sh` on Linux, proves the record: events,
+  answers and a closed connection reaching an idle Emacs, blocks' buffers
+  following a server meanwhile, and what a block's program says. Those
+  tests come first in the file and wait for no block's screen; the rest
+  show a block in a
   real Ghostty view: the first paint, the stream, a pane's new size, a
   hidden buffer kept current, keys typed in order with one write out at a
   time, and queries in the block's output that the view leaves unanswered.

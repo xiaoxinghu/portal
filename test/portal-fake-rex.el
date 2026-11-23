@@ -68,6 +68,16 @@ way; a test that needs one order binds it.")
     (delete-process (portal-fake-rex-process server)))
   (delete-directory (portal-fake-rex-directory server) t))
 
+(defun portal-fake-rex-send (server &rest command)
+  "Send SERVER the COMMAND, as `portal-fake-rex-command' does, and return at once.
+For a test whose Emacs is to idle while the server runs it.  Return the
+command's number, which the server's `done' count reaches once it has
+run; a later `portal-fake-rex-command' returns only after both."
+  (let ((count (cl-incf (portal-fake-rex-commands server))))
+    (process-send-string (portal-fake-rex-process server)
+                         (concat (json-serialize command) "\n"))
+    count))
+
 (defun portal-fake-rex-command (server &rest command)
   "Send SERVER the COMMAND, a plist that `json-serialize' takes.
 For example (:event (:type \"session_created\" :payload (...))).
@@ -75,9 +85,8 @@ Return once the server has run it, so that what a client asks next meets
 it.  Only the server's own output is read meanwhile: no other process's,
 and no timer runs."
   (let ((process (portal-fake-rex-process server))
-        (count (cl-incf (portal-fake-rex-commands server)))
+        (count (apply #'portal-fake-rex-send server command))
         (deadline (+ (float-time) 5)))
-    (process-send-string process (concat (json-serialize command) "\n"))
     (while (< (portal-fake-rex-done server) count)
       (when (or (> (float-time) deadline) (not (process-live-p process)))
         (error "The fake Rex server did not run %S" command))
