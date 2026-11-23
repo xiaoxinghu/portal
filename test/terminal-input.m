@@ -5,6 +5,7 @@
 #import <Carbon/Carbon.h>
 #import <IOSurface/IOSurface.h>
 #import <WebKit/WebKit.h>
+#import <objc/runtime.h>
 #include <emacs-module.h>
 #include <stdlib.h>
 #include <string.h>
@@ -498,8 +499,69 @@ static emacs_value mockCapture(emacs_env *env, ptrdiff_t nargs, emacs_value *arg
     return env->intern(env, "nil");
 }
 
+
+/* WebKit features to turn off in every web view made from now on, from
+   PORTAL_TEST_WEBKIT_FEATURES, "Key=0,Other=1": WebKit's private feature
+   list on the configuration's preferences, set before the view makes its
+   page.  The features with GPU, Accelerat, IOSurface or Compositing in their
+   key, and what each was, go to webkit-features.txt in PORTAL_TEST_LOGS. */
+@interface WKPreferences (PortalTestFeatures)
++ (NSArray *)_features;
+- (void)_setEnabled:(BOOL)enabled forFeature:(id)feature;
+- (BOOL)_isEnabledForFeature:(id)feature;
+@end
+
+static NSDictionary<NSString *, NSNumber *> *webkitFeatures;
+static IMP webViewInit;
+
+static void setFeatures(WKPreferences *preferences)
+{
+    if (![WKPreferences respondsToSelector:@selector(_features)]) return;
+    for (id feature in WKPreferences._features) {
+        NSNumber *value = webkitFeatures[[feature valueForKey:@"key"]];
+        if (value) [preferences _setEnabled:value.boolValue forFeature:feature];
+    }
+}
+
+static id initWebView(id self, SEL _cmd, NSRect frame, WKWebViewConfiguration *configuration)
+{
+    setFeatures(configuration.preferences);
+    return ((id (*)(id, SEL, NSRect, WKWebViewConfiguration *))webViewInit)(self, _cmd, frame, configuration);
+}
+
+static void installWebKitFeatures(void)
+{
+    NSString *spec = NSProcessInfo.processInfo.environment[@"PORTAL_TEST_WEBKIT_FEATURES"];
+    NSMutableDictionary *wanted = [NSMutableDictionary dictionary];
+    for (NSString *item in [spec componentsSeparatedByString:@","]) {
+        NSArray *pair = [item componentsSeparatedByString:@"="];
+        if (pair.count == 2) wanted[pair[0]] = @([pair[1] integerValue] != 0);
+    }
+    NSString *logs = NSProcessInfo.processInfo.environment[@"PORTAL_TEST_LOGS"];
+    if (logs.length && [WKPreferences respondsToSelector:@selector(_features)]) {
+        WKPreferences *fresh = [WKPreferences new];
+        NSMutableString *dump = [NSMutableString stringWithFormat:@"asked: %@\n", spec ?: @""];
+        for (id feature in WKPreferences._features) {
+            NSString *key = [feature valueForKey:@"key"];
+            for (NSString *part in @[@"GPU", @"Accelerat", @"IOSurface", @"Compositing", @"RemoteLayer"]) {
+                if ([key rangeOfString:part].location == NSNotFound) continue;
+                BOOL on = [fresh _isEnabledForFeature:feature];
+                [dump appendFormat:@"%@ %d%@\n", key, on, wanted[key] ? @" (asked)" : @""];
+                break;
+            }
+        }
+        [dump writeToFile:[logs stringByAppendingPathComponent:@"webkit-features.txt"]
+               atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    }
+    if (!wanted.count) return;
+    webkitFeatures = wanted;
+    Method method = class_getInstanceMethod(WKWebView.class, @selector(initWithFrame:configuration:));
+    webViewInit = method_setImplementation(method, (IMP)initWebView);
+}
+
 int emacs_module_init(struct emacs_runtime *runtime)
 {
+    installWebKitFeatures();
     emacs_env *env = runtime->get_environment(runtime);
     emacs_value args[] = {
         env->intern(env, "portal-test-native-key"),
