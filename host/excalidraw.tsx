@@ -733,8 +733,16 @@ function Arrange({
 	]);
 
 	// Dragging a slide: the pointer goes down on it and moves; where it lets
-	// go, between which two slides, is where the slide goes.
+	// go, between which two slides, is where the slide goes. The handlers
+	// read the drag from a ref: a page that is busy gets the pointer's
+	// events back to back, with no render between them to give the handlers
+	// the state the previous one set. The state draws the drop mark.
 	const [drag, setDrag] = useState<Drag>();
+	const current = useRef<Drag>();
+	const updateDrag = (next: Drag | undefined) => {
+		current.current = next;
+		setDrag(next);
+	};
 	const dragged = useRef(false);
 	const dropAt = (y: number) => {
 		const options = [
@@ -753,7 +761,7 @@ function Arrange({
 		if (event.button !== 0 || !option || isField(event.target)) return;
 		const from = frames.findIndex((frame) => frame.id === option.dataset.id);
 		if (from < 0) return;
-		setDrag({
+		updateDrag({
 			id: option.dataset.id ?? "",
 			pointer: event.pointerId,
 			startY: event.clientY,
@@ -763,6 +771,7 @@ function Arrange({
 		});
 	};
 	const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+		const drag = current.current;
 		if (!drag || event.pointerId !== drag.pointer) return;
 		if (!drag.moving && Math.abs(event.clientY - drag.startY) < 5) return;
 		if (!drag.moving) list.current?.setPointerCapture(event.pointerId);
@@ -772,15 +781,16 @@ function Arrange({
 		else if (box && event.clientY > box.bottom - 24)
 			list.current?.scrollBy(0, 12);
 		const before = dropAt(event.clientY);
-		setDrag({
+		updateDrag({
 			...drag,
 			moving: true,
 			to: before > drag.from ? before - 1 : before,
 		});
 	};
 	const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+		const drag = current.current;
 		if (!drag || event.pointerId !== drag.pointer) return;
-		setDrag(undefined);
+		updateDrag(undefined);
 		if (!drag.moving) return;
 		// The click that ends a drag does not select.
 		dragged.current = true;
@@ -825,7 +835,7 @@ function Arrange({
 						onPointerDown={onPointerDown}
 						onPointerMove={onPointerMove}
 						onPointerUp={onPointerUp}
-						onPointerCancel={() => setDrag(undefined)}
+						onPointerCancel={() => updateDrag(undefined)}
 					>
 						{frames.map((frame, at) => (
 							// biome-ignore lint/a11y/useKeyWithClickEvents: the list takes the keys.
