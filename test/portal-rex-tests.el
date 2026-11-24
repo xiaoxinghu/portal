@@ -3322,21 +3322,18 @@ whether a mode is on or not, before `:disconnected'."
             (let ((shown (portal-rex-tests--count)))
               (should (eq (get-text-property 0 'face shown) 'portal-rex-waiting))
               (should (equal (get-text-property 0 'help-echo shown)
-                             (format "Rex blocks waiting for you:\n%s  blocked: Clean up?"
+                             (format "Rex blocks waiting for you:\n%s  blocked: Clean up?\nmouse-1: go to each in turn, the one waiting longest first"
                                      (buffer-name claude))))
-              ;; With no command to go to it, a click does nothing.
-              (should-not (get-text-property 0 'local-map shown)))
+              ;; A click goes to them.
+              (should (eq (lookup-key (get-text-property 0 'local-map shown)
+                                      [mode-line mouse-1])
+                          #'portal-rex-next-waiting)))
             ;; Another finishes: two wait, the one that waited longest first.
             (funcall report "block:2" :state "done")
             (should (equal (portal-rex-tests--count) "Rex 2● "))
-            (cl-letf (((symbol-function 'portal-rex-next-waiting) #'ignore))
-              (let ((shown (portal-rex-tests--count)))
-                (should (equal (get-text-property 0 'help-echo shown)
-                               (format "Rex blocks waiting for you:\n%s  blocked: Clean up?\n%s  done\nmouse-1: go to the one waiting longest"
-                                       (buffer-name claude) (buffer-name codex))))
-                (should (eq (lookup-key (get-text-property 0 'local-map shown)
-                                        [mode-line mouse-1])
-                            #'portal-rex--visit-waiting))))
+            (should (equal (get-text-property 0 'help-echo (portal-rex-tests--count))
+                           (format "Rex blocks waiting for you:\n%s  blocked: Clean up?\n%s  done\nmouse-1: go to each in turn, the one waiting longest first"
+                                   (buffer-name claude) (buffer-name codex))))
             ;; A message that changes, or a block at work, redraws no
             ;; other mode line: the count is the same.
             (setq redraws nil)
@@ -3444,6 +3441,140 @@ whether a mode is on or not, before `:disconnected'."
       (should (equal (portal-rex-tests--mark buffer) ""))
       (funcall report :state "idle")
       (should (equal (portal-rex-tests--mark buffer) "")))))
+
+;;; Going to the next block that waits
+
+(defmacro portal-rex-tests--going (bindings &rest body)
+  "Run BODY with three blocks of a fake server, as `portal-rex-next-waiting' sees them.
+BINDINGS names the connection, the blocks' buffers claude, codex and
+shell, a function that makes a block, \"block:1\" to \"block:3\", report
+its root record, and a function that runs the command and returns what
+it said.  BODY starts in the buffer `*origin*', alone in its frame.
+Batch Emacs shows no view: the pane in use is the selected window, its
+use is taken as the window hooks take it after each run, and the blocks
+that had the keyboard are in `focused', newest first."
+  (declare (indent 1))
+  (pcase-let ((`(,connection ,claude ,codex ,shell ,report ,run) bindings))
+    `(portal-rex-tests--with (server)
+       (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")])
+       (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "claude")
+                                 (portal-rex-tests--block "2" "codex")
+                                 (portal-rex-tests--block "3" "shell"))
+       (let* ((,connection (portal-rex-tests--connect server))
+              (,claude (portal-rex-block-buffer ,connection "block:1"))
+              (,codex (portal-rex-block-buffer ,connection "block:2"))
+              (,shell (portal-rex-block-buffer ,connection "block:3"))
+              (origin (get-buffer-create "*origin*"))
+              (configuration (current-window-configuration))
+              (portal-rex--next-waiting nil)
+              (stamp 0)
+              (focused nil)
+              (,report (lambda (block &rest record)
+                         (apply #'portal-rex-tests--report server block ""
+                                :updated_at (format "2026-11-24T20:13:%02d+13:00"
+                                                    (cl-incf stamp))
+                                record)
+                         (portal-rex-tests--settle ,connection)))
+              (,run (lambda ()
+                      (string-trim
+                       (portal-rex-tests--messages
+                         (call-interactively #'portal-rex-next-waiting)
+                         (portal-rex--claim-used))))))
+         (ignore ,claude ,codex ,shell ,report ,run)
+         (portal-rex-tests--settle ,connection)
+         (cl-letf (((symbol-function 'portal-view-buffers)
+                    (lambda (&rest _) (list ,claude ,codex ,shell)))
+                   ((symbol-function 'portal-rex--in-use-p)
+                    (lambda () (eq (current-buffer) (window-buffer (selected-window)))))
+                   ((symbol-function 'portal--rex-take) #'ignore)
+                   ((symbol-function 'portal-terminal-focus)
+                    (lambda () (push (current-buffer) focused))))
+           (unwind-protect
+               (progn
+                 (delete-other-windows)
+                 (switch-to-buffer origin)
+                 ,@body)
+             (set-window-configuration configuration)
+             (kill-buffer origin)))))))
+
+(ert-deftest portal-rex-next-waiting-goes-to-each-then-back ()
+  (portal-rex-tests--going (connection claude codex shell report run)
+    ;; Two agents finish, claude first; the shell is at work.
+    (funcall report "block:1" :state "done")
+    (funcall report "block:3" :state "working" :msg "make")
+    (funcall report "block:2" :state "done")
+    (should (equal (portal-rex-waiting-buffers) (list claude codex)))
+    ;; The one that has waited longest, with the keyboard in it.
+    (should (equal (funcall run) ""))
+    (should (eq (window-buffer (selected-window)) claude))
+    (should (equal focused (list claude)))
+    ;; Gone to, it is seen.
+    (should-not (plist-get (portal-terminal-metadata claude) :status))
+    ;; Then the next.
+    (should (equal (funcall run) ""))
+    (should (eq (window-buffer (selected-window)) codex))
+    (should (equal focused (list codex claude)))
+    (should-not (portal-rex-waiting-buffers))
+    ;; Then back where it began.
+    (should (equal (funcall run) "No other agent is waiting; back to *origin*"))
+    (should (eq (window-buffer (selected-window)) (get-buffer "*origin*")))
+    (should (equal focused (list codex claude)))
+    (should-not portal-rex--next-waiting)
+    ;; With nothing waiting, it stays.
+    (should (equal (funcall run) "No agent is waiting"))
+    (should (eq (window-buffer (selected-window)) (get-buffer "*origin*")))))
+
+(ert-deftest portal-rex-next-waiting-passes-a-block-still-blocked ()
+  (portal-rex-tests--going (connection claude codex shell report run)
+    (funcall report "block:1" :state "blocked" :kind "question" :msg "Clean up?")
+    (funcall report "block:2" :state "done")
+    (should (equal (funcall run) ""))
+    (should (eq (window-buffer (selected-window)) claude))
+    ;; Not answered, it still waits, and the next run passes over it.
+    (should (plist-get (plist-get (portal-terminal-metadata claude) :status) :waiting))
+    (should (equal (funcall run) ""))
+    (should (eq (window-buffer (selected-window)) codex))
+    ;; A block that starts to wait meanwhile comes after the last one gone to.
+    (funcall report "block:3" :state "error" :msg "API error")
+    (should (equal (funcall run) ""))
+    (should (eq (window-buffer (selected-window)) shell))
+    ;; Only the unanswered block waits: it was gone to, so this is the end.
+    (should (equal (portal-rex-waiting-buffers) (list claude)))
+    (should (equal (funcall run)
+                   "The one agent still waiting was gone to already; back to *origin*"))
+    (should (eq (window-buffer (selected-window)) (get-buffer "*origin*")))
+    ;; The next round starts over, with it.
+    (should (equal (funcall run) ""))
+    (should (eq (window-buffer (selected-window)) claude))))
+
+(ert-deftest portal-rex-next-waiting-returns-to-the-window-it-began-in ()
+  (portal-rex-tests--going (connection claude codex shell report run)
+    (funcall report "block:1" :state "done")
+    (funcall report "block:2" :state "blocked" :kind "permission")
+    (let ((first (selected-window))
+          (other (split-window)))
+      (should (equal (funcall run) ""))
+      (should (eq (window-buffer first) claude))
+      ;; Moved to another window, a block gone to goes on from there.
+      (switch-to-buffer (get-buffer "*scratch*"))
+      (select-window other)
+      (switch-to-buffer claude)
+      (should (equal (funcall run) ""))
+      (should (eq (window-buffer other) codex))
+      (should (equal (funcall run)
+                     "The one agent still waiting was gone to already; back to *origin*"))
+      (should (eq (selected-window) first))
+      (should (eq (window-buffer first) (get-buffer "*origin*")))
+      ;; Run from elsewhere than the block gone to last, it starts a new
+      ;; round, which returns there.
+      (should (equal (funcall run) ""))
+      (should (eq (window-buffer first) codex))
+      (switch-to-buffer (get-buffer "*scratch*"))
+      (should (equal (funcall run) ""))
+      (should (eq (window-buffer first) codex))
+      (should (equal (funcall run)
+                     "The one agent still waiting was gone to already; back to *scratch*"))
+      (should (eq (window-buffer first) (get-buffer "*scratch*"))))))
 
 ;;; The list of agents
 

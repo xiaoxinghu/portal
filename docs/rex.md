@@ -547,10 +547,35 @@ nothing while none does. The block in the selected window is not counted:
 you are looking at it. The default mode line shows `global-mode-string`,
 and so do doom-modeline and the tab bar's `tab-bar-format-global`; Portal
 changes none of them. Hovering the count names each waiting block, the
-one that has waited longest first, with its state and message. Every
+one that has waited longest first, with its state and message, and
+clicking it runs [`portal-rex-next-waiting`](#go-to-the-next-one). Every
 mode line is redrawn when a block starts or stops waiting, or a waiting
 block's buffer is killed, and at no other time: there is no timer.
 `(portal-rex-waiting-buffers)` returns the same blocks, as buffers.
+
+### Go to the next one
+
+`M-x portal-rex-next-waiting` takes you to the block that has waited
+longest, in the selected window, with the keyboard in its terminal, as
+the [pickers](#in-the-terminal-pickers) select one. Run again, it goes to
+the next, in the order they began to wait, as `erc-track-switch-buffer`
+goes through channels with activity. When no other block waits, it takes
+you back to the buffer and window you were in before the first run, and
+says so; with nothing waiting at all, it says `No agent is waiting`.
+
+A finished block you go to is seen, so it waits no more. One still
+blocked on a question or a permission waits until you answer it, and the
+next run passes over it to the blocks that began to wait after it: it is
+gone to again in the next round, once you are back. A round goes on while
+the selected window shows the block it went to last; run from anywhere
+else, it begins a new one there.
+
+No key is bound. A Command chord reaches Emacs from inside a terminal too,
+so it works from the block you have just answered:
+
+```elisp
+(keymap-global-set "s-;" #'portal-rex-next-waiting)
+```
 
 ### In the echo area
 
