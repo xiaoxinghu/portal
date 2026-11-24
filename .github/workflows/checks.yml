@@ -25,6 +25,13 @@ on:
         description: Run the full set (off runs the essential set, as a push to main does)
         type: boolean
         default: true
+      releases:
+        description: >-
+          Install the Linux runtimes from this release site, such as
+          https://github.com/OWNER/REPO/releases/download/, not the run's own
+          (run it on the release's commit)
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -700,6 +707,94 @@ jobs:
             echo "### ${{ matrix.target }}"
             echo '```'
             cat "$PORTAL_TEST_LOGS/runtime.log"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      # The archive installed as a user's Emacs installs it, as far as a
+      # batch Emacs goes: on stock Ubuntu 26.04 without Portal's build tools,
+      # in a fresh home, with the checkout's Lisp and its build moved away,
+      # portal-runtime.el fetches the manifest and the archive by the
+      # release's tag over HTTPS, checks the size and SHA-256, unpacks it,
+      # loads the module and starts Ghostty in a disposable Emacs and
+      # activates it. Then a fresh Emacs finds it as Portal's commands do,
+      # loads it and starts Ghostty, and an install again with no release
+      # site to reach uses it. The run's own files are served under the
+      # release's names from 127.0.0.1, signed by a test authority; with
+      # the input releases, a release site's are fetched instead.
+      - name: Install the runtime as a user would
+        env:
+          MANIFEST: ${{ steps.runtime.outputs.manifest }}
+          RELEASES: ${{ github.event_name == 'workflow_dispatch' && inputs.releases || '' }}
+        run: |
+          export PORTAL_TEST_LOGS=$PORTAL_TEST_LOGS/runtime
+          server=
+          mv build "$RUNNER_TEMP/build-tested"
+          trap 'mv "$RUNNER_TEMP/build-tested" build; [ -z "$server" ] || kill "$server"' EXIT
+          tag=v$(sed -n 's/^;; Version: //p' portal.el)
+          trust=
+          if [ -z "$RELEASES" ]; then
+            certs=$RUNNER_TEMP/release-certs site=$RUNNER_TEMP/release-site
+            python3 -B test/runtime-assets.py certs "$certs"
+            mkdir -p "$site/$tag"
+            # A release's names: a push's manifest names no tag.
+            python3 -I - "$MANIFEST" "$site/$tag" "$tag" ${{ matrix.target }} <<'EOF'
+          import json, shutil, sys
+          from pathlib import Path
+          manifest, out, tag, target = Path(sys.argv[1]), Path(sys.argv[2]), *sys.argv[3:]
+          data = json.loads(manifest.read_text())
+          [archive] = data["archives"]
+          name = f"portal-runtime-{tag}-{target}"
+          shutil.copy(manifest.parent / archive["name"], out / f"{name}.tar.gz")
+          data["tag"], archive["name"] = tag, f"{name}.tar.gz"
+          (out / f"{name}.json").write_text(json.dumps(data))
+          EOF
+            python3 -B test/runtime-assets.py serve "$certs" trusted "$site" >"$RUNNER_TEMP/site.log" &
+            server=$!
+            port=
+            for _ in $(seq 50); do
+              port=$(sed -n 's/^{"port": \([0-9]*\)}$/\1/p' "$RUNNER_TEMP/site.log")
+              [ -z "$port" ] || break
+              sleep 0.2
+            done
+            [ -n "$port" ] || { echo "::error::The release site did not start"; exit 1; }
+            RELEASES=https://127.0.0.1:$port/ trust=$certs/ca.pem
+          fi
+          docker run --rm --network host -v "$RUNNER_TEMP:$RUNNER_TEMP" -v "$PWD:$PWD" -w "$PWD" \
+              -e EMACS -e RELEASES -e trust="$trust" -e HOME="$RUNNER_TEMP/user" \
+              "$UBUNTU_IMAGE" bash -euo pipefail -c '
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -q >/dev/null
+            apt-get install -y -q --no-install-recommends emacs-pgtk libegl1 libegl-mesa0 \
+                ca-certificates >/dev/null
+            grep PRETTY_NAME /etc/os-release
+            for tool in cmake ninja zig; do
+              if command -v "$tool"; then echo "::error::$tool is installed"; exit 1; fi
+            done
+            echo "No cmake, ninja or zig; HOME $HOME, empty: $(ls -A "$HOME" 2>/dev/null | wc -l) entries"
+            emacs=$(readlink -f "$EMACS")
+            cache=$HOME/.emacs.d/portal/runtime/
+            install() {
+              "$emacs" --batch -Q -l portal-build.el -l portal-runtime.el \
+                  -f portal-runtime--install-batch \
+                  "(:directory \"$cache\" :releases \"$1\"${trust:+ :trustfiles (\"$trust\")})"
+            }
+            echo "Installing from $RELEASES:"
+            install "$RELEASES"
+            echo "A fresh Emacs uses it:"
+            "$emacs" --batch -Q -L . --eval "(progn
+                (setq portal-runtime-directory \"$cache\")
+                (require (quote portal-build))
+                (portal-build-ensure)
+                (princ (format \"Runtime: %s\n\" portal-build--runtime))
+                (module-load (portal-build-native-file portal-build--module))
+                (princ (format \"Ghostty: %S\n\" (portal--terminal-engine))))"
+            echo "Installing again with no release site to reach:"
+            install https://127.0.0.1:9/
+          ' 2>&1 | tee "$PORTAL_TEST_LOGS/install.log"
+          {
+            echo "### ${{ matrix.target }}: installed as a user would"
+            echo '```'
+            cat "$PORTAL_TEST_LOGS/install.log"
             echo '```'
           } >>"$GITHUB_STEP_SUMMARY"
 
