@@ -1597,42 +1597,34 @@ out: you are looking at it."
 
 (defvar portal-rex--waiting-map
   (let ((map (make-sparse-keymap)))
-    (define-key map [mode-line mouse-1] #'portal-rex--visit-waiting)
-    (define-key map [header-line mouse-1] #'portal-rex--visit-waiting)
-    (define-key map [tab-bar mouse-1] #'portal-rex--visit-waiting)
+    (define-key map [mode-line mouse-1] #'portal-rex-next-waiting)
+    (define-key map [header-line mouse-1] #'portal-rex-next-waiting)
+    (define-key map [tab-bar mouse-1] #'portal-rex-next-waiting)
     map)
   "The keymap of the mode line's count of waiting blocks.")
-
-(defun portal-rex--visit-waiting (event)
-  "Go to the next block that waits, from a click EVENT on the mode line's count."
-  (interactive "e")
-  (ignore event)
-  (when (fboundp 'portal-rex-next-waiting)
-    (call-interactively 'portal-rex-next-waiting)))
 
 (defun portal-rex--waiting-mark ()
   "The mode line's count of the Rex blocks that wait for you, or nil for none."
   (when-let* ((waiting (portal-rex-waiting-buffers)))
-    (let ((visit (fboundp 'portal-rex-next-waiting)))
-      ;; A space after, as `erc-track' leaves one, before what follows.
-      (concat
-       (propertize
-       (format "Rex %d●" (length waiting))
-       'face 'portal-rex-waiting
-       'help-echo
-       (concat "Rex blocks waiting for you:\n"
-               (mapconcat (lambda (buffer)
-                            (let ((status (buffer-local-value 'portal-terminal--status buffer)))
-                              (concat (buffer-name buffer) "  "
-                                      (cdr (assq (plist-get status :state)
-                                                 portal-rex--state-names))
-                                      (when-let* ((message (plist-get status :message)))
-                                        (concat ": " message)))))
-                          waiting "\n")
-               (and visit "\nmouse-1: go to the one waiting longest"))
-       'mouse-face (and visit 'mode-line-highlight)
-       'local-map (and visit portal-rex--waiting-map))
-       " "))))
+    ;; A space after, as `erc-track' leaves one, before what follows.
+    (concat
+     (propertize
+      (format "Rex %d●" (length waiting))
+      'face 'portal-rex-waiting
+      'help-echo
+      (concat "Rex blocks waiting for you:\n"
+              (mapconcat (lambda (buffer)
+                           (let ((status (buffer-local-value 'portal-terminal--status buffer)))
+                             (concat (buffer-name buffer) "  "
+                                     (cdr (assq (plist-get status :state)
+                                                portal-rex--state-names))
+                                     (when-let* ((message (plist-get status :message)))
+                                       (concat ": " message)))))
+                         waiting "\n")
+              "\nmouse-1: go to each in turn, the one waiting longest first")
+      'mouse-face 'mode-line-highlight
+      'local-map portal-rex--waiting-map)
+     " ")))
 
 (defvar portal-rex--waiting-mode-line '(:eval (portal-rex--waiting-mark))
   "What `portal-rex-status-mode' adds to `global-mode-string'.")
@@ -1653,7 +1645,7 @@ none waiting, it says nothing.  A block waits while its program is
 blocked on a question or a permission, and once it is done or has
 failed until you use its buffer.  The block in the selected window is
 not counted.  Hovering the count names the blocks, and clicking it runs
-`portal-rex-next-waiting' where that command is defined.
+`portal-rex-next-waiting'.
 
 Each block's own buffer names its program's state in its mode line
 whether this mode is on or not."
@@ -1682,6 +1674,81 @@ is on: the count loses it."
   (when (and portal-rex-status-mode (plist-get portal-terminal--status :waiting))
     (force-mode-line-update t)))
 (put 'portal-rex--stop-waiting 'permanent-local-hook t)
+
+;;; Going to the next block that waits
+
+;; As `erc-track-switch-buffer' goes to the channels with activity:
+;; each run goes to the block that has waited longest after the one it
+;; went to last, and when none is left, back to where the first run
+;; began.  Using a finished block's buffer makes it seen, so it waits no
+;; more; one that is blocked waits until it is answered, and the next run
+;; passes over it all the same, as it waited before the one gone to.
+
+(defvar portal-rex--next-waiting nil
+  "Where `portal-rex-next-waiting' began, and where it went last, or nil.
+A plist: `:window' and `:buffer', the selected window and its buffer
+before the first run; `:last', the block's buffer it went to last; and
+`:time', that block's `:time' then.  A run continues from it while the
+selected window shows `:last'.")
+
+(defun portal-rex--next-after (time)
+  "Return the buffer of the block that has waited longest since TIME.
+With TIME nil, of every block that waits.  Nil if none does."
+  (seq-find (lambda (buffer)
+              (or (null time)
+                  (> (plist-get (buffer-local-value 'portal-terminal--status buffer) :time)
+                     time)))
+            (portal-rex-waiting-buffers)))
+
+;;;###autoload
+(defun portal-rex-next-waiting ()
+  "Go to the Rex block that has waited longest, with the keyboard in it.
+Run again from there, go to the next, in the order they began to wait.
+A finished block you go to is seen, so it waits no more; one still
+blocked on a question or a permission waits until you answer it, and the
+next run passes over it.  When no other block waits, go back to the
+buffer and window you were in before the first run.
+
+A block waits while its program is blocked, and once it is done or has
+failed until you use its buffer, as `portal-rex-waiting-buffers' says.
+Clicking the count `portal-rex-status-mode' shows runs this command."
+  (interactive)
+  (let* ((state portal-rex--next-waiting)
+         (here (window-buffer (selected-window)))
+         (going (and state (buffer-live-p (plist-get state :last))
+                     (eq here (plist-get state :last))))
+         (next (portal-rex--next-after (and going (plist-get state :time)))))
+    (cond
+     (next
+      (setq portal-rex--next-waiting
+            (list :window (if going (plist-get state :window) (selected-window))
+                  :buffer (if going (plist-get state :buffer) here)
+                  :last next
+                  :time (plist-get (buffer-local-value 'portal-terminal--status next) :time)))
+      (portal-terminal--visit next)
+      ;; Selecting a buffer leaves the keyboard with Emacs.  A block that
+      ;; cannot take it, as one with no view yet, is shown all the same.
+      (with-current-buffer next
+        (condition-case nil (portal-terminal-focus) (user-error nil))))
+     ((and going (buffer-live-p (plist-get state :buffer)))
+      (setq portal-rex--next-waiting nil)
+      (let ((window (plist-get state :window))
+            (buffer (plist-get state :buffer)))
+        (when (window-live-p window)
+          (select-window window))
+        (unless (eq (window-buffer (selected-window)) buffer)
+          (switch-to-buffer buffer nil t))
+        ;; Those still waiting are blocked ones this round has been to.
+        (let ((left (length (portal-rex-waiting-buffers))))
+          (message "%s; back to %s"
+                   (pcase left
+                     (0 "No other agent is waiting")
+                     (1 "The one agent still waiting was gone to already")
+                     (_ (format "The %d agents still waiting were gone to already" left)))
+                   (buffer-name buffer)))))
+     (t
+      (setq portal-rex--next-waiting nil)
+      (message "No agent is waiting")))))
 
 ;;; What the echo area says of it
 
