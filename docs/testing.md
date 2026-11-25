@@ -443,11 +443,15 @@ and to type, and is not run without one.
   types another token, and the token check fails. Run it from a terminal in
   the Plasma Wayland session, as on GNOME, with no click.
 
-Only Hyprland's has run: on an Apple M1 Pro under Asahi Linux, in a
-Hyprland of its own (Hyprland 0.56.2, scale 2, Mesa's Asahi driver). The
-GNOME and Plasma adapters follow what headless GNOME Shell 50 and KWin 6.6
-did when these routes were tried by hand, and have not run on either
-desktop.
+Each Linux adapter has run on a downloaded runtime, three times passing and
+once failing for each `--fault`. Hyprland's on an Apple M1 Pro under Asahi
+Linux, in a Hyprland of its own (Hyprland 0.56.2, scale 2, Mesa's Asahi
+driver). GNOME's and Plasma's in logged-in sessions, GNOME Shell 50.1 and
+Plasma 6.6.7 with KWin 6.6.7, of an Ubuntu 26.04.1 KVM guest on that
+machine, at scale 1 and drawn by Mesa's llvmpipe, on no GPU. There the
+frame's window had the keyboard without a click in every GNOME run, and
+KWin asked no authorisation for its EIS. [Supported
+platforms](platforms.md#the-downloaded-runtime) records the runs.
 
 It exits 0 when every check passed and 1 when one failed. It also exits 1
 when the test did not finish within `PORTAL_SMOKE_TIMEOUT` seconds

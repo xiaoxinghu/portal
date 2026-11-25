@@ -38,7 +38,7 @@ sh .agents/skills/release/release.sh publish X.Y.Z NOTES
 - `notes` drafts the notes from the logs of that branch's green run: what is
   new, what upgrading costs, the [runtime](#the-runtime-archive) it attaches,
   and the [evidence](#evidence).
-- `publish` attaches the logs and the run's tested runtime to an immutable
+- `publish` attaches the logs and the run's tested runtimes to an immutable
   release, then moves `stable` and `main`, and deletes the branch; see
   [publishing](#publishing).
 
@@ -111,7 +111,11 @@ the run restored no cached downloads and `PORTAL_TEST_EXPENSIVE=1` when it ran
 the full set, `build.log`, CTest's own log
 `ctest.log`, `python.log`, and each graphical suite's `test.log` in a
 directory of its own. Every suite prints its counts and the reasons for its
-skips there, and the notes quote them.
+skips there, and the notes quote them. Each Linux job keeps its own,
+`logs-TARGET`, with its `environment.log`, `ctest.log` and `python.log`, and
+the same rules hold for it. A job run again keeps one more of each, and the
+notes read the newest, the attempt that passed. The release attaches every
+job's logs in `logs.zip`.
 
 ## The runtime archive
 
@@ -175,11 +179,25 @@ and its loader stops on an older CPU before any program starts. `readelf`'s own 
 binaries is `runtime/abi.log` in the job's `logs-TARGET`. No terminal is
 drawn: Linux renders are checked on desktops, not here.
 
-A release attaches the Apple Silicon archive alone for now: an install on
-Linux downloads as soon as its release holds a Linux manifest, so the Linux
-archives stay out, though the run must still pass its Linux jobs, until their
-[download on desktops](platforms.md#linux) is accepted. `targets` in
-`release.sh` names what a release attaches.
+Each Linux job then installs its archive as a user's Emacs would, as far as
+a batch Emacs goes: in the stock `ubuntu:26.04` container, without cmake,
+ninja or zig, in an empty home and with the checkout's build moved away,
+`portal-runtime.el` fetches the manifest and the archive by the release's
+names over HTTPS from 127.0.0.1, signed by a test authority, checks the size
+and SHA-256, unpacks it, loads the module and starts Ghostty in a disposable
+Emacs, and activates it; a fresh Emacs then finds it as Portal's commands
+do and starts Ghostty from it, and an install again with no release site to
+reach uses it. Its record is `runtime/install.log`. Started by hand with
+`-f releases=https://github.com/OWNER/REPO/releases/download/` on a release's
+commit, the jobs install from that release site instead, so a published
+tag's downloads can be checked on both CPUs.
+
+A release attaches all three archives and their manifests, `targets` in
+`release.sh`: an install on Linux downloads as soon as its release holds a
+Linux manifest. Their [download on desktops](platforms.md#the-downloaded-runtime)
+was accepted on 2026-11-25. The release's evidence is every job's: each
+Linux job's `logs-TARGET` must be uncached and full too, each manifest the
+copy its own job logged, and the notes count each job's suites.
 
 ## Publishing
 
@@ -189,12 +207,12 @@ changed again:
 
 1. It refuses unless the repository has
    [immutable releases](#guard-rails-on-github) on.
-2. It downloads the run's runtime archive and manifest, checks each against
+2. It downloads the run's runtime archives and manifests, checks each against
    GitHub's digest of the artifact, and the manifest against the tag, the
-   version, the release commit and the archive's size and SHA-256. No
+   version, the release commit and its archive's size and SHA-256. No
    archive is ever built here.
 3. It pushes the tag alone, creates the release as a draft, and uploads the
-   logs, the archive and the manifest to it. A draft is visible only to the
+   logs, the archives and the manifests to it. A draft is visible only to the
    repository's writers, and `stable` has not moved, so no install sees it.
 4. When the draft holds exactly those files, it publishes it. GitHub then
    locks the tag and the assets: they cannot be replaced, added to or
@@ -204,9 +222,10 @@ changed again:
    that each downloads by the tag, without signing in, as the bytes GitHub
    holds and the run tested, the runtime as its manifest says; and
    `gh release verify` checks GitHub's attestation of the release. The
-   manifest must be the one the run packed, a copy of which its `logs` keep
-   in `runtime/`: so even a release found published, whose artifacts are not
-   fetched again, is tied to the archive that run tested.
+   manifest must be the one the run packed, a copy of which the logs of the
+   job that packed it keep in `runtime/`: so even a release found published,
+   whose artifacts are not fetched again, is tied to the archive that run
+   tested.
 6. Only then does it move `stable` and `main` in one push, and delete
    the candidate's branch.
 
@@ -267,6 +286,17 @@ releases on and `stable`, `v0.2.0` and its release as in Portal:
 | Publishing again | `publish` run again | Removed the cut archive, uploaded it, published; `stable` and `main` moved |
 | Changing it after | Replace, add or delete an asset; delete or move the tag | GitHub refused each; editing the notes was allowed |
 | The client | `portal-runtime-install` from a clone of `stable`, batch Emacs | Fetched the archive by the tag through GitHub's redirect, digest as the manifest, installed in 4.1 s |
+
+On 2026-11-25 Portal 0.3.1 was released there the same way with all three
+runtimes, from Portal's `portal/runtime-linux-download-rollout` branch.
+Its candidate's aarch64 job failed twice, once in a flaky Rex test and once
+fetching Emacs, and passed the third time; the first notes then stopped on
+Linux CTest suites that print no "Ran N tests", and the run kept three
+`logs-linux-aarch64-gnu`, which taught `notes` both. `publish` took 85 s and
+downloaded both Linux archives by the tag before moving `stable`. Checks
+on `stable` with `-f releases=` then installed each from the tag on its
+runner, and the aarch64 one was installed by the first native command on a
+desktop: see [supported platforms](platforms.md#the-downloaded-runtime).
 
 Not rehearsed on GitHub, only with the stand-in: a push of `stable` refused
 after publishing, a published release short of a file, not immutable or
