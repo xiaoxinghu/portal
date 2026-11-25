@@ -467,8 +467,11 @@ receives. A caller that needs an answer before going on, as
 primitive that waits, in turns of at most 50 ms so that a quit gets through,
 and receives directly; the record that follows finds nothing. The second
 way needs no run loop, so batch Emacs can test the real module's sockets;
-the core's own timers need one, so batch Emacs never sees a lost
-connection come back.
+the core's own timers need one. Batch Emacs on macOS runs none, so there a
+lost connection never comes back. On Linux Emacs dispatches GLib's main
+context while it waits, as in `sleep-for`, in batch too: a test that waits
+there past the first try, 200 ms after the loss, keeps the server from
+welcoming the client back.
 Messages that arrive while Emacs is busy wait in memory, without a limit:
 the control protocol's are small, and one above 16 MiB ends its connection.
 A block's stream is bounded instead: past a megabyte unread, the platform

@@ -4,8 +4,11 @@
 ;; Runs portal-rex.el on the real native module, whose message sockets need
 ;; no window, against test/fake-rex-server.py on sockets of its own: never
 ;; the user's Rex server.  PORTAL_TEST_BUILD names the build directory.
-;; Batch Emacs runs no main run loop, so the module's "rex ID" record never
-;; comes: these tests take messages by waiting, as `portal-rex-call' does.
+;; Batch Emacs runs no main run loop on macOS, and these tests connect no
+;; record pipe, so the module's "rex ID" record never comes: they take
+;; messages by waiting, as `portal-rex-call' does.  On Linux the module's
+;; timers still fire while Emacs itself waits, as in `sleep-for': a lost
+;; connection can come back under a test that does.
 ;; test/portal-rex-gui-tests.el covers the record, and
 ;; test/portal-rex-tests.c the core's own rules.  The real-server tier,
 ;; test/rex-server-gui.sh, runs the parity checks against a real server.
@@ -441,6 +444,10 @@ area announces no block's status unless BODY says so."
       (portal-fake-rex-request server "session.view")
       (dolist (name '("one" "two" "three"))
         (portal-fake-rex-command server :event (list :type name)))
+      ;; The module tries the server again 200 ms after it sees the drop,
+      ;; and on Linux its timer fires while batch Emacs sleeps below: a
+      ;; welcome then would attach the connection again before the checks.
+      (portal-fake-rex-command server :welcome :false)
       (portal-fake-rex-command server :drop t)
       (portal-fake-rex-take server :disconnected)
       (sleep-for 0.2)
