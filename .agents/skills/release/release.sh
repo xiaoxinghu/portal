@@ -47,10 +47,15 @@ evidence() {
     run=$(gh run list --workflow checks.yml --commit "$release" --json databaseId,conclusion \
         --jq '[.[] | select(.conclusion == "success")][0].databaseId // empty')
     [ -n "$run" ] || die "no green Checks run of $release"
+    artifacts
     for target in $targets; do
         logs=$(logs_of "$target")
-        gh run download "$run" -n "${logs#"$work/"}" -D "$logs" >&2 ||
-            die "Checks run $run keeps no ${logs#"$work/"}: a run keeps its logs 14 days"
+        # Zipped, as a job's logs are kept: its newest, the attempt that passed.
+        id=$(awk -v name="${logs#"$work/"}" '$4 == name { print $1; exit }' "$work/artifacts")
+        [ -n "$id" ] || die "Checks run $run keeps no ${logs#"$work/"}: a run keeps its logs 14 days"
+        gh api "repos/$GH_REPO/actions/artifacts/$id/zip" >"$logs.zip" &&
+            python3 -I -m zipfile -e "$logs.zip" "$logs" ||
+            die "cannot download ${logs#"$work/"} from Checks run $run"
         grep -qx 'USE_CACHE=false' "$logs/environment.log" ||
             die "Checks run $run restored cached downloads: it is no evidence"
         grep -qx 'PORTAL_TEST_EXPENSIVE=1' "$logs/environment.log" ||
@@ -70,6 +75,17 @@ identity() {
     esac
 }
 
+# Write to $work/artifacts the artifacts that run $run keeps, newest first,
+# one a line: ID, when made, digest and name. A job run again keeps one more
+# of each name, and a run that passed has its newest from the attempt that
+# passed.
+artifacts() {
+    # An expired artifact is listed as expired, or not at all.
+    gh api "repos/$GH_REPO/actions/runs/$run/artifacts?per_page=100" --paginate \
+        --jq '.artifacts[] | select(.expired | not) | "\(.id) \(.created_at) \(.digest) \(.name)"' |
+        sort -k2,2r >"$work/artifacts" || die "cannot list the artifacts of Checks run $run"
+}
+
 # Put in $work/assets the runtime archives and manifests that run $run kept
 # for version $1, each checked against GitHub's digest of its artifact, and
 # each manifest against the release commit and its archive. A release
@@ -77,13 +93,9 @@ identity() {
 # keeps, after its 14 days, is never built again here.
 runtimes() {
     mkdir -p "$work/assets"
-    # An expired artifact is listed as expired, or not at all.
-    gh api "repos/$GH_REPO/actions/runs/$run/artifacts?per_page=100" --paginate \
-        --jq '.artifacts[] | select(.expired | not) | "\(.id) \(.digest) \(.name)"' \
-        >"$work/artifacts" || die "cannot list the artifacts of Checks run $run"
     for target in $targets; do
         for name in "portal-runtime-v$1-$target.json" "portal-runtime-v$1-$target.tar.gz"; do
-            kept=$(awk -v name="$name" '$3 == name { print $1, $2 }' "$work/artifacts")
+            kept=$(awk -v name="$name" '$4 == name { print $1, $3; exit }' "$work/artifacts")
             [ -n "$kept" ] || die "Checks run $run keeps no $name: a run keeps its archives" \
                 "14 days, and a release attaches the archive its checks tested. Run Checks" \
                 "again on release/v$1, uncached, then notes and publish; nothing is built here"
@@ -273,10 +285,16 @@ notes() {
             *) label="$target " names=python ;;
         esac
         awk -v label="$label" '
-             /^[0-9]+\/[0-9]+ Test: / { suite = $3; counts = "" }
-             /^Ran [0-9]+ tests|^[0-9]+ checks passed|Test run with [0-9]+ tests/ {
+             /^[0-9]+\/[0-9]+ Test: / { suite = $3; counts = ""; compiled = 0 }
+             /^Ran [0-9]+ tests|^[0-9]+ checks passed|^[0-9]+ checks, 0 failed|Test run with [0-9]+ tests/ {
                  sub(/^[^A-Za-z0-9]+/, ""); counts = counts "; " $0 }
-             /^Test Passed\./ { suites++; print "- " label "CTest " suite ": passed" counts
+             # A suite CTest skips (exit 77) says why; shared-macos names
+             # each file it compiled for a Mac.
+             /^[^ ]+ skipped: / { counts = counts "; " $0 }
+             /^[a-z0-9_]+-macos: / { compiled++ }
+             /^Test Passed\./ { suites++
+                 if (compiled) counts = counts "; compiled " compiled " files for macOS"
+                 print "- " label "CTest " suite ": passed" counts
                  if (counts == "") { print "release: no count for the " label "CTest suite " suite >"/dev/stderr"; bad = 1 } }
              END { exit bad || !suites }' "$logs/ctest.log" ||
             die "${label}ctest.log does not count every suite's tests"
@@ -299,7 +317,7 @@ notes() {
              suite = FILENAME; sub(/.*\/logs(-[^\/]+)?\//, "", suite); sub(/(\/test)?\.log$/, "", suite)
              suite = label suite }
          /^[0-9]+\/[0-9]+ Test: / { suite = label "CTest " $3 }
-         /^ +SKIPPED +| \.\.\. skipped |^ *[1-9][0-9]* skip$/ { sub(/^ +(SKIPPED +)?/, ""); print "- " suite ": " $0; found = 1 }
+         /^ +SKIPPED +| \.\.\. skipped |^ *[1-9][0-9]* skip$|^[^ ]+ skipped: / { sub(/^ +(SKIPPED +)?/, ""); print "- " suite ": " $0; found = 1 }
          END { if (!found) print "None." }' "$@"
     echo
     echo "## Checks outside CI"
