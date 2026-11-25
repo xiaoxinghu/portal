@@ -3,7 +3,7 @@
 ;; Author: Xiaoxing Hu <hi@xiaoxing.dev>
 ;; Maintainer: Xiaoxing Hu <hi@xiaoxing.dev>
 ;; URL: https://github.com/xiaoxinghu/portal
-;; Version: 0.2.0
+;; Version: 0.3.0
 ;; Package-Requires: ((emacs "31.1"))
 ;; Keywords: terminals, hypermedia
 ;; SPDX-License-Identifier: GPL-3.0-or-later
