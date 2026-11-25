@@ -431,6 +431,9 @@ void portal_linux_stage_frame(struct portal_stage *stage);
 void portal_linux_stage_stop(struct portal_stage *stage);
 /* Destroy STAGE's buffers, freeing the frames they showed, and STAGE. */
 void portal_linux_stage_free(struct portal_stage *stage);
+/* Whether the compositor refused a DMABUF that it says it takes: frames
+   come in memory from then on.  From any thread. */
+bool portal_linux_dmabufs_refused(void);
 /* Add what the presenter counted for STAGE to DESCRIPTION, as members of a
    JSON object, each followed by a comma. */
 void portal_linux_stage_describe(struct portal_stage *stage, struct json *description);

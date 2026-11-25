@@ -705,6 +705,14 @@ struct portal_stage *portal_linux_stage_new(struct portal_view *view,
     return stage;
 }
 
+bool portal_linux_dmabufs_refused(void)
+{
+    pthread_mutex_lock(&presenter.lock);
+    bool refused = presenter.dmabufs < 0 && presenter.wayland && presenter.wayland->dmabuf;
+    pthread_mutex_unlock(&presenter.lock);
+    return refused;
+}
+
 void portal_linux_stage_ready(void *data)
 {
     struct portal_stage *stage = data;

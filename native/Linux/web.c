@@ -56,8 +56,9 @@ static struct {
        that can acquire the context. */
     GThread *owner, *main;
     WPEDisplay *display;
-    WebKitWebContext *web; /* Portal's, never freed: see webkit_make. */
     const struct portal_wayland *wayland;
+    /* Pages draw in memory, as decided at the first (webkit_start). */
+    bool memory;
 } webkit;
 
 /* Calls between threads. */
@@ -150,7 +151,9 @@ struct page {
     WPEView *wpe;
     WPEToplevel *toplevel;
     WPEInputMethodContext *method;
-    WebKitWebContext *context; /* The web view's: see context_for. */
+    /* The web view's context, for DIRECTORY or none: see context_of. */
+    WebKitWebContext *context;
+    char *directory;
     const char *typing; /* The text of the key being given to WebKit. */
     char *preedit;
     int preedit_cursor;
@@ -300,13 +303,14 @@ static void display_look(PortalDisplay *self)
 }
 
 /* The GPU, for frames WebKit makes DMABUFs; none for frames it draws in
-   memory, which the presenter copies into shared memory.  WebKit draws in
-   memory where the compositor takes no DMABUF at all, and where EGL names
-   no GPU, as with a software renderer. */
+   memory, which the presenter copies into shared memory.  What WebKit is
+   told the first time it asks, at the first page's first load, holds for
+   every page of the process: so pages draw in memory only as decided then
+   (webkit_start), or where EGL names no GPU, as with a software renderer. */
 static WPEDRMDevice *display_get_drm_device(WPEDisplay *display)
 {
     PortalDisplay *self = PORTAL_DISPLAY(display);
-    if (!webkit.wayland->dmabuf)
+    if (webkit.memory)
         return NULL;
     display_look(self);
     return self->device;
@@ -523,16 +527,18 @@ static gboolean unmap_on_webkit(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
-/* The compositor refused a DMABUF it says it takes.  WebKit draws in
-   memory only for a display with no DRM device, which a page cannot change
-   once made: the page says it cannot be shown and stops drawing, rather
-   than drawing frames that are each dropped. */
+/* The compositor refused a DMABUF of the page's, or a terminal's, after
+   WebKit was told of the GPU: no page of this process can draw in memory
+   (display_get_drm_device).  The page says it cannot be shown and stops
+   drawing, rather than drawing frames that are each dropped; pages show
+   again in the next Emacs, which knows from its first terminal. */
 static void page_memory(void *data)
 {
     struct page *page = data;
-    if (atomic_exchange(&page->unshowable, true))
+    if (webkit.memory || atomic_exchange(&page->unshowable, true))
         return;
-    fprintf(stderr, "Portal: the compositor took no DMABUF of a page's: it cannot be shown\n");
+    fprintf(stderr, "Portal: the compositor took no DMABUF of a page's: it cannot be shown "
+                    "until Emacs starts again\n");
     on_webkit(unmap_on_webkit, page, NULL);
 }
 
@@ -568,10 +574,6 @@ static gboolean webkit_make(gpointer data)
     }
     wpe_display_set_primary(display);
     webkit.display = display;
-    /* A context of Portal's, never freed.  WebKit keeps its default one in
-       a function's static, which exit() frees on the thread that exits,
-       Emacs's main thread, aborting Emacs when WebKit is on another. */
-    webkit.web = webkit_web_context_new();
     return G_SOURCE_REMOVE;
 }
 
@@ -582,6 +584,12 @@ static bool webkit_start(const struct portal_wayland *wayland, portal_text *erro
     if (!started) {
         started = true;
         webkit.wayland = wayland;
+        /* Pages draw in memory where the compositor takes no DMABUF: it
+           has no way to, or it refused a terminal's already.
+           PORTAL_TEST_WEB_MEMORY, for the checks, has them draw so as
+           well, which only the process's first page can decide. */
+        const char *test = getenv("PORTAL_TEST_WEB_MEMORY");
+        webkit.memory = !wayland->dmabuf || host->dmabufs_refused() || (test && *test);
         webkit.main = g_thread_self();
         webkit.context = g_main_context_new();
         GMainLoop *loop = g_main_loop_new(webkit.context, FALSE);
@@ -781,6 +789,33 @@ static void web_title(GObject *web, GParamSpec *property, gpointer data)
     tell(data, NEWS_TITLE, webkit_web_view_get_title(WEBKIT_WEB_VIEW(web)), NULL);
 }
 
+/* The context for a page of DIRECTORY, or of none, made the first time and
+   never freed: WebKit keeps its default one in a function's static, which
+   exit() frees on the thread that exits, Emacs's main thread, aborting
+   Emacs when WebKit is on another.
+
+   WebKit's sandbox shows a web process only the paths its context was
+   given, and takes none once the context has started a process; a page's
+   media, which the web process reads itself, would not play from a file of
+   the page's directory.  So a file's page goes in a context of its own
+   directory's, which may read that directory, as a file's page may on
+   macOS. */
+static WebKitWebContext *context_of(const char *directory)
+{
+    static GHashTable *contexts;
+    if (!contexts)
+        contexts = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+    const char *key = directory ? directory : "";
+    WebKitWebContext *context = g_hash_table_lookup(contexts, key);
+    if (!context) {
+        context = webkit_web_context_new();
+        if (directory)
+            webkit_web_context_add_path_to_sandbox(context, directory, TRUE);
+        g_hash_table_insert(contexts, g_strdup(key), context);
+    }
+    return context;
+}
+
 /* Tell the web view the size, scale and showing the main thread last
    gave: on WebKit's thread. */
 static void view_apply(struct page *page)
@@ -792,8 +827,6 @@ static void view_apply(struct page *page)
         wpe_toplevel_resized(page->toplevel, page->width, page->height);
         wpe_view_resized(page->wpe, page->width, page->height);
     }
-    if (atomic_load(&page->unshowable))
-        return;
     if (page->shown && !page->mapped)
         wpe_view_map(page->wpe);
     else if (!page->shown && page->mapped)
@@ -818,6 +851,7 @@ static gboolean page_make(gpointer data)
     webkit_user_content_manager_add_script(content, script);
     webkit_user_script_unref(script);
     WebKitNetworkSession *session = webkit_network_session_new_ephemeral();
+    page->context = context_of(page->directory);
     making = page;
     page->web = g_object_new(WEBKIT_TYPE_WEB_VIEW, "display", webkit.display, "web-context",
                              page->context, "network-session", session,
@@ -887,6 +921,7 @@ static void page_free(struct page *page)
     pthread_mutex_destroy(&page->lock);
     presses_clear(page);
     g_free(page->preedit);
+    g_free(page->directory);
     g_free(page->url);
     g_free(page->title);
     g_free(page->error);
@@ -1316,7 +1351,6 @@ static bool web_create(struct portal_view *view, const portal_option *options, s
     page->serial = view->serial;
     g_queue_init(&page->presses);
     pthread_mutex_init(&page->lock, NULL);
-    page->context = webkit.web;
     page->stage = host->stage_new(view, &page_source);
     if (!page->stage) {
         page_free(page);
@@ -1355,32 +1389,14 @@ static void loaded_free(gpointer data)
     g_free(loaded);
 }
 
-/* The context for a page at URL.  WebKit's sandbox shows a web process
-   only the paths its context was given, and takes none once the context
-   has started a process; a page's media, which the web process reads
-   itself, would not play from a file of the page's directory.  So a file's
-   page goes in a context of its own directory's, made the first time,
-   which may read that directory, as a file's page may on macOS; any other
-   page stays in the one it is in.  Contexts are never freed: see
-   webkit_make. */
-static WebKitWebContext *context_for(struct page *page, const char *url)
+/* Make the page's web view again, in the context of DIRECTORY: a web view
+   starts a history of its own. */
+static void page_remake(struct page *page, char *directory)
 {
-    char *file = g_str_has_prefix(url, "file:") ? g_filename_from_uri(url, NULL, NULL) : NULL;
-    if (!file)
-        return page->context;
-    char *directory = g_path_get_dirname(file);
-    g_free(file);
-    static GHashTable *contexts;
-    if (!contexts)
-        contexts = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
-    WebKitWebContext *context = g_hash_table_lookup(contexts, directory);
-    if (!context) {
-        context = webkit_web_context_new();
-        webkit_web_context_add_path_to_sandbox(context, directory, TRUE);
-        g_hash_table_insert(contexts, g_strdup(directory), context);
-    }
-    g_free(directory);
-    return context;
+    page_unmake(page);
+    g_free(page->directory);
+    page->directory = directory;
+    page_make(page);
 }
 
 static gboolean load_on_webkit(gpointer data)
@@ -1390,17 +1406,16 @@ static gboolean load_on_webkit(gpointer data)
     if (!page->web)
         return G_SOURCE_REMOVE;
     if (loaded->url) {
-        /* A page that moves to another context is a web view made again
-           there, which starts a history of its own. */
-        WebKitWebContext *context = context_for(page, loaded->url);
-        if (context != page->context) {
-            page_unmake(page);
-            page->context = context;
-            page_make(page);
-            if (!page->web)
-                return G_SOURCE_REMOVE;
-        }
-        webkit_web_view_load_uri(page->web, loaded->url);
+        char *file = g_str_has_prefix(loaded->url, "file:")
+                         ? g_filename_from_uri(loaded->url, NULL, NULL)
+                         : NULL;
+        char *directory = file ? g_path_get_dirname(file) : NULL;
+        g_free(file);
+        if (directory && g_strcmp0(directory, page->directory))
+            page_remake(page, g_steal_pointer(&directory));
+        g_free(directory);
+        if (page->web)
+            webkit_web_view_load_uri(page->web, loaded->url);
     } else if (loaded->step == PORTAL_BACK) {
         webkit_web_view_go_back(page->web);
     } else if (loaded->step == PORTAL_FORWARD) {
@@ -1410,6 +1425,7 @@ static gboolean load_on_webkit(gpointer data)
     }
     return G_SOURCE_REMOVE;
 }
+
 
 static bool web_load(struct portal_view *view, portal_string url, portal_text *error)
 {
