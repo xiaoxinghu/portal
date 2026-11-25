@@ -58,6 +58,25 @@ on any other version, and no Ventura guest is set up to run one. A version is
 added here once the [download's acceptance](#the-download) passes on it. The
 rows of the [matrix](#matrix) above are about Portal built from source.
 
+The two Linux downloads, for glibc 2.43 or newer, are claimed where they ran,
+each pair of CPU, desktop and graphics driver named; every row ran the same
+aarch64 archive, Emacs 31.1 pgtk and Wayland:
+
+| CPU | System | Desktop | Drawn by | What ran |
+| --- | --- | --- | --- | --- |
+| aarch64 | Arch Linux ARM, Apple M1 Pro under Asahi | Hyprland 0.56.2, scale 2 | Mesa's `asahi`, the GPU | **Verified**: the [download's acceptance](#the-download-on-linux), with no build tools |
+| aarch64 | Ubuntu 26.04.1, a KVM guest on that Mac | GNOME Shell 50.1, logged in, scale 1 | Mesa's llvmpipe, no GPU | The rendering smoke test on the downloaded runtime |
+| aarch64 | the same guest | Plasma 6.6.7, KWin 6.6.7, logged in, scale 1 | Mesa's llvmpipe, no GPU | The rendering smoke test on the downloaded runtime |
+| x86-64 | Ubuntu 26.04.1, GitHub's hosted runner | none: batch | none | Download, digest, unpacking, module load and Ghostty start, with no build tools. **Graphically unverified** |
+| Either | any other | any other | any other GPU driver | Unverified |
+
+x86-64 stays unverified until someone runs `sh test/render-smoke.sh` on a
+downloaded runtime on real x86-64 hardware: no such machine with a desktop
+is at hand, and an Apple Silicon Mac cannot run one at a usable speed.
+GNOME and Plasma ran on no GPU, so no driver but Asahi's has drawn a
+downloaded terminal. Fractional scale, two monitors and keyboard layouts
+other than US English have not run.
+
 ## Linux
 
 On Linux Portal has terminals and no web views yet. Its native module
@@ -75,9 +94,9 @@ build needs and which checks run.
 
 The [runtime download](install.md#downloaded-runtimes) has an archive for
 x86-64 and one for aarch64, for glibc 2.43 or newer, and refuses musl, other
-CPUs and older glibc before downloading, offering a build. Which archive an
-install takes, and each refusal, is tested on fixtures only: no Linux release
-has published an archive, and no download has run on a desktop.
+CPUs and older glibc before downloading, offering a build. Where each has
+run is [the downloaded runtime](#the-downloaded-runtime)'s table. Which
+archive an install takes, and each refusal, is also tested on fixtures.
 
 **Untested: Emacs from Nix, Guix, Flatpak or Snap.** None has been tried,
 with a build or a download. Such an Emacs may not use the system's C library
@@ -180,7 +199,72 @@ Tools):
 6. with the developer tools back and no runtime cached, Build here builds
    from the sources and the retried command uses that build.
 
+### The download on Linux
+
+A CPU, desktop and driver are verified for the Linux download when, with
+graphical Emacs 31.1 built with pgtk on that desktop's Wayland, in a home
+that never had Portal and with no compiler, CMake, Ninja, Make or Zig
+reachable (installing needs Git):
+
+1. the Lisp installed as [the install guide](install.md#with-use-package-and-package-vc)
+   says, the first native command offers Download and Not now, no Build
+   here, and the install fetches the archive and manifest by the release's
+   tag;
+2. the retried command opens a terminal whose module, Ghostty library and
+   resources are the downloaded runtime's;
+3. `sh test/render-smoke.sh` passes on the downloaded runtime;
+4. a fresh Emacs with no network uses the cached runtime without asking, and
+   `M-x portal-download-runtime` reuses it;
+5. the install refuses, leaving nothing behind: an archive whose SHA-256 is
+   not the manifest's, another CPU's archive under this one's name, Lisp
+   whose native sources are not the release's, and a release with no Linux
+   runtime.
+
+A desktop that runs only step 3 on the downloaded runtime gets a row that
+says so.
+
 ## Evidence
+
+Recorded 2026-11-25, [the Linux download's acceptance](#the-download-on-linux),
+against release v0.3.1 of `xiaoxinghu/portal-release-rehearsal`, a public
+copy of Portal at its `portal/runtime-linux-download-rollout` branch,
+released by `release.sh` with all three runtimes. Its aarch64 archive,
+`portal-runtime-v0.3.1-linux-aarch64-gnu.tar.gz`, 18,721,558 bytes, SHA-256
+`ec9cf60c7d058f0c119800446f4dc8520c3d1d32ac7b8bbe610710f131783804`,
+identity `f3ce6bb9…`, ran everywhere below; the x86-64 one, 19,179,508
+bytes, SHA-256 `c2efac2df77e61c2a73862520d9446673d052174f3989a853e31cb3269238461`.
+
+- **Asahi, Hyprland.** In a bubblewrap sandbox on the M1 Pro: a fresh home,
+  `/usr/bin`'s compilers, `make`, `cmake`, `ninja` and `zig` replaced by
+  `/dev/null`, Arch's `emacs-wayland` 31.1 and glibc 2.43, on a Hyprland of
+  its own. `use-package` with `:vc` installed `stable` (v0.3.1, byte-compiled).
+  `M-x portal-terminal` offered `d` and `n`; `d` installed in 1.8 s; the
+  retried command opened a terminal with `portal.so` and
+  `ghostty-internal.so` mapped from the cache. The smoke test passed 3 of 3,
+  3.35 to 3.45 s, with `/dev/dri/renderD128` (`asahi`, `apple,agx-t6000`)
+  open. With the network unshared a fresh Emacs asked nothing and opened a
+  terminal, and `portal-download-runtime` said it was already there. Refused
+  with an empty cache: a byte flipped ("has SHA-256 …, not the manifest's"),
+  the x86-64 archive named for aarch64 (the loader's "cannot open shared
+  object file", as glibc says of another machine's library, then the line
+  naming what the runtime needs), one native source changed ("built from
+  other native sources"), and Version 0.3.0, a Mac-only release ("answered
+  404 … is it released?").
+- **GNOME and Plasma.** A KVM guest on that machine, Ubuntu 26.04.1 arm64
+  with kernel 7.0.0-43, 6 performance cores, `bochs-display` at 1280 by 800,
+  Emacs 31.1 built there with pgtk, GDM logging in each session. The runtime
+  installed there by `portal-runtime--install-batch` from the tag. The smoke
+  test, from the session's environment, passed 3 of 3 on each (GNOME 3.8 to
+  4.2 s, Mutter's ScreenCast and RemoteDesktop; Plasma, Spectacle and KWin's
+  EIS) and failed with `--fault blank` (7 checks) and `--fault shift` (6) on
+  each. No click was needed on GNOME, and KWin asked no authorisation.
+- **x86-64 and aarch64 runners.** Checks run 45521619283 of the rehearsal's
+  `stable` with `-f releases=` its release site: on each runner, in stock
+  Ubuntu 26.04.1 with no cmake, ninja or zig, the tag's archive downloaded,
+  matched its manifest, unpacked, loaded and started Ghostty 1.4.0, then
+  was reused with no site to reach. Every Checks run does the same from the
+  run's own files.
+
 
 Recorded 2026-11-23, [the download's acceptance](#the-download), the first
 download of a runtime on a Mac that never built Portal: a fresh clone of the

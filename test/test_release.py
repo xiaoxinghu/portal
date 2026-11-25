@@ -15,15 +15,18 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 RELEASE = ROOT / ".agents" / "skills" / "release" / "release.sh"
 # The answers of GitHub as `gh` gives them, to the questions release.sh asks.
-# Artifacts are the files in STUB/artifacts/RUN, gone when they expire;
+# Artifacts are the files in STUB/artifacts/RUN, gone when they expire, and
+# each job's logs, the directories STUB/logs and STUB/logs-TARGET, kept
+# zipped; STUB/older/NAME is the logs of an earlier attempt of the job;
 # releases are in STUB/releases.json and their assets' bytes in STUB/assets.
 # A file STUB/fail-upload naming an asset makes its next upload stop halfway.
 GH = """#!{python}
-import hashlib, json, os, shutil, subprocess, sys
+import hashlib, io, json, os, shutil, subprocess, sys, zipfile
 from pathlib import Path
 
 stub = Path(os.environ["STUB"])
@@ -47,8 +50,23 @@ def of_tag(tag):
     return [r for r in releases if r["tag"] == tag] or [None]
 
 def artifacts(run):
+    # The run's artifacts, each (path, when made), the newest last.
     directory = stub / "artifacts" / run
-    return sorted(directory.iterdir()) if directory.is_dir() else []
+    kept = sorted(directory.iterdir()) if directory.is_dir() else []
+    older = sorted((stub / "older").iterdir()) if (stub / "older").is_dir() else []
+    logs = sorted(p for p in stub.iterdir() if p.is_dir() and p.name.startswith("logs"))
+    return ([(p, "2026-01-01T00:00:00Z") for p in older] +
+            [(p, "2026-01-02T00:00:00Z") for p in kept + logs])
+
+def data(path):
+    if path.is_file():
+        return path.read_bytes()
+    zipped = io.BytesIO()
+    with zipfile.ZipFile(zipped, "w") as archive:
+        for file in sorted(path.rglob("*")):
+            if file.is_file():
+                archive.write(file, file.relative_to(path))
+    return zipped.getvalue()
 
 def digest(data):
     return "sha256:" + hashlib.sha256(data).hexdigest()
@@ -64,8 +82,6 @@ elif command == "run list":
     print(runs.read_text().split("\\n")[0] if runs.exists() else "")
 elif command == "run view":
     print("| Build | success |" if "jobs" in args else "https://example/run/7")
-elif command == "run download":
-    shutil.copytree(stub / "logs", option("-D"))
 elif command == "workflow run":
     pass
 elif args[0] == "api":
@@ -74,11 +90,12 @@ elif args[0] == "api":
     if path == ["immutable-releases"]:
         print("false" if (stub / "mutable").exists() else "true")
     elif path[:2] == ["actions", "runs"]:
-        for number, file in enumerate(artifacts(path[2])):
-            print(f"{{path[2]}}{{number}} {{digest(file.read_bytes())}} {{file.name}}")
+        for number, (file, made) in enumerate(artifacts(path[2])):
+            kept = digest(file.read_bytes()) if file.is_file() else "null"
+            print(f"{{path[2]}}{{number:03d}} {{made}} {{kept}} {{file.name}}")
     elif path[:2] == ["actions", "artifacts"]:
-        run, number = path[2][:-1], int(path[2][-1])
-        sys.stdout.buffer.write(artifacts(run)[number].read_bytes())
+        run, number = path[2][:-3], int(path[2][-3:])
+        sys.stdout.buffer.write(data(artifacts(run)[number][0]))
     elif path == ["releases"]:
         for r in releases:
             print(r["id"], r["tag"], str(r["draft"]).lower(), str(r["immutable"]).lower())
@@ -154,6 +171,18 @@ LOGS = {
     "terminal-shell-startup/test.log": "Ran 2 tests, 2 results as expected, 0 unexpected\n",
     "package/test.log": "9 checks passed\n6 checks passed\n",
 }
+# Each Linux job's logs, logs-TARGET: its environment, CTest and Python.
+LINUX_LOGS = {
+    "environment.log": "USE_CACHE=false\nPORTAL_TEST_EXPENSIVE=1\nPRETTY_NAME=\"Ubuntu 26.04\"\n",
+    "ctest.log": "1/4 Test: runtime\nRan 22 tests, 22 results as expected, 0 unexpected\nTest Passed.\n"
+    "2/4 Test: gui-runner\ngui-runner skipped: no Bun: set BUN or put bun on PATH to run it\n"
+    "Test Passed.\n3/4 Test: ghostty-fed\n20 checks, 0 failed\nTest Passed.\n"
+    "4/4 Test: shared-macos\naarch64-macos: native/Shared/a.c\nx86_64-macos: native/Shared/a.c\n"
+    "Test Passed.\n",
+    "python.log": "Ran 108 tests in 9.1s\n",
+}
+LINUX = ("linux-x86_64-gnu", "linux-aarch64-gnu")
+TARGETS = ("macos-arm64", *LINUX)
 # A pre-receive hook: GitHub refuses stable while STUB/refuse-stable exists.
 HOOK = """#!/bin/sh
 pushed=$(cat)
@@ -170,6 +199,10 @@ class ReleaseTests(unittest.TestCase):
         for name, text in LOGS.items():
             (self.stub / "logs" / name).parent.mkdir(parents=True, exist_ok=True)
             (self.stub / "logs" / name).write_text(text)
+        for target in LINUX:
+            for name, text in LINUX_LOGS.items():
+                (self.stub / f"logs-{target}").mkdir(exist_ok=True)
+                (self.stub / f"logs-{target}" / name).write_text(text)
         (self.root / "bin").mkdir()
         (self.root / "bin" / "gh").write_text(GH)
         (self.root / "bin" / "gh").chmod(0o755)
@@ -216,7 +249,7 @@ class ReleaseTests(unittest.TestCase):
         """Make RUN the green run of release/vVERSION, keeping its runtime artifacts.
 
         It packs an archive for each of the three systems, as Checks does, and
-        writes their manifests, the Mac's copied into the run's logs; SEED changes
+        writes their manifests, each copied into its job's logs; SEED changes
         the archives' bytes."""
         commit = self.git("rev-parse", f"origin/release/v{version}")
         runs = self.stub / "runs"
@@ -225,7 +258,7 @@ class ReleaseTests(unittest.TestCase):
             runs.write_text(run + "\n" + listed)
         kept = self.stub / "artifacts" / run
         kept.mkdir(parents=True)
-        for target in ("macos-arm64", "linux-x86_64-gnu", "linux-aarch64-gnu"):
+        for target in TARGETS:
             name = f"portal-runtime-v{version}-{target}"
             data = f"{target} {commit} ".encode() + seed + bytes(range(256)) * 8
             (kept / f"{name}.tar.gz").write_bytes(data)
@@ -239,9 +272,11 @@ class ReleaseTests(unittest.TestCase):
 
     def logs_from(self, kept, version):
         """Make the logs the green run gives those of the run that kept KEPT."""
-        (self.stub / "logs" / "runtime").mkdir(exist_ok=True)
-        name = f"portal-runtime-v{version}-macos-arm64.json"
-        shutil.copy(kept / name, self.stub / "logs" / "runtime" / name)
+        for target in TARGETS:
+            logs = self.stub / ("logs" if target == "macos-arm64" else f"logs-{target}")
+            (logs / "runtime").mkdir(exist_ok=True)
+            name = f"portal-runtime-v{version}-{target}.json"
+            shutil.copy(kept / name, logs / "runtime" / name)
 
     def releases(self):
         return json.loads((self.stub / "releases.json").read_text())
@@ -304,10 +339,17 @@ class ReleaseTests(unittest.TestCase):
                      "- CTest input: portal-input-evil  ((skip-unless",
                      "- python: test_a (test_x.X.test_a) ... skipped 'no network'",
                      "Bun 1.3.14", "https://example/run/7",
-                     f"- `{archive.name}`, {archive.stat().st_size} bytes, SHA-256 "
-                     f"`{hashlib.sha256(archive.read_bytes()).hexdigest()}`"):
+                     "- linux-x86_64-gnu CTest runtime: passed; Ran 22 tests",
+                     "- linux-aarch64-gnu python: Ran 108 tests",
+                     "- linux-aarch64-gnu CTest gui-runner: passed; gui-runner skipped: no Bun",
+                     "- linux-x86_64-gnu CTest ghostty-fed: passed; 20 checks, 0 failed",
+                     "- linux-x86_64-gnu CTest shared-macos: passed; compiled 2 files for macOS",
+                     "- linux-aarch64-gnu CTest gui-runner: gui-runner skipped: no Bun"):
             self.assertIn(line, notes)
-        self.assertNotIn("linux", notes)
+        for target in TARGETS:
+            archive = kept / f"portal-runtime-v0.2.0-{target}.tar.gz"
+            self.assertIn(f"- `{archive.name}`, {archive.stat().st_size} bytes, SHA-256 "
+                          f"`{hashlib.sha256(archive.read_bytes()).hexdigest()}`", notes)
         (self.root / "notes.md").write_text(notes)
         # Evidence with a suite's count missing is no notes at all.
         logs = self.stub / "logs"
@@ -318,6 +360,31 @@ class ReleaseTests(unittest.TestCase):
         (logs / "ctest.log").write_text(LOGS["ctest.log"] + "4/4 Test: quiet\nTest Passed.\n")
         self.assertIn("no count for the CTest suite quiet", self.release("notes", "0.2.0", ok=False))
         (logs / "ctest.log").write_text(LOGS["ctest.log"])
+        # Each Linux job's evidence is the release's as much as the Mac's.
+        linux = self.stub / "logs-linux-x86_64-gnu"
+        (linux / "python.log").write_text("Traceback\n")
+        self.assertIn("do not count linux-x86_64-gnu python's tests",
+                      self.release("notes", "0.2.0", ok=False))
+        (linux / "python.log").write_text(LINUX_LOGS["python.log"])
+        (linux / "environment.log").write_text("USE_CACHE=true\nPORTAL_TEST_EXPENSIVE=1\n")
+        self.assertIn("restored cached downloads", self.release("notes", "0.2.0", ok=False))
+        (linux / "environment.log").write_text(LINUX_LOGS["environment.log"])
+        # A Linux manifest other than the one its job packed and logged.
+        manifest = linux / "runtime" / "portal-runtime-v0.2.0-linux-x86_64-gnu.json"
+        manifest.write_text(manifest.read_text().replace('"size"', '"size" '))
+        self.assertIn("other than the one Checks run 7 packed",
+                      self.release("notes", "0.2.0", ok=False))
+        self.logs_from(kept, "0.2.0")
+        # A job run again: the logs of its failed attempt are kept too, older.
+        older = self.stub / "older" / "logs-linux-x86_64-gnu"
+        older.mkdir(parents=True)
+        (older / "environment.log").write_text(LINUX_LOGS["environment.log"])
+        (older / "ctest.log").write_text("1/1 Test: rex\nTest Failed.\n")
+        self.assertIn("- linux-x86_64-gnu CTest ghostty-fed", self.release("notes", "0.2.0"))
+        shutil.rmtree(self.stub / "older")
+        shutil.move(linux, self.root / "kept-linux-logs")
+        self.assertIn("keeps no logs-linux-x86_64-gnu", self.release("notes", "0.2.0", ok=False))
+        shutil.move(self.root / "kept-linux-logs", linux)
         # Nor is a run whose archive has expired.
         (kept / "portal-runtime-v0.2.0-macos-arm64.json").unlink()
         self.assertIn("keeps no portal-runtime-v0.2.0-macos-arm64.json",
@@ -329,25 +396,31 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn("no evidence", self.release("notes", "0.2.0", ok=False))
         self.assertIn("no evidence", self.release("publish", "0.2.0", "notes.md", ok=False))
 
-    def test_publishing_attaches_the_tested_mac_runtime_before_stable_moves(self):
+    def test_publishing_attaches_the_tested_runtimes_before_stable_moves(self):
         first = self.publish("0.2.0")
         for name in ("v0.2.0^{commit}", "origin/stable", "origin/main"):
             self.assertEqual(self.git("rev-parse", name), first)
         asked = self.asked()
         created = asked.index("release create v0.2.0 --verify-tag --draft --title Portal 0.2.0")
         published = asked.index("release edit v0.2.0 --draft=false")
-        for name in ("logs.zip", "portal-runtime-v0.2.0-macos-arm64.json",
-                     "portal-runtime-v0.2.0-macos-arm64.tar.gz"):
+        names = [f"portal-runtime-v0.2.0-{target}{extension}"
+                 for target in TARGETS for extension in (".json", ".tar.gz")]
+        for name in ("logs.zip", *names):
             self.assertTrue(created < asked.index(f"/{name}\n") < published, name)
-        self.assertNotIn("linux", asked[created:])
         self.assertLess(published, asked.index("release verify v0.2.0"))
         [release] = self.releases()
         self.assertEqual((release["draft"], release["immutable"]), (False, True))
+        self.assertEqual(self.public("0.2.0"), sorted(["logs.zip", *names]))
         kept = self.stub / "artifacts" / "7"
-        for name in ("portal-runtime-v0.2.0-macos-arm64.json",
-                     "portal-runtime-v0.2.0-macos-arm64.tar.gz"):
+        for name in names:
             self.assertEqual((self.stub / "public" / "v0.2.0" / name).read_bytes(),
                              (kept / name).read_bytes())
+        # The logs it attaches are every job's.
+        with zipfile.ZipFile(self.stub / "public" / "v0.2.0" / "logs.zip") as logs:
+            listed = logs.namelist()
+        for name in ("logs/ctest.log", "logs-linux-x86_64-gnu/ctest.log",
+                     "logs-linux-aarch64-gnu/runtime/portal-runtime-v0.2.0-linux-aarch64-gnu.json"):
+            self.assertIn(name, listed)
         self.assertEqual(self.git("branch", "-r", "--list", "origin/release/*"), "")
 
         # The next one: main moves on while the candidate is checked.
@@ -374,8 +447,7 @@ class ReleaseTests(unittest.TestCase):
                          f"{later}\n{second}")
         self.assertIn(";; Version: 0.2.1", self.git("show", "origin/main:portal.el"))
         # The older release's assets are as they were.
-        self.assertEqual(self.public("0.2.0"), ["logs.zip", "portal-runtime-v0.2.0-macos-arm64.json",
-                                                "portal-runtime-v0.2.0-macos-arm64.tar.gz"])
+        self.assertEqual(self.public("0.2.0"), sorted(["logs.zip", *names]))
 
     def test_nothing_is_published_without_immutable_releases(self):
         base = self.git("rev-parse", "HEAD")
@@ -432,7 +504,7 @@ class ReleaseTests(unittest.TestCase):
         output = self.release("publish", "0.2.0", "notes.md")
         self.assertIn(f"removing {archive} from the draft of v0.2.0", output)
         [release] = self.releases()
-        self.assertEqual(len(release["assets"]), 3)
+        self.assertEqual(len(release["assets"]), 7)
         self.assertEqual({a["state"] for a in release["assets"]}, {"uploaded"})
         self.assertEqual(self.git("rev-parse", "origin/stable"), commit)
         kept = self.stub / "artifacts" / "7" / archive
@@ -465,7 +537,9 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn("v0.2.0 is published already: checking it, changing nothing", output)
         self.assertNotIn("release upload", self.asked())
         self.assertNotIn("DELETE", self.asked())
-        self.assertNotIn("actions/artifacts", self.asked())
+        # Of the runs' artifacts, the two publishes above fetched only the
+        # three jobs' logs each, never a runtime.
+        self.assertEqual(self.asked().count("/zip\n"), 6)
         self.assertEqual({p.name: p.read_bytes()
                           for p in (self.stub / "public" / "v0.2.0").iterdir()}, before)
         self.assertEqual(self.git("rev-parse", "origin/stable"), commit)

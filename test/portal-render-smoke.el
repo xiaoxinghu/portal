@@ -302,6 +302,9 @@ or why not."
                             (with-temp-buffer
                               (set-buffer-multibyte nil)
                               (insert-file-contents-literally raw)
+                              ;; The PPM is the capture: the raw frame,
+                              ;; as large, need not stay in the record.
+                              (delete-file raw)
                               (buffer-string)))
                            (progn
                              (portal-render-smoke--note
