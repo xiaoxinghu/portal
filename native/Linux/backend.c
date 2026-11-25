@@ -41,6 +41,7 @@
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <locale.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,8 +52,8 @@
 #include <ghostty.h>
 
 #include "linux-dmabuf-v1-client-protocol.h"
-#include "linux.h"
 #include "message-socket.h"
+#include "web.h"
 #include "viewporter-client-protocol.h"
 
 bool portal_linux_fail(portal_text *error, const char *format, ...)
@@ -353,11 +354,6 @@ bool portal_terminal_engine(portal_text *json, portal_text *error)
 }
 
 /* What each group of operations says until it is written. */
-static bool no_web(portal_text *error)
-{
-    return portal_linux_fail(error, "Portal has no web views on Linux yet");
-}
-
 static bool no_launcher(portal_text *error)
 {
     return portal_linux_fail(error, "Portal's launcher needs the macOS build of Emacs");
@@ -373,8 +369,11 @@ static bool no_status(portal_text *error)
     return portal_linux_fail(error, "Portal has no status panel on Linux yet");
 }
 
-/* The content of a new view: a terminal, or a test pattern of either kind,
-   where the kind still decides what the core does with the view's keys. */
+static const struct portal_web_object *web_open(portal_text *error);
+
+/* The content of a new view: a terminal, a page, or a test pattern of
+   either kind, where the kind still decides what the core does with the
+   view's keys. */
 bool portal_linux_content_create(struct portal_view *view, const portal_option *options,
                                  size_t count, portal_text *error)
 {
@@ -384,8 +383,10 @@ bool portal_linux_content_create(struct portal_view *view, const portal_option *
             pattern = options[i].is_string || options[i].flag;
     if (pattern)
         return portal_linux_pattern_create(view, options, count, error);
-    return view->kind == PORTAL_TERMINAL ? portal_linux_terminal_create(view, options, count, error)
-                                         : no_web(error);
+    if (view->kind == PORTAL_TERMINAL)
+        return portal_linux_terminal_create(view, options, count, error);
+    const struct portal_web_object *object = web_open(error);
+    return object && object->create(view, options, count, error);
 }
 
 /* The launcher. */
@@ -432,25 +433,189 @@ bool portal_launcher_describe(portal_text *state, portal_text *error)
     return no_launcher(error);
 }
 
-/* Web views.  None is ever created, so the core has only a test pattern
-   of that kind to pass to these, which is no page. */
+/* Web views.  A page is WPE WebKit's, in portal-web.so (web.h, web.c),
+   opened at the first web view: this module links nothing of WPE WebKit,
+   so that it loads and runs terminals where WPE WebKit is not installed.
+   The object is found beside this module, as Ghostty's resources are; the
+   build makes it where WPE WebKit's development files are, and an install
+   without it has no web views.  What the object needs of this module it is
+   given (web_host): it links nothing of it either, which keeps every
+   symbol but Emacs's entry points inside each. */
+
+/* WPE WebKit's library, by its soname, and what to install for it. */
+static const char wpe_library[] = "libWPEWebKit-2.0.so.1";
+#define PORTAL_WPE_RUNTIME                                                                   \
+    "WPE WebKit 2.0 with its WPEPlatform API, libWPEWebKit-2.0.so.1, such as Arch's "       \
+    "wpewebkit"
+#define PORTAL_WPE_PACKAGES                                                                  \
+    "pkg-config's wpe-webkit-2.0 and wpe-platform-2.0, such as Arch's wpewebkit"
+
+static bool host_fail(portal_text *error, const char *message)
+{
+    return portal_linux_fail(error, "%s", message);
+}
+
+static const struct portal_web_host web_host = {
+    .interface = PORTAL_WEB_INTERFACE,
+    .fail = host_fail,
+    .view_find = portal_linux_view_find,
+    .input_settle = portal_linux_input_settle,
+    .input_cursor = portal_linux_input_cursor,
+    .stage_new = portal_linux_stage_new,
+    .stage_ready = portal_linux_stage_ready,
+    .stage_start = portal_linux_stage_start,
+    .stage_configure = portal_linux_stage_configure,
+    .stage_frame = portal_linux_stage_frame,
+    .stage_stop = portal_linux_stage_stop,
+    .stage_free = portal_linux_stage_free,
+    .stage_describe = portal_linux_stage_describe,
+    .committed = portal_web_committed,
+    .failed = portal_web_failed,
+};
+
+/* JavaScriptCore stops threads for its collector with a signal, SIGUSR1
+   unless told another, and takes the signal's handler over from the
+   process.  Emacs binds SIGUSR1 to its sigusr1 event: one sent to Emacs
+   with a page open crashed it.  So JavaScriptCore is told one that nothing
+   of Emacs's uses, before it starts, unless the environment names one. */
+static void jsc_signal(void)
+{
+    char number[16];
+    snprintf(number, sizeof number, "%d", SIGRTMIN + 6);
+    setenv("JSC_SIGNAL_FOR_GC", number, 0);
+}
+
+/* The page's object, once opened.  Only Emacs's main thread opens it. */
+static const struct portal_web_object *web_object;
+
+/* Open portal-web.so, beside this module, the first time; or fail saying
+   what to install.  A failure is not kept: WPE WebKit may be installed
+   while Emacs runs. */
+static const struct portal_web_object *web_open(portal_text *error)
+{
+    if (web_object)
+        return web_object;
+    Dl_info info;
+    char *module = NULL;
+    if (!dladdr((void *) web_open, &info) || !info.dli_fname ||
+        !(module = realpath(info.dli_fname, NULL))) {
+        portal_linux_fail(error, "Portal cannot find where its module is installed");
+        return NULL;
+    }
+    *strrchr(module, '/') = '\0';
+    char *path = text_of("%s/portal-web.so", module);
+    free(module);
+    if (!path) {
+        portal_linux_fail(error, "Portal is out of memory");
+        return NULL;
+    }
+    struct stat status;
+    if (stat(path, &status)) {
+        portal_linux_fail(error,
+                          "This build of Portal has no web views: build it again where WPE "
+                          "WebKit's development files are installed (%s)",
+                          PORTAL_WPE_PACKAGES);
+        free(path);
+        return NULL;
+    }
+    jsc_signal();
+    void *wpe = dlopen(wpe_library, RTLD_NOW | RTLD_LOCAL);
+    if (!wpe) {
+        portal_linux_fail(error, "Web views on Linux need WPE WebKit, which is not installed: "
+                                 "install %s",
+                          PORTAL_WPE_RUNTIME);
+        free(path);
+        return NULL;
+    }
+    void *object = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    free(path);
+    portal_web_object_open_function *open =
+        object ? (portal_web_object_open_function *) dlsym(object, "portal_web_object_open")
+               : NULL;
+    if (!open) {
+        portal_linux_fail(error, "Portal's web views could not start: %s", dlerror());
+        if (object)
+            dlclose(object);
+        dlclose(wpe);
+        return NULL;
+    }
+    char *failure = NULL;
+    web_object = open(&web_host, &failure);
+    if (!web_object) {
+        portal_linux_fail(error, "%s", failure ? failure : "Portal is out of memory");
+        free(failure);
+    }
+    /* Neither is ever closed: WebKit's threads and types stay. */
+    return web_object;
+}
+
+/* WEB's page, or NULL with *ERROR set for a web view that shows none, a
+   test pattern. */
+static const struct portal_web_object *page_of(portal_view *web, portal_text *error)
+{
+    if (web_object && web_object->is_page(web))
+        return web_object;
+    portal_linux_fail(error, "This web view shows a test pattern, not a page");
+    return NULL;
+}
 
 bool portal_web_load(portal_view *web, portal_string url, portal_text *error)
 {
-    (void) web, (void) url;
-    return no_web(error);
+    const struct portal_web_object *object = page_of(web, error);
+    return object && object->load(web, url, error);
 }
 
+/* URL as WebKit spells it, with GLib's parser: the scheme and an ASCII host
+   in lower case, a Unicode host in punycode, a scheme's default port left
+   out, dot segments removed, and spaces and other bytes no URL holds
+   percent-encoded. */
 bool portal_web_parse_url(portal_string url, portal_text *parsed, portal_text *error)
 {
-    (void) url, (void) parsed;
-    return no_web(error);
+    char *text = g_strndup(url.data, url.length);
+    GError *failure = NULL;
+    GUri *uri = memchr(url.data, 0, url.length)
+                    ? NULL
+                    : g_uri_parse(text, G_URI_FLAGS_ENCODED | G_URI_FLAGS_SCHEME_NORMALIZE |
+                                            G_URI_FLAGS_PARSE_RELAXED,
+                                  &failure);
+    g_free(text);
+    if (!uri) {
+        bool failed = portal_linux_fail(error, "Not a URL: %s",
+                                        failure ? failure->message : "it holds a NUL");
+        if (failure)
+            g_error_free(failure);
+        return failed;
+    }
+    const char *host = g_uri_get_host(uri);
+    char *lower = host ? g_ascii_strdown(host, -1) : NULL;
+    GUri *spelled = lower ? g_uri_build(g_uri_get_flags(uri), g_uri_get_scheme(uri),
+                                        g_uri_get_userinfo(uri), lower, g_uri_get_port(uri),
+                                        g_uri_get_path(uri), g_uri_get_query(uri),
+                                        g_uri_get_fragment(uri))
+                          : g_uri_ref(uri);
+    char *string = g_uri_to_string(spelled);
+    g_free(lower);
+    g_uri_unref(spelled);
+    g_uri_unref(uri);
+    char *copy = string ? strdup(string) : NULL;
+    g_free(string);
+    if (!copy)
+        return portal_linux_fail(error, "Portal is out of memory");
+    *parsed = (portal_text) {copy, strlen(copy)};
+    return true;
 }
 
 bool portal_web_go(portal_view *web, portal_history step, portal_text *error)
 {
-    (void) web, (void) step;
-    return no_web(error);
+    const struct portal_web_object *object = page_of(web, error);
+    return object && object->go(web, step, error);
+}
+
+/* The rest wait for portal.h's web primitives on WPE WebKit. */
+
+static bool no_web(portal_text *error)
+{
+    return portal_linux_fail(error, "Portal's web views on Linux cannot do this yet");
 }
 
 bool portal_web_post(portal_view *web, portal_string json, uint64_t token, portal_text *error)
