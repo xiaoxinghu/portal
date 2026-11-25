@@ -33,12 +33,46 @@ with native subroutine trampolines enabled. Other builds are rejected for this
 feature. Read [launcher safety and setup](docs/launcher.md#set-up-safely) before
 enabling it.
 
+## Install
+
+Add Portal to your Emacs configuration:
+
+```elisp
+(use-package portal
+  :vc (:url "https://github.com/xiaoxinghu/portal" :rev "stable"))
+```
+
+`:rev "stable"` installs the latest release, and `M-x package-vc-upgrade`
+moves to the next one. Keep the `:rev`: without it the install cannot be
+upgraded. To follow every change on `main` instead, write `:rev :newest`.
+
+Then run `M-x portal-hello`, or on Linux, which has terminals and no web views
+yet, `M-x portal-terminal`. Installing compiles Portal's Lisp only, so the
+first native command asks how to get its native part:
+
+- **Download** fetches the runtime that Portal's release attaches, about 46 MB
+  on Apple Silicon and 19 MB on Linux. It needs no Xcode, CMake, Ninja or Bun.
+  Every release after 0.2.0 attaches one for Apple Silicon and one each for
+  x86-64 and aarch64 Linux with glibc 2.43 or newer; see
+  [downloaded runtimes](docs/install.md#downloaded-runtimes) for what Portal
+  checks and [supported platforms](docs/platforms.md#the-downloaded-runtime)
+  for where each has run.
+- **Build here** builds it from the sources, with the tools
+  [a build needs](#build-and-run).
+- **Not now** does neither, and asks again next time.
+
+Either runs in the background. When Emacs says to retry your command, run it
+again. [Install Portal](docs/install.md) covers installing from a clone or
+with straight.el, choosing ahead of time, the first build's downloads,
+upgrades and [troubleshooting](docs/install.md#troubleshooting).
+
 ## Build and run
 
-You need graphical macOS Emacs 31.1 or newer with module support and its
-matching `emacs-module.h`, Apple's Swift 6.2 or newer and Clang (Xcode), CMake
-3.29 or newer, and Ninja. Install CMake and Ninja with `brew install cmake ninja`
-or your tool manager. Bun is optional: the build compiles the app host with
+A download needs none of this. To build Portal you need graphical macOS Emacs
+31.1 or newer with module support and its matching `emacs-module.h`, Apple's
+Swift 6.2 or newer and Clang (Xcode), CMake 3.29 or newer, and Ninja. Install
+CMake and Ninja with `brew install cmake ninja` or your tool manager. Bun is
+optional: the build compiles the app host with
 Portal's pinned Bun (1.3.14), which it downloads and verifies, unless `BUN` or
 `portal-build-bun` names another; it never takes a `bun` from `PATH`. The first build downloads
 the app host's locked dependencies, the pinned GhosttyKit binary (about 77 MB)
@@ -55,23 +89,6 @@ MacPorts install them, so a Homebrew installation needs no setup. For tools
 installed elsewhere, add their directory to `exec-path` in your configuration,
 for example `(add-to-list 'exec-path (expand-file-name "~/.local/bin"))`, or use
 [exec-path-from-shell](https://github.com/purcell/exec-path-from-shell).
-
-To install Portal, add it to your Emacs configuration:
-
-```elisp
-(use-package portal
-  :vc (:url "https://github.com/xiaoxinghu/portal" :rev "stable"))
-```
-
-`:rev "stable"` installs the latest release, and `M-x package-vc-upgrade`
-moves to the next one. Keep the `:rev`: without it the install cannot be
-upgraded. To follow every change on `main` instead, write `:rev :newest`.
-
-Then run `M-x portal-hello`. Portal offers to build its native part and shows
-the build in `*portal-build*`. When Emacs says "Portal is ready: retry your
-command", run `M-x portal-hello` again. [Install Portal](docs/install.md)
-covers installing from a clone or with straight.el, the first build's downloads,
-upgrades and [troubleshooting](docs/install.md#troubleshooting).
 
 To try Portal without changing your configuration, build a clone with the
 graphical Emacs executable that matches the build's header. For a non-default
