@@ -231,10 +231,11 @@ last one started from Emacs.
 
 ## Downloaded runtimes
 
-On Apple Silicon, Portal can download its native part instead of building it:
-the runtime archive a release attaches, holding the module, the app host and
-Ghostty's resources. Every release after 0.2.0 attaches one; for 0.2.0,
-Download says the runtime is not released, and Build here remains. Choose **Download**
+On Apple Silicon and on glibc Linux, x86-64 or aarch64, Portal can download
+its native part instead of building it: the runtime archive a release
+attaches, holding the module and Ghostty's resources, and on the Mac the app
+host. Every release after 0.2.0 attaches one for each; for 0.2.0, Download
+says the runtime is not released, and Build here remains. Choose **Download**
 when the first native command asks, or run `M-x portal-download-runtime` at
 any time. The install runs in the
 background, shows its progress in `*portal-runtime*`, and ends by saying one
@@ -277,7 +278,9 @@ supported route: Gatekeeper sees every file in it as quarantined. Use
 On Linux the same install takes one of two archives, for x86-64 and for
 aarch64, each holding the module and Ghostty's library and resources, and no
 app host: Linux has terminals and Rex blocks, not web views or the launcher.
-No Linux release has published them yet. The Emacs process chooses, not the
+Neither needs a compiler, CMake or Zig. [Supported
+platforms](platforms.md#the-downloaded-runtime) says where each has run. The
+Emacs process chooses, not the
 distribution or the desktop: its CPU and C library, from
 `system-configuration`, and the version of the glibc it runs with. Before
 anything is downloaded, Portal refuses, saying why and offering
