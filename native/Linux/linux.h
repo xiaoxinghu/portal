@@ -360,40 +360,74 @@ bool portal_linux_terminal_create(struct portal_view *view, const portal_option 
    each time after a first failure. */
 bool portal_linux_ghostty_start(const char **resources, portal_text *error);
 
-/* presenter.c, for terminal.c: what shows a terminal's frames.
+/* presenter.c, for terminal.c and web.c: what shows a content's frames.
 
-   A stage is a terminal as the presenter has it: its Ghostty surface and
-   the buffers made for its frames.  The presenter is one thread for every
-   terminal, with a Wayland queue of its own, which it reads the display
-   with, and it dispatches each stage's view's queue.  Ghostty's renderer
-   announces each frame on its own thread; the presenter takes the latest
-   when the view's last frame has reached the screen, at its frame
-   callback, and shows it, so it commits no faster than the compositor
-   shows.  A frame is kept until the compositor releases the buffer it was
-   shown with.
+   A stage is a content as the presenter has it: the source of its frames
+   and the buffers made for them.  The presenter is one thread for every
+   stage, with a Wayland queue of its own, which it reads the display
+   with, and it dispatches each stage's view's queue.  A source announces
+   each frame on any thread; the presenter takes the latest when the
+   view's last frame has reached the screen, at its frame callback, and
+   shows it, so it commits no faster than the compositor shows.  A frame is
+   kept until the compositor releases the buffer it was shown with.
 
-   A stage is made, with portal_linux_stage_new, before its Ghostty
-   surface, whose frame-ready callback is portal_linux_stage_ready with the
-   stage; started with that surface; stopped before the surface is freed,
-   which Portal's main thread does; and freed after the view's surface is
-   gone.  Between the stop and the free, Ghostty may still announce frames,
-   until ghostty_surface_free returns. */
+   A stage is made, with portal_linux_stage_new, before its source, whose
+   frames it announces with portal_linux_stage_ready; started with the
+   source's data; stopped before that data is freed, which Portal's main
+   thread does; and freed after the view's surface is gone.  Between the
+   stop and the free, the source may still announce frames. */
+
+/* A frame, as a source hands it over: a DMABUF, or pixels in memory. */
+struct portal_linux_frame {
+    bool memory;
+    bool bgra;  /* Memory pixels are B, G, R, A bytes, wl_shm's ARGB8888; else R, G, B, A. */
+    int32_t width, height;
+    uint64_t texture; /* The same for each frame drawn into one buffer, never another's. */
+    uint32_t fourcc;
+    uint64_t modifier;
+    uint32_t plane_count;
+    int fds[4];
+    uint32_t offsets[4], strides[4];
+    const uint8_t *pixels;
+    void *own; /* The source's. */
+};
+
+/* Where a stage's frames come from.  DATA is what the stage was started
+   with. */
+struct portal_stage_source {
+    /* The latest frame, or NULL if there is none since the last taken: on
+       the presenter's thread, while DATA lives. */
+    struct portal_linux_frame *(*take)(void *data);
+    /* The stage is done with FRAME: the compositor released the buffer it
+       was shown with, or it was never shown.  From any thread, also after
+       the stop. */
+    void (*done)(struct portal_linux_frame *frame);
+    /* FRAME reached the screen, or never will: once for each frame taken,
+       while DATA lives.  NULL for a source that does not ask. */
+    void (*shown)(void *data, struct portal_linux_frame *frame);
+    /* Show or hide what DATA draws, off the main thread.  NULL for none. */
+    void (*visible)(void *data, bool visible);
+    /* DMABUFs cannot be shown: draw in memory from now on.  NULL for none. */
+    void (*memory)(void *data);
+};
+
 struct portal_stage;
-struct portal_stage *portal_linux_stage_new(struct portal_view *view);
-/* Ghostty's frame-ready callback for the stage DATA: on the render thread. */
+struct portal_stage *portal_linux_stage_new(struct portal_view *view,
+                                            const struct portal_stage_source *source);
+/* The source of the stage DATA has a new frame: from any thread. */
 void portal_linux_stage_ready(void *data);
-/* Start showing SURFACE, a ghostty_surface_t, on STAGE's view. */
-bool portal_linux_stage_start(struct portal_stage *stage, void *surface, portal_text *error);
+/* Start showing the frames of DATA, the source's, on STAGE's view. */
+bool portal_linux_stage_start(struct portal_stage *stage, void *data, portal_text *error);
 /* The view changed: its size, its scale or whether it is SHOWN.  The stage
-   asks Ghostty to show or hide the surface to match, off the main thread:
-   Ghostty takes the terminal's lock for that, which its IO thread holds
-   most of the time under a flood of output. */
+   asks the source to show or hide to match, off the main thread: Ghostty
+   takes the terminal's lock for that, which its IO thread holds most of
+   the time under a flood of output. */
 void portal_linux_stage_configure(struct portal_stage *stage, bool shown);
 /* A frame shown on STAGE's view has reached the screen: its frame
    callback, on the presenter's thread. */
 void portal_linux_stage_frame(struct portal_stage *stage);
-/* Forget STAGE's surface: nothing of the presenter's calls into it after
-   this returns, and it may be freed. */
+/* Forget STAGE's source data: nothing of the presenter's calls into it
+   after this returns, and it may be freed. */
 void portal_linux_stage_stop(struct portal_stage *stage);
 /* Destroy STAGE's buffers, freeing the frames they showed, and STAGE. */
 void portal_linux_stage_free(struct portal_stage *stage);

@@ -1,46 +1,52 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/* The presenter: the thread that shows every terminal's frames.
+/* The presenter: the thread that shows every terminal's and page's frames.
 
-   Ghostty's renderer draws each terminal on a thread of its own and
-   announces each finished frame there (portal_linux_stage_ready).  The
-   presenter is one thread for every terminal, so that frames reach the
-   screen while Emacs's main thread is busy in Lisp.  When a terminal's
-   view has shown its last frame, at that frame's callback, the presenter
-   takes the latest frame Ghostty has, imports it as a wl_buffer and
-   presents it to the view (portal_linux_present): it commits no faster
-   than the compositor shows, whatever the renderer makes.  A frame is a
-   DMABUF, a texture of the renderer's, which the renderer does not draw
-   into again until the frame is freed: so a frame is kept until the
-   compositor releases the buffer it was shown with, or the view gives it
-   back unshown.  A buffer is kept for each texture, keyed by the frame's
-   `texture', and used again for the later frames of that texture.
+   A source, Ghostty's renderer for a terminal or WebKit for a page, draws
+   on a thread of its own and announces each finished frame there
+   (portal_linux_stage_ready).  The presenter is one thread for every
+   stage, so that frames reach the screen while Emacs's main thread is busy
+   in Lisp.  When a stage's view has shown its last frame, at that frame's
+   callback, the presenter takes the latest frame the source has, imports
+   it as a wl_buffer and presents it to the view (portal_linux_present): it
+   commits no faster than the compositor shows, whatever the source makes.
+   A frame is a DMABUF, a texture of the source's, which the source does
+   not draw into again until the stage is done with the frame: so a frame
+   is kept until the compositor releases the buffer it was shown with, or
+   the view gives it back unshown.  A buffer is kept for each texture,
+   keyed by the frame's `texture', and used again for the later frames of
+   that texture.  A source that asks is told when each frame reaches the
+   screen (`shown'), as WebKit is before it draws the next.
 
    A compositor that refuses the first DMABUF, or has no way to take one,
-   makes every terminal report that it cannot show them: frames then come
-   as pixels in memory, which the presenter copies into wl_shm buffers.
+   makes every source hear that its DMABUFs cannot be shown (`memory'):
+   Ghostty's frames then come as pixels in memory, which the presenter
+   copies into wl_shm buffers.  A page cannot change how it draws once
+   made, so it is shown only when WebKit drew in memory from the start
+   (web.c).
 
    Wayland.  The presenter reads the display on a queue of its own, as GDK
    reads it on Emacs's main thread: whoever reads queues the other's
-   events.  Every proxy it makes for a terminal is on that terminal's
+   events.  Every proxy it makes for a stage is on that stage's
    view's queue, and the presenter dispatches every such queue, so the
    views' frame callbacks and the buffers' releases are heard here.  Once
    it has said it will read, nobody reads without it, so it dispatches
    each view's queue after that and before it waits: nothing can arrive
-   unseen.  Work done for a terminal, which may make requests and even a
+   unseen.  Work done for a stage, which may make requests and even a
    round trip, is done before that, never between saying it will read and
    reading.
 
-   A stage is a terminal as the presenter has it: its Ghostty surface, the
-   buffers made for its frames, and what the presenter knows of it.
+   A stage is a content as the presenter has it: its source, the buffers
+   made for its frames, and what the presenter knows of it.  linux.h has
+   the source's contract.
 
    Locks.  The presenter's lock guards the list of stages and everything
    the presenter does for one: it is let go of only while the thread waits.
    The main thread takes it to add a stage and to remove one, after which
    the stage and its view's queue are the main thread's alone.  A stage's
-   own lock keeps its Ghostty surface from being freed while a thread calls
+   own lock keeps its source's data from being freed while a thread calls
    into it: the presenter, which takes frames, and the thread that shows
-   and hides the surface, read it; the main thread writes it NULL before it
-   frees the surface.  The view's lock comes after both. */
+   and hides it, read it; the main thread writes it NULL before it frees
+   the data.  The view's lock comes after both. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <poll.h>
@@ -51,8 +57,6 @@
 #include <sys/eventfd.h>
 #include <sys/mman.h>
 #include <unistd.h>
-
-#include <ghostty.h>
 
 #include "linux-dmabuf-v1-client-protocol.h"
 #include "linux.h"
@@ -69,7 +73,7 @@ struct cached {
     struct wl_buffer *buffer; /* NULL: unused. */
     uint64_t texture;
     int32_t width, height;
-    ghostty_frame_s *frame; /* Kept until the compositor releases the buffer. */
+    struct portal_linux_frame *frame; /* Kept until the compositor releases the buffer. */
     uint64_t used;          /* When it was last presented, for evicting. */
 };
 
@@ -88,9 +92,14 @@ struct portal_stage {
     struct portal_view *view;
     atomic_int references; /* The main thread's, and each task of the shower's. */
 
-    /* The Ghostty surface, which the main thread frees: see the top. */
+    const struct portal_stage_source *source;
+    /* The source's data, which the main thread frees: see the top. */
     pthread_rwlock_t lock;
-    ghostty_surface_t surface;
+    void *data;
+    /* The frame presented last, whose source is still to hear that it
+       reached the screen, and whether the stage is done with it already. */
+    struct portal_linux_frame *unseen;
+    bool unseen_done;
 
     /* What other threads tell the presenter. */
     atomic_bool announced; /* The renderer has a new frame. */
@@ -98,10 +107,10 @@ struct portal_stage {
     atomic_bool changed;   /* The view changed. */
     atomic_bool shown;
 
-    /* Showing and hiding the surface, off the main thread (show). */
+    /* Showing and hiding the source, off the main thread (show). */
     atomic_bool visible;  /* What the view wants. */
     atomic_bool queued;   /* A task of the shower's will look at VISIBLE. */
-    bool applied_visible; /* What Ghostty was last told, under LOCK. */
+    bool applied_visible; /* What the source was last told, under LOCK. */
 
     /* The presenter's, while the stage is in its list; then the main
        thread's. */
@@ -112,7 +121,7 @@ struct portal_stage {
     bool pending;   /* A frame was announced and not taken. */
     bool waiting;   /* A frame presented has not reached the screen. */
     bool memory;      /* DMABUFs cannot be shown. */
-    atomic_bool told; /* Ghostty was told so. */
+    atomic_bool told; /* The source was told so. */
     bool starved;   /* A frame in memory was dropped for want of a canvas. */
     int32_t width, height; /* The size of the frames now. */
     uint64_t clock;
@@ -148,13 +157,41 @@ static void stage_unref(struct portal_stage *stage)
     free(stage);
 }
 
+/* The stage is done with FRAME: the source hears so, after it hears that
+   the frame reached the screen, if it is to. */
+static void frame_done(struct portal_stage *stage, struct portal_linux_frame *frame)
+{
+    if (frame == stage->unseen) {
+        stage->unseen_done = true;
+        return;
+    }
+    stage->source->done(frame);
+}
+
+/* The frame presented last reached the screen, or never will. */
+static void frame_seen(struct portal_stage *stage)
+{
+    struct portal_linux_frame *frame = stage->unseen;
+    if (!frame)
+        return;
+    stage->unseen = NULL;
+    pthread_rwlock_rdlock(&stage->lock);
+    if (stage->data)
+        stage->source->shown(stage->data, frame);
+    pthread_rwlock_unlock(&stage->lock);
+    if (stage->unseen_done) {
+        stage->unseen_done = false;
+        stage->source->done(frame);
+    }
+}
+
 /* Buffers. */
 
 static void cached_drop(struct cached *cached)
 {
     wl_buffer_destroy(cached->buffer);
     if (cached->frame)
-        ghostty_frame_free(cached->frame);
+        frame_done(cached->stage, cached->frame);
     *cached = (struct cached) {0};
 }
 
@@ -167,7 +204,7 @@ static void cached_released(void *data, struct wl_buffer *buffer)
     struct cached *cached = data;
     struct portal_stage *stage = cached->stage;
     if (cached->frame) {
-        ghostty_frame_free(cached->frame);
+        frame_done(stage, cached->frame);
         cached->frame = NULL;
     }
     if (cached->width != stage->width || cached->height != stage->height)
@@ -217,7 +254,7 @@ static void give_back(struct portal_stage *stage, struct wl_buffer *buffer)
     for (size_t i = 0; i < CACHED; i++) {
         struct cached *cached = &stage->cached[i];
         if (cached->buffer == buffer && cached->frame) {
-            ghostty_frame_free(cached->frame);
+            frame_done(stage, cached->frame);
             cached->frame = NULL;
         }
     }
@@ -250,7 +287,8 @@ static void params_failed(void *data, struct zwp_linux_buffer_params_v1 *params)
 static const struct zwp_linux_buffer_params_v1_listener params_listener = {params_created,
                                                                            params_failed};
 
-static void add_planes(struct zwp_linux_buffer_params_v1 *params, const ghostty_frame_s *frame)
+static void add_planes(struct zwp_linux_buffer_params_v1 *params,
+                       const struct portal_linux_frame *frame)
 {
     for (uint32_t i = 0; i < frame->plane_count && i < 4; i++)
         zwp_linux_buffer_params_v1_add(params, frame->fds[i], i, frame->offsets[i],
@@ -262,7 +300,7 @@ static void add_planes(struct zwp_linux_buffer_params_v1 *params, const ghostty_
    does not take it.  The first one is asked for and waited for, so that a
    refusal is an answer and not a protocol error, which would end Emacs's
    connection; once one is taken, the rest are made without waiting. */
-static struct wl_buffer *import(struct portal_stage *stage, const ghostty_frame_s *frame)
+static struct wl_buffer *import(struct portal_stage *stage, const struct portal_linux_frame *frame)
 {
     if (presenter.dmabufs < 0 || !stage->dmabuf)
         return NULL;
@@ -294,8 +332,8 @@ static struct wl_buffer *import(struct portal_stage *stage, const ghostty_frame_
     wl_event_queue_destroy(queue);
     presenter.dmabufs = asked.answer > 0 ? 1 : -1;
     if (asked.answer <= 0)
-        fprintf(stderr, "Portal: the compositor took no DMABUF of a terminal's (%.4s, modifier "
-                        "0x%llx): terminals draw into memory from now on\n",
+        fprintf(stderr, "Portal: the compositor took no DMABUF of a view's (%.4s, modifier "
+                        "0x%llx): views draw into memory from now on\n",
                 (const char *) &frame->fourcc, (unsigned long long) frame->modifier);
     return asked.buffer;
 }
@@ -323,6 +361,8 @@ static void offer(struct portal_stage *stage, struct wl_buffer *buffer, int32_t 
     case PORTAL_REFUSED:
         atomic_fetch_add(&stage->refused, 1);
         give_back(stage, buffer);
+        /* It never reaches the screen. */
+        frame_seen(stage);
         break;
     }
 }
@@ -330,8 +370,8 @@ static void offer(struct portal_stage *stage, struct wl_buffer *buffer, int32_t 
 /* A buffer for FRAME's texture: the one kept for it, or one imported now in
    a slot that holds no frame, the least recently used.  NULL with *REFUSED
    when the compositor does not take DMABUFs. */
-static struct cached *cached_for(struct portal_stage *stage, const ghostty_frame_s *frame,
-                                 bool *refused)
+static struct cached *cached_for(struct portal_stage *stage,
+                                 const struct portal_linux_frame *frame, bool *refused)
 {
     struct cached *empty = NULL, *oldest = NULL;
     for (size_t i = 0; i < CACHED; i++) {
@@ -364,20 +404,31 @@ static struct cached *cached_for(struct portal_stage *stage, const ghostty_frame
     return slot;
 }
 
-static void present_dmabuf(struct portal_stage *stage, ghostty_frame_s *frame)
+/* FRAME, taken, is to be shown: its source hears when it was. */
+static void showing(struct portal_stage *stage, struct portal_linux_frame *frame)
+{
+    if (!stage->source->shown)
+        return;
+    frame_seen(stage);
+    stage->unseen = frame;
+}
+
+static void present_dmabuf(struct portal_stage *stage, struct portal_linux_frame *frame)
 {
     bool refused = false;
     struct cached *cached = cached_for(stage, frame, &refused);
+    showing(stage, frame);
     if (!cached) {
         /* Never shown, so let go of at once. */
-        ghostty_frame_free(frame);
+        frame_seen(stage);
+        frame_done(stage, frame);
         if (refused)
             stage->memory = true;
         return;
     }
     /* The renderer never draws into a texture whose frame is kept. */
     if (cached->frame)
-        ghostty_frame_free(cached->frame);
+        frame_done(stage, cached->frame);
     cached->frame = frame;
     cached->used = ++stage->clock;
     offer(stage, cached->buffer, cached->width, cached->height);
@@ -401,7 +452,7 @@ static struct canvas *canvas_for(struct portal_stage *stage, int32_t width, int3
     if (!unused)
         return NULL;
     size_t size = (size_t) width * (size_t) height * 4;
-    int memory = memfd_create("portal-terminal", MFD_CLOEXEC);
+    int memory = memfd_create("portal-view", MFD_CLOEXEC);
     if (memory < 0 || ftruncate(memory, (off_t) size) < 0) {
         if (memory >= 0)
             close(memory);
@@ -428,30 +479,36 @@ static struct canvas *canvas_for(struct portal_stage *stage, int32_t width, int3
     return unused;
 }
 
-/* A frame in memory: RGBA bytes, which are ABGR8888 to wl_shm, copied into a
-   canvas, and let go of. */
-static void present_memory(struct portal_stage *stage, ghostty_frame_s *frame)
+/* A frame in memory: RGBA bytes, which are ABGR8888 to wl_shm, or BGRA,
+   ARGB8888, copied into a canvas, and let go of. */
+static void present_memory(struct portal_stage *stage, struct portal_linux_frame *frame)
 {
     int32_t width = (int32_t) frame->width, height = (int32_t) frame->height;
     struct canvas *canvas = canvas_for(stage, width, height);
+    showing(stage, frame);
     if (!canvas) {
-        ghostty_frame_free(frame);
+        frame_seen(stage);
+        frame_done(stage, frame);
         stage->starved = true;
         return;
     }
-    if (presenter.wayland->shm_abgr) {
-        memcpy(canvas->pixels, frame->pixels, canvas->size);
-    } else {
-        uint8_t *to = canvas->pixels;
-        const uint8_t *from = frame->pixels;
-        for (size_t i = 0; i < canvas->size; i += 4) {
+    size_t row = (size_t) width * 4;
+    size_t stride = frame->strides[0] ? frame->strides[0] : row;
+    for (int32_t y = 0; y < height; y++) {
+        uint8_t *to = (uint8_t *) canvas->pixels + (size_t) y * row;
+        const uint8_t *from = frame->pixels + (size_t) y * stride;
+        if (frame->bgra != presenter.wayland->shm_abgr) {
+            memcpy(to, from, row);
+            continue;
+        }
+        for (size_t i = 0; i < row; i += 4) {
             to[i] = from[i + 2];
             to[i + 1] = from[i + 1];
             to[i + 2] = from[i];
             to[i + 3] = from[i + 3];
         }
     }
-    ghostty_frame_free(frame);
+    frame_done(stage, frame);
     canvas->busy = true;
     offer(stage, canvas->buffer, width, height);
 }
@@ -460,7 +517,7 @@ static void present_memory(struct portal_stage *stage, ghostty_frame_s *frame)
 static void present_latest(struct portal_stage *stage)
 {
     pthread_rwlock_rdlock(&stage->lock);
-    ghostty_frame_s *frame = stage->surface ? ghostty_surface_take_frame(stage->surface) : NULL;
+    struct portal_linux_frame *frame = stage->data ? stage->source->take(stage->data) : NULL;
     pthread_rwlock_unlock(&stage->lock);
     if (!frame)
         return;
@@ -470,7 +527,7 @@ static void present_latest(struct portal_stage *stage)
         stage->height = (int32_t) frame->height;
         drop_unused(stage, false);
     }
-    if (frame->kind == GHOSTTY_FRAME_MEMORY)
+    if (frame->memory)
         present_memory(stage, frame);
     else
         present_dmabuf(stage, frame);
@@ -484,21 +541,22 @@ static void work(struct portal_stage *stage)
            view was hidden; and a frame for the change is wanted. */
         stage->waiting = false;
         stage->pending = true;
+        frame_seen(stage);
         /* A hidden surface's textures are made anew when it shows. */
         if (!atomic_load(&stage->shown))
             drop_unused(stage, true);
     }
-    if (atomic_exchange(&stage->called, false))
+    if (atomic_exchange(&stage->called, false)) {
         stage->waiting = false;
+        frame_seen(stage);
+    }
     if (atomic_exchange(&stage->announced, false))
         stage->pending = true;
     if (stage->memory && !atomic_load(&stage->told)) {
         atomic_store(&stage->told, true);
         pthread_rwlock_rdlock(&stage->lock);
-        if (stage->surface) {
-            ghostty_surface_set_presentation_health(stage->surface, false);
-            ghostty_surface_draw(stage->surface);
-        }
+        if (stage->data && stage->source->memory)
+            stage->source->memory(stage->data);
         pthread_rwlock_unlock(&stage->lock);
     }
     if (stage->pending && !stage->waiting) {
@@ -577,12 +635,12 @@ static void *run(void *data)
     return NULL;
 }
 
-/* Showing and hiding a surface.  ghostty_surface_set_occlusion takes the
-   terminal's lock on the calling thread, which Ghostty's IO thread holds
-   most of the time under a flood of output: showing a surface then took up
-   to 164 ms.  So it runs on a thread of GLib's pool, never Emacs's main
-   thread, under the stage's lock as a reader, which keeps the surface from
-   being freed meanwhile. */
+/* Showing and hiding a source, for one that asks.  Ghostty's
+   ghostty_surface_set_occlusion takes the terminal's lock on the calling
+   thread, which Ghostty's IO thread holds most of the time under a flood
+   of output: showing a surface then took up to 164 ms.  So it runs on a
+   thread of GLib's pool, never Emacs's main thread, under the stage's lock
+   as a reader, which keeps the source's data from being freed meanwhile. */
 static void show(gpointer data, gpointer unused)
 {
     (void) unused;
@@ -590,8 +648,8 @@ static void show(gpointer data, gpointer unused)
     atomic_store(&stage->queued, false);
     pthread_rwlock_rdlock(&stage->lock);
     bool visible = atomic_load(&stage->visible);
-    if (stage->surface && visible != stage->applied_visible) {
-        ghostty_surface_set_occlusion(stage->surface, visible);
+    if (stage->data && visible != stage->applied_visible) {
+        stage->source->visible(stage->data, visible);
         stage->applied_visible = visible;
     }
     pthread_rwlock_unlock(&stage->lock);
@@ -600,9 +658,11 @@ static void show(gpointer data, gpointer unused)
 
 static GThreadPool *shower;
 
-/* The stage's surface is to be VISIBLE or not. */
+/* The stage's source is to be VISIBLE or not. */
 static void want_visible(struct portal_stage *stage, bool visible)
 {
+    if (!stage->source->visible)
+        return;
     atomic_store(&stage->visible, visible);
     if (atomic_exchange(&stage->queued, true))
         return;
@@ -616,21 +676,23 @@ static void want_visible(struct portal_stage *stage, bool visible)
 
 /* The interface of linux.h. */
 
-struct portal_stage *portal_linux_stage_new(struct portal_view *view)
+struct portal_stage *portal_linux_stage_new(struct portal_view *view,
+                                            const struct portal_stage_source *source)
 {
     struct portal_stage *stage = calloc(1, sizeof *stage);
     if (!stage)
         return NULL;
     stage->view = view;
+    stage->source = source;
     atomic_init(&stage->references, 1);
     pthread_rwlockattr_t attributes;
     pthread_rwlockattr_init(&attributes);
-    /* The main thread, which frees the surface, is not kept waiting behind
+    /* The main thread, which frees the data, is not kept waiting behind
        a stream of readers. */
     pthread_rwlockattr_setkind_np(&attributes, PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP);
     pthread_rwlock_init(&stage->lock, &attributes);
     pthread_rwlockattr_destroy(&attributes);
-    /* Ghostty makes a surface shown. */
+    /* A source starts shown: Ghostty makes a surface so. */
     stage->applied_visible = true;
     atomic_init(&stage->visible, true);
     const struct portal_wayland *wayland = view->wayland;
@@ -651,7 +713,7 @@ void portal_linux_stage_ready(void *data)
     wake();
 }
 
-bool portal_linux_stage_start(struct portal_stage *stage, void *surface, portal_text *error)
+bool portal_linux_stage_start(struct portal_stage *stage, void *data, portal_text *error)
 {
     pthread_mutex_lock(&presenter.lock);
     bool started = presenter.started;
@@ -678,7 +740,7 @@ bool portal_linux_stage_start(struct portal_stage *stage, void *surface, portal_
     }
     if (started && !presenter.broken) {
         pthread_rwlock_wrlock(&stage->lock);
-        stage->surface = surface;
+        stage->data = data;
         pthread_rwlock_unlock(&stage->lock);
         /* Once a compositor has refused one, no DMABUF is offered. */
         stage->memory = presenter.dmabufs < 0;
@@ -688,7 +750,7 @@ bool portal_linux_stage_start(struct portal_stage *stage, void *surface, portal_
     bool broken = presenter.broken;
     pthread_mutex_unlock(&presenter.lock);
     if (!started || broken)
-        return portal_linux_fail(error, "Portal could not start the thread that shows terminals");
+        return portal_linux_fail(error, "Portal could not start the thread that shows views");
     wake();
     return true;
 }
@@ -719,24 +781,27 @@ void portal_linux_stage_stop(struct portal_stage *stage)
         *link = stage->next;
     stage->next = NULL;
     pthread_mutex_unlock(&presenter.lock);
-    /* And nothing else calls into the surface: a show or hide under way
+    /* And nothing else calls into the data: a show or hide under way
        finishes first. */
     pthread_rwlock_wrlock(&stage->lock);
-    stage->surface = NULL;
+    stage->data = NULL;
     pthread_rwlock_unlock(&stage->lock);
 }
 
 void portal_linux_stage_free(struct portal_stage *stage)
 {
-    /* The frames shown go with their buffers: Ghostty allows that after
-       its surface is freed, and the view's surface, which showed them, is
-       gone. */
+    /* The frames shown go with their buffers: a source allows that after
+       its data is freed, as Ghostty does after its surface is, and the
+       view's surface, which showed them, is gone. */
     for (size_t i = 0; i < CACHED; i++)
         if (stage->cached[i].buffer)
             cached_drop(&stage->cached[i]);
     for (size_t i = 0; i < CANVASES; i++)
         if (stage->canvases[i].buffer)
             canvas_drop(&stage->canvases[i]);
+    if (stage->unseen && stage->unseen_done)
+        stage->source->done(stage->unseen);
+    stage->unseen = NULL;
     if (stage->dmabuf)
         wl_proxy_wrapper_destroy(stage->dmabuf);
     wl_proxy_wrapper_destroy(stage->shm);
