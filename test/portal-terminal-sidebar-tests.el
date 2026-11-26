@@ -653,6 +653,13 @@ STATUS holds the other keys of `:status' in `portal-terminal-metadata'."
              (pos (with-current-buffer portal-terminal-sidebar--name
                     (portal-terminal-sidebar--find second)))
              (event (list 'mouse-2 (list sidebar pos '(0 . 0) 0 nil pos '(0 . 0) nil '(0 . 0) '(0 . 0)))))
+        ;; A selection-change hook during down-mouse-1 must not swap main's buffer
+        ;; (which would swallow window-buffer-change-functions for an unshown Rex block).
+        (select-window sidebar)
+        (set-window-point sidebar pos)
+        (run-hook-with-args 'window-selection-change-functions (selected-frame))
+        (should (eq (window-buffer main) file))
+        (select-window main)
         (portal-terminal-sidebar-click event)
         (should (eq (selected-window) main))
         (should (eq (window-buffer main) second))

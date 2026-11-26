@@ -582,12 +582,15 @@ restores the original buffer."
   (portal-terminal-sidebar--preview-update))
 
 (defun portal-terminal-sidebar--selection-changed (&rest _)
-  "Move the sidebar's highlights and preview on window selection changes.
-On `window-selection-change-functions' while the sidebar's buffer lives."
+  "Move the sidebar's highlights and end preview when leaving the sidebar.
+On `window-selection-change-functions' while the sidebar's buffer lives.
+Preview updates run from `post-command-hook', not here: changing a
+window's buffer inside `window-selection-change-functions' skips
+`window-buffer-change-functions', which Rex uses to show a block's view,
+and would also preview while a mouse click is held down."
   (when-let* ((sidebar (get-buffer portal-terminal-sidebar--name)))
     (with-current-buffer sidebar
-      (if (eq (window-buffer (portal-view--selected-pane)) sidebar)
-          (portal-terminal-sidebar--preview-update)
+      (unless (eq (window-buffer (portal-view--selected-pane)) sidebar)
         (portal-terminal-sidebar--preview-restore))
       (portal-terminal-sidebar--highlight)
       (portal-terminal-sidebar--highlight-cursor))))
