@@ -50,6 +50,9 @@ and no ZIG names the Zig, which would hide the tests' stand-ins."
   "Make the tree's build complete, recording IDENTITY or the sources' identity."
   (dolist (file portal-build--artifacts)
     (portal-build-test--write (concat "build/" file) ""))
+  ;; A Linux build with web views: WPE WebKit's development files were there.
+  (when (eq system-type 'gnu/linux)
+    (portal-build-test--write (concat "build/" portal-build--web) ""))
   (portal-build-test--write "build/portal-build.eld"
                             (prin1-to-string
                              (list :identity (or identity (portal-build-source-identity))
@@ -352,6 +355,22 @@ echo \"TOOLS=$PORTAL_TOOLS_DIR\"\nmkdir -p build\n")
            (with-temp-buffer
              (insert-file-contents (expand-file-name "build.sh" portal-build-root))
              (buffer-string)))))
+
+(ert-deftest portal-build-says-what-web-views-need-where-it-made-none ()
+  "A Linux build makes web views only where WPE WebKit's development files are."
+  (portal-build-test--with-root
+    (let ((exec-path (portal-build-test--tools))
+          (advice "It has no web views: for them, install WPE WebKit's development files"))
+      (portal-build-test--write "build.sh" "exit 0\n")
+      (portal-build-test--complete)
+      (should-not (string-search advice (portal-build-test--run)))
+      (when (file-exists-p (portal-build-file portal-build--web))
+        (delete-file (portal-build-file portal-build--web)))
+      ;; Complete without it, and only Linux says so.
+      (should-not (portal-build-problem))
+      (let ((message (portal-build-test--run)))
+        (should (string-prefix-p "Portal is ready: retry your command" message))
+        (should (eq (and (string-search advice message) t) (eq system-type 'gnu/linux)))))))
 
 (ert-deftest portal-build-reports-success-failure-and-restarts ()
   (portal-build-test--with-root
