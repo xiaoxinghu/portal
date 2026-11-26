@@ -67,10 +67,10 @@ the bottom of the pane for a moment: see `portal-view-shrunk-hook'.")
 (defvar portal-view-shrunk-hook nil
   "Hook run in a view's buffer as the minibuffer starts or stops shrinking it.
 That is, its pane.  The minibuffer shrinks a pane while it is active in
-the pane's frame, the frame keeps its size, and the pane, not selected,
-keeps its left, top and right edges and has its bottom edge higher than
-before the minibuffer was used; `portal-view-shrunk-p' says whether it
-does now.
+the pane's frame, the frame keeps its size, and the pane, not selected
+and at the frame's bottom, keeps its left, top and right edges and has
+its bottom edge higher than before the minibuffer was used;
+`portal-view-shrunk-p' says whether it does now.
 The hook runs before the view is placed in the shrunk pane, and after
 it is placed in the pane once the shrinking ends, as when the minibuffer
 closes, or is left for the pane itself, or the frame or the windows'
@@ -376,8 +376,11 @@ See `portal-view-shrunk-hook'."
 (defun portal-view--shrunk-by-minibuffer (base geometry window)
   "Whether GEOMETRY is BASE with only its bottom raised by the minibuffer.
 BASE and GEOMETRY are placements, as `portal-view--geometry' has them;
-WINDOW is the pane of GEOMETRY, which must not be the selected window."
+WINDOW is the pane of GEOMETRY, which must not be the selected window
+and must be at the bottom of its frame, just above the minibuffer: a
+pane split, or grown into, from below has another window there."
   (and base geometry (not (eq window (selected-window)))
+       (window-at-side-p window 'bottom)
        (eq (car base) (car geometry))
        (eql (nth 1 base) (nth 1 geometry))
        (let ((before (nth 2 base)) (after (nth 2 geometry)))

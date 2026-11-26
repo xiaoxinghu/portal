@@ -708,20 +708,27 @@ and the buffer current."
             (active nil)
             (grid (portal-rex-gui-tests--size server)))
         ;; The minibuffer covers the pane's bottom and goes: the block keeps
-        ;; its grid.  A window split below stands in for it, active while
-        ;; `active' is.
-        (cl-letf (((symbol-function 'minibuffer-window-active-p) (lambda (_) active)))
-          (let ((below (split-window-below)))
+        ;; its grid.  Its window grows and is selected, kept so through
+        ;; redisplay, and it is active while `active' is.
+        (cl-letf (((symbol-function 'minibuffer-window-active-p) (lambda (_) active))
+                  (resize-mini-windows nil))
+          (let ((edges (window-inside-pixel-edges pane))
+                (height (window-pixel-height (minibuffer-window))))
             (setq active t)
-            (select-window below)
+            (window-resize (minibuffer-window) 4)
+            (select-window (minibuffer-window))
             (redisplay t)
             (should (with-current-buffer buffer (portal-view-shrunk-p)))
+            (should (< (nth 3 (window-inside-pixel-edges pane)) (nth 3 edges)))
             (portal-rex-gui-tests--none server "com.superlogical.terminal.resize")
-            (delete-window below)
+            (window-resize (minibuffer-window)
+                           (- height (window-pixel-height (minibuffer-window))) nil nil t)
             (setq active nil)
             (select-window pane)
             (redisplay t)
+            (should (equal (window-inside-pixel-edges pane) edges))
             (should-not (with-current-buffer buffer (portal-view-shrunk-p)))
+            (should (equal (car (portal-rex-gui-tests--grid target)) grid))
             (portal-rex-gui-tests--none server "com.superlogical.terminal.resize")))
         ;; Its pane narrowed step by step, as by a drag: one resize, once
         ;; the grid has settled, and the frame held across the new grid is
