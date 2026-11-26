@@ -423,10 +423,20 @@ Return a function of no arguments that returns the record, oldest first."
         (portal-view-sync)
         (should (portal-view-test--shown target pane))
         (should (funcall shrunk))
+        ;; Hidden when the minibuffer goes, it stays so until it is placed
+        ;; again: back in its pane as it was, it is no longer.
         (set-window-buffer pane "*scratch*")
         (portal-view-sync)
         (setq active nil)
+        (window-resize (minibuffer-window) (- 1 (window-height (minibuffer-window))))
+        (select-window pane)
         (portal-view-sync)
+        (should (funcall shrunk))
+        (let ((places (length (portal-fake-native-calls 'portal--place))))
+          (set-window-buffer pane buffer)
+          (portal-view-sync)
+          (should (portal-view-test--shown target pane))
+          (should (= (length (portal-fake-native-calls 'portal--place)) (1+ places))))
         (should-not (funcall shrunk))
         (funcall reset)
         ;; A split below the pane while the minibuffer is open is a change

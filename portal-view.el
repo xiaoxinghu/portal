@@ -74,7 +74,8 @@ its bottom edge higher than before the minibuffer was used;
 The hook runs before the view is placed in the shrunk pane, and after
 it is placed in the pane once the shrinking ends, as when the minibuffer
 closes, or is left for the pane itself, or the frame or the windows'
-layout change.")
+layout change.  A view hidden meanwhile stays shrunk until it is placed
+again.")
 (defvar portal-view--live-windows nil
   "The live windows of every frame at the last `portal-view-sync'.
 A selected pane among them that did not show a buffer then, and shows it
@@ -417,9 +418,10 @@ another frame moves it there.  Nothing is sent when nothing moved.
                                        (vconcat (window-inside-pixel-edges window)))))
            (base (or portal-view--shrunk portal-view--geometry))
            ;; A view hidden while shrunk, as by a preview of another
-           ;; buffer in its pane, stays so until the minibuffer goes.
+           ;; buffer in its pane, stays so until it is placed again: its
+           ;; grid while hidden is the shrunk pane's, which goes nowhere.
            (shrunk (and (if (and portal-view--shrunk (null geometry))
-                            (portal-view--minibuffer-active-p (car base))
+                            t
                           (portal-view--shrunk-by-minibuffer base geometry window))
                         base)))
       ;; Shrinking starts before the view is placed in the shrunk pane, and
