@@ -114,19 +114,30 @@ echo "$views" | while IFS= read -r line; do
 (run-at-time
  1 nil
  (lambda ()
-   (switch-to-buffer (get-buffer-create \"*quit*\"))
-   (let ((target (portal-view-open '$kind (unless (eq '$kind 'web) '$view)))
-         (deadline (+ (float-time) 10)))
-     (when (eq '$kind 'web)
-       (portal--web-load target (plist-get '$view :load)))
-     (while (and (not (plist-get (portal--inspect target) :showing)) (< (float-time) deadline))
-       (accept-process-output nil 0.02)
-       (redisplay t))
-     (sit-for 0.5)
-     (kill-emacs (if (and (portal--input target \"focus\")
-                          (plist-get (portal--inspect target) :showing))
-                     0
-                   3)))))" || status=$?
+   (condition-case failure
+       (progn
+         (switch-to-buffer (get-buffer-create \"*quit*\"))
+         (let ((target (portal-view-open '$kind (unless (eq '$kind 'web) '$view)))
+               (deadline (+ (float-time) 10)))
+           (when (eq '$kind 'web)
+             (portal--web-load target (plist-get '$view :load)))
+           (while (and (not (plist-get (portal--inspect target) :showing))
+                       (< (float-time) deadline))
+             (accept-process-output nil 0.02)
+             (redisplay t))
+           (sit-for 0.5)
+           (kill-emacs (if (and (portal--input target \"focus\")
+                                (plist-get (portal--inspect target) :showing))
+                           0
+                         3))))
+     ;; A web view where WPE WebKit is missing says so: not run, 4.
+     (error (message \"%s\" (error-message-string failure))
+            (kill-emacs (if (string-match-p \"WPE WebKit\" (error-message-string failure)) 4 5))))))" ||
+        status=$?
+    if [ "$status" = 4 ]; then
+        echo "GUI checks: not run: Emacs quitting with a page open, without WPE WebKit" >&2
+        continue
+    fi
     if [ "$status" != 0 ]; then
         echo "GUI checks failed: Emacs quitting with a $kind view $view open exited $status" >&2
         exit 1
