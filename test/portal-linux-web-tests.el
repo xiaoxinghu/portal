@@ -391,6 +391,9 @@ addEventListener('keydown', (event) => {
           ;; A click follows the link, and gives the view the keyboard.
           (portal-linux-gui--point 'click)
           (portal-linux-web--wait-for target :hash (lambda (hash) (equal hash "#clicked")))
+          ;; The page's URL is the fragment's, though no document loaded.
+          (portal-linux-gui--wait
+           (lambda () (string-suffix-p "page.html#clicked" (portal-linux-gui--get :url target))))
           (should (portal-linux-gui--get :focused target))
           (portal-linux-gui--events)
           ;; Two clicks are a double click.

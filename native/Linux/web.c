@@ -782,7 +782,15 @@ static void key_reported(WebKitUserContentManager *manager, JSCValue *value, gpo
 }
 
 /* News of the page, for the main thread. */
-enum news_kind { NEWS_LOADING, NEWS_COMMITTED, NEWS_LOADED, NEWS_TITLE, NEWS_FAILED, NEWS_ENDED };
+enum news_kind {
+    NEWS_LOADING,
+    NEWS_COMMITTED,
+    NEWS_LOADED,
+    NEWS_URL, /* Within the document, as by a fragment or pushState. */
+    NEWS_TITLE,
+    NEWS_FAILED,
+    NEWS_ENDED,
+};
 
 struct news {
     uint64_t serial;
@@ -829,6 +837,8 @@ static gboolean news_on_main(gpointer data)
         break;
     case NEWS_LOADED:
         page->loading = false;
+        break;
+    case NEWS_URL:
         break;
     case NEWS_TITLE:
         replace(&page->title, &news->text);
@@ -895,6 +905,14 @@ static gboolean web_load_failed(WebKitWebView *web, WebKitLoadEvent event, char 
                          WEBKIT_POLICY_ERROR_FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE))
         tell(data, NEWS_FAILED, error->message, NULL);
     return FALSE;
+}
+
+static void web_uri(GObject *web, GParamSpec *property, gpointer data)
+{
+    (void) property;
+    const char *url = webkit_web_view_get_uri(WEBKIT_WEB_VIEW(web));
+    if (url)
+        tell(data, NEWS_URL, NULL, url);
 }
 
 static void web_title(GObject *web, GParamSpec *property, gpointer data)
@@ -985,6 +1003,7 @@ static gboolean page_make(gpointer data)
     g_signal_connect(page->web, "load-changed", G_CALLBACK(web_load_changed), page);
     g_signal_connect(page->web, "load-failed", G_CALLBACK(web_load_failed), page);
     g_signal_connect(page->web, "notify::title", G_CALLBACK(web_title), page);
+    g_signal_connect(page->web, "notify::uri", G_CALLBACK(web_uri), page);
     page->mapped = false;
     view_apply(page);
     return G_SOURCE_REMOVE;
