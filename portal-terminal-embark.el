@@ -88,17 +88,32 @@ Enabling `portal-terminal-embark-mode' makes Embark's buffer map its parent."
 (defvar portal-terminal-embark--finding nil
   "Non-nil while `portal-terminal-embark-target' asks the other finders.")
 
+(defun portal-terminal-embark--sidebar-target ()
+  "Return the terminal of the sidebar's row at point as a target, or nil.
+In `portal-terminal-sidebar-mode' only: its bounds are the row's lines."
+  (when (derived-mode-p 'portal-terminal-sidebar-mode)
+    (let ((buffer (get-text-property (line-beginning-position) 'portal-terminal-sidebar-item)))
+      (when (and (bufferp buffer) (portal-terminal-metadata buffer))
+        (let ((start (or (previous-single-property-change
+                          (1+ (line-beginning-position)) 'portal-terminal-sidebar-item)
+                         (point-min)))
+              (end (or (next-single-property-change (point) 'portal-terminal-sidebar-item)
+                       (point-max))))
+          `(portal-terminal ,(buffer-name buffer) ,start . ,(1- end)))))))
+
 (defun portal-terminal-embark-target ()
   "Return the current buffer target as a Portal terminal target, if it is one.
 Embark's other finders and transformers find the target, such as a
 Consult candidate or an Ibuffer line; a buffer that is a live terminal
-becomes a `portal-terminal' target with the same bounds."
+becomes a `portal-terminal' target with the same bounds.  In the sidebar
+of terminals, the target is the terminal of the row at point."
   (unless portal-terminal-embark--finding
-    (let* ((target (let ((portal-terminal-embark--finding t)) (car (embark--targets))))
-           (buffer (and (memq (plist-get target :type) '(buffer portal-terminal))
-                        (get-buffer (plist-get target :target)))))
-      (when (and buffer (portal-terminal-metadata buffer))
-        `(portal-terminal ,(buffer-name buffer) . ,(plist-get target :bounds))))))
+    (or (portal-terminal-embark--sidebar-target)
+        (let* ((target (let ((portal-terminal-embark--finding t)) (car (embark--targets))))
+               (buffer (and (memq (plist-get target :type) '(buffer portal-terminal))
+                            (get-buffer (plist-get target :target)))))
+          (when (and buffer (portal-terminal-metadata buffer))
+            `(portal-terminal ,(buffer-name buffer) . ,(plist-get target :bounds)))))))
 
 (defun portal-terminal-embark--refine (_type target)
   "Refine TARGET, a `portal-terminal' candidate or a terminal's name.

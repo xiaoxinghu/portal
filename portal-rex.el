@@ -94,6 +94,18 @@ the change, and the buffer of a closed block is gone.  The buffer of a
 new block comes a moment later, once the server has said what the block
 is called.")
 
+(defvar portal-rex-sessions-changed-functions nil
+  "Abnormal hook run when what Emacs holds of a Rex server's sessions changes.
+Each function is called with the connection, after its sessions have
+changed, been added, relabelled, moved or removed, after one of its
+blocks' buffers has been made, renamed or killed, and after it has
+attached, as on first connecting and on coming back from a loss, or
+ended.  One change of the server's can run it several times, as when a
+session's blocks are listed: a function here must be cheap, and should
+leave the work to a timer.  It may run from a process filter, with
+quitting inhibited, or while a buffer is being killed, so it must never
+prompt.")
+
 (define-error 'portal-rex-error "Rex error")
 
 (cl-defstruct (portal-rex-connection (:constructor portal-rex--make-connection)
@@ -318,6 +330,10 @@ The messages after this one must still be handled."
   (with-demoted-errors "Portal Rex: %S"
     (apply function arguments)))
 
+(defun portal-rex--sessions-changed (connection)
+  "Run `portal-rex-sessions-changed-functions' for CONNECTION."
+  (portal-rex--run #'run-hook-with-args 'portal-rex-sessions-changed-functions connection))
+
 (defun portal-rex--end (connection reason &optional quiet)
   "End CONNECTION from this side, because of REASON, as one step.
 A connection that has ended keeps the reason it had.  QUIET is as for
@@ -367,6 +383,7 @@ waiting fails, oldest first."
               (lost (message "Stopped connecting to the Rex server at %s: %s"
                              (portal-rex--named connection) reason))))
       (portal-rex--run #'portal-rex--forget-blocks connection)
+      (portal-rex--sessions-changed connection)
       (portal-rex--fail-calls connection reason)
       (portal-rex--opened connection (portal-rex--cannot connection reason)))))
 
@@ -651,13 +668,15 @@ A session that is not among them joins them, last."
         (old (portal-rex--session connection session-id))
         (new (list :session_id session-id :label label)))
     (setf (portal-rex-connection-sessions connection)
-          (vconcat (if old (cl-substitute new old sessions) (append sessions (list new)))))))
+          (vconcat (if old (cl-substitute new old sessions) (append sessions (list new)))))
+    (portal-rex--sessions-changed connection)))
 
 (defun portal-rex--drop-session (connection session-id)
   "Take the session SESSION-ID out of CONNECTION's sessions."
   (setf (portal-rex-connection-sessions connection)
         (vconcat (remq (portal-rex--session connection session-id)
-                       (append (portal-rex-connection-sessions connection) nil)))))
+                       (append (portal-rex-connection-sessions connection) nil))))
+  (portal-rex--sessions-changed connection))
 
 (defun portal-rex--move-session (connection session-id before)
   "Move the session SESSION-ID to before BEFORE in CONNECTION's sessions.
@@ -667,7 +686,8 @@ BEFORE is another session's ID; without it, the session goes last."
            (place (or (cl-position (portal-rex--session connection before) others)
                       (length others))))
       (setf (portal-rex-connection-sessions connection)
-            (vconcat (seq-take others place) (list session) (seq-drop others place))))))
+            (vconcat (seq-take others place) (list session) (seq-drop others place)))
+      (portal-rex--sessions-changed connection))))
 
 (defun portal-rex--buffer-name (connection session-id label)
   "Return the name of the buffer of a block called LABEL.
@@ -751,6 +771,7 @@ the block needs, and has no view."
     ;; A window that showed the placeholder shows the block's screen now.
     (when (and placeholder (display-graphic-p) (get-buffer-window buffer t))
       (run-at-time 0 nil #'portal-rex--show-shown))
+    (portal-rex--sessions-changed connection)
     buffer))
 
 (defun portal-rex--rename-buffer (buffer &optional label)
@@ -760,7 +781,8 @@ the block needs, and has no view."
     (rename-buffer (portal-rex--buffer-name portal-rex-block-connection portal-rex-session-id
                                             portal-rex--block-label)
                    t)
-    (portal-rex--describe-block)))
+    (portal-rex--describe-block)
+    (portal-rex--sessions-changed portal-rex-block-connection)))
 
 (defun portal-rex--untangle-names (connection session-id)
   "Give SESSION-ID's buffers on CONNECTION their plain names where they are free.
@@ -785,7 +807,8 @@ The block has gone, or the connection has: nothing asks, whatever is on
       (with-current-buffer buffer
         (let ((portal-rex--killing t)
               (kill-buffer-query-functions nil))
-          (kill-buffer buffer))))))
+          (kill-buffer buffer)))
+      (portal-rex--sessions-changed connection))))
 
 (defun portal-rex--forget-blocks (connection)
   "Kill every buffer of CONNECTION's blocks, which has ended."
@@ -1892,6 +1915,7 @@ Each session is asked for its blocks, which makes their buffers."
           (portal-rex--kill-buffer connection (buffer-local-value 'portal-rex-block-id buffer))))
       (seq-doseq (session (portal-rex-connection-sessions connection))
         (portal-rex--list-blocks connection (plist-get session :session_id)))
+      (portal-rex--sessions-changed connection)
       ;; A placeholder of a session the server no longer has waits for nothing.
       (portal-rex--give-up connection (lambda (record)
                                         (not (portal-rex--session connection

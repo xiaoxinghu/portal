@@ -216,6 +216,11 @@ if(BUILD_TESTING)
             -l "${CMAKE_SOURCE_DIR}/test/portal-terminal-choose-tests.el"
             ${ert_batch})
     set_tests_properties(terminal-choose PROPERTIES TIMEOUT 30)
+    add_test(NAME terminal-sidebar
+        COMMAND ${test_emacs} -L "${CMAKE_SOURCE_DIR}"
+            -l "${CMAKE_SOURCE_DIR}/test/portal-terminal-sidebar-tests.el"
+            ${ert_batch})
+    set_tests_properties(terminal-sidebar PROPERTIES TIMEOUT 30)
     # The optional Consult and Embark adapters and the launcher's graphical
     # completion fixtures use the GNU ELPA releases the user guides name,
     # downloaded once and checked by hash.

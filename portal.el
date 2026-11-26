@@ -44,6 +44,8 @@
 (require 'portal-rex)
 ;; Lists nothing until `portal-rex-list-agents' is called.
 (require 'portal-rex-list)
+;; Shows nothing until `portal-terminal-sidebar' is called.
+(require 'portal-terminal-sidebar)
 
 (defcustom portal-terminal-consult-auto-enable t
   "Whether loading Portal and Consult enables their terminal integration.
