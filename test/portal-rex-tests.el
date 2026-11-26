@@ -3730,5 +3730,267 @@ The windows are as they were after."
           (goto-char (point-max))
           (should-error (portal-rex-list-visit) :type 'user-error))))))
 
+;;; The sidebar of terminals
+
+(require 'portal-terminal-sidebar)
+
+(defmacro portal-rex-tests--sidebar (&rest body)
+  "Run BODY with the sidebar of terminals shown beside the selected window.
+The windows are as they were after, and the sidebar's buffer is killed."
+  (declare (indent 0))
+  `(let ((portal-terminal-sidebar-width 32)
+         (portal-terminal-sidebar--folded nil)
+         (display-buffer-alist nil))
+     (unwind-protect
+         (save-window-excursion
+           (delete-other-windows)
+           (portal-terminal-sidebar)
+           (should (get-buffer-window portal-terminal-sidebar--name))
+           ,@body)
+       (when (get-buffer portal-terminal-sidebar--name)
+         (kill-buffer portal-terminal-sidebar--name)))))
+
+(defun portal-rex-tests--sidebar-rows ()
+  "Return the sidebar's lines trimmed, each run of spaces in them one space."
+  (with-current-buffer portal-terminal-sidebar--name
+    (mapcar (lambda (line) (replace-regexp-in-string " +" " " (string-trim line)))
+            (split-string (buffer-substring-no-properties (point-min) (point-max)) "\n" t))))
+
+(defun portal-rex-tests--sidebar-on (text)
+  "Move point in the sidebar, and in its window, to the line that begins with TEXT."
+  (with-current-buffer portal-terminal-sidebar--name
+    (goto-char (point-min))
+    (re-search-forward (concat "^ *" (regexp-quote text)))
+    (beginning-of-line)
+    (set-window-point (get-buffer-window (current-buffer)) (point))))
+
+(defun portal-rex-tests--sidebar-at ()
+  "Return the trimmed line at point in the sidebar's window."
+  (with-current-buffer portal-terminal-sidebar--name
+    (save-excursion
+      (goto-char (window-point (get-buffer-window (current-buffer))))
+      (replace-regexp-in-string " +" " " (string-trim (thing-at-point 'line t))))))
+
+(defun portal-rex-tests--sidebar-drawn (connection)
+  "Handle what CONNECTION's server has sent, then let the sidebar's timer run.
+No key is pressed: Emacs waits, as for input."
+  (portal-rex-tests--settle connection)
+  (sleep-for 0.25))
+
+(defun portal-rex-tests--own-terminal (name)
+  "Return a buffer named NAME that is one of Portal's own terminals to the lists.
+It has the target of a terminal view, as one shown in a window has, and no view."
+  (let ((buffer (generate-new-buffer name)))
+    (with-current-buffer buffer
+      (portal-terminal-mode)
+      (setq portal-view--target (format "terminal:test-%s" name)))
+    (setq portal-view--buffers (append portal-view--buffers (list buffer)))
+    buffer))
+
+(defun portal-rex-tests--end-own-terminal (buffer)
+  "End BUFFER, from `portal-rex-tests--own-terminal'."
+  (setq portal-view--buffers (delq buffer portal-view--buffers))
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer (setq portal-view--target nil))
+    (kill-buffer buffer)))
+
+(ert-deftest portal-terminal-sidebar-groups-blocks-by-session ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "workspace")
+                                               (:session_id "session:b" :label "portal")
+                                               (:session_id "session:c" :label "obento")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "ai")
+                              (portal-rex-tests--block "2" "shell"))
+    (portal-rex-tests--blocks server "b" (portal-rex-tests--block "3" "linux-web-view-page"))
+    (portal-rex-tests--blocks server "c")
+    (let ((connection (portal-rex-tests--connect server))
+          (own (portal-rex-tests--own-terminal "*terminal: workspace*")))
+      (unwind-protect
+          (let ((ai (portal-rex-block-buffer connection "block:1"))
+                (shell (portal-rex-block-buffer connection "block:2"))
+                (page (portal-rex-block-buffer connection "block:3")))
+            (portal-rex-tests--settle connection)
+            (portal-rex-tests--report server "block:3" "" :state "blocked" :kind "permission"
+                                      :app "claude-code" :msg "approve Bash: git push")
+            (portal-rex-tests--settle connection)
+            ;; The sessions in the server's order, an empty one too, each
+            ;; with its blocks in the order they were made; Portal's own
+            ;; terminals after, at the root.
+            (should (equal (portal-terminal-sidebar-tree)
+                           `(((,connection ("session:a" "workspace" ,ai ,shell)
+                                           ("session:b" "portal" ,page)
+                                           ("session:c" "obento")))
+                             ,own)))
+            (should (equal (portal-terminal-sidebar-buffers) (list ai shell page own)))
+            (portal-rex-tests--sidebar
+              (should (equal (portal-rex-tests--sidebar-rows)
+                             '("workspace" "ai" "shell"
+                               ;; Cut to the window, the program kept.
+                               "portal" "● linux-web-vie… claude-code" "approve Bash: git push"
+                               "obento"
+                               "terminal: workspace")))
+              (with-current-buffer portal-terminal-sidebar--name
+                (let ((face-at (lambda (text)
+                                 (goto-char (point-min))
+                                 (re-search-forward (concat "^ *\\(?:[^ ] \\)?\\(" (regexp-quote text) "\\)"))
+                                 (get-text-property (match-beginning 1) 'face))))
+                  ;; A session's heading bold, an empty one's dimmed, Portal's
+                  ;; own terminal in a face of its own, a block in none.
+                  (should (eq (funcall face-at "workspace") 'portal-terminal-sidebar-session))
+                  (should (eq (funcall face-at "obento") 'portal-terminal-sidebar-empty-session))
+                  (should (eq (funcall face-at "terminal: workspace")
+                              'portal-terminal-sidebar-terminal))
+                  (should-not (funcall face-at "ai"))
+                  (should (eq (funcall face-at "approve") 'portal-terminal-status-blocked)))
+                ;; A heading is indented less than its rows.
+                (goto-char (point-min))
+                (should (looking-at " workspace"))
+                (forward-line 1)
+                (should (looking-at "   ai"))))
+            ;; A block's row is an Embark terminal target.
+            (portal-rex-tests--sidebar
+              (portal-rex-tests--sidebar-on "shell")
+              (with-current-buffer portal-terminal-sidebar--name
+                (goto-char (window-point (get-buffer-window (current-buffer))))
+                (should (equal (car (portal-terminal-embark--sidebar-target))
+                               'portal-terminal))
+                (should (equal (cadr (portal-terminal-embark--sidebar-target))
+                               (buffer-name shell))))))
+        (portal-rex-tests--end-own-terminal own)))))
+
+(ert-deftest portal-terminal-sidebar-follows-statuses-in-place ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")
+                                               (:session_id "session:b" :label "portal")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "claude")
+                              (portal-rex-tests--block "2" "codex"))
+    (portal-rex-tests--blocks server "b" (portal-rex-tests--block "3" "agent"))
+    (let ((connection (portal-rex-tests--connect server))
+          (report (lambda (block &rest record)
+                    (apply #'portal-rex-tests--report server block "" record))))
+      (portal-rex-tests--settle connection)
+      (portal-rex-tests--sidebar
+        (should (equal (portal-rex-tests--sidebar-rows)
+                       '("work" "claude" "codex" "portal" "agent")))
+        (portal-rex-tests--sidebar-on "codex")
+        ;; An agent in a block never shown asks: its row shows the mark and
+        ;; the question, in its place, with no key pressed; point stays.
+        (funcall report "block:1" :state "blocked" :kind "question" :app "claude-code"
+                 :msg "Clean up the task now?")
+        (portal-rex-tests--sidebar-drawn connection)
+        (should (equal (portal-rex-tests--sidebar-rows)
+                       '("work" "● claude claude-code" "Clean up the task now?" "codex"
+                         "portal" "agent")))
+        (should (equal (portal-rex-tests--sidebar-at) "codex"))
+        ;; Each state its mark, a row never moving: failed and done.
+        (funcall report "block:2" :state "error" :app "codex" :msg "API error")
+        (funcall report "block:3" :state "working" :app "pi" :msg "Reading slides.ts")
+        (portal-rex-tests--sidebar-drawn connection)
+        (should (equal (portal-rex-tests--sidebar-rows)
+                       '("work" "● claude claude-code" "Clean up the task now?"
+                         "✗ codex codex" "API error" "portal" "◌ agent pi")))
+        (should (equal (portal-rex-tests--sidebar-at) "✗ codex codex"))
+        (funcall report "block:1" :state "done" :app "claude-code")
+        (portal-rex-tests--sidebar-drawn connection)
+        (should (equal (portal-rex-tests--sidebar-rows)
+                       '("work" "✓ claude claude-code" "✗ codex codex" "API error"
+                         "portal" "◌ agent pi")))
+        ;; A block that closes leaves; a session made appears, dimmed.
+        (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "claude"))
+        (portal-rex-tests--session-event server "a" "block_closed" :block_id "block:2")
+        (portal-fake-rex-command server :event (portal-rex-tests--event "later"))
+        (portal-rex-tests--sidebar-drawn connection)
+        (should (equal (portal-rex-tests--sidebar-rows)
+                       '("work" "✓ claude claude-code" "portal" "◌ agent pi" "later")))))))
+
+(ert-deftest portal-terminal-sidebar-folds-a-session ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")
+                                               (:session_id "session:b" :label "portal")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "claude"))
+    (portal-rex-tests--blocks server "b" (portal-rex-tests--block "3" "agent")
+                              (portal-rex-tests--block "4" "shell"))
+    (let ((connection (portal-rex-tests--connect server)))
+      (portal-rex-tests--settle connection)
+      (portal-rex-tests--sidebar
+        (portal-rex-tests--sidebar-on "portal")
+        (with-current-buffer portal-terminal-sidebar--name
+          (goto-char (window-point (get-buffer-window (current-buffer))))
+          (call-interactively (keymap-lookup portal-terminal-sidebar-mode-map "TAB")))
+        ;; Its rows are left out, and its heading counts its blocks.
+        (should (equal (portal-rex-tests--sidebar-rows) '("work" "claude" "portal 2")))
+        ;; Its agent starts to wait: the heading shows the mark, with no
+        ;; key pressed, and the fold stays through every redraw.
+        (portal-rex-tests--report server "block:4" "" :state "working")
+        (portal-rex-tests--report server "block:3" "" :state "blocked" :kind "question")
+        (portal-rex-tests--sidebar-drawn connection)
+        (should (equal (portal-rex-tests--sidebar-rows) '("work" "claude" "portal ● 2")))
+        (with-current-buffer portal-terminal-sidebar--name (revert-buffer))
+        (should (equal (portal-rex-tests--sidebar-rows) '("work" "claude" "portal ● 2")))
+        ;; Kept by ID: through a new label and a new block.
+        (portal-rex-tests--session-event server "b" "session_label_changed" :label "web")
+        (portal-rex-tests--blocks server "b" (portal-rex-tests--block "3" "agent")
+                                  (portal-rex-tests--block "4" "shell")
+                                  (portal-rex-tests--block "5" "more"))
+        (portal-rex-tests--session-event server "b" "block_created" :block_id "block:5")
+        (portal-rex-tests--sidebar-drawn connection)
+        (should (equal (portal-rex-tests--sidebar-rows) '("work" "claude" "web ● 3")))
+        ;; The highlight of a folded block is on its heading.
+        (switch-to-buffer (portal-rex-block-buffer connection "block:4"))
+        (with-current-buffer portal-terminal-sidebar--name
+          (portal-terminal-sidebar--highlight)
+          (should (equal (get-text-property (overlay-start portal-terminal-sidebar--overlay)
+                                            'portal-terminal-sidebar-item)
+                         '(session . "session:b"))))
+        ;; RET on the heading unfolds it.
+        (portal-rex-tests--sidebar-on "web")
+        (with-current-buffer portal-terminal-sidebar--name
+          (goto-char (window-point (get-buffer-window (current-buffer))))
+          (call-interactively (keymap-lookup portal-terminal-sidebar-mode-map "RET")))
+        (should (equal (portal-rex-tests--sidebar-rows)
+                       '("work" "claude" "web" "● agent" "question" "◌ shell" "more")))))))
+
+(ert-deftest portal-terminal-sidebar-starts-a-block-in-the-session-at-point ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")
+                                               (:session_id "session:b" :label "empty")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "claude"))
+    (portal-rex-tests--blocks server "b")
+    (let ((connection (portal-rex-tests--connect server)))
+      (portal-rex-tests--settle connection)
+      (portal-rex-tests--sidebar
+        (let ((main (selected-window)))
+          (portal-terminal-sidebar-select)
+          (portal-rex-tests--sidebar-on "empty")
+          (call-interactively (keymap-lookup portal-terminal-sidebar-mode-map "c"))
+          ;; A block of that session, in the window used last.
+          (should (eq (selected-window) main))
+          (should (equal (buffer-local-value 'portal-rex-session-id (window-buffer main))
+                         "session:b"))
+          (portal-rex-tests--sidebar-drawn connection)
+          (should (equal (portal-rex-tests--sidebar-rows) '("work" "claude" "empty" "shell"))))))))
+
+(ert-deftest portal-terminal-sidebar-heads-each-server-when-there-are-two ()
+  (portal-rex-tests--with (one two)
+    (portal-fake-rex-command one :sessions [(:session_id "session:a" :label "work")])
+    (portal-rex-tests--blocks one "a" (portal-rex-tests--block "1" "claude"))
+    (portal-fake-rex-command two :sessions [(:session_id "session:b" :label "elsewhere")])
+    (portal-rex-tests--blocks two "b" (portal-rex-tests--block "2" "shell"))
+    (let ((first (portal-rex-tests--connect one)))
+      (portal-rex-tests--settle first)
+      (portal-rex-tests--sidebar
+        (should (equal (portal-rex-tests--sidebar-rows) '("work" "claude")))
+        (let ((second (portal-rex-tests--connect two)))
+          (portal-rex-tests--sidebar-drawn second)
+          ;; A socket's name is cut at its start, which they share.
+          (should (equal (mapcar (lambda (row) (string-remove-prefix "…" row))
+                                 (portal-rex-tests--sidebar-rows))
+                         (list (substring (portal-rex--named first) -27) "work" "claude"
+                               (substring (portal-rex--named second) -27) "elsewhere" "shell")))
+          ;; One ends: its heading and its sessions go.
+          (portal-rex-disconnect first)
+          (portal-rex-tests--sidebar-drawn second)
+          (should (equal (portal-rex-tests--sidebar-rows) '("elsewhere" "shell"))))))))
+
 (provide 'portal-rex-tests)
 ;;; portal-rex-tests.el ends here

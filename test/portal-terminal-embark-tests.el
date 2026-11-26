@@ -9,6 +9,7 @@
 (require 'embark)
 (require 'ibuffer)
 (require 'portal-terminal-embark)
+(require 'portal-terminal-sidebar)
 
 ;; `portal-completion-testing' types into a real minibuffer with Consult,
 ;; Vertico and Orderless on; <f10> acts there with Embark.  Actions run
@@ -165,5 +166,23 @@
                          (list (format "Kill terminal %s and its running shell? " name)))))
         (should-not (buffer-live-p other))
         (should (buffer-live-p server))))))
+
+(ert-deftest portal-terminal-embark-targets-the-sidebar-row-at-point ()
+  (portal-embark-test--environment
+    (let ((server (portal-completion-test--open "one/app"))
+          (display-buffer-alist nil))
+      (with-current-buffer server (portal-terminal-rename "server"))
+      (portal-completion-test--open "two/app")
+      (portal-terminal-sidebar-select)
+      ;; The row's terminal, its bounds the row's line, on any line of it.
+      (goto-char (point-min))
+      (forward-char 4)
+      (should (equal (portal-embark-test--target) '(portal-terminal "server")))
+      (should (equal (plist-get (car (embark--targets)) :bounds)
+                     (cons (point-min) (line-end-position))))
+      (forward-line 1)
+      (should (equal (car (portal-embark-test--target)) 'portal-terminal))
+      (should-not (equal (portal-embark-test--target) '(portal-terminal "server")))
+      (portal-terminal-sidebar))))
 
 ;;; portal-terminal-embark-tests.el ends here
