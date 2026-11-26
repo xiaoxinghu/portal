@@ -39,6 +39,12 @@
                       portal--rex-open portal--terminal-engine))
     (should (module-function-p (symbol-function function)))))
 
+(ert-deftest portal-linux-module-loads-nothing-of-wpe-webkit ()
+  "A page is in portal-web.so, opened at the first web view: the module needs no WPE WebKit."
+  (with-temp-buffer
+    (insert-file-contents "/proc/self/maps")
+    (should-not (re-search-forward "libWPEWebKit\\|portal-web\\.so" nil t))))
+
 (ert-deftest portal-linux-module-answers-what-needs-no-view ()
   ;; The core's own rules run whatever the backend lacks.
   (should-not (portal--shortcuts))

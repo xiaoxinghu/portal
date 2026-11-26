@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Run via: sh test/linux-follow.sh [fill|terminal|fed]
+# Run via: sh test/linux-follow.sh [fill|terminal|fed|page]
 # Record a view following its pane and check every frame of the recording:
 # after ./build.sh, on the desktop of test/linux-desktop.sh. A fresh Emacs
 # opens a test pattern in a pane and changes that pane, one command every
@@ -20,6 +20,8 @@
 # block's terminal of the fake Rex server's, fed blank lines all the while:
 # it holds the block's grid, which follows the pane a moment later, with the
 # theme's background beside it, so the pane is that orange throughout too.
+# With "page", a web view whose page draws every frame, each within a few
+# levels of that orange, so that WebKit makes frames as the pane changes.
 #
 # It exits 0 when no frame is out of place, 1 when one is, naming each, and
 # 77 where the desktop cannot start. The recording stays in
@@ -29,6 +31,10 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 if [ -z "${PORTAL_TEST_DESKTOP:-}" ]; then
     exec sh "$root/test/linux-desktop.sh" sh "$0" "$@"
+fi
+if [ "${1:-}" = page ] && [ ! -f "$root/build/portal-web.so" ]; then
+    echo "linux-follow.sh: not run: this build has no web views" >&2
+    exit 77
 fi
 for tool in wf-recorder ffmpeg ffprobe python3; do
     command -v "$tool" >/dev/null 2>&1 || { echo "linux-follow.sh: needs $tool" >&2; exit 1; }
@@ -79,7 +85,8 @@ recorder=
 kill -KILL "$emacs" 2>/dev/null || :
 wait "$emacs" 2>/dev/null || :
 emacs=
-if [ "$PORTAL_FOLLOW_PATTERN" = terminal ] || [ "$PORTAL_FOLLOW_PATTERN" = fed ]; then
+case $PORTAL_FOLLOW_PATTERN in terminal | fed | page) orange=1 ;; *) orange= ;; esac
+if [ -n "$orange" ]; then
     # Great Pumpkin's background (test/portal-linux-follow.el).
     python3 -B "$root/test/linux-recording.py" "$logs/follow.mkv" f98128
 else
