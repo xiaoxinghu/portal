@@ -128,12 +128,22 @@ static void test_loading(void)
     CHECK(portal_fake_calls().loaded == before.loaded + 1);
     CHECK(portal_fake_calls().went == before.went + 2);
     CHECK(shows(web, "\"history\":\"reload reload\"", NULL));
+    /* Moved within its document, as by history.pushState, the page is
+       another: the one it left loads, and the one it moved to reloads. */
+    portal_web_moved(text(web), text("HTTPS://example.com/moved"));
+    CHECK(load(web, "HTTPS://example.com/page", &error));
+    CHECK(portal_fake_calls().loaded == before.loaded + 2);
+    portal_web_committed(text(web), text("HTTPS://example.com/page"));
+    portal_web_moved(text(web), text("HTTPS://example.com/moved"));
+    CHECK(load(web, "HTTPS://example.com/moved", &error));
+    CHECK(portal_fake_calls().loaded == before.loaded + 2);
+    CHECK(portal_fake_calls().went == before.went + 3);
     /* Any other document loads, including about:blank once a page has shown. */
     const char *const others[] = {"HTTPS://example.com/other", "file:///tmp/a%20b.html",
                                   "data:text/html,<p>#1</p>", "about:blank"};
     for (size_t i = 0; i < sizeof others / sizeof *others; i++)
         CHECK(load(web, others[i], &error));
-    CHECK(portal_fake_calls().loaded == before.loaded + 5);
+    CHECK(portal_fake_calls().loaded == before.loaded + 6);
     /* A platform that cannot load leaves the view as it was. */
     portal_fake_refuse(true);
     CHECK(!load(web, "https://example.org/", &error));

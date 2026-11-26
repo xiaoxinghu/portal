@@ -36,6 +36,7 @@ struct portal_web_host {
     bool (*dmabufs_refused)(void);
     /* portal.h's calls into the core of those names, on the module thread. */
     void (*committed)(portal_string target, portal_string url);
+    void (*moved)(portal_string target, portal_string url);
     void (*failed)(portal_string target, uint64_t token, portal_string message);
 };
 

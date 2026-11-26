@@ -839,6 +839,10 @@ static gboolean news_on_main(gpointer data)
         page->loading = false;
         break;
     case NEWS_URL:
+        /* Within the document: its key reports stay. */
+        replace(&page->url, &news->url);
+        if (page->url)
+            host->moved(target, (portal_string) {page->url, strlen(page->url)});
         break;
     case NEWS_TITLE:
         replace(&page->title, &news->text);

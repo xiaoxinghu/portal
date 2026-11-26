@@ -966,6 +966,13 @@ waits, is that press's, never a later one's. A chord WebKit's own editing
 acts on without the page preventing it reaches both the page and Emacs,
 where on macOS WebKit hands back what neither used.
 
+**A page's URL follows its document.** WebKit changes a view's URL without a
+load for a fragment link and `history.pushState`; the page tells the core
+with `portal_web_moved`, which changes the page the core knows without a
+new document, so that loading the URL the page left loads it rather than
+reloading the one it moved to. macOS's WebKit tells of no such move, and
+its core keeps the committed URL.
+
 **The pointer** goes to the page at the pane's coordinates, with WPE's own
 press counting for double clicks. A wheel's notch is one of WebKit's steps,
 as WebKit's own Wayland seat counts it; a touchpad's or pointing stick's

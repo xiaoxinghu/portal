@@ -1065,6 +1065,16 @@ void portal_web_committed(portal_string target, portal_string url)
         queue_own(web, target, "page", "url", url);
 }
 
+void portal_web_moved(portal_string target, portal_string url)
+{
+    struct portal_web_state *web;
+    if (!find(target, &web))
+        return;
+    free(web->page.data);
+    if (!copy(url, &web->page)) /* Unknown: the next load loads. */
+        web->page = (portal_text) {0};
+}
+
 void portal_web_failed(portal_string target, uint64_t token, portal_string message)
 {
     struct portal_web_state *web;

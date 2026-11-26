@@ -825,6 +825,12 @@ void portal_web_closed(portal_string target);
    For a window a page opened, the core tells Emacs with a "web TARGET"
    record, and sends no other for that view until Emacs has inspected it. */
 void portal_web_committed(portal_string target, portal_string url);
+/* The page in TARGET moved to URL within its document, as a fragment link,
+   history.pushState and history.replaceState move it: the page the core
+   knows is URL from now on, with no new document, so loading the URL it
+   left loads again rather than reloading this one.  The Linux backend
+   calls it; on macOS WebKit tells of no such move. */
+void portal_web_moved(portal_string target, portal_string url);
 /* Something failed that the page cannot report: a load of TARGET's page, its
    web process, or, when TOKEN is not 0, the delivery of the message that
    portal_web_post sent with TOKEN.  MESSAGE says what, for the app's buffer;

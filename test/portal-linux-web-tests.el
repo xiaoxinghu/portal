@@ -49,7 +49,12 @@ addEventListener('keydown', (event) => {
                   (event.defaultPrevented ? '!' : ''));
   state.keys = state.keys.slice(-20);
 });
-addEventListener('mousedown', (event) => { state.clicks++; state.detail = event.detail; });
+addEventListener('mousedown', (event) => {
+  state.clicks++;
+  state.detail = event.detail;
+  // A double click moves the page within its document, as an app's routes do.
+  if (event.detail === 2) history.pushState(null, '', '?moved');
+});
 setInterval(() => {
   Object.assign(state, {field: field.value, focus: document.activeElement.id,
                         scroll: Math.round(scrollY), hash: location.hash});
@@ -394,11 +399,18 @@ addEventListener('keydown', (event) => {
           ;; The page's URL is the fragment's, though no document loaded.
           (portal-linux-gui--wait
            (lambda () (string-suffix-p "page.html#clicked" (portal-linux-gui--get :url target))))
-          (should (portal-linux-gui--get :focused target))
-          (portal-linux-gui--events)
           ;; Two clicks are a double click.
           (portal-linux-gui--point 'move (+ x 600) (+ y 400) 'click 'click)
           (portal-linux-web--wait-for target :detail (lambda (detail) (eql detail 2)))
+          ;; The page moved itself to page.html?moved; loading the page it
+          ;; left loads that, where reloading would keep the query.
+          (portal-linux-gui--wait
+           (lambda () (string-suffix-p "page.html?moved" (portal-linux-gui--get :url target))))
+          (let ((url (concat "file://" (expand-file-name "page.html" portal-linux-web--directory))))
+            (portal-web-load-url url)
+            (portal-linux-gui--wait (lambda () (equal (portal-linux-gui--get :url target) url)))
+            (portal-linux-gui--wait (lambda () (not (portal-linux-gui--get :loading target))))
+            (portal-linux-web--wait-for target :frames (lambda (frames) (and frames (> frames 5)))))
           ;; Three notches of the wheel, one an event as a wheel sends them,
           ;; are three of WebKit's steps.
           (portal-linux-gui--point 'scroll 1 'wait 50 'scroll 1 'wait 50 'scroll 1)

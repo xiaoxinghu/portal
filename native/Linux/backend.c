@@ -478,6 +478,7 @@ static const struct portal_web_host web_host = {
     .stage_describe = portal_linux_stage_describe,
     .dmabufs_refused = portal_linux_dmabufs_refused,
     .committed = portal_web_committed,
+    .moved = portal_web_moved,
     .failed = portal_web_failed,
 };
 
