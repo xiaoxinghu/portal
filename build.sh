@@ -42,8 +42,8 @@ export PATH
 
 # The Mac compiles the app host with BUN, or else Portal's pinned Bun, cached
 # or downloaded and verified; see tools/resolve-bun.sh.  A -DBUN argument is
-# an explicit choice, like BUN.  Linux, which has no web views, builds no
-# host and needs no Bun: CMake runs the host's tests with one it finds.
+# an explicit choice, like BUN.  Linux, which has no hosted apps yet, builds
+# no host and needs no Bun: CMake runs the host's tests with one it finds.
 if [ "$(uname -s)" = Darwin ]; then
     for argument in "$@"; do
         case $argument in -DBUN=*|-DBUN:*=*) BUN=${argument#*=}; export BUN ;; esac
@@ -59,7 +59,7 @@ cmake --build --preset dev
 if [ -n "$prune" ]; then
     # Keep the outputs, the build record and log, the lock and the Bun cache.
     find build -mindepth 1 -maxdepth 1 ! -name portal.bundle ! -name portal.so \
-        ! -name ghostty-linux ! -name portal-host \
+        ! -name portal-web.so ! -name ghostty-linux ! -name portal-host \
         ! -name licenses ! -name portal-build.eld ! -name portal-build.log \
         ! -name .build.lock ! -name tools -exec rm -rf {} +
     # Of Ghostty's install on Linux, what portal.so loads: the library, by its
@@ -78,5 +78,10 @@ fi
 if [ "$(uname -s)" = Darwin ]; then
     echo "Built build/portal.bundle, build/portal-host and build/licenses"
 else
-    echo "Built build/portal.so, build/ghostty-linux and build/licenses"
+    if [ -f build/portal-web.so ]; then
+        echo "Built build/portal.so, build/portal-web.so, build/ghostty-linux and build/licenses"
+    else
+        echo "Built build/portal.so, build/ghostty-linux and build/licenses, and no web views:"
+        echo "they need WPE WebKit's development files, pkg-config's wpe-webkit-2.0 and wpe-platform-2.0"
+    fi
 fi

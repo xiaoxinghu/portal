@@ -277,7 +277,11 @@ supported route: Gatekeeper sees every file in it as quarantined. Use
 
 On Linux the same install takes one of two archives, for x86-64 and for
 aarch64, each holding the module and Ghostty's library and resources, and no
-app host: Linux has terminals and Rex blocks, not web views or the launcher.
+app host: Linux has terminals, Rex blocks and pages, not hosted apps or the
+launcher. Neither archive has web views yet: they are built on Ubuntu 26.04,
+which packages no WPE WebKit, and a web view from one says so. A
+[build](../CONTRIBUTING.md#building-on-linux) where WPE WebKit's development
+files are installed has them.
 Neither needs a compiler, CMake or Zig. [Supported
 platforms](platforms.md#the-downloaded-runtime) says where each has run. The
 Emacs process chooses, not the
@@ -363,7 +367,7 @@ A compatible Bun has `Bun.markdown.html` and is at least the pinned version.
 Set `portal-build-download-bun` to nil, or `PORTAL_BUN_DOWNLOAD=0`, to never
 download. Portal never changes your shell configuration or installed Bun.
 
-On Linux, which has no web views yet, the build makes no app host and needs
+On Linux, which has no hosted apps yet, the build makes no app host and needs
 no Bun: see [building on Linux](../CONTRIBUTING.md#building-on-linux).
 
 ## Disk use and removal

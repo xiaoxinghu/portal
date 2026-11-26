@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* What portal-web.so exports: the one function portal.so looks up in it
+   (web.h).  Everything else, WPE WebKit's classes of Portal's among it,
+   stays inside. */
+{
+    global:
+        portal_web_object_open;
+    local:
+        *;
+};

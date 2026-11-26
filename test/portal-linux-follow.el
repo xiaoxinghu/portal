@@ -183,6 +183,14 @@ blank lines all the while, as the block's program printed them."
              'terminal
              (list :directory "/" :theme portal-linux-follow-terminal-theme :points 12
                    :command "sh -c 'printf \"\\033[?25l\"; exec yes \"\"'")))
+           ((equal kind "page")
+            ;; A page drawing every frame, each its own colour within a
+            ;; few levels of the same orange.
+            (let ((file (expand-file-name "page.html" portal-linux-follow--directory))
+                  (target (portal-view-open 'web nil)))
+              (with-temp-file file (insert portal-linux-follow--page))
+              (portal--web-load target (concat "file://" file))
+              target))
            (t (portal-view-open
                'terminal (list :directory "/" :test-pattern (if (equal kind "fill") "fill" t))))))
          (_ (setq portal-linux-follow--target target))
@@ -202,6 +210,20 @@ blank lines all the while, as the block's program printed them."
                    (message nil)
                    (portal-linux-follow--say "ready")))))))
       waiting)))
+
+(defconst portal-linux-follow--page
+  "<!doctype html><meta charset=utf-8><style>html,body{margin:0;height:100%;background:#f98128}</style>
+<script>
+let frames = 0;
+requestAnimationFrame(function frame() {
+  const k = ++frames % 8;
+  document.body.style.background = `rgb(${249 - k}, ${129 + k}, ${40 - k})`;
+  requestAnimationFrame(frame);
+});
+</script>"
+  "The page that follows its pane, for \"page\": a new colour each frame,
+each within a few levels of the terminals' orange, Great Pumpkin's, which
+test/linux-recording.py takes for one.")
 
 (provide 'portal-linux-follow)
 ;;; portal-linux-follow.el ends here

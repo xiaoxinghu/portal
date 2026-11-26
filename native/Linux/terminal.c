@@ -1107,6 +1107,62 @@ static void fed_free(struct fed *fed)
 
 static struct terminal *terminal_of(portal_view *view, portal_text *error);
 
+/* The stage's source: Ghostty's surface and its frames. */
+
+static struct portal_linux_frame *ghostty_take(void *surface)
+{
+    ghostty_frame_s *taken = ghostty_surface_take_frame(surface);
+    if (!taken)
+        return NULL;
+    struct portal_linux_frame *frame = calloc(1, sizeof *frame);
+    if (!frame) {
+        ghostty_frame_free(taken);
+        return NULL;
+    }
+    *frame = (struct portal_linux_frame) {.memory = taken->kind == GHOSTTY_FRAME_MEMORY,
+                                          .width = (int32_t) taken->width,
+                                          .height = (int32_t) taken->height,
+                                          .texture = taken->texture,
+                                          .fourcc = taken->fourcc,
+                                          .modifier = taken->modifier,
+                                          .plane_count = taken->plane_count,
+                                          .pixels = taken->pixels,
+                                          .own = taken};
+    for (uint32_t i = 0; i < 4; i++) {
+        frame->fds[i] = taken->fds[i];
+        frame->offsets[i] = taken->offsets[i];
+        frame->strides[i] = taken->strides[i];
+    }
+    if (frame->memory)
+        frame->strides[0] = 0;
+    return frame;
+}
+
+static void ghostty_done(struct portal_linux_frame *frame)
+{
+    ghostty_frame_free(frame->own);
+    free(frame);
+}
+
+static void ghostty_visible(void *surface, bool visible)
+{
+    ghostty_surface_set_occlusion(surface, visible);
+}
+
+static void ghostty_memory(void *surface)
+{
+    ghostty_surface_set_presentation_health(surface, false);
+    ghostty_surface_draw(surface);
+}
+
+static const struct portal_stage_source ghostty_source = {
+    .take = ghostty_take,
+    .done = ghostty_done,
+    .shown = NULL,
+    .visible = ghostty_visible,
+    .memory = ghostty_memory,
+};
+
 static void terminal_stop(void *content)
 {
     struct terminal *terminal = content;
@@ -1570,7 +1626,7 @@ bool portal_linux_terminal_create(struct portal_view *view, const portal_option 
     const portal_option *points = option(options, count, "points");
     const portal_option *opacity = option(options, count, "opacity");
     struct terminal *terminal = calloc(1, sizeof *terminal);
-    struct portal_stage *stage = terminal ? portal_linux_stage_new(view) : NULL;
+    struct portal_stage *stage = terminal ? portal_linux_stage_new(view, &ghostty_source) : NULL;
     if (terminal) {
         terminal->view = view;
         terminal->fed = stage && feeding ? fed_new(terminal) : NULL;

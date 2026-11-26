@@ -43,7 +43,7 @@ if(APPLE)
         set(BUN "${resolved_bun}" CACHE FILEPATH "The Bun that compiles Portal's app host")
     endif()
 else()
-    # Linux has no web views yet, so it builds no host and needs no Bun. The
+    # Linux has no hosted apps yet, so it builds no host and needs no Bun. The
     # host's tests run with BUN or a bun on PATH, and are skipped without one.
     if(DEFINED ENV{BUN} AND NOT DEFINED CACHE{BUN})
         set(BUN "$ENV{BUN}" CACHE FILEPATH "The Bun that runs the app host's tests")
@@ -521,7 +521,44 @@ pkg-config's egl, such as libglvnd's")
         DEPENDS portal-module
         COMMENT "Publishing the Portal native module"
         VERBATIM)
-    add_custom_target(portal ALL DEPENDS "${CMAKE_BINARY_DIR}/portal.so")
+    # The page, WPE WebKit's, in a second object that portal.so opens at the
+    # first web view (native/Linux/web.h), so that portal.so loads where WPE
+    # WebKit is not installed. It is built where WPE WebKit's development
+    # files are; a build without them has no web views, and says so.
+    pkg_check_modules(portal_wpe QUIET IMPORTED_TARGET wpe-webkit-2.0 wpe-platform-2.0)
+    set(portal_outputs "${CMAKE_BINARY_DIR}/portal.so")
+    if(portal_wpe_FOUND)
+        message(STATUS "Web views: WPE WebKit ${portal_wpe_wpe-webkit-2.0_VERSION}")
+        add_library(portal-web MODULE native/Linux/web.c)
+        target_include_directories(portal-web PRIVATE
+            native/Core/include native/Core native/Shared "${EMACS_INCLUDE}")
+        target_link_libraries(portal-web PRIVATE PkgConfig::portal_wpe
+            PkgConfig::portal_platform PkgConfig::ghostty_egl Threads::Threads)
+        target_compile_options(portal-web PRIVATE -Wall -Wextra -Werror)
+        set(web_exports "${CMAKE_SOURCE_DIR}/native/Linux/portal-web.map")
+        target_link_options(portal-web PRIVATE
+            -Wl,--no-undefined "-Wl,--version-script=${web_exports}")
+        set_target_properties(portal-web PROPERTIES
+            C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+            PREFIX "" OUTPUT_NAME portal-web LINK_DEPENDS "${web_exports}"
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/linux")
+        add_custom_command(
+            OUTPUT "${CMAKE_BINARY_DIR}/portal-web.so"
+            COMMAND "${CMAKE_COMMAND}" -E copy
+                "$<TARGET_FILE:portal-web>" "${CMAKE_BINARY_DIR}/.portal-web.so"
+            COMMAND "${CMAKE_COMMAND}" -E rename
+                "${CMAKE_BINARY_DIR}/.portal-web.so" "${CMAKE_BINARY_DIR}/portal-web.so"
+            DEPENDS portal-web
+            COMMENT "Publishing Portal's web views"
+            VERBATIM)
+        list(APPEND portal_outputs "${CMAKE_BINARY_DIR}/portal-web.so")
+    else()
+        message(STATUS "Web views: none, for want of WPE WebKit's development files, \
+pkg-config's wpe-webkit-2.0 and wpe-platform-2.0")
+        # One built before would be opened as this build's.
+        file(REMOVE "${CMAKE_BINARY_DIR}/portal-web.so")
+    endif()
+    add_custom_target(portal ALL DEPENDS ${portal_outputs})
     if(BUILD_TESTING)
         # The graphical checks' pointer, which moves and clicks through the
         # compositor's virtual pointer (test/linux-gui.sh).

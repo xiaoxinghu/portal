@@ -96,9 +96,9 @@ The ready hook runs after the server has bound its HTTP listener."
   (interactive)
   (unless (and portal--server-process (process-live-p portal--server-process))
     (unless portal-server-program
-      ;; Linux has no web views yet, so its build makes no host to offer.
+      ;; Linux has no hosted apps yet, so its build makes no host to offer.
       (unless portal-build--host
-        (user-error "Portal has no web views on %s yet, so it has no app host"
+        (user-error "Portal has no hosted apps on %s yet, so it has no app host"
                     (if (eq system-type 'gnu/linux) "Linux" system-type)))
       ;; Portal's own host is usable only as part of a complete, current
       ;; build, or of the runtime that serves in its place.

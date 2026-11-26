@@ -80,7 +80,7 @@ nil uses Portal's pinned Bun, the one tools/bun.manifest names, cached in
 `portal-build-tools-directory': the host contains the Bun that compiled
 it, and a bun on `exec-path' is not used.  A Bun named here that is
 missing or incompatible fails the build rather than being replaced.
-Only macOS builds the host: a Linux build, which has no web views yet,
+Only macOS builds the host: a Linux build, which has no hosted apps yet,
 needs no Bun."
   :type '(choice (const :tag "Find or download" nil) file))
 
@@ -117,11 +117,20 @@ Keep this list the same as build.sh's.")
   "Files of a complete build, relative to the build directory.
 macOS builds a bundle that holds the module and Ghostty's resources, and
 the app host; Linux builds the module and keeps Ghostty's library and
-resources in ghostty-linux beside it, and no host, having no web views.")
+resources in ghostty-linux beside it, and no host, having no hosted apps.
+A Linux build also makes portal-web.so, its web views, where WPE WebKit's
+development files are: they are optional, and not among these.")
 
 (defconst portal-build--host
   (and (member "portal-host" portal-build--artifacts) "portal-host")
   "The app host in the build directory, or nil where the build makes none.")
+
+(defconst portal-build--web "portal-web.so"
+  "Linux's web views, beside the module, which opens them at the first.")
+
+(defconst portal-build--wpe
+  "pkg-config's wpe-webkit-2.0 and wpe-platform-2.0, such as Arch's wpewebkit"
+  "What a Linux build needs for web views, as native/Linux/backend.c says it.")
 
 (defconst portal-build--module
   (if (eq system-type 'darwin) "portal.bundle/Contents/MacOS/portal.dylib" "portal.so")
@@ -473,14 +482,26 @@ the new one."
   (let ((problem (and (string-prefix-p "finished" status) (portal-build-problem))))
     (if (not (string-prefix-p "finished" status))
         (message "Portal's build failed: see %s" (buffer-name buffer))
-      (message "%s%s"
+      (message "%s%s%s"
                (cond ((eq problem 'restart)
                       "Portal is built: restart Emacs to load its new native module")
                      (problem
                       (concat "Portal's build finished, but "
                               (downcase (portal-build--describe problem))))
                      (t "Portal is ready: retry your command"))
+               (portal-build--web-advice)
                (portal-build--detached-advice)))))
+
+(defun portal-build--web-advice ()
+  "Return a sentence to add to a build's message when it has no web views.
+A Linux build makes them only where WPE WebKit's development files are;
+the result begins with the period that ends the message before it."
+  (if (and (eq system-type 'gnu/linux)
+           (file-exists-p (portal-build-file portal-build--module))
+           (not (file-exists-p (portal-build-file portal-build--web))))
+      (concat ".  It has no web views: for them, install WPE WebKit's development files, "
+              portal-build--wpe ", and build again")
+    ""))
 
 (defun portal-build-ensure ()
   "Signal a `user-error' unless Portal's native part can be loaded now.

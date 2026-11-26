@@ -29,8 +29,8 @@ For an SSH-only test account, set these in its `~/.zshenv` so non-interactive
 builds inherit them. Verify actual native compilation, not only
 `native-comp-available-p`, before saving a prepared VM.
 
-On Linux, where Portal has views and terminals and no web views yet, the
-checks are those [Contributing](../CONTRIBUTING.md#building-on-linux) lists,
+On Linux, where Portal has views, terminals and pages and no hosted apps
+yet, the checks are those [Contributing](../CONTRIBUTING.md#building-on-linux) lists,
 with [two graphical ones](#linux-graphical-checks) of their own.
 
 ## Writing tests
@@ -570,6 +570,7 @@ sh test/linux-gui.sh
 sh test/linux-follow.sh
 sh test/linux-follow.sh terminal
 sh test/linux-follow.sh fed
+sh test/linux-follow.sh page
 ```
 
 Both run after `./build.sh`, each on **a desktop of its own**:
@@ -586,16 +587,22 @@ It is the compositor the views were written against: no other has run them.
 
 `linux-gui.sh` runs [the views' suite](../test/portal-linux-gui-tests.el),
 [the terminals'](../test/portal-linux-terminal-tests.el),
-[the fed terminals'](../test/portal-linux-fed-tests.el) and
+[the fed terminals'](../test/portal-linux-fed-tests.el),
+[the pages'](../test/portal-linux-web-tests.el) and
 [the Rex suite of the fake server](../test/portal-rex-gui-tests.el) in one
 fresh Emacs through `gui-ert.sh`; then
 [the desktop scheme's suite](../test/portal-linux-scheme-tests.el), a
 terminal with a pair of themes following the desktop's light or dark, in
 another Emacs on a session bus of its own that `dbus-run-session` starts,
 where that Emacs plays the XDG desktop portal, so your desktop is never
-asked to change (without `dbus-run-session` it says it did not run); and
-then Emacs quitting with a view open, a
-test pattern and then a terminal printing as fast as it can. Pass an ERT
+asked to change (without `dbus-run-session` it says it did not run); then
+a page drawing in memory, in an Emacs with `PORTAL_TEST_WEB_MEMORY` set,
+since only a process's first page decides how pages draw; then a web view
+where WPE WebKit is not installed, in an Emacs that `bwrap` gives an
+empty file in place of WPE WebKit's library, which must say what to
+install while a terminal works; and then Emacs quitting with a view open,
+a test pattern, a terminal printing as fast as it can and a page drawing
+every frame, after which no process it started may run on. Pass an ERT
 selector regexp to run part of it. It needs `grim`, which reads the
 output's pixels, `wtype`, which types, and `wf-recorder` with `ffmpeg` and
 Python 3 for a recording; it points and clicks with
@@ -623,6 +630,20 @@ message socket's wake and the terminal's frames share GLib's context at
 the default priority. It prints the median, the 90th percentile and the
 longest of each.
 
+The pages' tests load a page of the terminals' orange, a new shade within
+a few levels of it at every animation frame, which writes what it saw to
+its title as JSON: shown in its pane and through a split; its web process
+and network process gone with its view; its web process killed, and Emacs
+and the page living on; a video of its own directory playing under
+WebKit's sandbox; half a second of busy Lisp and a collection leaving it
+no gap of 50 ms between animation frames; a terminal under output beside
+it, both at 60 frames a second; text and a dead key in its field, a chord
+it uses kept and one it does not handed to Emacs, and a chord the page was
+too busy to answer in time not answering a later one; the pointer's shape,
+a click on a link, a double click, and three notches of the wheel as three
+of WebKit's steps. They need `portal-web.so` and WPE WebKit, and skip
+without them.
+
 `linux-follow.sh` is the check that a view is never out of place.
 [A fresh Emacs](../test/portal-linux-follow.el) changes a view's pane, one
 command every 0.4 s: splits, a pane made larger, one pane again, its buffer
@@ -634,7 +655,9 @@ its pane and nothing else, to the pixel along one column and one row. It
 prints each frame that is not, and exits 1 if there is one.
 `PORTAL_FOLLOW_ROUNDS` repeats the steps (default 3),
 `PORTAL_FOLLOW_STEPS` chooses them, the argument `fill` uses a pattern
-of one pixel stretched over the pane, and the argument `terminal` a terminal
+of one pixel stretched over the pane, the argument `page` a page drawing
+every frame, each a shade of the terminals' orange, and the argument
+`terminal` a terminal
 whose shell prints blank lines all the while, so that its renderer makes
 frames as the pane changes, each its theme's flat orange. The argument `fed`
 shows a Rex block of [the fake server](#rex-checks) instead, fed blank lines
@@ -653,8 +676,9 @@ beside the echo area and says how many there were: one or two for each
 resize, on this compositor without its animations.
 
 Run both after changing `native/Linux` or `portal-view.el`, the follow check
-with `terminal` too after changing a terminal's presenter, and with `fed`
-after changing a fed terminal or where a view's frames go in its pane, and
+with `terminal` too after changing the presenter, with `page` after
+changing it or a page, and with `fed` after changing a fed terminal or
+where a view's frames go in its pane, and
 say which machine and compositor ran them: a pass says what that compositor
 does.
 
