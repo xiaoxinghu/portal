@@ -57,6 +57,7 @@ the plist `portal--inspect' returned.")
 (declare-function portal-terminal-quick--display "portal-terminal-quick" (buffer))
 (declare-function portal-terminal-quick--window "portal-terminal-quick" ())
 (declare-function portal-terminal-quick-dismiss "portal-terminal-quick" ())
+(declare-function portal-terminal-sidebar-buffers "portal-terminal-sidebar" ())
 
 (defun portal-terminal--theme-names (theme)
   "Return THEME, a `portal-terminal-theme' value, as a list (LIGHT DARK).
@@ -559,15 +560,33 @@ none of this, and ends no Rex block."
     (switch-to-buffer buffer)
     (unless (eq previous buffer) (setq portal-terminal--last-buffer previous))))
 
+(defun portal-terminal--in-order ()
+  "Return the terminals' buffers in the order of the sidebar of terminals.
+That is each Rex session's blocks, the sessions in their server's order
+and a session's blocks in the order their buffers were made, then
+Portal's own terminals in the order they were made; quick terminals are
+left out.  It is the same whether the sidebar is shown or not, and
+`portal-terminal-next', `-previous' and `-select-index' walk it.
+Without Rex loaded there are no blocks, and it is `portal-terminal-buffers'."
+  (if (featurep 'portal-rex)
+      (progn (require 'portal-terminal-sidebar) (portal-terminal-sidebar-buffers))
+    (portal-terminal-buffers)))
+
 (defun portal-terminal-next (&optional previous)
-  "Select the next terminal in creation order, or PREVIOUS when non-nil."
+  "Select the next terminal in the sidebar's order, or PREVIOUS when non-nil.
+After the last comes the first.  From a buffer that is not one of them,
+the next is the first and the previous the last.  The order is
+`portal-terminal--in-order'."
   (interactive)
-  (let* ((buffers (portal-terminal-buffers))
-         (index (or (cl-position (current-buffer) buffers) 0)))
-    (unless buffers (user-error "No terminal buffers"))
-    (portal-terminal--switch (nth (mod (+ index (if previous -1 1)) (length buffers)) buffers))))
+  (let* ((buffers (or (portal-terminal--in-order) (user-error "No terminal buffers")))
+         (index (cl-position (current-buffer) buffers)))
+    (portal-terminal--switch
+     (nth (cond (index (mod (+ index (if previous -1 1)) (length buffers)))
+                (previous (1- (length buffers)))
+                (t 0))
+          buffers))))
 (defun portal-terminal-previous ()
-  "Select the previous terminal buffer."
+  "Select the previous terminal in the sidebar's order; before the first, the last."
   (interactive) (portal-terminal-next t))
 (defun portal-terminal-last ()
   "Select the last terminal used in this pane."
@@ -576,10 +595,11 @@ none of this, and ends no Rex block."
     (user-error "No previous terminal"))
   (portal-terminal--switch portal-terminal--last-buffer))
 (defun portal-terminal-select-index ()
-  "Select terminal 0 through 9 in creation order, by the digit of the key
-that ran this command, such as s-1."
+  "Select terminal 0 through 9 in the sidebar's order, by the digit of the key
+that ran this command, such as s-1.  Terminal 0 is the sidebar's first
+row, folded or not; the order is `portal-terminal--in-order'."
   (interactive)
-  (let ((buffer (nth (- (event-basic-type last-command-event) ?0) (portal-terminal-buffers))))
+  (let ((buffer (nth (- (event-basic-type last-command-event) ?0) (portal-terminal--in-order))))
     (unless buffer (user-error "No terminal at that index"))
     (portal-terminal--switch buffer)))
 (defvar-local portal-terminal--renamer nil

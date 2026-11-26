@@ -663,7 +663,8 @@ moment Emacs connects:
 | --- | --- |
 | `portal-terminal-choose`, `portal-terminal-select`, the Consult source | Listed with the other terminals, whether shown yet or not, and annotated with its program. Choosing one shows it, which opens its view; so does previewing one in Consult, which claims the block. |
 | `portal-terminal-choose-project` | Lists it when it belongs to the project: a block started with `portal-rex-new-terminal` belongs to the project it started in, and one made elsewhere to none, until `portal-terminal-set-project` assigns it. |
-| `portal-terminal-next`, `-previous`, `-last`, `-select-index` | Go to it in turn: terminals with views in the order they opened, then the buffers of blocks not yet shown, in the order they were made. |
+| `portal-terminal-next`, `-previous`, `-select-index` | Go to it in the [sidebar's](terminals.md#the-sidebar) order, shown yet or not: each session's blocks, the sessions in the server's order and a session's blocks in the order their buffers were made, then Portal's own terminals in the order they were made. |
+| `portal-terminal-last` | Returns to it when it was the terminal used last in the pane. |
 | `portal-terminal` | Returns to the first terminal, which may be a block's. |
 | `portal-terminal-set-project` | Assigns it to a project, or to none. |
 | `portal-terminal-rename` | Relabels the block on its server, and the buffer takes its new name, as [above](#sessions-and-new-terminals). |

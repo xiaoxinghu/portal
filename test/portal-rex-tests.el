@@ -3858,6 +3858,72 @@ It has the target of a terminal view, as one shown in a window has, and no view.
                                (buffer-name shell))))))
         (portal-rex-tests--end-own-terminal own)))))
 
+;; Next, previous and by index walk the sidebar's order, the terminals'
+;; and not the window's: shown or not, a block keeps its place.
+(ert-deftest portal-terminal-next-walks-the-sidebars-rows ()
+  (portal-rex-tests--with (server)
+    (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")
+                                               (:session_id "session:b" :label "portal")])
+    (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "claude")
+                              (portal-rex-tests--block "2" "shell"))
+    (portal-rex-tests--blocks server "b" (portal-rex-tests--block "3" "agent"))
+    (let ((connection (portal-rex-tests--connect server))
+          (own (portal-rex-tests--own-terminal "*terminal: notes*"))
+          (file (get-buffer-create "*a file*")))
+      (unwind-protect
+          (let* ((claude (portal-rex-block-buffer connection "block:1"))
+                 (shell (portal-rex-block-buffer connection "block:2"))
+                 (agent (portal-rex-block-buffer connection "block:3"))
+                 (highlighted
+                  (lambda ()
+                    ;; No redisplay in batch Emacs, so no selection hook:
+                    ;; the highlight is moved as that hook moves it.
+                    (with-current-buffer portal-terminal-sidebar--name
+                      (portal-terminal-sidebar--highlight)
+                      (string-trim (buffer-substring-no-properties
+                                    (overlay-start portal-terminal-sidebar--overlay)
+                                    (overlay-end portal-terminal-sidebar--overlay))))))
+                 (index (lambda (digit)
+                          (let ((last-command-event (+ ?0 digit)))
+                            (portal-terminal-select-index))
+                          (current-buffer))))
+            (portal-rex-tests--settle connection)
+            (portal-rex-tests--sidebar
+              (should (equal (portal-rex-tests--sidebar-rows)
+                             '("work" "claude" "shell" "portal" "agent" "terminal: notes")))
+              ;; From a session's last block to the next session's first,
+              ;; then to Portal's own terminal, and from the last row to
+              ;; the first: the highlight a row down each time.
+              (switch-to-buffer shell)
+              (should (equal (funcall highlighted) "shell"))
+              (dolist (row '("agent" "terminal: notes" "claude" "shell"))
+                (portal-terminal-next)
+                (should (equal (funcall highlighted) row)))
+              (portal-terminal-previous)
+              (should (eq (current-buffer) claude))
+              (portal-terminal-previous)
+              (should (eq (current-buffer) own))
+              ;; From a buffer that is not a terminal: the first, the last.
+              (switch-to-buffer file)
+              (portal-terminal-next)
+              (should (eq (current-buffer) claude))
+              (switch-to-buffer file)
+              (portal-terminal-previous)
+              (should (eq (current-buffer) own)))
+            ;; The sidebar hidden, the order is the same.
+            (should-not (get-buffer-window portal-terminal-sidebar--name))
+            (should (equal (mapcar index '(0 1 2 3)) (list claude shell agent own)))
+            (should-error (funcall index 4) :type 'user-error)
+            ;; A block first shown, its view opening, keeps its index.
+            (with-current-buffer agent (setq portal-view--target "terminal:test-agent"))
+            (setq portal-view--buffers (append portal-view--buffers (list agent)))
+            (should (memq agent (portal-view-buffers 'terminal)))
+            (should (equal (mapcar index '(0 1 2 3)) (list claude shell agent own)))
+            (with-current-buffer agent (setq portal-view--target nil))
+            (setq portal-view--buffers (delq agent portal-view--buffers)))
+        (kill-buffer file)
+        (portal-rex-tests--end-own-terminal own)))))
+
 (ert-deftest portal-terminal-sidebar-follows-statuses-in-place ()
   (portal-rex-tests--with (server)
     (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")
