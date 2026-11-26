@@ -60,11 +60,18 @@ setInterval(() => {
 
 (defvar portal-linux-web--directory nil "The page's directory, for the test that runs.")
 
+(defconst portal-linux-web--absent
+  "\\`\\(?:Web views on Linux need WPE WebKit, which is not installed: install \\|This build of Portal has no web views: build it again where WPE WebKit's development files are installed\\)"
+  "What a web view says where WPE WebKit or the build's web views are missing.")
+
 (defun portal-linux-web--usable ()
-  "Skip the test where this build of Portal has no web views."
+  "Skip the test where this build of Portal has no web views, or WPE WebKit is missing.
+Any other failure to open a web view fails the test."
   (portal-view--load)
   (let ((target (condition-case failure (portal--open "web" nil)
-                  (error (ert-skip (format "No web views: %s" (cadr failure)))))))
+                  (error (if (string-match-p portal-linux-web--absent (cadr failure))
+                             (ert-skip (format "No web views: %s" (cadr failure)))
+                           (signal (car failure) (cdr failure)))))))
     (portal--close target)))
 
 (defmacro portal-linux-web--with (&rest body)
@@ -203,6 +210,25 @@ Returns the view's target once the page has loaded and shows."
         (portal-linux-web--wait-for target :time (lambda (time) (and time (> time 1))))
         (should (eq (plist-get (portal-linux-web--seen target) :error) :null))))))
 
+(ert-deftest portal-linux-gui-web-page-moves-to-a-file-of-another-directory ()
+  :tags '(:gui)
+  "A page loading a file of another directory is a web view made again, while it draws."
+  (portal-linux-web--with
+    (let ((target (portal-linux-web--open))
+          (other (make-temp-file "portal-linux-web-other-" t)))
+      (unwind-protect
+          (let ((page (expand-file-name "page.html" other)))
+            (with-temp-file page (insert portal-linux-web--page))
+            ;; Back and forth between the two, the page animating all the while.
+            (dolist (url (list (concat "file://" page)
+                               (portal-linux-web--file "page.html" portal-linux-web--page)
+                               (concat "file://" page)))
+              (portal-web-load-url url)
+              (portal-linux-gui--wait (lambda () (equal (portal-linux-gui--get :url target) url)))
+              (portal-linux-web--wait-for target :frames (lambda (frames) (and frames (> frames 30))))
+              (portal-linux-terminal--covers (selected-window) target)))
+        (delete-directory other t)))))
+
 ;;; Busy Lisp
 
 (ert-deftest portal-linux-gui-web-page-draws-while-lisp-is-busy ()
@@ -275,6 +301,32 @@ Returns the view's target once the page has loaded and shows."
       (portal-linux-gui--wait (lambda () (portal-linux-gui--get :focused target)))
       (portal-linux-web--wait-for target :keys (lambda (keys) (member "C-c" keys)))
       (should (equal (plist-get (portal-linux-web--seen target) :field) "helloéb")))))
+
+(ert-deftest portal-linux-gui-web-page-answers-an-offer-after-more-presses-than-it-keeps ()
+  :tags '(:gui)
+  "A busy page given more presses than Portal keeps still answers the offer after them."
+  (portal-linux-web--with
+    (let ((target (portal-linux-web--open
+                   (portal-linux-web--file
+                    "many.html"
+                    "<!doctype html><title>ready</title><script>
+let count = 0;
+addEventListener('keydown', (event) => {
+  // Busy at the first key, while the rest pile up behind it.
+  if (++count === 1) { const end = performance.now() + 400; while (performance.now() < end); }
+  if (event.ctrlKey && event.key === 'k') { event.preventDefault(); document.title = 'kept ' + count; }
+});
+</script>"))))
+      (keymap-set (current-local-map) "C-k" #'portal-linux-gui--mark)
+      (portal-linux-web--focus target)
+      (let ((portal-linux-gui--ran nil))
+        (portal-linux-gui--type (make-string 80 ?a) "-M" "ctrl" "-k" "k" "-m" "ctrl")
+        (portal-linux-gui--wait
+         (lambda () (equal (portal-linux-gui--get :title target) "kept 81")))
+        (portal-linux-gui--wait (lambda () (not (portal-linux-gui--get :offering target))))
+        (portal-linux-gui--pause 0.3)
+        (should-not portal-linux-gui--ran)
+        (should-not unread-command-events)))))
 
 (ert-deftest portal-linux-gui-web-page-busy-past-an-offer-answers-only-its-own ()
   :tags '(:gui)
@@ -375,9 +427,8 @@ in which WPE WebKit's library cannot be opened."
   (let* ((before (portal--open "terminal" '(:directory "/" :test-pattern t)))
          (next (format "web:%d" (1+ (string-to-number (cadr (split-string before ":")))))))
     (portal--close before)
-    (should (string-match-p
-             "\\`\\(?:Web views on Linux need WPE WebKit, which is not installed: install \\|This build of Portal has no web views: build it again where WPE WebKit's development files are installed\\)"
-             (cadr (should-error (portal--open "web" nil) :type 'error))))
+    (should (string-match-p portal-linux-web--absent
+                            (cadr (should-error (portal--open "web" nil) :type 'error))))
     ;; A failed open leaves nothing behind, and a second fails the same way.
     (should-not (portal--inspect next))
     (should-error (portal--open "web" nil) :type 'error))
