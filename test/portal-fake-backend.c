@@ -765,19 +765,19 @@ bool portal_terminal_pending(portal_view *terminal, size_t *bytes, portal_text *
     return true;
 }
 
-/* Placed at a grid, which hangs below its pane where a pane-filling
-   rectangle does not, an attached terminal takes it: with cells of 8 by
-   16 at scale 1 and no padding, the rectangle is the grid and half a cell
+/* Placed at a grid, whose corner is not the pane's where a pane-filling
+   rectangle's is, an attached terminal takes it: with cells of 8 by 16 at
+   scale 1 and no padding, the rectangle is the grid and half a cell
    more. */
 bool portal_terminal_place(portal_view *terminal, portal_pane_rect rect, portal_text *error)
 {
     if (!fed_working(terminal, error))
         return false;
-    note("place x %g y %g width %g height %g top %g\n", rect.x, rect.y, rect.width, rect.height,
-         rect.top);
+    note("place x %g y %g width %g height %g top %g%s\n", rect.x, rect.y, rect.width, rect.height,
+         rect.top, rect.from_bottom ? " from bottom" : "");
     if (!get(terminal, "size"))
         return true;
-    bool gridded = rect.y < 0;
+    bool gridded = rect.y != 0 || rect.top != 0;
     uint32_t columns = rect.width > 0 ? (uint32_t) (rect.width / 8) : 0;
     uint32_t rows = rect.height > 0 ? (uint32_t) (rect.height / 16) : 0;
     if (gridded && (!terminal->gridded || terminal->grid[0] != columns
@@ -797,6 +797,17 @@ bool portal_terminal_place(portal_view *terminal, portal_pane_rect rect, portal_
         portal_terminal_took_grid((portal_string) {terminal->target, strlen(terminal->target)},
                                   columns, rows);
     }
+    return true;
+}
+
+/* A fed terminal's frame, held or let go, is in the log; a terminal
+   describes "frame-held" while it is held. */
+bool portal_terminal_hold_frame(portal_view *terminal, bool hold, portal_text *error)
+{
+    if (!fed_working(terminal, error))
+        return false;
+    note(hold ? "hold frame\n" : "let go frame\n");
+    set_flag(terminal, "frame-held", hold);
     return true;
 }
 

@@ -104,7 +104,11 @@ bool portal_rex_resume(uint64_t id, portal_text *error);
    reports of focus, size and colour scheme, which the server makes for
    itself; a change of who has the keyboard is sent as a "focus" block
    event, and a change of the grid of TARGET's pane is sent as Emacs's size
-   for the block, whoever owns it.  The paint leaves the server's palette
+   for the block, whoever owns it, once it has stayed the same for 120 ms:
+   a frame dragged by its edge resizes the block once, and a grid that
+   comes back to the block's sends nothing.  TARGET's grid hangs from the
+   pane's top-left corner, as a local terminal's does, unless another
+   client owns the block: then from its bottom-left (portal_fed_hang).  The paint leaves the server's palette
    out, so TARGET keeps its own theme's colours.
 
    A block has the size its owner gives it.  The server keeps the size
@@ -152,6 +156,12 @@ bool portal_rex_show(uint64_t id, portal_string target, portal_string session,
    another client takes it.  A take already waiting stands for this one.
    Fails, sending nothing, for a TARGET that shows no block. */
 bool portal_rex_take(portal_string target, portal_text *error);
+
+/* Hold back the changes of TARGET's grid while HOLD, as while the
+   minibuffer covers the bottom of its pane for a moment: none is sent to
+   the block.  Let go, the grid is sent at once, unless it is the one the
+   block was last sent.  Fails for a TARGET that shows no block. */
+bool portal_rex_hold_size(portal_string target, bool hold, portal_text *error);
 
 /* For views.c: what TARGET shows, if it shows a block, as the members
    ,"title":T,"pwd":P,"program":G,"exited":E,

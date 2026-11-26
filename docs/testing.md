@@ -662,7 +662,7 @@ whose shell prints blank lines all the while, so that its renderer makes
 frames as the pane changes, each its theme's flat orange. The argument `fed`
 shows a Rex block of [the fake server](#rex-checks) instead, fed blank lines
 all the while: its terminal holds the block's grid, from the pane's
-bottom-left corner over the theme's background, so the pane is that orange
+top-left corner over the theme's background, so the pane is that orange
 whatever grid it holds. The recording stays in
 `PORTAL_TEST_LOGS`, or `build/linux-follow`. It needs `wf-recorder`,
 `ffmpeg` and Python 3.

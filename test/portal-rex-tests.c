@@ -661,28 +661,34 @@ static void test_typing(void)
     answer_with(id, 12, "{\"ticket\":\"AAECAwQFBgcICQoLDA0ODw\"}", NULL);
     uint64_t data = portal_fake_socket_last();
     CHECK(data > id);
-    /* Once sized, a new grid resizes the block, the latest of several. */
+    /* Once sized, a new grid resizes the block once it has settled: the
+       latest of several, once. */
     CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 400, 160}, text("frame"), &error));
-    CHECK(asked(id, 13, "com.superlogical.terminal.resize",
-                ON_BLOCK ",\"args\":{\"columns\":50,\"rows\":10,\"cell_width_px\":8,"
-                         "\"cell_height_px\":16}}"));
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
     CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 480, 160}, text("frame"), &error));
     CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 560, 160}, text("frame"), &error));
     portal_terminal_input(text(target), "d", 1);
+    CHECK(asked(id, 13, "com.superlogical.terminal.write", ON_BLOCK ",\"args\":{\"data\":\"d\"}}"));
     answer_with(id, 13, "{}", NULL);
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
+    portal_fake_fire_timers();
     CHECK(asked(id, 14, "com.superlogical.terminal.resize",
                 ON_BLOCK ",\"args\":{\"columns\":70,\"rows\":10,\"cell_width_px\":8,"
                          "\"cell_height_px\":16}}"));
     answer_with(id, 14, "{}", NULL);
-    CHECK(asked(id, 15, "com.superlogical.terminal.write", ON_BLOCK ",\"args\":{\"data\":\"d\"}}"));
+    /* A grid that comes back to the block's before it settles sends
+       nothing. */
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 400, 160}, text("frame"), &error));
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 560, 160}, text("frame"), &error));
+    portal_fake_fire_timers();
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
     /* The stream ends while a write is out: what was typed after it is
        dropped, not sent once the write is answered. */
     portal_terminal_input(text(target), "e", 1);
-    answer_with(id, 15, "{}", NULL);
-    CHECK(asked(id, 16, "com.superlogical.terminal.write", ON_BLOCK ",\"args\":{\"data\":\"e\"}}"));
+    CHECK(asked(id, 15, "com.superlogical.terminal.write", ON_BLOCK ",\"args\":{\"data\":\"e\"}}"));
     portal_terminal_input(text(target), "f", 1);
     portal_fake_socket_closed(data, 1000, "The server closed the connection (1000)");
-    answer_with(id, 16, "{}", NULL);
+    answer_with(id, 15, "{}", NULL);
     CHECK(is_text(portal_fake_socket_sent(id), ""));
     /* Closing the terminal stops its typing. */
     CHECK(portal_views_close(text(target), &error));
@@ -1182,6 +1188,141 @@ static void backlog(const char *target, size_t bytes)
     portal_terminal_backlog(text(target));
 }
 
+/* Whether the last thing the core sent on ID resizes the block to COLUMNS
+   by ROWS, alone. */
+static bool resized_to(uint64_t id, int columns, int rows)
+{
+    char expected[128];
+    snprintf(expected, sizeof expected,
+             "\"method\":\"com.superlogical.terminal.resize\",\"payload\":{\"session_id\":"
+             "\"" SESSION "\",\"block_id\":\"" BLOCK "\",\"args\":{\"columns\":%d,\"rows\":%d,",
+             columns, rows);
+    const char *got = portal_fake_socket_sent(id);
+    if (!strstr(got, expected) || strchr(got, '\n')) {
+        fprintf(stderr, "Expected a resize to %dx%d, got \"%s\"\n", columns, rows, got);
+        return false;
+    }
+    return true;
+}
+
+/* A grid hangs from the pane's bottom-left while another client owns the
+   block, and from its top-left otherwise. */
+static void test_hanging(void)
+{
+    portal_text error = {0};
+    uint64_t id = open_connection("/tmp/rex/server.sock", &error);
+    portal_fake_socket_sent(id);
+    welcome_me(id);
+    int number = 1;
+    char *target = fed_terminal(&error);
+    portal_fake_fed_log();
+    show_live(id, target, &number, false, true, "P");
+    /* No client owns it: the stream's grid of 80 by 24 from the top-left,
+       480 - 392 up from the pane's bottom. */
+    CHECK(strstr(portal_fake_fed_log(), "place x 0 y 88 width 644 height 392 top 0\n") != NULL);
+    owner_changed(id, 20, "client:app");
+    CHECK(is_text(portal_fake_fed_log(), "place x 0 y -8 width 644 height 392 top 96 from bottom\n"));
+    owner_changed(id, 21, "client:other");
+    CHECK(is_text(portal_fake_fed_log(), ""));
+    owner_changed(id, 22, "client:me");
+    CHECK(is_text(portal_fake_fed_log(), "place x 0 y 88 width 644 height 392 top 0\n"));
+    owner_changed(id, 23, NULL);
+    CHECK(is_text(portal_fake_fed_log(), ""));
+    received(id);
+    sent();
+    CHECK(portal_views_close(text(target), &error));
+    free(target);
+    CHECK(portal_rex_close(id, &error));
+    sent();
+}
+
+/* Held, the pane's grid goes nowhere; let go, it goes at once, unless it
+   is the block's. */
+static void test_holding_the_size(void)
+{
+    portal_text error = {0};
+    uint64_t id = open_connection("/tmp/rex/server.sock", &error);
+    int number = 1;
+    char *target = fed_terminal(&error);
+    char refusal[64];
+    snprintf(refusal, sizeof refusal, "No block is shown in %s", target);
+    CHECK(!portal_rex_hold_size(text(target), true, &error));
+    CHECK(says(&error, refusal));
+    show_live(id, target, &number, false, true, "P");
+    /* The minibuffer opens over the pane's bottom, grows, and closes. */
+    CHECK(portal_rex_hold_size(text(target), true, &error));
+    CHECK(portal_rex_hold_size(text(target), true, &error));
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 800, 400}, text("frame"), &error));
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 800, 320}, text("frame"), &error));
+    portal_fake_fire_timers();
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 800, 480}, text("frame"), &error));
+    CHECK(portal_rex_hold_size(text(target), false, &error));
+    portal_fake_fire_timers();
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
+    /* A change waiting to settle when the hold starts waits with it; let
+       go at another grid, as when the command split the pane, the grid
+       goes at once. */
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 400, 480}, text("frame"), &error));
+    CHECK(portal_rex_hold_size(text(target), true, &error));
+    portal_fake_fire_timers();
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
+    CHECK(portal_rex_hold_size(text(target), false, &error));
+    CHECK(resized_to(id, 50, 30));
+    answer_with(id, number++, "{}", NULL);
+    /* A size queued behind an operation still out when the hold starts
+       goes with nothing; let go at the block's grid, nothing goes. */
+    portal_rex_focus(text(target), true);
+    CHECK(asked(id, number, "block.event",
+                ON_BLOCK ",\"event\":{\"type\":\"focus\",\"payload\":{\"action\":\"in\"}}}"));
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 480, 480}, text("frame"), &error));
+    portal_fake_fire_timers();
+    CHECK(portal_rex_hold_size(text(target), true, &error));
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 480, 320}, text("frame"), &error));
+    answer_with(id, number++, "{}", NULL);
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 400, 480}, text("frame"), &error));
+    CHECK(portal_rex_hold_size(text(target), false, &error));
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
+    /* A size queued behind an operation still out, whose grid moves on
+       before it goes, waits for the new grid to settle; and one that comes
+       back to the block's sends nothing. */
+    portal_rex_focus(text(target), false);
+    CHECK(asked(id, number, "block.event",
+                ON_BLOCK ",\"event\":{\"type\":\"focus\",\"payload\":{\"action\":\"out\"}}}"));
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 480, 480}, text("frame"), &error));
+    portal_fake_fire_timers();
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 560, 480}, text("frame"), &error));
+    answer_with(id, number++, "{}", NULL);
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
+    portal_fake_fire_timers();
+    CHECK(resized_to(id, 70, 30));
+    answer_with(id, number++, "{}", NULL);
+    portal_rex_focus(text(target), true);
+    sent();
+    portal_fake_socket_sent(id);
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 480, 480}, text("frame"), &error));
+    portal_fake_fire_timers();
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 400, 480}, text("frame"), &error));
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 560, 480}, text("frame"), &error));
+    answer_with(id, number++, "{}", NULL);
+    portal_fake_fire_timers();
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
+    /* Not held, a change settles and goes as ever. */
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 400, 240}, text("frame"), &error));
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
+    portal_fake_fire_timers();
+    CHECK(resized_to(id, 50, 15));
+    received(id);
+    sent();
+    CHECK(portal_views_close(text(target), &error));
+    CHECK(!portal_rex_hold_size(text(target), false, &error));
+    free(error.data);
+    free(target);
+    CHECK(portal_rex_close(id, &error));
+    sent();
+}
+
 static void test_backlog(void)
 {
     portal_text error = {0};
@@ -1612,6 +1753,8 @@ int main(void)
     test_details();
     test_owning();
     test_resizing_while_painting();
+    test_hanging();
+    test_holding_the_size();
     test_backlog();
     test_held_end();
     test_resuming();

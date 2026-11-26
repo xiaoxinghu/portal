@@ -44,6 +44,15 @@ struct portal_fed {
     /* The pane's grid and cell as last reported, once they have been. */
     bool reported;
     uint32_t reported_pane[4];
+    /* Whether a grid hangs from the pane's bottom-left corner, as for a
+       block another client sizes, and not from its top-left. */
+    bool from_bottom;
+    /* The frame on the screen is held across a change of grid, until the
+       output after it has been parsed and the terminal has been quiet for
+       PORTAL_FED_QUIET_MS, or PORTAL_FED_HOLD_FRAME_MS have gone by: the
+       two timers' tokens, 0 while not running. */
+    bool frame_held;
+    uint64_t quiet, hold_cap;
     /* Whether the program waits for the backlog to go down. */
     bool backlogged;
     size_t length;
@@ -144,19 +153,23 @@ static bool place(struct portal_fed *fed, portal_pane_rect rect)
 
 portal_pane_rect portal_fed_grid_rect(uint32_t columns, uint32_t rows, double pane_height,
                                       double cell_width, double cell_height, double padding,
-                                      double scale)
+                                      double scale, bool from_bottom)
 {
     /* The grid, Ghostty's padding, and half a cell to spare, so that
        rounding never loses a row or a column.  Ghostty leaves the spare
-       below the grid and to its right, so the terminal hangs that much
-       below the pane: the grid's last row sits at the pane's bottom, and a
-       grid that fits the pane is never clipped. */
+       below the grid and to its right.  From the top-left, the terminal's
+       top is the pane's, as a local terminal's is: a pane that shrinks or
+       grows from below covers or uncovers its last rows, and nothing
+       moves.  From the bottom-left, the terminal hangs the spare below the
+       pane: the grid's last row sits at the pane's bottom, and a grid that
+       fits the pane is never clipped. */
     portal_pane_rect rect = {
         .x = 0,
-        .y = -cell_height / 2 / scale,
         .width = ((double) columns * cell_width + 2 * padding + cell_width / 2) / scale,
         .height = ((double) rows * cell_height + 2 * padding + cell_height / 2) / scale,
+        .from_bottom = from_bottom,
     };
+    rect.y = from_bottom ? -cell_height / 2 / scale : pane_height - rect.height;
     rect.top = pane_height - (rect.y + rect.height);
     return rect;
 }
@@ -205,17 +218,19 @@ static void report_pane(struct portal_fed *fed)
 static bool same_rect(portal_pane_rect a, portal_pane_rect b)
 {
     return a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height
-        && a.top == b.top;
+        && a.top == b.top && a.from_bottom == b.from_bottom;
 }
 
-/* Size the terminal to the grid it holds, at its pane's bottom-left, or to
-   its pane until it holds one; then report the pane's grid. */
+/* Size the terminal to the grid it holds, at its pane's top-left or
+   bottom-left, or to its pane until it holds one; then report the pane's
+   grid. */
 static void fit(struct portal_fed *fed)
 {
-    portal_pane_rect rect = {0, 0, fed->pane_width, fed->pane_height, 0};
+    portal_pane_rect rect = {0, 0, fed->pane_width, fed->pane_height, 0, false};
     if (fed->holds && knows_cell(fed))
         rect = portal_fed_grid_rect(fed->held_columns, fed->held_rows, fed->pane_height,
-                                    fed->cell_width, fed->cell_height, fed->padding, fed->scale);
+                                    fed->cell_width, fed->cell_height, fed->padding, fed->scale,
+                                    fed->from_bottom);
     if ((!fed->placed || !same_rect(rect, fed->rect)) && place(fed, rect)) {
         fed->placed = true;
         fed->rect = rect;
@@ -234,6 +249,16 @@ void portal_terminal_pane(portal_string target, double width, double height, dou
     fed->pane_height = height;
     fed->scale = scale;
     fed->padding = padding > 0 ? padding : 0;
+    if (fed->terminal)
+        fit(fed);
+}
+
+void portal_fed_hang(portal_string target, bool from_bottom)
+{
+    struct portal_fed *fed = find(target);
+    if (!fed || fed->from_bottom == from_bottom)
+        return;
+    fed->from_bottom = from_bottom;
     if (fed->terminal)
         fit(fed);
 }
@@ -257,9 +282,50 @@ static bool taking(const struct portal_fed *fed)
     return fed->take_grid != 0;
 }
 
+/* The frame held across a change of grid. */
+
+static void hold_frame(struct portal_fed *fed)
+{
+    portal_text error = {0};
+    /* Held already: the wait for quiet starts again once this grid is
+       taken. */
+    fed->quiet = 0;
+    if (fed->frame_held)
+        return;
+    if (!portal_terminal_hold_frame(fed->terminal, true, &error)) {
+        free(error.data);
+        return;
+    }
+    fed->frame_held = true;
+    fed->hold_cap = portal_channel_timer(PORTAL_FED_HOLD_FRAME_MS);
+}
+
+static void release_frame(struct portal_fed *fed)
+{
+    portal_text error = {0};
+    if (!fed->frame_held)
+        return;
+    fed->frame_held = false;
+    fed->quiet = fed->hold_cap = 0;
+    if (!portal_terminal_hold_frame(fed->terminal, false, &error))
+        free(error.data);
+}
+
+/* Output came, or the grid was taken: the frame is let go once the
+   terminal has been quiet a while since. */
+static void quieten(struct portal_fed *fed)
+{
+    if (fed->frame_held && !taking(fed))
+        fed->quiet = portal_channel_timer(PORTAL_FED_QUIET_MS);
+}
+
 /* The core's output and grids, in order: a grid waits for the output
    before it to be parsed, and holds the output after it until the
-   terminal has taken it, for at most a quarter of a second. */
+   terminal has taken it, for at most a quarter of a second.  A grid that
+   changes the one the terminal holds holds its frame on the screen from
+   just before it is placed, so that what is drawn on the way, the old
+   grid in the new size, the new grid before the program has redrawn it,
+   never shows. */
 static void flush(struct portal_fed *fed)
 {
     while (!taking(fed) && fed->waiting) {
@@ -273,6 +339,11 @@ static void flush(struct portal_fed *fed)
                 free(error.data);
         } else {
             drain(fed);
+            /* A new grid in place of one held and shown. */
+            if (fed->holds && fed->placed
+                && (fed->held_columns != entry->columns || fed->held_rows != entry->rows)
+                && (fed->taken_columns != entry->columns || fed->taken_rows != entry->rows))
+                hold_frame(fed);
             fed->holds = true;
             fed->held_columns = entry->columns;
             fed->held_rows = entry->rows;
@@ -282,6 +353,7 @@ static void flush(struct portal_fed *fed)
         }
         free(entry);
     }
+    quieten(fed);
 }
 
 static bool wait_with(struct portal_fed *fed, struct waiting *entry, portal_text *error)
@@ -316,8 +388,10 @@ bool portal_fed_feed(portal_string target, const char *bytes, size_t length, por
     if (!length)
         return true;
     /* Nothing waits: parse it now, without a copy. */
-    if (!taking(fed) && !fed->waiting)
+    if (!taking(fed) && !fed->waiting) {
+        quieten(fed);
         return parse(fed, bytes, length, error);
+    }
     if (length > SIZE_MAX - sizeof(struct waiting))
         return fail_with(error, "Portal is out of memory");
     struct waiting *entry = malloc(sizeof *entry + length);
@@ -405,6 +479,22 @@ bool portal_fed_timer(uint64_t token)
         }
         if (fed->look == token) {
             look(fed);
+            return true;
+        }
+        if (fed->hold_cap == token) {
+            release_frame(fed);
+            return true;
+        }
+        if (fed->quiet == token) {
+            fed->quiet = 0;
+            /* What came is still being parsed, or a grid is being taken:
+               the wait starts again after. */
+            if (taking(fed))
+                return true;
+            if (pending(fed))
+                quieten(fed);
+            else
+                release_frame(fed);
             return true;
         }
     }

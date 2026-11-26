@@ -322,6 +322,152 @@ Return the view's target."
             (should (equal (portal-view-target remote) target))
             (should (eq (plist-get (portal--inspect target) :frame) other))))))))
 
+;; Batch Emacs cannot enter the minibuffer: its window grows and is
+;; selected, and it is active while `active' is.
+(defmacro portal-view-test--with-minibuffer (active &rest body)
+  "Run BODY with every frame's minibuffer window active while ACTIVE is non-nil."
+  (declare (indent 1))
+  `(cl-letf (((symbol-function 'minibuffer-window-active-p) (lambda (_) ,active)))
+     ,@body))
+
+(defun portal-view-test--minibuffer (lines)
+  "Grow the minibuffer window by LINES, fewer when negative, and select it."
+  (window-resize (minibuffer-window) lines)
+  (select-window (minibuffer-window)))
+
+(defun portal-view-test--shrunk-log ()
+  "Record each run of `portal-view-shrunk-hook' with the places so far.
+Return a function of no arguments that returns the record, oldest first."
+  (let ((log nil))
+    (add-hook 'portal-view-shrunk-hook
+              (lambda ()
+                (push (list (portal-view-shrunk-p)
+                            (length (portal-fake-native-calls 'portal--place)))
+                      log))
+              nil t)
+    (lambda () (reverse log))))
+
+(ert-deftest portal-view-minibuffer-shrinking-its-pane-is-told-around-the-place ()
+  (portal-view-test--environment
+    (let* ((active nil)
+           (target (portal-view-test--open "view"))
+           (pane (selected-window))
+           (log (portal-view-test--shrunk-log))
+           (placed (lambda () (length (portal-fake-native-calls 'portal--place)))))
+      (portal-view-test--with-minibuffer active
+        (portal-view-sync)
+        (let ((before (funcall placed)))
+          ;; The minibuffer opens and grows over the pane's bottom: told once,
+          ;; before the view is placed in the shrunk pane.
+          (setq active t)
+          (portal-view-test--minibuffer 3)
+          (portal-view-sync)
+          (should (portal-view-test--shown target pane))
+          (should (equal (funcall log) (list (list t before))))
+          (with-current-buffer (window-buffer pane) (should (portal-view-shrunk-p)))
+          (portal-view-test--minibuffer 1)
+          (portal-view-sync)
+          (should (equal (funcall log) (list (list t before))))
+          ;; It closes, and the pane is as it was: told after the place.
+          (portal-view-test--minibuffer -4)
+          (setq active nil)
+          (select-window pane)
+          (portal-view-sync)
+          (should (portal-view-test--shown target pane))
+          (should (equal (funcall log) (list (list t before) (list nil (funcall placed)))))
+          (with-current-buffer (window-buffer pane) (should-not (portal-view-shrunk-p))))))))
+
+(ert-deftest portal-view-minibuffer-shrinking-ends-however-the-minibuffer-goes ()
+  (portal-view-test--environment
+    (let* ((active nil)
+           (target (portal-view-test--open "view"))
+           (buffer (current-buffer))
+           (pane (selected-window))
+           (shrunk (lambda () (with-current-buffer buffer (portal-view-shrunk-p))))
+           (reset (lambda ()
+                    (delete-other-windows pane)
+                    (set-window-buffer pane buffer)
+                    (window-resize (minibuffer-window) (- 1 (window-height (minibuffer-window))))
+                    (select-window pane)
+                    (portal-view-sync))))
+      (portal-view-test--with-minibuffer active
+        (portal-view-sync)
+        ;; Ended with nothing moved, as by C-g.
+        (setq active t)
+        (portal-view-test--minibuffer 3)
+        (portal-view-sync)
+        (should (funcall shrunk))
+        (setq active nil)
+        (portal-view-sync)
+        (should-not (funcall shrunk))
+        (funcall reset)
+        ;; Left for the pane itself, as in a recursive edit.
+        (setq active t)
+        (portal-view-test--minibuffer 3)
+        (portal-view-sync)
+        (should (funcall shrunk))
+        (select-window pane)
+        (portal-view-sync)
+        (should-not (funcall shrunk))
+        (funcall reset)
+        ;; Hidden meanwhile, as by a preview of another buffer in its pane,
+        ;; and back; then hidden when the minibuffer goes.
+        (portal-view-test--minibuffer 3)
+        (portal-view-sync)
+        (should (funcall shrunk))
+        (set-window-buffer pane "*scratch*")
+        (portal-view-sync)
+        (should-not (plist-get (portal--inspect target) :visible))
+        (should (funcall shrunk))
+        (set-window-buffer pane buffer)
+        (portal-view-sync)
+        (should (portal-view-test--shown target pane))
+        (should (funcall shrunk))
+        ;; Hidden when the minibuffer goes, it stays so until it is placed
+        ;; again: back in its pane as it was, it is no longer.
+        (set-window-buffer pane "*scratch*")
+        (portal-view-sync)
+        (setq active nil)
+        (window-resize (minibuffer-window) (- 1 (window-height (minibuffer-window))))
+        (select-window pane)
+        (portal-view-sync)
+        (should (funcall shrunk))
+        (let ((places (length (portal-fake-native-calls 'portal--place))))
+          (set-window-buffer pane buffer)
+          (portal-view-sync)
+          (should (portal-view-test--shown target pane))
+          (should (= (length (portal-fake-native-calls 'portal--place)) (1+ places))))
+        (should-not (funcall shrunk))
+        (funcall reset)
+        ;; A split below the pane while the minibuffer is open is a change
+        ;; of layout, and so is a pane not at the frame's bottom.
+        (setq active t)
+        (portal-view-test--minibuffer 3)
+        (portal-view-sync)
+        (should (funcall shrunk))
+        (set-window-buffer (split-window pane nil 'below) "*scratch*")
+        (portal-view-sync)
+        (should (portal-view-test--shown target pane))
+        (should-not (funcall shrunk))
+        (portal-view-test--minibuffer 1)
+        (portal-view-sync)
+        (should-not (funcall shrunk))
+        (funcall reset)
+        ;; Inactive, the same shrinking is a change of layout.
+        (setq active nil)
+        (portal-view-test--minibuffer 3)
+        (portal-view-sync)
+        (should-not (funcall shrunk))
+        (funcall reset)
+        ;; A pane that loses width as well is not shrunk by the minibuffer.
+        (setq active t)
+        (set-window-buffer (split-window pane nil 'right) "*scratch*")
+        (portal-view-test--minibuffer 3)
+        (portal-view-sync)
+        (should (portal-view-test--shown target pane))
+        (should-not (funcall shrunk))
+        (funcall reset)))))
+
 (ert-deftest portal-view-frame-deletion-hides-views-without-ending-them ()
   (portal-view-test--environment
     (let ((origin (selected-window))

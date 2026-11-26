@@ -494,7 +494,8 @@ the core what it would write to its program, keys, mouse reports, pastes
 and its own reports, in order on the main thread (`portal_terminal_input`);
 and it does what the core's rules for it ask, below. On macOS the view
 Portal places is a clipping pane, filled with the theme's background, with
-the terminal inside it at its bottom-left, sized to its grid; on Linux the
+the terminal inside it at its top-left, or at its bottom-left while
+another client sizes the block, sized to its grid; on Linux the
 view's frames are placed in its pane over a backdrop of that background
 ([Views on Linux](#views-on-linux)). Everything else, its theme, text size,
 placement, input and lifetime, is any terminal view's.
@@ -507,8 +508,10 @@ output and grids, a grid waiting for the output before it and holding the
 output after it until the terminal has taken it, a quarter of a second at
 most; the geometry, a terminal that holds a grid sized to it with
 Ghostty's 2-point padding and half a cell to spare and hung from its
-pane's bottom-left corner, and the grid its pane would hold, which sizes
-the block; and the backlog, past half a megabyte given and not yet parsed
+pane's top-left corner, or its bottom-left while another client sizes the
+block, the frame on the screen held across a change of grid until the
+program has redrawn (`portal_terminal_hold_frame`), and the grid its pane
+would hold, which sizes the block; and the backlog, past half a megabyte given and not yet parsed
 the stream waiting unread until a quarter of that is left, looked at again
 every 10 ms meanwhile. Rex gives a block's output and grids to the rules
 (`portal_fed_feed`, `portal_fed_hold_grid`), and the rules ask the

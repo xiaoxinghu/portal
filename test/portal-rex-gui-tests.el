@@ -697,6 +697,55 @@ and the buffer current."
               (should-not (string-search "Rex block" said)))
           (remove-variable-watcher 'portal-terminal--exited watcher))))))
 
+;;; How a block is resized
+
+(ert-deftest portal-rex-gui-the-minibuffer-and-a-drag-resize-a-block-once-at-most ()
+  :tags '(:gui)
+  (portal-fake-rex-with (server)
+    (portal-rex-gui-tests--showing server
+      (let ((buffer (current-buffer))
+            (pane (selected-window))
+            (active nil)
+            (grid (portal-rex-gui-tests--size server)))
+        ;; The minibuffer covers the pane's bottom and goes: the block keeps
+        ;; its grid.  Its window grows and is selected, kept so through
+        ;; redisplay, and it is active while `active' is.
+        (cl-letf (((symbol-function 'minibuffer-window-active-p) (lambda (_) active))
+                  (resize-mini-windows nil))
+          (let ((edges (window-inside-pixel-edges pane))
+                (height (window-pixel-height (minibuffer-window))))
+            (setq active t)
+            (window-resize (minibuffer-window) 4)
+            (select-window (minibuffer-window))
+            (redisplay t)
+            (should (with-current-buffer buffer (portal-view-shrunk-p)))
+            (should (< (nth 3 (window-inside-pixel-edges pane)) (nth 3 edges)))
+            (portal-rex-gui-tests--none server "com.superlogical.terminal.resize")
+            (window-resize (minibuffer-window)
+                           (- height (window-pixel-height (minibuffer-window))) nil nil t)
+            (setq active nil)
+            (select-window pane)
+            (redisplay t)
+            (should (equal (window-inside-pixel-edges pane) edges))
+            (should-not (with-current-buffer buffer (portal-view-shrunk-p)))
+            (should (equal (car (portal-rex-gui-tests--grid target)) grid))
+            (portal-rex-gui-tests--none server "com.superlogical.terminal.resize")))
+        ;; Its pane narrowed step by step, as by a drag: one resize, once
+        ;; the grid has settled, and the frame held across the new grid is
+        ;; let go.
+        (let ((right (split-window-right)))
+          (redisplay t)
+          (dotimes (_ 4)
+            (with-selected-window right (enlarge-window-horizontally 3))
+            (redisplay t))
+          (let ((size (portal-rex-gui-tests--size server)))
+            (should (< (car size) (car grid)))
+            (portal-rex-gui-tests--none server "com.superlogical.terminal.resize")
+            (portal-rex-gui-tests--wait
+             (lambda () (equal (car (portal-rex-gui-tests--grid target)) size)))
+            (portal-rex-gui-tests--wait
+             (lambda () (not (plist-get (portal--inspect target) :frame-held))))))))))
+
 ;;; Who sizes a block
 
 (defun portal-rex-gui-tests--claim (server)

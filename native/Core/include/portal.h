@@ -393,19 +393,31 @@ bool portal_terminal_pending(portal_view *terminal, size_t *bytes, portal_text *
    corner from the pane's, with y growing upward, as AppKit has it; TOP is
    the same rectangle's top edge from the pane's top, with y growing
    downward, as GTK and Wayland have it.  Y is negative when the rectangle
-   hangs below the pane, TOP when it rises above it. */
+   hangs below the pane, TOP when it rises above it.  FROM_BOTTOM says
+   which corner of the pane the rectangle hangs from: a frame the terminal
+   drew for another size, before or after it, hangs from the same corner,
+   its bottom-left one or else its top-left. */
 typedef struct portal_pane_rect {
     double x, y, width, height, top;
+    bool from_bottom;
 } portal_pane_rect;
 /* Size TERMINAL to RECT and put it there in its pane, from now on, at its
    text size, never scaled: clipped by the pane, and with the theme's
    background, at the terminal's opacity, wherever the pane shows no
    terminal.  The core gives either the pane itself or a rectangle sized to
-   a grid of the terminal's and hung from the pane's bottom-left corner, so
-   a shell's prompt and cursor stay in view.  Until the core first places
-   it, which it does once the view is created, a fed terminal fills its
-   pane, as an engine may need a size to start. */
+   a grid of the terminal's and hung from the pane's top-left corner, as a
+   local terminal's grid is, or from its bottom-left, so that the prompt
+   and cursor of a grid another client sizes stay in view.  Until the core
+   first places it, which it does once the view is created, a fed terminal
+   fills its pane, as an engine may need a size to start. */
 bool portal_terminal_place(portal_view *terminal, portal_pane_rect rect, portal_text *error);
+/* While HOLD, keep the frame TERMINAL shows now on the screen, where it is
+   in its pane, whatever its engine draws and wherever the terminal is
+   placed meanwhile; the pane beside it shows the theme's background.  With
+   HOLD false, show the engine's latest frame at once.  The core holds a
+   fed terminal's frame across a change of its grid, for a third of a
+   second at most (native/Core/fed.h). */
+bool portal_terminal_hold_frame(portal_view *terminal, bool hold, portal_text *error);
 /* The size of a terminal's text, in points: the one it starts at without
    :points, and the smallest and largest it is shown at; and two numbers of
    a fed terminal. */

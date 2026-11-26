@@ -44,8 +44,10 @@ private func terminalQuote(_ value: String) -> String {
 
 /// A fed terminal's pane: the view Portal places, which clips the terminal
 /// inside it. The terminal holds the grid its output is laid out for, at
-/// the pane's bottom-left, so a shell's prompt and cursor stay in view; the
-/// rest of the pane is the theme's background (`portal_terminal_place`).
+/// the pane's top-left as a local terminal's, or at its bottom-left while
+/// another client sizes the block, so a shell's prompt and cursor stay in
+/// view; the rest of the pane is the theme's background
+/// (`portal_terminal_place`).
 /// Below an opacity of 1 the pane alone draws that background, at the
 /// opacity, and the terminal's own is clear: drawn by both, the grid would
 /// show as a darker box (`portal_terminal_set_opacity`).
@@ -95,6 +97,34 @@ private final class FedPane: NSView {
     }
 }
 
+/// The frame a fed terminal showed when the core began holding it, over
+/// the terminal, which is hidden meanwhile, until the core lets it go
+/// (`portal_terminal_hold_frame`). It shows Ghostty's own surface, which
+/// the renderer never draws into again once the terminal's size changes:
+/// a frame of another size goes into a new one. It stays where the
+/// terminal was, from the pane's top or bottom as the terminal hangs, and
+/// the pointer goes through it to the terminal.
+@MainActor
+private final class FrameStill: NSView {
+    init(frame: NSRect, contents: Any, scale: CGFloat, fromBottom: Bool) {
+        super.init(frame: frame)
+        let still = CALayer()
+        still.contents = contents
+        still.contentsScale = scale
+        still.contentsGravity = .topLeft
+        still.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull()]
+        // Layer-hosting, as Ghostty's own view is: AppKit leaves it alone.
+        layer = still
+        wantsLayer = true
+        autoresizingMask = fromBottom ? [.maxYMargin] : [.minYMargin]
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 @MainActor
 private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     TerminalSurfacePwdDelegate, TerminalSurfaceGridResizeDelegate, TerminalSurfaceLifecycleDelegate,
@@ -132,6 +162,10 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
     /// the pane: Ghostty makes no surface for a view of no size, and the
     /// core places it only once the view is created.
     var placed = false
+    /// The core hangs a fed terminal's grid from its pane's bottom-left.
+    var fromBottom = false
+    /// The frame shown while the core holds it, or nil.
+    private var still: FrameStill?
     /// A fed terminal's pane, which Portal places; nil for any other. The
     /// pane holds the terminal as its subview, and its session holds the
     /// pane, so the terminal's reference is weak: neither keeps the other.
@@ -228,6 +262,29 @@ private final class HostedTerminal: TerminalView, TerminalSurfaceTitleDelegate,
 
     // A fed terminal's grid and its pane's, which the core's rules work
     // out from what the terminal tells them.
+
+    /// Show the frame on the screen now in place of the terminal while
+    /// HOLD, and the terminal again, as Ghostty last drew it, once not.
+    /// Nothing is held before Ghostty has drawn.
+    func holdFrame(_ hold: Bool) {
+        guard let pane else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        if hold {
+            guard still == nil, let contents = layer?.contents else { return }
+            let view = FrameStill(frame: frame, contents: contents, scale: layer?.contentsScale ?? 1,
+                                  fromBottom: fromBottom)
+            pane.addSubview(view, positioned: .above, relativeTo: self)
+            alphaValue = 0
+            still = view
+        } else if let view = still {
+            alphaValue = 1
+            view.removeFromSuperview()
+            still = nil
+        }
+    }
+    var holdsFrame: Bool { still != nil }
 
     /// The pane's size or scale changed: the core places the terminal and
     /// works out the pane's grid. Ghostty counts 72 points to the inch here,
@@ -468,6 +525,7 @@ final class TerminalSession: PortalView {
          // opacity and background.
          ("ghostty-opacity", .number(terminal.configuredOpacity))]
             + (terminal.paneOpacity.map { [("pane-opacity", .number($0))] } ?? [])
+            + (terminal.fed != nil ? [("frame-held", .flag(terminal.holdsFrame))] : [])
             + (terminal.paneBackground.map { [("pane-background", .string($0))] } ?? [])
     }
 
@@ -489,11 +547,18 @@ final class TerminalSession: PortalView {
 
     func pending() throws -> Int { max(0, try fedSession().pendingOutputByteCount) }
 
-    /// The terminal's frame in its clipping pane.
-    func place(_ frame: CGRect) throws {
+    /// The terminal's frame in its clipping pane, hung from its top-left or
+    /// bottom-left corner.
+    func place(_ frame: CGRect, fromBottom: Bool) throws {
         _ = try fedSession()
         terminal.placed = true
+        terminal.fromBottom = fromBottom
         if terminal.frame != frame { terminal.frame = frame }
+    }
+
+    func holdFrame(_ hold: Bool) throws {
+        _ = try fedSession()
+        terminal.holdFrame(hold)
     }
 
     func applyTheme(light: String?, dark: String?) throws {

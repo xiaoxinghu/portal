@@ -56,6 +56,11 @@ enum {
        sized to it: a view placed in a pane reports a grid or two on the
        way, and a block resized while its stream starts redraws twice. */
     SETTLE_MILLISECONDS = 100,
+    /* How long the grid of a block's terminal, once sized, must stay the
+       same before the block is sized to it again: a frame dragged by its
+       edge reports a grid at each step, and the block is resized once,
+       and not at all if the grid comes back to the block's. */
+    LIVE_SETTLE_MILLISECONDS = 120,
     /* The most of the first paint to ask for at once: the server lowers
        anything larger to this. */
     PAINT_BYTES = 983040,
@@ -190,7 +195,8 @@ struct shown {
     enum stage stage;
     portal_text reason; /* Why it failed or ended. */
     bool announced;     /* A "rex-block" record waits for a description. */
-    uint64_t timer;     /* The settling grid's timer, or 0. */
+    uint64_t timer;     /* The settling grid's timer, or 0: the first size's, or a later one's. */
+    bool size_held;     /* Emacs holds back the grid's changes (portal_rex_hold_size). */
     uint32_t sized[4];  /* The grid last sent to the server, cells first. */
     uint32_t columns, rows; /* The grid the stream last gave. */
     uint64_t data;          /* The stream's socket, or 0. */
@@ -937,6 +943,16 @@ static bool mine(struct shown *shown)
         && same(shown->owner, literal(connection->client));
 }
 
+/* Hang SHOWN's grid from the pane's bottom-left corner while another
+   client owns the block, so that the prompt and cursor of the grid it
+   sizes stay in view in a smaller pane; from the top-left, as a local
+   terminal's, while Emacs owns it, nobody does, or nobody has said. */
+static void hang(struct shown *shown)
+{
+    portal_fed_hang(view(shown->target),
+                    shown->owner_known && shown->owner.length && !mine(shown));
+}
+
 static answer named;
 
 /* OWNER, a block's "owner" member, a client's ID, or NULL for a block
@@ -958,6 +974,7 @@ static bool take_owner(struct shown *shown, const portal_string *owner, uint64_t
             copy(literal(""), &shown->owner);
         shown->owner_known = shown->owner.data != NULL;
         set_text(&shown->owner_name, literal(""));
+        hang(shown);
         if (shown->owner.length && !mine(shown)) {
             struct json json = {0};
             put_text(&json, "{\"client_id\":");
@@ -1094,8 +1111,11 @@ static void attached(struct shown *shown, const char *response, size_t length)
 static void bring_up_to_date(struct shown *shown)
 {
     memset(shown->sized, 0, sizeof shown->sized);
-    if (shown->stage > RESIZING && shown->stage < FAILED)
+    /* At once, whatever was settling meanwhile. */
+    if (shown->stage > RESIZING && shown->stage < FAILED && !shown->size_held) {
+        shown->timer = 0;
         queue(shown, (struct operation) {.kind = RESIZE});
+    }
     struct portal_input *input = portal_views_input(view(shown->target));
     if (input)
         queue(shown, (struct operation) {.kind = FOCUS, .in = input->focused});
@@ -1731,6 +1751,8 @@ static void put_bytes(struct json *json, const char *bytes, size_t length)
     free(valid.data);
 }
 
+static bool resizable(const struct shown *shown);
+
 static void next_operation(struct shown *shown)
 {
     /* Nothing goes before the block is claimed: a take or a key could
@@ -1765,7 +1787,11 @@ static void next_operation(struct shown *shown)
     case RESIZE:
     default:
         method = "com.superlogical.terminal.resize";
-        if (!grid(shown, values) || !memcmp(values, shown->sized, sizeof values)) {
+        /* Held, or settling again since it was queued, a size goes with
+           nothing: the hold's end, or the settled grid's timer, queues
+           the grid there is then. */
+        if (shown->size_held || (resizable(shown) && shown->timer) || !grid(shown, values)
+            || !memcmp(values, shown->sized, sizeof values)) {
             free_operation(&operation);
             return next_operation(shown);
         }
@@ -1899,6 +1925,13 @@ void portal_rex_backlog(portal_string target, bool backlogged)
         stream_ready(shown);
 }
 
+/* Whether SHOWN's block has had its first size, and has a stream to come
+   or going: its grid's changes are sent once they settle. */
+static bool resizable(const struct shown *shown)
+{
+    return shown->stage > RESIZING && shown->stage < FAILED;
+}
+
 void portal_rex_grid(portal_string target)
 {
     struct shown *shown = shown_in(target);
@@ -1906,8 +1939,31 @@ void portal_rex_grid(portal_string target)
         return;
     if (shown->stage == SIZING)
         settle(shown);
-    else if (shown->stage > RESIZING && shown->stage < FAILED)
+    else if (resizable(shown) && !shown->size_held) {
+        /* Back to the block's grid, a change waiting goes with nothing. */
+        uint32_t values[4];
+        shown->timer = grid(shown, values) && memcmp(values, shown->sized, sizeof values)
+            ? portal_channel_timer(LIVE_SETTLE_MILLISECONDS)
+            : 0;
+    }
+}
+
+bool portal_rex_hold_size(portal_string target, bool hold, portal_text *error)
+{
+    struct shown *shown = shown_in(target);
+    if (!shown)
+        return fail(error, "No block is shown in ", target);
+    if (hold == shown->size_held)
+        return true;
+    shown->size_held = hold;
+    if (!resizable(shown))
+        return true;
+    /* A change on its way waits with the rest; let go, the grid goes at
+       once, unless it is the block's still. */
+    shown->timer = 0;
+    if (!hold)
         queue(shown, (struct operation) {.kind = RESIZE});
+    return true;
 }
 
 /* Start SHOWN: attach to its session unless the connection has, then
@@ -1915,6 +1971,7 @@ void portal_rex_grid(portal_string target)
 static void begin(struct shown *shown)
 {
     struct connection *connection = find(shown->connection, NULL);
+    hang(shown);
     bool joined = false;
     for (size_t i = 0; connection && !joined && i < connection->sessions; i++)
         joined = strlen(connection->attached[i]) == shown->session.length
@@ -2527,6 +2584,8 @@ void portal_rex_timer(uint64_t token)
             shown->timer = 0;
             if (shown->stage == SIZING)
                 size(shown);
+            else if (resizable(shown) && !shown->size_held)
+                queue(shown, (struct operation) {.kind = RESIZE});
             return;
         }
         if (shown->exit_timer == token)
