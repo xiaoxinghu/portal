@@ -111,8 +111,9 @@ access inside terminals:
 | --- | --- |
 | `portal-terminal-new` | New independent terminal buffer |
 | `portal-terminal-split-below` / `-split-right` | Split below / right with a new shell |
-| `portal-terminal-next` / `-previous` / `-last` | Next / previous / last terminal buffer |
-| `portal-terminal-select-index` | Select a terminal by the digit of its key, such as `s-1` |
+| `portal-terminal-next` / `-previous` | Next / previous terminal in the [sidebar's](#the-sidebar) order, from the last to the first |
+| `portal-terminal-last` | The terminal used last in this pane |
+| `portal-terminal-select-index` | Select a terminal by the digit of its key, such as `s-1`, counting the sidebar's rows from 0 |
 | `portal-terminal-choose` | Choose a terminal by name, project, directory or title |
 | `portal-terminal-rename` | Rename the terminal buffer |
 | `portal-terminal-zoom` | Zoom the pane; repeat to restore the layout |
@@ -243,8 +244,8 @@ Blocks that [wait for you](rex.md#what-a-blocks-program-is-doing), blocked
 or finished and not yet seen, come first, the one that has waited longest at
 the top. Recently selected terminals follow; the current one comes last,
 waiting or not. `RET` on empty input takes the first. Order, columns and
-messages are fixed at opening; previews do not count as selections. `portal-terminal-next`, `-previous` and `-select-index` retain
-creation order.
+messages are fixed at opening; previews do not count as selections. `portal-terminal-next`, `-previous` and `-select-index` keep
+the [sidebar's](#the-sidebar) order whatever was selected.
 
 The New group starts terminals at the project root, or current directory
 outside projects. "New named terminal…" prompts first: `server` yields
@@ -297,6 +298,14 @@ the face `portal-terminal-sidebar-terminal`. With a second Rex server
 connected, each server's socket heads its sessions. Quick terminals are left
 out. The row of the terminal in use is highlighted: that of the selected
 window, or, from the sidebar, of the window used last.
+
+`portal-terminal-next` and `-previous` walk the terminals in this order,
+moving the highlight down or up a row and from the last row to the first;
+from a buffer that is not a terminal, next goes to the first and previous to
+the last. `portal-terminal-select-index` counts the same rows from 0. The
+order is the terminals', not the window's: it is the same with the sidebar
+hidden, a folded session's blocks count as rows, and a block keeps its place
+whether it has been shown or not.
 
 The sidebar is drawn afresh, at most ten times a second and only while a
 window shows it, when a status changes, a session or block comes, goes or is
@@ -439,7 +448,7 @@ Embark's `embark--targets`—are confined to `portal-terminal-consult.el` and
 `portal-terminal-embark.el`.
 
 `ctest --test-dir build -R terminal-choose` checks pickers using Emacs completion
-and the fake native module: recent-use order, creation-order cycling, assigned
+and the fake native module: recent-use order, cycling in the order made, assigned
 projects, `M-a`, New, quick panels, closed terminals and kill confirmation, and
 the status column, its order and its filtering.
 `-R 'terminal-(consult|embark)'` checks adapters against the releases above,
