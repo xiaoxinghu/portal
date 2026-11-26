@@ -1284,6 +1284,30 @@ static void test_holding_the_size(void)
     CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 400, 480}, text("frame"), &error));
     CHECK(portal_rex_hold_size(text(target), false, &error));
     CHECK(is_text(portal_fake_socket_sent(id), ""));
+    /* A size queued behind an operation still out, whose grid moves on
+       before it goes, waits for the new grid to settle; and one that comes
+       back to the block's sends nothing. */
+    portal_rex_focus(text(target), false);
+    CHECK(asked(id, number, "block.event",
+                ON_BLOCK ",\"event\":{\"type\":\"focus\",\"payload\":{\"action\":\"out\"}}}"));
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 480, 480}, text("frame"), &error));
+    portal_fake_fire_timers();
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 560, 480}, text("frame"), &error));
+    answer_with(id, number++, "{}", NULL);
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
+    portal_fake_fire_timers();
+    CHECK(resized_to(id, 70, 30));
+    answer_with(id, number++, "{}", NULL);
+    portal_rex_focus(text(target), true);
+    sent();
+    portal_fake_socket_sent(id);
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 480, 480}, text("frame"), &error));
+    portal_fake_fire_timers();
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 400, 480}, text("frame"), &error));
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 560, 480}, text("frame"), &error));
+    answer_with(id, number++, "{}", NULL);
+    portal_fake_fire_timers();
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
     /* Not held, a change settles and goes as ever. */
     CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 400, 240}, text("frame"), &error));
     CHECK(is_text(portal_fake_socket_sent(id), ""));

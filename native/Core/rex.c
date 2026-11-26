@@ -1111,8 +1111,11 @@ static void attached(struct shown *shown, const char *response, size_t length)
 static void bring_up_to_date(struct shown *shown)
 {
     memset(shown->sized, 0, sizeof shown->sized);
-    if (shown->stage > RESIZING && shown->stage < FAILED && !shown->size_held)
+    /* At once, whatever was settling meanwhile. */
+    if (shown->stage > RESIZING && shown->stage < FAILED && !shown->size_held) {
+        shown->timer = 0;
         queue(shown, (struct operation) {.kind = RESIZE});
+    }
     struct portal_input *input = portal_views_input(view(shown->target));
     if (input)
         queue(shown, (struct operation) {.kind = FOCUS, .in = input->focused});
@@ -1748,6 +1751,8 @@ static void put_bytes(struct json *json, const char *bytes, size_t length)
     free(valid.data);
 }
 
+static bool resizable(const struct shown *shown);
+
 static void next_operation(struct shown *shown)
 {
     /* Nothing goes before the block is claimed: a take or a key could
@@ -1782,9 +1787,10 @@ static void next_operation(struct shown *shown)
     case RESIZE:
     default:
         method = "com.superlogical.terminal.resize";
-        /* Held, a size queued before goes with nothing: the hold's end
-           queues the grid there is then. */
-        if (shown->size_held || !grid(shown, values)
+        /* Held, or settling again since it was queued, a size goes with
+           nothing: the hold's end, or the settled grid's timer, queues
+           the grid there is then. */
+        if (shown->size_held || (resizable(shown) && shown->timer) || !grid(shown, values)
             || !memcmp(values, shown->sized, sizeof values)) {
             free_operation(&operation);
             return next_operation(shown);
