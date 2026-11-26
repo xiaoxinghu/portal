@@ -548,6 +548,17 @@ LISP_FUNCTION(Frex_take)
     return result;
 }
 
+LISP_FUNCTION(Frex_hold_size)
+{
+    portal_text target = {0}, error = {0};
+    emacs_value result = NULL;
+    if (read_text(env, args[0], &target))
+        result = done(env, portal_rex_hold_size(borrow(target), env->is_not_nil(env, args[1]), &error),
+                      &error);
+    free(target.data);
+    return result;
+}
+
 LISP_FUNCTION(Flauncher_show)
 {
     int64_t values[6];
@@ -1050,6 +1061,8 @@ static const struct export {
      "terminal, until it closes."},
     {"portal--rex-take", 1, 1, Frex_take, NULL,
      "Claim the block shown in TARGET with take: Emacs owns it, and sizes it, from then on."},
+    {"portal--rex-hold-size", 2, 2, Frex_hold_size, NULL,
+     "Hold back the changes of TARGET's grid from its block while HOLD; let go, send it."},
     {"portal--rex-resume", 1, 1, Frex_resume, NULL,
      "Resume the blocks Rex connection ID shows, now that it is back after a loss."},
 };

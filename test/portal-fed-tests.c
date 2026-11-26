@@ -120,7 +120,7 @@ static void test_grid_between_outputs(void)
        what comes after it. */
     HAPPENED("parse before\n"
              "drain\n"
-             "place x 0 y -8 width 648 height 396 top -88\n"
+             "place x 0 y -96 width 648 height 396 top 0\n"
              "timer 250 ms\n");
     /* Other sizes first, as a surface reports on its way: still held. */
     took(target, 49, 18);
@@ -146,7 +146,7 @@ static void test_grid_taken_late(void)
     CHECK(hold(target, 80, 24));
     CHECK(fed(target, "after"));
     HAPPENED("drain\n"
-             "place x 0 y -8 width 648 height 396 top -88\n"
+             "place x 0 y -96 width 648 height 396 top 0\n"
              "timer 250 ms\n");
     /* A quarter of a second, and the output goes on without it. */
     portal_fake_fire_timers_of(PORTAL_FED_TAKE_GRID_MS);
@@ -167,7 +167,7 @@ static void test_grid_already_taken(void)
     CHECK(fed(target, "after"));
     /* The terminal has that grid: nothing waits. */
     HAPPENED("drain\n"
-             "place x 0 y -8 width 648 height 396 top -88\n"
+             "place x 0 y -96 width 648 height 396 top 0\n"
              "parse after\n");
     /* The same grid again: no new place. */
     CHECK(hold(target, 80, 24));
@@ -198,16 +198,18 @@ static void test_grids_in_a_row(void)
     CHECK(hold(target, 100, 30));
     CHECK(fed(target, "b"));
     HAPPENED("drain\n"
-             "place x 0 y -8 width 648 height 396 top -88\n"
+             "place x 0 y -96 width 648 height 396 top 0\n"
              "timer 250 ms\n");
     took(target, 80, 24);
     /* 100 * 8 + 4 + 4 by 30 * 16 + 4 + 8. */
     HAPPENED("parse a\n"
              "drain\n"
-             "place x 0 y -8 width 808 height 492 top -184\n"
+             "hold frame\n"
+             "timer 300 ms\n"
+             "place x 0 y -192 width 808 height 492 top 0\n"
              "timer 250 ms\n");
     took(target, 100, 30);
-    HAPPENED("parse b\n");
+    HAPPENED("parse b\ntimer 40 ms\n");
     close_view(target);
 }
 
@@ -280,28 +282,48 @@ static void test_only_fed_terminals(void)
 static void test_rect_at_both_scales(void)
 {
     /* Cells of 8 by 16 pixels at scale 1, and the same cells at scale 2,
-       16 by 32 pixels: the rectangle is the same in the pane's units. */
-    portal_pane_rect one = portal_fed_grid_rect(80, 24, 300, 8, 16, 2, 1);
-    portal_pane_rect two = portal_fed_grid_rect(80, 24, 300, 16, 32, 4, 2);
+       16 by 32 pixels: the rectangle is the same in the pane's units.
+       From the bottom-left, the spare half cell hangs below the pane. */
+    portal_pane_rect one = portal_fed_grid_rect(80, 24, 300, 8, 16, 2, 1, true);
+    portal_pane_rect two = portal_fed_grid_rect(80, 24, 300, 16, 32, 4, 2, true);
     CHECK(one.x == 0 && one.y == -8 && one.width == 648 && one.height == 396);
-    CHECK(one.top == -88);
+    CHECK(one.top == -88 && one.from_bottom);
     CHECK(two.x == 0 && two.y == -8 && two.width == 648 && two.height == 396);
     CHECK(two.top == -88);
     /* A grid smaller than the pane: its last row at the pane's bottom, the
        rest of the pane above it.  10 * 9 + 4 + 4.5 by 5 * 18 + 4 + 9. */
-    portal_pane_rect small = portal_fed_grid_rect(10, 5, 300, 9, 18, 2, 1);
+    portal_pane_rect small = portal_fed_grid_rect(10, 5, 300, 9, 18, 2, 1, true);
     CHECK(small.y == -9 && small.width == 98.5 && small.height == 103);
     CHECK(small.top == 206);
     /* At scale 2 with odd pixels: (10 * 9 + 8 + 4.5) / 2 by
        (5 * 19 + 8 + 9.5) / 2, hanging 4.75 below. */
-    portal_pane_rect odd = portal_fed_grid_rect(10, 5, 100, 9, 19, 4, 2);
+    portal_pane_rect odd = portal_fed_grid_rect(10, 5, 100, 9, 19, 4, 2, true);
     CHECK(odd.y == -4.75 && odd.width == 51.25 && odd.height == 56.25);
     CHECK(odd.top == 48.5);
     /* Ghostty's padding on Linux, 5 pixels at scale 2:
        (80 * 16 + 10 + 8) / 2 by (24 * 32 + 10 + 16) / 2. */
-    portal_pane_rect linux = portal_fed_grid_rect(80, 24, 300, 16, 32, 5, 2);
+    portal_pane_rect linux = portal_fed_grid_rect(80, 24, 300, 16, 32, 5, 2, true);
     CHECK(linux.y == -8 && linux.width == 649 && linux.height == 397);
     CHECK(linux.top == -89);
+}
+
+static void test_rect_from_the_top(void)
+{
+    /* From the top-left, the terminal's top is the pane's whatever the
+       grid: one taller than the pane rises past its bottom, by
+       396 - 300, and one smaller leaves the pane's bottom below it. */
+    portal_pane_rect tall = portal_fed_grid_rect(80, 24, 300, 8, 16, 2, 1, false);
+    CHECK(tall.x == 0 && tall.y == -96 && tall.width == 648 && tall.height == 396);
+    CHECK(tall.top == 0 && !tall.from_bottom);
+    portal_pane_rect small = portal_fed_grid_rect(10, 5, 300, 9, 18, 2, 1, false);
+    CHECK(small.y == 197 && small.width == 98.5 && small.height == 103 && small.top == 0);
+    /* The same at scale 2, and in a pane that shrank from below: the
+       rectangle moves in AppKit's units, from the bottom, and not in
+       Wayland's, from the top. */
+    portal_pane_rect two = portal_fed_grid_rect(10, 5, 100, 9, 19, 4, 2, false);
+    CHECK(two.y == 43.75 && two.height == 56.25 && two.top == 0);
+    portal_pane_rect shrunk = portal_fed_grid_rect(10, 5, 80, 9, 19, 4, 2, false);
+    CHECK(shrunk.y == 23.75 && shrunk.height == 56.25 && shrunk.top == 0);
 }
 
 static void test_pane_grid_at_both_scales(void)
@@ -345,14 +367,14 @@ static void test_padding_told(void)
     HAPPENED("");
     CHECK(grid_is(target, "49x18 cell 16x32"));
     /* A held grid is that much larger: (80 * 16 + 10 + 8) / 2 by
-       (24 * 32 + 10 + 16) / 2, hanging 8 below. */
+       (24 * 32 + 10 + 16) / 2, rising 97 past the pane's bottom. */
     CHECK(hold(target, 80, 24));
     HAPPENED("drain\n"
-             "place x 0 y -8 width 649 height 397 top -89\n"
+             "place x 0 y -97 width 649 height 397 top 0\n"
              "timer 250 ms\n");
     /* Back to 4. */
     pane(target, 404, 300, 2);
-    HAPPENED("place x 0 y -8 width 648 height 396 top -88\n");
+    HAPPENED("place x 0 y -96 width 648 height 396 top 0\n");
     CHECK(grid_is(target, "50x18 cell 16x32"));
     close_view(target);
     portal_fake_fire_timers();
@@ -408,18 +430,129 @@ static void test_held_grid_follows_the_pane(void)
     pane(target, 400, 300, 2);
     HAPPENED("place x 0 y 0 width 400 height 300 top 0\n");
     portal_terminal_cell(text(target), 16, 32);
-    HAPPENED("place x 0 y -8 width 648 height 396 top -88\n");
+    HAPPENED("place x 0 y -96 width 648 height 396 top 0\n");
     CHECK(grid_is(target, "49x18 cell 16x32"));
-    /* A taller pane: the same rectangle, from a lower top. */
+    /* A taller pane: the same rectangle, its top the pane's still. */
     pane(target, 400, 500, 2);
-    HAPPENED("place x 0 y -8 width 648 height 396 top 112\n");
+    HAPPENED("place x 0 y 104 width 648 height 396 top 0\n");
     CHECK(grid_is(target, "49x31 cell 16x32"));
     /* The same pane at scale 1, its cells 16 by 32 still: twice as large
-       in the pane's units, hanging 16 below. */
+       in the pane's units. */
     pane(target, 400, 500, 1);
-    HAPPENED("place x 0 y -16 width 1292 height 788 top -272\n");
+    HAPPENED("place x 0 y -288 width 1292 height 788 top 0\n");
     CHECK(grid_is(target, "24x15 cell 16x32"));
     close_view(target);
+}
+
+static void test_grid_hangs_from_either_corner(void)
+{
+    char *target = make_in_pane();
+    took(target, 80, 24);
+    CHECK(hold(target, 80, 24));
+    HAPPENED("drain\nplace x 0 y -96 width 648 height 396 top 0\n");
+    /* Another client sizes it: from the bottom-left, at once. */
+    portal_fed_hang(text(target), true);
+    HAPPENED("place x 0 y -8 width 648 height 396 top -88 from bottom\n");
+    portal_fed_hang(text(target), true);
+    HAPPENED("");
+    /* A pane that shrinks from below moves it in both units. */
+    pane(target, 400, 200, 1);
+    HAPPENED("place x 0 y -8 width 648 height 396 top -188 from bottom\n");
+    /* Emacs sizes it again: its top the pane's, in AppKit's units from
+       the bottom, 200 - 396. */
+    portal_fed_hang(text(target), false);
+    HAPPENED("place x 0 y -196 width 648 height 396 top 0\n");
+    pane(target, 400, 300, 1);
+    HAPPENED("place x 0 y -96 width 648 height 396 top 0\n");
+    /* A terminal that holds no grid fills its pane either way. */
+    char *other = make_in_pane();
+    portal_fed_hang(text(other), true);
+    HAPPENED("");
+    /* Nothing for a target with no fed terminal. */
+    portal_fed_hang(text("terminal:none"), true);
+    HAPPENED("");
+    close_view(other);
+    close_view(target);
+}
+
+/* A grid that changes the one held holds the frame on the screen until
+   the output after it has been parsed and nothing has come for a while. */
+static void test_frame_held_across_a_grid(void)
+{
+    char *target = make_in_pane();
+    /* The first grid replaces none: nothing is held. */
+    CHECK(hold(target, 80, 24));
+    took(target, 80, 24);
+    HAPPENED("drain\nplace x 0 y -96 width 648 height 396 top 0\ntimer 250 ms\n");
+    /* The same grid again: nothing. */
+    CHECK(hold(target, 80, 24));
+    HAPPENED("drain\n");
+    /* Another: held from before it is placed. */
+    CHECK(fed(target, "old"));
+    CHECK(hold(target, 100, 30));
+    CHECK(fed(target, "redrawn"));
+    HAPPENED("parse old\n"
+             "drain\n"
+             "hold frame\n"
+             "timer 300 ms\n"
+             "place x 0 y -192 width 808 height 492 top 0\n"
+             "timer 250 ms\n");
+    /* Taken: the output after it goes, and the wait for quiet starts. */
+    took(target, 100, 30);
+    HAPPENED("parse redrawn\ntimer 40 ms\n");
+    /* More output starts it again; a wait that was overtaken counts for
+       nothing. */
+    CHECK(fed(target, "more"));
+    HAPPENED("timer 40 ms\nparse more\n");
+    /* Quiet, but still being parsed: it waits again. */
+    portal_fake_pending(target, 10);
+    portal_fake_fire_timers_of(PORTAL_FED_QUIET_MS);
+    HAPPENED("timer 40 ms\n");
+    /* Parsed and quiet: let go. */
+    portal_fake_pending(target, 0);
+    portal_fake_fire_timers_of(PORTAL_FED_QUIET_MS);
+    HAPPENED("let go frame\n");
+    /* Its longest wait, ended, counts for nothing. */
+    portal_fake_fire_timers();
+    HAPPENED("");
+    close_view(target);
+    HAPPENED("");
+}
+
+/* A program that never redraws, or a grid never taken, holds the frame a
+   third of a second at most. */
+static void test_frame_held_at_most(void)
+{
+    char *target = make_in_pane();
+    CHECK(hold(target, 80, 24));
+    took(target, 80, 24);
+    CHECK(hold(target, 60, 20));
+    HAPPENED("drain\nplace x 0 y -96 width 648 height 396 top 0\ntimer 250 ms\n"
+             "drain\n"
+             "hold frame\n"
+             "timer 300 ms\n"
+             "place x 0 y -32 width 488 height 332 top 0\n"
+             "timer 250 ms\n");
+    /* Never taken: the output goes on after a quarter of a second, and the
+       frame is let go after a third. */
+    portal_fake_fire_timers_of(PORTAL_FED_TAKE_GRID_MS);
+    HAPPENED("timer 40 ms\n");
+    CHECK(fed(target, "busy"));
+    HAPPENED("timer 40 ms\nparse busy\n");
+    portal_fake_fire_timers_of(PORTAL_FED_HOLD_FRAME_MS);
+    HAPPENED("let go frame\n");
+    portal_fake_fire_timers();
+    HAPPENED("");
+    /* Closed while held: nothing more. */
+    CHECK(hold(target, 70, 20));
+    HAPPENED("drain\n"
+             "hold frame\n"
+             "timer 300 ms\n"
+             "place x 0 y -32 width 568 height 332 top 0\n"
+             "timer 250 ms\n");
+    close_view(target);
+    portal_fake_fire_timers();
+    HAPPENED("");
 }
 
 /* The backlog. */
@@ -511,7 +644,7 @@ static void test_timers_apart(void)
     CHECK(fed(target, "held"));
     backlog(target, PORTAL_TERMINAL_BACKLOG + 1);
     HAPPENED("drain\n"
-             "place x 0 y -8 width 648 height 396 top -88\n"
+             "place x 0 y -96 width 648 height 396 top 0\n"
              "timer 250 ms\n"
              "timer 10 ms\n");
     /* The backlog's look leaves the grid's wait alone, and the other way. */
@@ -536,10 +669,14 @@ int main(void)
     test_told_while_created();
     test_only_fed_terminals();
     test_rect_at_both_scales();
+    test_rect_from_the_top();
     test_pane_grid_at_both_scales();
     test_padding_told();
     test_pane_reports();
     test_held_grid_follows_the_pane();
+    test_grid_hangs_from_either_corner();
+    test_frame_held_across_a_grid();
+    test_frame_held_at_most();
     test_backlog_crossings();
     test_backlog_across_both_marks();
     test_backlog_crossings_out_of_order();
