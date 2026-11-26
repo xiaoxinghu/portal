@@ -21,6 +21,7 @@
 (require 'ert)
 (require 'portal-rex)
 (require 'portal-rex-list)
+(require 'portal-terminal-sidebar)
 (require 'portal-fake-rex)
 
 (defun portal-rex-gui-tests--wait (done &optional seconds)
@@ -316,6 +317,62 @@ its messages: only the module's record can bring them."
             (redisplay t)
             (should (eq (window-buffer (selected-window)) (get-buffer "*Rex agents*"))))
         (when (get-buffer "*Rex agents*") (kill-buffer "*Rex agents*"))
+        (mapc #'portal-rex-disconnect (portal-rex-connections))))))
+
+(ert-deftest portal-rex-gui-the-sidebar-follows-an-idle-emacs ()
+  :tags '(:gui)
+  ;; The sidebar shown: an agent in a block never visited asks, and its
+  ;; row says so in its place with no key pressed.  Resized, as by a drag,
+  ;; it keeps the width through balancing and a hide and show.
+  (portal-fake-rex-with (server)
+    (let* ((portal-rex-socket (portal-fake-rex-socket server))
+           (connection (portal-rex-connect))
+           (buffer (portal-rex-block-buffer connection "block:fake-1"))
+           (portal-terminal-sidebar-width 32)
+           (portal-terminal-sidebar--folded nil)
+           (display-buffer-alist nil)
+           (rows (lambda ()
+                   (with-current-buffer portal-terminal-sidebar--name
+                     (mapcar (lambda (line) (replace-regexp-in-string " +" " " (string-trim line)))
+                             (split-string (buffer-substring-no-properties (point-min) (point-max))
+                                           "\n" t)))))
+           (inhibit-message t))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (switch-to-buffer (get-buffer-create "*sidebar-gui-file*"))
+            (portal-terminal-sidebar)
+            (redisplay t)
+            (should (eq (window-buffer (selected-window)) (get-buffer "*sidebar-gui-file*")))
+            (should (equal (funcall rows) '("fake" "shell")))
+            (portal-fake-rex-command
+             server :block_event "block:fake-1" :name "program_status_changed"
+             :payload (list :id "" :record '(:state "blocked" :kind "question" :app "claude-code"
+                                             :msg "Clean up the task now?")
+                            :reason "report"))
+            (portal-rex-gui-tests--wait
+             (lambda () (equal (funcall rows)
+                               '("fake" "● shell claude-code" "Clean up the task now?"))))
+            (should-not (get-buffer-window buffer t))
+            ;; Wider by a drag's worth: redisplay records it.
+            (split-window-right)
+            (let ((sidebar (get-buffer-window portal-terminal-sidebar--name)))
+              (should (= (window-total-width sidebar) 32))
+              (with-selected-window sidebar (enlarge-window-horizontally 7))
+              (redisplay t)
+              (should (= portal-terminal-sidebar-width 39))
+              (balance-windows)
+              (redisplay t)
+              (should (= (window-total-width sidebar) 39)))
+            (portal-terminal-sidebar)
+            (redisplay t)
+            (should-not (get-buffer-window portal-terminal-sidebar--name))
+            (portal-terminal-sidebar)
+            (redisplay t)
+            (should (= (window-total-width (get-buffer-window portal-terminal-sidebar--name)) 39))
+            (should (eq (window-buffer (selected-window)) (get-buffer "*sidebar-gui-file*"))))
+        (when (get-buffer portal-terminal-sidebar--name) (kill-buffer portal-terminal-sidebar--name))
+        (when (get-buffer "*sidebar-gui-file*") (kill-buffer "*sidebar-gui-file*"))
         (mapc #'portal-rex-disconnect (portal-rex-connections))))))
 
 ;;; A block's screen

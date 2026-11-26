@@ -6,6 +6,7 @@
 - [Independent terminals](#native-ghostty-terminal)
 - [Names, projects and directories](#names-projects-and-directories)
 - [Choosing terminals](#choosing-terminals)
+- [The sidebar](#the-sidebar)
 - [Consult and Embark](#consult-and-embark)
 - [Appearance and native bindings](#appearance-and-native-bindings)
 
@@ -262,6 +263,84 @@ its prompt from a busy one, so it asks for every running program, as
 without a question. Exited programs need none; quick reset/forget retain
 their own questions. `M-x portal-terminal-select`
 selects by name, where terminals of its kind show.
+
+### The sidebar
+
+`M-x portal-terminal-sidebar` shows `*Portal terminals*`, a narrow side window
+that lists every terminal and keeps itself current; the same command hides it.
+Each [Rex session](rex.md#sessions-and-new-terminals) has a heading, in the
+server's order, with its blocks under it in the order their buffers were made;
+Portal's own terminals follow, with no heading, in the order they were made:
+
+```
+ workspace
+   ai                    zsh
+   shell                 zsh
+ ◌ general            claude
+ portal
+ ● linux-web-view-page claude
+   approve Bash: git push
+ obento
+   terminal: workspace     zsh
+```
+
+A row has the mark of what its [program is doing](rex.md#what-a-blocks-program-is-doing),
+in the pickers' faces and with `portal-terminal-status-marks`; the block's
+label, or the buffer's name without its asterisks; and at the right, dimmed,
+the program: the app that reports its status, else the file name of the
+program in its foreground, once that is known. A blocked or failed row has a
+second line, with what its program said, cut to the window. A working row has
+the mark alone. Rows never move with their status: `*Rex agents*`
+([In a list](rex.md#in-a-list)) is the list sorted by urgency. A session's
+heading is bold, an empty session's dimmed, and Portal's own terminals have
+the face `portal-terminal-sidebar-terminal`. With a second Rex server
+connected, each server's socket heads its sessions. Quick terminals are left
+out. The row of the terminal in use is highlighted: that of the selected
+window, or, from the sidebar, of the window used last.
+
+The sidebar is drawn afresh, at most ten times a second and only while a
+window shows it, when a status changes, a session or block comes, goes or is
+renamed, a connection ends or comes back, and a terminal starts, ends, is
+renamed or runs another program. Point stays on its row. Hidden and shown
+again, it is drawn first. It asks the server nothing.
+
+| Key | On a row | On a session's heading |
+| --- | --- | --- |
+| `RET`, `mouse-1` | Select the terminal in the window used last, as the pickers do | Fold or unfold the session |
+| `o` | Select it in another window | |
+| `C-o` | Show it in the window used last, staying in the sidebar | |
+| `TAB` | | Fold or unfold the session |
+| `c` | A new terminal: a block in the row's session, or one of Portal's own from a row at the root | A new block in the session |
+| `g`, `q` | Draw afresh; hide the sidebar | The same |
+
+A folded session's rows are left out; its heading ends with the mark of its
+most urgent block and how many blocks it has, so a block that starts to wait
+shows there. Folds stay through redraws and renames, and are not saved. Nothing
+previews as point moves. With
+[`portal-terminal-embark-mode`](#consult-and-embark) on, a row is a terminal
+target, so Embark's actions rename it, set its project or end it.
+`M-x portal-terminal-sidebar-select` selects the sidebar, showing it first.
+Portal binds neither command to a key.
+
+The sidebar is shown by `display-buffer` with
+`portal-terminal-sidebar-display-action`: a side window on the left whose width
+balancing and frame resizes leave alone, and that `C-x 1` keeps. An entry in
+`display-buffer-alist` wins over it, to put it elsewhere:
+
+```elisp
+(add-to-list 'display-buffer-alist
+             '("\\`\\*Portal terminals\\*\\'" display-buffer-in-side-window
+               (side . right) (preserve-size . (t . nil))
+               (window-parameters . ((no-delete-other-windows . t)))))
+```
+
+Drag its edge, or use `C-x {` and `C-x }` in it, to resize it: the width is
+kept in `portal-terminal-sidebar-width`, 32 columns until then, and the sidebar
+comes back at it in any tab or frame. With `savehist-mode` on, the width lasts
+across Emacs sessions. A `window-width` in your `display-buffer-alist` entry
+wins each time it is shown. A side window belongs to its tab: a new tab starts
+without the sidebar. Showing or hiding it changes the width of the terminals
+beside it, whose programs redraw for the new size.
 
 ### Consult and Embark
 

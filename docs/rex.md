@@ -645,6 +645,15 @@ window:
 
 From a side window, `RET` selects the block in the window used last.
 
+### In the sidebar
+
+`M-x portal-terminal-sidebar` shows every terminal in a narrow side window,
+each session's blocks under its heading, with the same marks, a second line
+for a block that is blocked or failed, and rows that keep their places
+whatever their status: the [terminal guide](terminals.md#the-sidebar)
+describes it. A folded session's heading shows the mark of its most urgent
+block. The list above is the one sorted by urgency.
+
 ## Portal's terminal commands
 
 A block's buffer is a terminal to Portal's own terminal commands, from the
@@ -863,6 +872,15 @@ sessions have the change, and a closed block's buffer is gone. A new block's
 buffer comes a moment later, as its event carries only the block's ID and
 Portal asks the server for the label. The first event the hook sees is the
 first change after the sessions the connection started with.
+
+To follow what Emacs holds rather than what the server sends,
+`portal-rex-sessions-changed-functions` runs with the connection after its
+sessions change, after one of its blocks' buffers is made, renamed or killed,
+and after it attaches, on connecting and on coming back from a loss, or ends.
+One change of the server's can run it several times, as when a session's
+blocks are listed, and it can run while a buffer is being killed: a function
+on it should leave its work to a timer, as the
+[sidebar](terminals.md#the-sidebar) does.
 
 ## When a connection is lost
 
