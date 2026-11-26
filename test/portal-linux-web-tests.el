@@ -293,6 +293,8 @@ Returns the view's target once the page has loaded and shows."
       (portal-linux-web--wait-for target :field (lambda (text) (equal text "helloéb")))
       (should (member "C-k!" (plist-get (portal-linux-web--seen target) :keys)))
       (should-not unread-command-events)
+      ;; Reports go to their presses by the time each press was given at.
+      (should (portal-linux-gui--get :keys_by_time target))
       ;; It does not use Control-C: that and t are Emacs's.
       (let ((portal-linux-gui--ran nil))
         (portal-linux-gui--type "-M" "ctrl" "-k" "c" "-m" "ctrl" "-k" "t")

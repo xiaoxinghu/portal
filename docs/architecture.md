@@ -823,8 +823,9 @@ frame the renderer makes, which is many times more under output. A buffer
 is imported once for each of the renderer's textures and kept, and a frame
 is kept until the compositor releases its buffer: the renderer does not
 draw into a texture whose frame is held, so no frame on the screen is drawn
-into. A compositor that refuses the first DMABUF makes every terminal draw
-into memory, which the presenter copies into `wl_shm` buffers. Frames keep
+into. The first DMABUF of each format is asked for and waited for, and a
+compositor that refuses it makes each terminal that draws in that format
+draw into memory, which the presenter copies into `wl_shm` buffers. Frames keep
 coming while Lisp is busy, since neither thread waits for Emacs's.
 
 **Locks.** The presenter's lock keeps its list of terminals, and what it
@@ -915,7 +916,9 @@ view, which keeps the latest for the presenter; the presenter imports and
 presents it at the view's frame callback, keeps it until the compositor
 releases its buffer, and tells WebKit when the frame reached the screen,
 which a source may ask to hear and WebKit does: it draws the next frame
-only then.
+only then. The first DMABUF of each format and modifier is asked for and
+waited for, a terminal's and a page's apart: a refusal is then an answer,
+not a protocol error that would end Emacs's connection.
 
 **WebKit is told of the GPU once for the process**, at the first page's
 first load: a page draws DMABUFs from the compositor's GPU, which an EGL
@@ -945,14 +948,20 @@ made again there, starting a history of its own.
 Portal's input method committed for it, which an input method context of
 the page's hands to WebKit. WPE WebKit does not say whether a page used a
 key. A script in a world of its own in every frame reports each trusted
-keydown once its dispatch is over, with its modifiers and whether the page
-prevented its default. WebKit dispatches the presses in the order it was
-given them and the script reports them in that order, so a report is for
-the oldest press not reported yet; a press whose keydown never reached a
-document, as when its process ended, is known by the next report's
-modifiers not being its own, and dropped. An offered chord is used when the
-page prevented its default, and only its own report settles it: one that
-comes after its offer gave up, the page busy past the second an offer
+keydown once its dispatch is over, with its modifiers, its time on the
+document's clock and whether the page prevented its default. The time says
+which press a report is for: every event is given to WebKit at a time of
+Portal's own, never decreasing, presses at least 5 ms apart, and WebKit
+makes the keydown's time from it, keeping the differences to the
+millisecond, so within a document a report's time less its press's is the
+same for every press. That constant is learned from the first report that
+came with one press waiting, and followed as the document's clock drifts;
+a report then belongs to the press whose time it fits within 2.5 ms, and
+presses older than that one are dropped, their reports never coming.
+Before that, and after three reports in a row fit no press, a report is
+the oldest press's whose modifiers it has. An offered chord is used when
+the page prevented its default, and only its own report settles it: one
+that comes after its offer gave up, the page busy past the second an offer
 waits, is that press's, never a later one's. A chord WebKit's own editing
 acts on without the page preventing it reaches both the page and Emacs,
 where on macOS WebKit hands back what neither used.

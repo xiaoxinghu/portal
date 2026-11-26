@@ -26,9 +26,10 @@
    page's hands to WebKit as the key's text.  WebKit does not say whether
    a page used a key: WPE's PageClientImpl::doneWithKeyEvent is empty.  The
    key script, in a world of its own in every frame, reports each trusted
-   keydown after its dispatch, with its modifiers and whether the page
-   prevented its default; and an offered chord is used when it was
-   (key_reported). */
+   keydown after its dispatch, with its modifiers, its time and whether the
+   page prevented its default; the time, which Portal gave the press, says
+   which press the report is for (event_time); and an offered chord is
+   used when the page prevented it (key_reported). */
 #define _GNU_SOURCE
 #include <stdatomic.h>
 #include <stdio.h>
@@ -137,9 +138,15 @@ enum { PRESSES = 64 };
 
 struct press {
     uint64_t number;
+    guint32 time; /* The time WebKit was given it at: see event_time. */
     bool control, alt, meta;
     bool modifier; /* A modifier key's own press, whose modifiers WebKit adds. */
 };
+
+/* Presses are given to WebKit at least this many milliseconds apart, and a
+   report is its press's if its time is within this much of the press's. */
+enum { PRESS_SPACING = 5 };
+static const double report_tolerance = 2.5;
 
 struct page {
     struct portal_view *view; /* The main thread's. */
@@ -178,22 +185,33 @@ struct page {
     bool terminated;
 
     /* Keys, the main thread's.  Each press given to WebKit is numbered and
-       kept in PRESSES until the key script reports it: WebKit dispatches
-       the presses in order, and the script reports each keydown in order,
-       so a report is for the oldest press not yet reported.  The presses
-       go when the document that had them does, or its process: their
-       reports never come.  A press whose keydown reached no document
-       otherwise would take the next one's report: a report whose
-       modifiers are not that press's is the next press's, and the press
-       is dropped.  A press
-       numbered OFFER_NUMBER is with the page while OFFERING: the report
-       for that press, and for no other, settles it. */
+       kept in PRESSES until the key script reports it, with the time it
+       was given at, which travels with it: WebKit makes the keydown's
+       time from it (event_time), and the report says that time on the
+       document's clock.  So within a document a report's time less its
+       press's is the same for every press, OFFSET, to the coarseness of
+       the document's clock; and a report is the press's whose time it
+       fits, which a press that never reports cannot take from another.
+       Presses older than the one a report is for are dropped: theirs never
+       came.  OFFSET is learned, CALIBRATED, from the first report that
+       came with one press waiting, which is that press's, and follows each
+       report after, as the document's clock drifts from Emacs's.  Before
+       that, and after three reports in a row fit no press, as when the
+       wall clock was set, a report is the oldest press's whose modifiers
+       are its own, as WebKit dispatches presses in order and the script
+       reports them in order.  A press numbered OFFER_NUMBER is with the
+       page while OFFERING: the report for that press, and for no other,
+       settles it. */
     uint64_t pressed;
     GQueue presses;
-    /* Reports still to come for presses dropped from PRESSES, which a busy
-       page let pile up past its length: the next this many are theirs.
-       Should one never come, no report settles an offer, which then gives
-       up, until the document or its process goes. */
+    bool calibrated;
+    double offset;
+    unsigned misses;
+    /* Reports still to come, before calibration, for presses dropped from
+       PRESSES, which a busy page let pile up past its length: the next
+       this many are theirs.  Should one never come, no report settles an
+       offer, which then gives up, until the document or its process goes.
+       Calibrated, a dropped press's report fits no press. */
     unsigned dropped;
     bool offering;
     guint offer_timer;
@@ -618,13 +636,15 @@ static bool webkit_start(const struct portal_wayland *wayland, portal_text *erro
 /* What WebKit said, for the main thread. */
 
 /* The key script, in a world of its own in every frame: each trusted
-   keydown, once its dispatch is over, with its modifiers and whether the
-   page prevented its default. */
+   keydown, once its dispatch is over, with its modifiers, whether the page
+   prevented its default, and its time on the document's clock, in
+   milliseconds. */
 static const char key_script[] =
     "addEventListener('keydown', (event) => {"
     "  if (!event.isTrusted) return;"
     "  setTimeout(() => window.webkit.messageHandlers.portalKey.postMessage("
-    "    [event.ctrlKey, event.altKey, event.metaKey, event.defaultPrevented]), 0);"
+    "    [event.ctrlKey, event.altKey, event.metaKey, event.defaultPrevented,"
+    "     performance.timeOrigin + event.timeStamp]), 0);"
     "}, true);";
 
 static void offer_settle(struct page *page, bool used)
@@ -642,12 +662,51 @@ static void presses_clear(struct page *page)
 {
     g_queue_clear_full(&page->presses, g_free);
     page->dropped = 0;
+    /* A new document's clock has an origin of its own. */
+    page->calibrated = false;
+    page->misses = 0;
 }
 
 struct key_report {
     uint64_t serial;
     bool control, alt, meta, prevented;
+    double time;
 };
+
+/* The press REPORT is for, by order, before calibration: the oldest whose
+   modifiers are the report's, those before it dropped. */
+static struct press *press_by_order(struct page *page, const struct key_report *report)
+{
+    struct press *press;
+    while ((press = g_queue_pop_head(&page->presses))) {
+        if (press->modifier || (press->control == report->control &&
+                                press->alt == report->alt && press->meta == report->meta))
+            return press;
+        g_free(press); /* It never reached a document: this report is a later one's. */
+    }
+    return NULL;
+}
+
+/* The press REPORT is for, by its time, those before it dropped; or NULL
+   for a report of a press no longer kept. */
+static struct press *press_by_time(struct page *page, const struct key_report *report)
+{
+    for (GList *link = page->presses.head; link; link = link->next) {
+        struct press *press = link->data;
+        double off = report->time - press->time - page->offset;
+        if (off < -report_tolerance || off > report_tolerance)
+            continue;
+        while (g_queue_peek_head(&page->presses) != press)
+            g_free(g_queue_pop_head(&page->presses));
+        g_queue_pop_head(&page->presses);
+        page->offset += off;
+        page->misses = 0;
+        return press;
+    }
+    if (!g_queue_is_empty(&page->presses) && ++page->misses >= 3)
+        page->calibrated = false;
+    return NULL;
+}
 
 static gboolean key_report_on_main(gpointer data)
 {
@@ -656,22 +715,25 @@ static gboolean key_report_on_main(gpointer data)
     if (!view)
         return G_SOURCE_REMOVE;
     struct page *page = view->content;
-    if (page->dropped) {
+    struct press *press;
+    if (page->calibrated) {
+        press = press_by_time(page, report);
+    } else if (page->dropped) {
         page->dropped--;
         return G_SOURCE_REMOVE;
+    } else {
+        bool alone = g_queue_get_length(&page->presses) == 1;
+        press = press_by_order(page, report);
+        if (press && alone) {
+            page->offset = report->time - press->time;
+            page->calibrated = true;
+            page->misses = 0;
+            page->dropped = 0;
+        }
     }
-    struct press *press;
-    while ((press = g_queue_pop_head(&page->presses))) {
-        bool same = press->modifier || (press->control == report->control &&
-                                        press->alt == report->alt && press->meta == report->meta);
-        uint64_t number = press->number;
-        g_free(press);
-        if (!same)
-            continue; /* It never reached a document: this report is a later one's. */
-        if (page->offering && number == page->offer_number)
-            offer_settle(page, report->prevented);
-        break;
-    }
+    if (press && page->offering && press->number == page->offer_number)
+        offer_settle(page, report->prevented);
+    g_free(press);
     return G_SOURCE_REMOVE;
 }
 
@@ -689,6 +751,9 @@ static void key_reported(WebKitUserContentManager *manager, JSCValue *value, gpo
         *flags[i] = jsc_value_to_boolean(item);
         g_object_unref(item);
     }
+    JSCValue *item = jsc_value_object_get_property_at_index(value, G_N_ELEMENTS(flags));
+    report->time = jsc_value_to_double(item);
+    g_object_unref(item);
     on_main(key_report_on_main, report, g_free);
 }
 
@@ -1115,6 +1180,29 @@ static gboolean given_on_webkit(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* The time an event is given to WebKit at, in milliseconds, never less
+   than the last one's, and for a press at least PRESS_SPACING more: the
+   identity of a press, which its keydown and the key script's report of it
+   carry.  WebKit makes an event's time from the first it was given in the
+   process and the time since (monotonicTimeForEventTimeInMilliseconds in
+   WebKit's WebEventConversion.cpp), so every event's must be Portal's,
+   counted from a start of its own, and none earlier than the first.  A
+   press given in a burst, as by a program that types, is that much later
+   to the page; a person's are spaced further apart.  From the module
+   thread. */
+static guint32 event_time(bool press)
+{
+    static gint64 start;
+    static guint32 last;
+    gint64 now = g_get_monotonic_time() / 1000;
+    if (!start)
+        start = now - 1;
+    guint32 time = (guint32) (now - start);
+    guint32 floor = press && last ? last + PRESS_SPACING : last;
+    last = time > floor ? time : floor;
+    return last;
+}
+
 static void give(struct page *page, struct given *given)
 {
     given->page = page;
@@ -1128,7 +1216,7 @@ static uint64_t give_key(struct page *page, const GdkEventKey *event, const char
     struct given *given = g_new0(struct given, 1);
     bool press = event->type == GDK_KEY_PRESS;
     given->type = press ? WPE_EVENT_KEYBOARD_KEY_DOWN : WPE_EVENT_KEYBOARD_KEY_UP;
-    given->time = event->time;
+    given->time = event_time(press);
     given->modifiers = modifiers_of(event->state);
     given->keycode = event->hardware_keycode;
     given->keyval = event->keyval;
@@ -1139,6 +1227,7 @@ static uint64_t give_key(struct page *page, const GdkEventKey *event, const char
     struct press *pressed = g_new(struct press, 1);
     *pressed = (struct press) {
         .number = ++page->pressed,
+        .time = given->time,
         .control = event->state & GDK_CONTROL_MASK,
         .alt = event->state & GDK_MOD1_MASK,
         .meta = event->state & (GDK_SUPER_MASK | GDK_MOD4_MASK | GDK_META_MASK),
@@ -1147,7 +1236,8 @@ static uint64_t give_key(struct page *page, const GdkEventKey *event, const char
     g_queue_push_tail(&page->presses, pressed);
     while (g_queue_get_length(&page->presses) > PRESSES) {
         g_free(g_queue_pop_head(&page->presses));
-        page->dropped++;
+        if (!page->calibrated)
+            page->dropped++;
     }
     return pressed->number;
 }
@@ -1256,7 +1346,7 @@ static void page_pointer(void *content, const GdkEvent *event)
     gdk_event_get_coords(event, &x, &y);
     given->x = x;
     given->y = y;
-    given->time = gdk_event_get_time(event);
+    given->time = event_time(false);
     GdkModifierType state = 0;
     gdk_event_get_state(event, &state);
     given->modifiers = modifiers_of(state);
@@ -1314,11 +1404,12 @@ static void page_describe(void *content, struct json *description)
     char facts[256];
     int length = snprintf(facts, sizeof facts,
                           "\"loading\":%s,\"rendered\":%llu,\"memory_frames\":%llu,"
-                          "\"offering\":%s,\"unshowable\":%s,\"terminated\":%s,",
+                          "\"offering\":%s,\"unshowable\":%s,\"terminated\":%s,"
+                          "\"keys_by_time\":%s,",
                           page->loading ? "true" : "false", atomic_load(&page->rendered),
                           atomic_load(&page->memory_frames), page->offering ? "true" : "false",
                           atomic_load(&page->unshowable) ? "true" : "false",
-                          page->terminated ? "true" : "false");
+                          page->terminated ? "true" : "false", page->calibrated ? "true" : "false");
     put(description, facts, (size_t) length);
     host->stage_describe(page->stage, description);
     const struct {
