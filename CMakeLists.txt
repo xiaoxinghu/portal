@@ -43,7 +43,7 @@ if(APPLE)
         set(BUN "${resolved_bun}" CACHE FILEPATH "The Bun that compiles Portal's app host")
     endif()
 else()
-    # Linux has no web views yet, so it builds no host and needs no Bun. The
+    # Linux has no hosted apps yet, so it builds no host and needs no Bun. The
     # host's tests run with BUN or a bun on PATH, and are skipped without one.
     if(DEFINED ENV{BUN} AND NOT DEFINED CACHE{BUN})
         set(BUN "$ENV{BUN}" CACHE FILEPATH "The Bun that runs the app host's tests")

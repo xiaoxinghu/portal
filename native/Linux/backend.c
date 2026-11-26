@@ -17,6 +17,9 @@
    - Fed terminals, which show a Rex block (terminal.c): Ghostty's
      host-managed surface, fed by a thread of Portal's, placed where the
      core's rules for it say (native/Core/fed.h).
+   - Pages (web.c), WPE WebKit's, in portal-web.so, which this module opens
+     at the first web view and links nothing of: loading a page, going
+     through its history, and parsing a URL as WebKit spells it.
    - A test pattern (pattern.c), the content of a view made with the option
      :test-pattern, of either kind, which the checks of the view machinery
      use.
@@ -28,7 +31,11 @@
    What is not, and what each operation waits for: it fails, saying what
    Portal lacks on Linux, and changes nothing.
 
-   - Web views, on WebKitGTK.  Without :test-pattern, creating one fails.
+   - The other web primitives, which wait for portal.h's web primitives on
+     WPE WebKit: the bridge, appearance, opacity, windows, finding, zoom
+     and printing.
+   - A web view where WPE WebKit is not installed, or the build had no
+     web views: creating one fails, saying what to install.
    - System-wide keys, posted keys and the status panel, which Wayland gives
      a client no direct way to do.
    - The launcher, which rests on the NS build of Emacs and has no Linux

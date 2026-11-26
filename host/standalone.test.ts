@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 const build = process.env.PORTAL_BUILD ?? join(import.meta.dir, "..", "build");
 
-// Only the Mac compiles the host: Linux has no web views yet.
+// Only the Mac compiles the host: Linux has no hosted apps yet.
 test.skipIf(process.platform !== "darwin")(
 	"a relocated host serves its pages and bundled assets",
 	async () => {

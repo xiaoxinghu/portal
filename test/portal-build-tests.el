@@ -501,7 +501,7 @@ echo \"TOOLS=$PORTAL_TOOLS_DIR\"\nmkdir -p build\n")
       (should-not (file-exists-p (portal-build-file "portal-host")))
       (cl-letf (((symbol-function 'portal-build-ensure) (lambda () (ert-fail "Ensured")))
                 ((symbol-function 'make-process) (lambda (&rest _) (ert-fail "Started"))))
-        (should (string-match-p "no web views on .* yet, so it has no app host"
+        (should (string-match-p "no hosted apps on .* yet, so it has no app host"
                                 (cadr (should-error (portal-start-server)
                                                     :type 'user-error)))))
       (should (equal (portal-build--describe 'missing) "Portal's native module is not built"))

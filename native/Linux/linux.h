@@ -10,7 +10,9 @@
    terminal.c a terminal: a content that is a Ghostty surface, running a
               shell or fed a Rex block's output, and Ghostty's app, which
               every terminal shares.
-   presenter.c the thread that shows every terminal's frames.
+   presenter.c the thread that shows every terminal's and page's frames.
+   web.c      a page: a content that is WPE WebKit's, built into a second
+              object, portal-web.so, which backend.c opens (web.h).
    pattern.c  the other kind of content, a test pattern for the checks.
 
    A view has two parts in an Emacs frame, as docs/architecture.md says: a
@@ -63,9 +65,9 @@ struct portal_wayland {
    that lacks one of them. */
 const struct portal_wayland *portal_linux_wayland(portal_text *error);
 
-/* A view's content: what it shows and what its input does.  Two kinds of
-   content exist, a terminal (terminal.c) and the test pattern (pattern.c);
-   a page is to come.  The view calls these on the module thread, except
+/* A view's content: what it shows and what its input does.  Three kinds of
+   content exist, a terminal (terminal.c), a page (web.c) and the test
+   pattern (pattern.c).  The view calls these on the module thread, except
    FRAME.
 
    A content draws on a thread, its own or one it shares with others, into
