@@ -314,17 +314,21 @@ Returns the view's target once the page has loaded and shows."
                     "<!doctype html><title>ready</title><script>
 let count = 0;
 addEventListener('keydown', (event) => {
-  // Busy at the first key, while the rest pile up behind it.
-  if (++count === 1) { const end = performance.now() + 400; while (performance.now() < end); }
+  // Busy at the second key, while the rest pile up behind it.
+  if (++count === 2) { const end = performance.now() + 400; while (performance.now() < end); }
   if (event.ctrlKey && event.key === 'k') { event.preventDefault(); document.title = 'kept ' + count; }
+  else document.title = 'keys ' + count;
 });
 </script>"))))
       (keymap-set (current-local-map) "C-k" #'portal-linux-gui--mark)
       (portal-linux-web--focus target)
+      ;; One key alone first, whose report matches reports to presses by time.
+      (portal-linux-gui--type "x")
+      (portal-linux-gui--wait (lambda () (portal-linux-gui--get :keys_by_time target)))
       (let ((portal-linux-gui--ran nil))
         (portal-linux-gui--type (make-string 80 ?a) "-M" "ctrl" "-k" "k" "-m" "ctrl")
         (portal-linux-gui--wait
-         (lambda () (equal (portal-linux-gui--get :title target) "kept 81")))
+         (lambda () (equal (portal-linux-gui--get :title target) "kept 82")))
         (portal-linux-gui--wait (lambda () (not (portal-linux-gui--get :offering target))))
         (portal-linux-gui--pause 0.3)
         (should-not portal-linux-gui--ran)
