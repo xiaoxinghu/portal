@@ -1269,7 +1269,21 @@ static void test_holding_the_size(void)
     CHECK(is_text(portal_fake_socket_sent(id), ""));
     CHECK(portal_rex_hold_size(text(target), false, &error));
     CHECK(resized_to(id, 50, 30));
-    answer_with(id, number, "{}", NULL);
+    answer_with(id, number++, "{}", NULL);
+    /* A size queued behind an operation still out when the hold starts
+       goes with nothing; let go at the block's grid, nothing goes. */
+    portal_rex_focus(text(target), true);
+    CHECK(asked(id, number, "block.event",
+                ON_BLOCK ",\"event\":{\"type\":\"focus\",\"payload\":{\"action\":\"in\"}}}"));
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 480, 480}, text("frame"), &error));
+    portal_fake_fire_timers();
+    CHECK(portal_rex_hold_size(text(target), true, &error));
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 480, 320}, text("frame"), &error));
+    answer_with(id, number++, "{}", NULL);
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
+    CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 400, 480}, text("frame"), &error));
+    CHECK(portal_rex_hold_size(text(target), false, &error));
+    CHECK(is_text(portal_fake_socket_sent(id), ""));
     /* Not held, a change settles and goes as ever. */
     CHECK(portal_views_place(text(target), (portal_edges) {0, 0, 400, 240}, text("frame"), &error));
     CHECK(is_text(portal_fake_socket_sent(id), ""));

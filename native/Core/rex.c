@@ -1782,7 +1782,10 @@ static void next_operation(struct shown *shown)
     case RESIZE:
     default:
         method = "com.superlogical.terminal.resize";
-        if (!grid(shown, values) || !memcmp(values, shown->sized, sizeof values)) {
+        /* Held, a size queued before goes with nothing: the hold's end
+           queues the grid there is then. */
+        if (shown->size_held || !grid(shown, values)
+            || !memcmp(values, shown->sized, sizeof values)) {
             free_operation(&operation);
             return next_operation(shown);
         }

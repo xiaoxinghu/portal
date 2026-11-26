@@ -519,6 +519,32 @@ static void test_frame_held_across_a_grid(void)
     HAPPENED("");
 }
 
+/* A grid that comes while the frame waits for quiet after the last one
+   keeps it held until the new grid is taken and quiet in its turn. */
+static void test_frame_held_across_grids_in_a_row(void)
+{
+    char *target = make_in_pane();
+    CHECK(hold(target, 80, 24));
+    took(target, 80, 24);
+    CHECK(hold(target, 100, 30));
+    took(target, 100, 30);
+    portal_fake_fed_log();
+    CHECK(hold(target, 60, 20));
+    HAPPENED("drain\n"
+             "place x 0 y -32 width 488 height 332 top 0\n"
+             "timer 250 ms\n");
+    /* The last grid's quiet counts for nothing while this one is taken. */
+    portal_fake_fire_timers_of(PORTAL_FED_QUIET_MS);
+    HAPPENED("");
+    took(target, 60, 20);
+    HAPPENED("timer 40 ms\n");
+    portal_fake_fire_timers_of(PORTAL_FED_QUIET_MS);
+    HAPPENED("let go frame\n");
+    close_view(target);
+    portal_fake_fire_timers();
+    HAPPENED("");
+}
+
 /* A program that never redraws, or a grid never taken, holds the frame a
    third of a second at most. */
 static void test_frame_held_at_most(void)
@@ -677,6 +703,7 @@ int main(void)
     test_grid_hangs_from_either_corner();
     test_frame_held_across_a_grid();
     test_frame_held_at_most();
+    test_frame_held_across_grids_in_a_row();
     test_backlog_crossings();
     test_backlog_across_both_marks();
     test_backlog_crossings_out_of_order();

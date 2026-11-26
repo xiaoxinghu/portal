@@ -287,6 +287,9 @@ static bool taking(const struct portal_fed *fed)
 static void hold_frame(struct portal_fed *fed)
 {
     portal_text error = {0};
+    /* Held already: the wait for quiet starts again once this grid is
+       taken. */
+    fed->quiet = 0;
     if (fed->frame_held)
         return;
     if (!portal_terminal_hold_frame(fed->terminal, true, &error)) {
@@ -484,7 +487,10 @@ bool portal_fed_timer(uint64_t token)
         }
         if (fed->quiet == token) {
             fed->quiet = 0;
-            /* What came is still being parsed: it is drawn after. */
+            /* What came is still being parsed, or a grid is being taken:
+               the wait starts again after. */
+            if (taking(fed))
+                return true;
             if (pending(fed))
                 quieten(fed);
             else
