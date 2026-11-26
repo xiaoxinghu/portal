@@ -296,8 +296,11 @@ the mark alone. Rows never move with their status: `*Rex agents*`
 heading is bold, an empty session's dimmed, and Portal's own terminals have
 the face `portal-terminal-sidebar-terminal`. With a second Rex server
 connected, each server's socket heads its sessions. Quick terminals are left
-out. The row of the terminal in use is highlighted: that of the selected
-window, or, from the sidebar, of the window used last.
+out. The row of the terminal in use is marked with a left-edge bar
+(`portal-terminal-sidebar-current-indicator`) and bold text
+(`portal-terminal-sidebar-current`): that of the selected window, or, from
+the sidebar, of the window used last. Hovering a clickable row or heading
+highlights only that item with `portal-terminal-sidebar-hover`.
 
 `portal-terminal-next` and `-previous` walk the terminals in this order,
 moving the highlight down or up a row and from the last row to the first;
@@ -330,7 +333,10 @@ previews as point moves. With
 [`portal-terminal-embark-mode`](#consult-and-embark) on, a row is a terminal
 target, so Embark's actions rename it, set its project or end it.
 `M-x portal-terminal-sidebar-select` selects the sidebar, showing it first.
-Portal binds neither command to a key.
+Portal binds neither command to a key. When Evil is loaded, the sidebar starts
+in normal state with `RET`, `TAB`, `o`, `C-o`, `c`, `gr` and `q` bound while
+leaving Evil's motions and leader alone; set `portal-terminal-sidebar-evil-keys`
+to nil before loading to leave Evil untouched.
 
 The sidebar is shown by `display-buffer` with
 `portal-terminal-sidebar-display-action`: a side window on the left whose width

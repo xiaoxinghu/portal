@@ -406,5 +406,87 @@ STATUS holds the other keys of `:status' in `portal-terminal-metadata'."
         (portal-sidebar-test--settle)
         (should (equal (portal-sidebar-test--rows) '("first" "second")))))))
 
+(ert-deftest portal-terminal-sidebar-hovers-each-row-separately ()
+  (portal-sidebar-test--environment
+    (let ((blocked (portal-sidebar-test--open "one/app" "asking"))
+          (plain (portal-sidebar-test--open "two/app" "shell")))
+      (portal-sidebar-test--status blocked 'blocked :kind "question" :message "Proceed?")
+      (portal-terminal-sidebar)
+      (with-current-buffer portal-terminal-sidebar--name
+        (let* ((width (1- (window-max-chars-per-line (portal-sidebar-test--window))))
+               (blocked-start (portal-terminal-sidebar--find blocked))
+               (plain-start (portal-terminal-sidebar--find plain))
+               (blocked-line1-end (save-excursion (goto-char blocked-start) (line-end-position)))
+               (plain-end (save-excursion (goto-char plain-start) (line-end-position))))
+          ;; Both lines of a blocked row share one hover stretch, stopping before its final newline.
+          (should (eq (get-text-property blocked-start 'mouse-face) 'portal-terminal-sidebar-hover))
+          (should (eq (get-text-property blocked-line1-end 'mouse-face) 'portal-terminal-sidebar-hover))
+          (should (eq (get-text-property (- plain-start 2) 'mouse-face) 'portal-terminal-sidebar-hover))
+          (should-not (get-text-property (1- plain-start) 'mouse-face))
+          ;; The next row is its own hover stretch, padded to the full row width, excluding its newline.
+          (should (= (- plain-end plain-start) width))
+          (should (eq (get-text-property plain-start 'mouse-face) 'portal-terminal-sidebar-hover))
+          (should (eq (get-text-property (1- plain-end) 'mouse-face) 'portal-terminal-sidebar-hover))
+          (should-not (get-text-property plain-end 'mouse-face)))))))
+
+(ert-deftest portal-terminal-sidebar-marks-active-row-with-bar-and-no-background ()
+  (portal-sidebar-test--environment
+    (let ((blocked (portal-sidebar-test--open "one/app" "asking"))
+          (plain (portal-sidebar-test--open "two/app" "shell")))
+      (portal-sidebar-test--status blocked 'blocked :kind "question" :message "Proceed?")
+      ;; Active face uses bold text, not a background color that clashes with hover.
+      (should (eq (face-attribute 'portal-terminal-sidebar-current :background nil t) 'unspecified))
+      (should (eq (face-attribute 'portal-terminal-sidebar-current :weight nil t) 'bold))
+      (portal-terminal-sidebar)
+      ;; Single-line active row gets one bar overlay (fallback glyph in batch).
+      (with-current-buffer portal-terminal-sidebar--name
+        (should (= (length portal-terminal-sidebar--bar-overlays) 1))
+        (should (equal (overlay-get (car portal-terminal-sidebar--bar-overlays) 'display) "▎")))
+      ;; Two-line active row gets a bar overlay on each of its two lines.
+      (switch-to-buffer blocked)
+      (run-hook-with-args 'window-buffer-change-functions (selected-frame))
+      (with-current-buffer portal-terminal-sidebar--name
+        (should (= (length portal-terminal-sidebar--bar-overlays) 2)))
+      ;; With fringe support, each line gets a left-fringe bitmap before-string.
+      (cl-letf (((symbol-function 'portal-terminal-sidebar--fringe-p) (lambda () t)))
+        (with-current-buffer portal-terminal-sidebar--name
+          (portal-terminal-sidebar--highlight)
+          (should (= (length portal-terminal-sidebar--bar-overlays) 2))
+          (dolist (ov portal-terminal-sidebar--bar-overlays)
+            (let ((before (overlay-get ov 'before-string)))
+              (should (equal (get-text-property 0 'display before)
+                             '(left-fringe portal-terminal-sidebar-current-bar
+                                           portal-terminal-sidebar-current-indicator)))))))
+      ;; A non-terminal buffer removes all bar overlays.
+      (switch-to-buffer "sidebar-file.el")
+      (run-hook-with-args 'window-buffer-change-functions (selected-frame))
+      (with-current-buffer portal-terminal-sidebar--name
+        (should-not portal-terminal-sidebar--bar-overlays)))))
+
+(ert-deftest portal-terminal-sidebar-sets-up-evil-keys-optionally ()
+  (let (initial bindings)
+    (cl-letf (((symbol-function 'evil-set-initial-state)
+               (lambda (mode state) (setq initial (cons mode state))))
+              ((symbol-function 'evil-define-key*)
+               (lambda (state map &rest pairs)
+                 (setq bindings (list state map pairs)))))
+      (let ((portal-terminal-sidebar-evil-keys nil))
+        (portal-terminal-sidebar--setup-evil)
+        (should-not initial)
+        (should-not bindings))
+      (let ((portal-terminal-sidebar-evil-keys t))
+        (portal-terminal-sidebar--setup-evil)
+        (should (equal initial '(portal-terminal-sidebar-mode . normal)))
+        (should (eq (car bindings) 'normal))
+        (should (eq (cadr bindings) portal-terminal-sidebar-mode-map))
+        (let ((pairs (caddr bindings)))
+          (should (eq (plist-get pairs (kbd "RET") #'equal) #'portal-terminal-sidebar-visit))
+          (should (eq (plist-get pairs (kbd "TAB") #'equal) #'portal-terminal-sidebar-toggle-fold))
+          (should (eq (plist-get pairs "o" #'equal) #'portal-terminal-sidebar-visit-other-window))
+          (should (eq (plist-get pairs (kbd "C-o") #'equal) #'portal-terminal-sidebar-display))
+          (should (eq (plist-get pairs "c" #'equal) #'portal-terminal-sidebar-new))
+          (should (eq (plist-get pairs "gr" #'equal) #'revert-buffer))
+          (should (eq (plist-get pairs "q" #'equal) #'quit-window)))))))
+
 (provide 'portal-terminal-sidebar-tests)
 ;;; portal-terminal-sidebar-tests.el ends here

@@ -64,9 +64,28 @@ resizes leave alone, and which \\[delete-other-windows] keeps."
   "Face of the program at the right of a row, and of a folded session's count."
   :group 'portal-terminal)
 
-(defface portal-terminal-sidebar-current '((t :inherit highlight :extend t))
+(defface portal-terminal-sidebar-current '((t :inherit bold))
   "Face of the row of the terminal in use."
   :group 'portal-terminal)
+
+(defface portal-terminal-sidebar-current-indicator
+  '((t :inherit mode-line-emphasis :slant normal))
+  "Face of the left-edge bar marking the row of the terminal in use."
+  :group 'portal-terminal)
+
+(defface portal-terminal-sidebar-hover '((t :inherit highlight :extend nil))
+  "Face of a clickable row or heading under the mouse pointer."
+  :group 'portal-terminal)
+
+(defcustom portal-terminal-sidebar-evil-keys t
+  "Non-nil starts the sidebar in Evil's normal state with keys for it.
+Set it before Evil or this file loads; nil leaves Evil untouched."
+  :type 'boolean
+  :group 'portal-terminal)
+
+(when (fboundp 'define-fringe-bitmap)
+  (define-fringe-bitmap 'portal-terminal-sidebar-current-bar
+    [224] nil nil '(center repeated)))
 
 ;;; The order
 
@@ -125,7 +144,10 @@ named then.")
 A window that shows it again draws it, such as one of a tab restored.")
 
 (defvar-local portal-terminal-sidebar--overlay nil
-  "The overlay that highlights the row of the terminal in use.")
+  "The overlay that styles the row of the terminal in use.")
+
+(defvar-local portal-terminal-sidebar--bar-overlays nil
+  "The overlays drawing the left-edge bar on each line of the terminal in use.")
 
 (defun portal-terminal-sidebar--program (buffer)
   "Return what names the program of terminal BUFFER on its row, or nil.
@@ -166,16 +188,19 @@ Without a status or a mark for it, spaces."
 (defun portal-terminal-sidebar--line (prefix text face right width)
   "Return a line WIDTH columns wide: PREFIX, then TEXT in FACE, then RIGHT.
 TEXT is cut short to leave room for RIGHT, which ends at the right; on
-a line too narrow for both, RIGHT is left out."
+a line too narrow for both, RIGHT is left out.  Lines without RIGHT are
+padded with spaces to WIDTH so hover and clicks span the full row."
   (let* ((right-width (if right (1+ (string-width right)) 0))
          (room (- width (string-width prefix) right-width)))
     (when (and right (< room 6))
       (setq right nil
             room (- width (string-width prefix))))
-    (let ((text (truncate-string-to-width text (max room 1) nil nil t)))
+    (let* ((text (truncate-string-to-width text (max room 1) nil nil t))
+           (pad (max 0 (- width (string-width prefix) (string-width text)
+                          (if right (string-width right) 0)))))
       (concat prefix (propertize text 'face face)
-              (and right (concat (make-string (max 1 (- (1+ room) (string-width text))) ?\s)
-                                 right))))))
+              (when (> pad 0) (make-string pad ?\s))
+              right))))
 
 (defun portal-terminal-sidebar--tail (text width)
   "Return TEXT, or as much of its end as fits in WIDTH columns after an ellipsis.
@@ -189,11 +214,16 @@ A server is told apart by the end of its socket's name."
         (cl-decf start))
       (concat ellipsis (substring text start)))))
 
-(defun portal-terminal-sidebar--insert (line &rest properties)
-  "Insert LINE and a newline, with PROPERTIES on both."
+(defun portal-terminal-sidebar--insert (lines clickable &rest properties)
+  "Insert LINES, each followed by a newline, with PROPERTIES on all of them.
+When CLICKABLE is non-nil, put `mouse-face' on the item up to, but not
+including, its final newline so consecutive items hover separately."
   (let ((start (point)))
-    (insert line "\n")
-    (add-text-properties start (point) (append properties '(mouse-face highlight)))))
+    (dolist (line lines)
+      (insert line "\n"))
+    (add-text-properties start (point) properties)
+    (when clickable
+      (put-text-property start (1- (point)) 'mouse-face 'portal-terminal-sidebar-hover))))
 
 (defun portal-terminal-sidebar--insert-row (buffer indent width &optional connection session-id)
   "Insert the row of terminal BUFFER, INDENT before its mark, WIDTH columns wide.
@@ -202,23 +232,23 @@ failed terminal has a second line, saying what its program said."
   (let* ((status (buffer-local-value 'portal-terminal--status buffer))
          (program (portal-terminal-sidebar--program buffer))
          (prefix (concat indent (portal-terminal-sidebar--mark status) " "))
-         (properties (list 'portal-terminal-sidebar-item buffer
-                           'portal-terminal-sidebar-connection connection
-                           'portal-terminal-sidebar-session session-id)))
-    (apply #'portal-terminal-sidebar--insert
-           (portal-terminal-sidebar--line
-            prefix (portal-terminal-sidebar--label buffer)
-            (and (not connection) 'portal-terminal-sidebar-terminal)
-            (and program (propertize program 'face 'portal-terminal-sidebar-program))
-            width)
-           properties)
+         (lines (list (portal-terminal-sidebar--line
+                       prefix (portal-terminal-sidebar--label buffer)
+                       (and (not connection) 'portal-terminal-sidebar-terminal)
+                       (and program (propertize program 'face 'portal-terminal-sidebar-program))
+                       width))))
     (when (memq (plist-get status :state) '(blocked error))
-      (apply #'portal-terminal-sidebar--insert
-             (portal-terminal-sidebar--line
-              (make-string (string-width prefix) ?\s)
-              (or (plist-get status :message) (portal-terminal--status-word status))
-              (portal-terminal-sidebar--face status) nil width)
-             properties))))
+      (setq lines (append lines
+                          (list (portal-terminal-sidebar--line
+                                 (make-string (string-width prefix) ?\s)
+                                 (or (plist-get status :message)
+                                     (portal-terminal--status-word status))
+                                 (portal-terminal-sidebar--face status) nil width)))))
+    (portal-terminal-sidebar--insert
+     lines t
+     'portal-terminal-sidebar-item buffer
+     'portal-terminal-sidebar-connection connection
+     'portal-terminal-sidebar-session session-id)))
 
 (defun portal-terminal-sidebar--insert-heading (connection session-id label blocks indent width)
   "Insert the heading of CONNECTION's session SESSION-ID, called LABEL.
@@ -227,14 +257,15 @@ columns wide.  A folded session's heading ends with its most urgent
 block's mark and how many blocks it has."
   (let ((urgent (portal-terminal-sidebar--urgent blocks)))
     (portal-terminal-sidebar--insert
-     (portal-terminal-sidebar--line
-      indent (if (and label (not (string-empty-p label))) label session-id)
-      (if blocks 'portal-terminal-sidebar-session 'portal-terminal-sidebar-empty-session)
-      (and blocks (member session-id portal-terminal-sidebar--folded)
-           (concat (and urgent (concat (portal-terminal-sidebar--mark urgent) " "))
-                   (propertize (number-to-string (length blocks))
-                               'face 'portal-terminal-sidebar-program)))
-      width)
+     (list (portal-terminal-sidebar--line
+            indent (if (and label (not (string-empty-p label))) label session-id)
+            (if blocks 'portal-terminal-sidebar-session 'portal-terminal-sidebar-empty-session)
+            (and blocks (member session-id portal-terminal-sidebar--folded)
+                 (concat (and urgent (concat (portal-terminal-sidebar--mark urgent) " "))
+                         (propertize (number-to-string (length blocks))
+                                     'face 'portal-terminal-sidebar-program)))
+            width))
+     t
      'portal-terminal-sidebar-item (cons 'session session-id)
      'portal-terminal-sidebar-connection connection
      'portal-terminal-sidebar-session session-id)))
@@ -259,9 +290,10 @@ That of the narrowest window showing it, less a column at the right."
     (pcase-dolist (`(,connection . ,sessions) (car tree))
       (when several
         (portal-terminal-sidebar--insert
-         (portal-terminal-sidebar--line
-          " " (portal-terminal-sidebar--tail (portal-rex--named connection) (1- width))
-          'portal-terminal-sidebar-server nil width)
+         (list (portal-terminal-sidebar--line
+                " " (portal-terminal-sidebar--tail (portal-rex--named connection) (1- width))
+                'portal-terminal-sidebar-server nil width))
+         nil
          'portal-terminal-sidebar-item (cons 'server (portal-rex-connection-socket connection))))
       (pcase-dolist (`(,id ,label . ,blocks) sessions)
         (portal-terminal-sidebar--insert-heading connection id label blocks indent width)
@@ -349,9 +381,47 @@ window used last."
       (setq window (get-mru-window nil nil t)))
     (and window (window-buffer window))))
 
+(defun portal-terminal-sidebar--fringe-p ()
+  "Return non-nil when the sidebar can draw its bar in the left fringe."
+  (and (fboundp 'fringe-bitmap-p)
+       (fringe-bitmap-p 'portal-terminal-sidebar-current-bar)
+       (let* ((window (get-buffer-window (current-buffer) t))
+              (frame (if window (window-frame window) (selected-frame)))
+              (width (or (and window (car (window-fringes window)))
+                         (frame-parameter frame 'left-fringe))))
+         (and (display-graphic-p frame)
+              (or (null width) (> width 0))))))
+
+(defun portal-terminal-sidebar--make-bars (start end)
+  "Draw the left-edge indicator bar on every line from START to END."
+  (let ((fringe (portal-terminal-sidebar--fringe-p))
+        (pos start)
+        bars)
+    (save-excursion
+      (while (< pos end)
+        (goto-char pos)
+        (if fringe
+            (let ((ov (make-overlay pos pos)))
+              (overlay-put ov 'before-string
+                           (propertize " " 'display
+                                       '(left-fringe portal-terminal-sidebar-current-bar
+                                                     portal-terminal-sidebar-current-indicator)))
+              (push ov bars))
+          (when (eq (char-after pos) ?\s)
+            (let ((ov (make-overlay pos (1+ pos))))
+              (overlay-put ov 'display
+                           (propertize "▎" 'face 'portal-terminal-sidebar-current-indicator))
+              (overlay-put ov 'evaporate t)
+              (push ov bars))))
+        (forward-line 1)
+        (setq pos (point))))
+    (nreverse bars)))
+
 (defun portal-terminal-sidebar--highlight ()
-  "Highlight the row of the terminal in use in the current buffer, the sidebar.
-A row folded away highlights its session's heading."
+  "Mark the row of the terminal in use in the current buffer, the sidebar.
+A row folded away marks its session's heading."
+  (mapc #'delete-overlay portal-terminal-sidebar--bar-overlays)
+  (setq portal-terminal-sidebar--bar-overlays nil)
   (let* ((buffer (portal-terminal-sidebar--in-use))
          (start (and buffer
                      (or (portal-terminal-sidebar--find buffer)
@@ -362,9 +432,11 @@ A row folded away highlights its session's heading."
       (overlay-put portal-terminal-sidebar--overlay 'face 'portal-terminal-sidebar-current)
       (overlay-put portal-terminal-sidebar--overlay 'priority -50))
     (if start
-        (move-overlay portal-terminal-sidebar--overlay start
-                      (or (next-single-property-change start 'portal-terminal-sidebar-item)
-                          (point-max)))
+        (let ((end (or (next-single-property-change start 'portal-terminal-sidebar-item)
+                       (point-max))))
+          (move-overlay portal-terminal-sidebar--overlay start end)
+          (setq portal-terminal-sidebar--bar-overlays
+                (portal-terminal-sidebar--make-bars start end)))
       (delete-overlay portal-terminal-sidebar--overlay))))
 
 (defun portal-terminal-sidebar--selection-changed (&rest _)
@@ -571,6 +643,26 @@ Portal's own.  It starts in the directory of that window's buffer."
   "p" #'previous-line
   "<mouse-2>" #'portal-terminal-sidebar-click
   "<follow-link>" 'mouse-face)
+
+(declare-function evil-set-initial-state "evil-core" (mode state))
+(declare-function evil-define-key* "evil-core" (state keymap key def &rest bindings))
+
+(defun portal-terminal-sidebar--setup-evil ()
+  "Bind the sidebar's Evil normal-state keys, unless disabled.
+Does nothing when `portal-terminal-sidebar-evil-keys' is nil."
+  (when portal-terminal-sidebar-evil-keys
+    (evil-set-initial-state 'portal-terminal-sidebar-mode 'normal)
+    (evil-define-key* 'normal portal-terminal-sidebar-mode-map
+      (kbd "RET") #'portal-terminal-sidebar-visit
+      (kbd "TAB") #'portal-terminal-sidebar-toggle-fold
+      "o" #'portal-terminal-sidebar-visit-other-window
+      (kbd "C-o") #'portal-terminal-sidebar-display
+      "c" #'portal-terminal-sidebar-new
+      "gr" #'revert-buffer
+      "q" #'quit-window)))
+
+(with-eval-after-load 'evil
+  (portal-terminal-sidebar--setup-evil))
 
 (define-derived-mode portal-terminal-sidebar-mode special-mode "Terminals"
   "The sidebar of terminals: every terminal, grouped by Rex session.

@@ -4053,6 +4053,17 @@ It has the target of a terminal view, as one shown in a window has, and no view.
                                  (portal-rex-tests--sidebar-rows))
                          (list (substring (portal-rex--named first) -27) "work" "claude"
                                (substring (portal-rex--named second) -27) "elsewhere" "shell")))
+          ;; Server headings are not clickable, while session headings hover on their own line.
+          (with-current-buffer portal-terminal-sidebar--name
+            (let ((server-pos (portal-terminal-sidebar--find
+                               (cons 'server (portal-rex-connection-socket first))))
+                  (session-pos (portal-terminal-sidebar--find '(session . "session:a"))))
+              (should-not (get-text-property server-pos 'mouse-face))
+              (should (eq (get-text-property session-pos 'mouse-face)
+                          'portal-terminal-sidebar-hover))
+              (save-excursion
+                (goto-char session-pos)
+                (should-not (get-text-property (line-end-position) 'mouse-face)))))
           ;; One ends: its heading and its sessions go.
           (portal-rex-disconnect first)
           (portal-rex-tests--sidebar-drawn second)
