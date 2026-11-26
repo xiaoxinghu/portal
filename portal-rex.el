@@ -32,6 +32,7 @@
 (declare-function portal--rex-close "portal-rex" (id))
 (declare-function portal--rex-show "portal-rex" (id target session-id block-id))
 (declare-function portal--rex-take "portal-rex" (target))
+(declare-function portal--rex-hold-size "portal-rex" (target hold))
 (declare-function portal--rex-resume "portal-rex" (id))
 (declare-function portal--inspect "portal-view" (target))
 (declare-function ibuffer-current-buffer "ibuffer" (&optional must-be-live))
@@ -1324,6 +1325,18 @@ not again until it has left."
                             (format ", at %d×%d" columns rows)
                           "")))))
 
+(defun portal-rex--hold-size ()
+  "Hold back the block's size while the minibuffer shrinks its pane.
+The block is the current buffer's.  On `portal-view-shrunk-hook' while
+Emacs is connected to a server: the minibuffer covers the bottom of the
+pane for a moment, and the block keeps its grid meanwhile, so its
+program is not resized and redrawn twice.  Once the pane is no longer
+shrunk, its grid goes to the block, unless it is the block's still."
+  (when (and portal-rex-block-connection portal-view--target)
+    (condition-case nil
+        (portal--rex-hold-size portal-view--target (portal-view-shrunk-p))
+      (error nil))))
+
 (defun portal-rex--follow-use (install)
   "INSTALL the hooks that take blocks as Emacs uses them, or remove them."
   (dolist (hook '(window-selection-change-functions window-state-change-functions))
@@ -1332,8 +1345,10 @@ not again until it has left."
       (remove-hook hook #'portal-rex--claim-used)))
   (if install
       (progn (add-hook 'portal-view-moved-hook #'portal-rex--claim-used)
+             (add-hook 'portal-view-shrunk-hook #'portal-rex--hold-size)
              (add-function :after after-focus-change-function #'portal-rex--claim-used))
     (remove-hook 'portal-view-moved-hook #'portal-rex--claim-used)
+    (remove-hook 'portal-view-shrunk-hook #'portal-rex--hold-size)
     (remove-function after-focus-change-function #'portal-rex--claim-used)))
 
 ;;; What a block's program is doing

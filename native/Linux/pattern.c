@@ -193,7 +193,7 @@ static void draw(struct pattern *pattern, int32_t width, int32_t height, int32_t
     enum portal_presented presented =
         portal_linux_present(pattern->view, canvas->buffer, pattern->fill ? 0 : columns,
                              pattern->fill ? 0 : rows, damage, &unused);
-    canvas->busy = presented != PORTAL_REFUSED;
+    canvas->busy = presented == PORTAL_PRESENTED || presented == PORTAL_HELD;
     if (unused)
         released(pattern, unused);
     /* The frame callback of a frame that is shown asks for the next. */

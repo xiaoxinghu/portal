@@ -697,6 +697,48 @@ and the buffer current."
               (should-not (string-search "Rex block" said)))
           (remove-variable-watcher 'portal-terminal--exited watcher))))))
 
+;;; How a block is resized
+
+(ert-deftest portal-rex-gui-the-minibuffer-and-a-drag-resize-a-block-once-at-most ()
+  :tags '(:gui)
+  (portal-fake-rex-with (server)
+    (portal-rex-gui-tests--showing server
+      (let ((buffer (current-buffer))
+            (pane (selected-window))
+            (active nil)
+            (grid (portal-rex-gui-tests--size server)))
+        ;; The minibuffer covers the pane's bottom and goes: the block keeps
+        ;; its grid.  A window split below stands in for it, active while
+        ;; `active' is.
+        (cl-letf (((symbol-function 'minibuffer-window-active-p) (lambda (_) active)))
+          (let ((below (split-window-below)))
+            (setq active t)
+            (select-window below)
+            (redisplay t)
+            (should (with-current-buffer buffer (portal-view-shrunk-p)))
+            (portal-rex-gui-tests--none server "com.superlogical.terminal.resize")
+            (delete-window below)
+            (setq active nil)
+            (select-window pane)
+            (redisplay t)
+            (should-not (with-current-buffer buffer (portal-view-shrunk-p)))
+            (portal-rex-gui-tests--none server "com.superlogical.terminal.resize")))
+        ;; Its pane narrowed step by step, as by a drag: one resize, once
+        ;; the grid has settled, and the frame held across the new grid is
+        ;; let go.
+        (let ((right (split-window-right)))
+          (redisplay t)
+          (dotimes (_ 4)
+            (with-selected-window right (enlarge-window-horizontally 3))
+            (redisplay t))
+          (let ((size (portal-rex-gui-tests--size server)))
+            (should (< (car size) (car grid)))
+            (portal-rex-gui-tests--none server "com.superlogical.terminal.resize")
+            (portal-rex-gui-tests--wait
+             (lambda () (equal (car (portal-rex-gui-tests--grid target)) size)))
+            (portal-rex-gui-tests--wait
+             (lambda () (not (plist-get (portal--inspect target) :frame-held))))))))))
+
 ;;; Who sizes a block
 
 (defun portal-rex-gui-tests--claim (server)

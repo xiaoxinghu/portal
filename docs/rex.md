@@ -183,7 +183,23 @@ nothing up, so the block keeps Emacs's size until another client is used.
 A block another client sizes is drawn at that size from the pane's
 bottom-left corner, never scaled: clipped at the top and the right where it
 is larger than the pane, with the terminal's background above it and to
-its right where it is smaller, so a shell's prompt stays in view.
+its right where it is smaller, so a shell's prompt stays in view. A block
+Emacs sizes, or that no client does, is drawn from the pane's top-left
+corner, as a terminal of Portal's own is, so a pane that grows or shrinks
+from below uncovers or covers its last lines and its top stays put.
+
+A new size of the pane goes to the server once it has stayed the same for
+an eighth of a second: dragging a frame's edge resizes the block once,
+when you stop, and a pane that comes back to the block's size before then
+sends nothing. The minibuffer, while it is open over the bottom of a
+block's pane, sends nothing either: it covers the block's last lines, and
+once it closes, the pane is the block's size again. Only if the pane is
+another size then, as after a command that split it, or the frame or the
+windows change meanwhile, or you select the pane with the minibuffer
+still open, does the new size go. When the block takes a new size, its
+pane keeps showing the screen it had until the program has redrawn for
+the new one, a third of a second at most, so nothing half drawn shows on
+the way.
 
 While another client sizes a block, its buffer's mode line says so after
 the mode's name: `:sized by Rex.app`, by the name that client gives
@@ -961,8 +977,8 @@ pin when it would.
 
 On Linux, in Emacs built with pgtk on Wayland, everything here works as
 on macOS: a window shows a block's screen, typed into, at its pane's size
-or another client's, from the pane's bottom-left corner, and the rest
-follows from it, the block's title, directory and program included.
+or another client's, from the pane's top-left corner or, for another
+client's, its bottom-left, and the rest follows from it, the block's title, directory and program included.
 [The terminal guide](terminals.md#on-linux) says what a terminal there
 does differently, which a block's does too.
 

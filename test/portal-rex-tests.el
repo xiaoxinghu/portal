@@ -851,6 +851,27 @@ With no answer left, a question fails the test."
   '("com.superlogical.terminal.input_mode" "com.superlogical.terminal.process")
   "What a kill asks the server, in order.")
 
+(ert-deftest portal-rex-a-blocks-size-is-held-while-the-minibuffer-shrinks-its-pane ()
+  (let ((held nil))
+    (with-temp-buffer
+      (cl-letf (((symbol-function 'portal--rex-hold-size)
+                 (lambda (target hold) (push (list target hold) held))))
+        (setq-local portal-view--target "terminal:1"
+                    portal-rex-block-connection 7)
+        (setq-local portal-view--shrunk '(frame 100 [0 0 10 10]))
+        (portal-rex--hold-size)
+        (setq-local portal-view--shrunk nil)
+        (portal-rex--hold-size)
+        ;; A buffer that shows no block holds nothing.
+        (setq-local portal-rex-block-connection nil)
+        (portal-rex--hold-size)
+        (should (equal (reverse held) '(("terminal:1" t) ("terminal:1" nil))))
+        ;; A view that shows no block yet refuses, which is no error here.
+        (setq-local portal-rex-block-connection 7)
+        (cl-letf (((symbol-function 'portal--rex-hold-size)
+                   (lambda (_target _hold) (error "No block is shown in terminal:1"))))
+          (portal-rex--hold-size))))))
+
 (ert-deftest portal-rex-connect-makes-a-buffer-for-every-block ()
   (portal-rex-tests--with (server)
     (portal-fake-rex-command server :sessions [(:session_id "session:a" :label "work")

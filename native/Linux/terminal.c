@@ -753,9 +753,10 @@ static char *argv_command(portal_string json, const char *directory, portal_text
    Portal does.  The order of output and grids, where the terminal goes in
    its pane, and when its program waits for a backlog are the core's rules
    (native/Core/fed.h), which this gives the feeder, its count of bytes
-   waiting, and the view's placement (views.c), which shows a grid that is
-   not the pane's from the pane's bottom-left corner, over the view's
-   backdrop, the theme's background at the terminal's opacity; and tells
+   waiting, the view's placement (views.c), which shows a grid that is not
+   the pane's from the corner of the pane the core hangs it from, over the
+   view's backdrop, the theme's background at the terminal's opacity, and
+   the view's hold of the frame it shows across a change of grid; and tells
    them the pane, the cell, each grid the surface takes and each crossing
    of the backlog's marks.
 
@@ -943,7 +944,8 @@ static void fed_place(struct fed *fed, portal_pane_rect rect)
                                                        .x = (int32_t) lround(rect.x * scale),
                                                        .y = (int32_t) lround(rect.top * scale),
                                                        .width = (int32_t) width,
-                                                       .height = (int32_t) height});
+                                                       .height = (int32_t) height,
+                                                       .from_bottom = rect.from_bottom});
 }
 
 /* What the surface tells, on Ghostty's IO thread. */
@@ -1925,4 +1927,17 @@ bool portal_terminal_place(portal_view *view, portal_pane_rect rect, portal_text
     if (fed)
         fed_place(fed, rect);
     return fed;
+}
+
+/* Held, the view keeps the frame it shows; let go, Ghostty draws again, so
+   that its latest frame, passed over meanwhile, shows. */
+bool portal_terminal_hold_frame(portal_view *view, bool hold, portal_text *error)
+{
+    struct fed *fed = fed_of(view, error);
+    if (!fed)
+        return false;
+    portal_linux_view_hold(fed->terminal->view, hold);
+    if (!hold && fed->terminal->surface)
+        ghostty_surface_refresh(fed->terminal->surface);
+    return true;
 }

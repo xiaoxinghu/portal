@@ -486,7 +486,16 @@ public func portalTerminalPlace(_ terminal: OpaquePointer, _ rect: portal_pane_r
     let terminal = native(terminal)
     // AppKit's frame, from the pane's bottom-left corner, y upward.
     let frame = CGRect(x: rect.x, y: rect.y, width: rect.width, height: rect.height)
-    return perform(error) { try session(terminal, as: TerminalSession.self).place(frame) } != nil
+    return perform(error) {
+        try session(terminal, as: TerminalSession.self).place(frame, fromBottom: rect.from_bottom)
+    } != nil
+}
+
+@_cdecl("portal_terminal_hold_frame")
+public func portalTerminalHoldFrame(_ terminal: OpaquePointer, _ hold: Bool,
+                                    _ error: UnsafeMutablePointer<portal_text>) -> Bool {
+    let terminal = native(terminal)
+    return perform(error) { try session(terminal, as: TerminalSession.self).holdFrame(hold) } != nil
 }
 
 @_cdecl("portal_view_focus")

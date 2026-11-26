@@ -59,6 +59,22 @@ It is non-nil exactly while the buffer is in `portal-view--buffers'.")
 (defvar-local portal-view--geometry nil
   "The placement last sent to the native view, or nil while it is hidden.
 The form is (FRAME FRAME-PIXEL-HEIGHT EDGES).")
+(defvar-local portal-view--shrunk nil
+  "The view's placement before the minibuffer shrank its pane, or nil.
+It is non-nil while the active minibuffer of the pane's frame covers
+the bottom of the pane for a moment: see `portal-view-shrunk-hook'.")
+
+(defvar portal-view-shrunk-hook nil
+  "Hook run in a view's buffer as the minibuffer starts or stops shrinking it.
+That is, its pane.  The minibuffer shrinks a pane while it is active in
+the pane's frame, the frame keeps its size, and the pane, not selected,
+keeps its left, top and right edges and has its bottom edge higher than
+before the minibuffer was used; `portal-view-shrunk-p' says whether it
+does now.
+The hook runs before the view is placed in the shrunk pane, and after
+it is placed in the pane once the shrinking ends, as when the minibuffer
+closes, or is left for the pane itself, or the frame or the windows'
+layout change.")
 (defvar portal-view--live-windows nil
   "The live windows of every frame at the last `portal-view-sync'.
 A selected pane among them that did not show a buffer then, and shows it
@@ -347,6 +363,26 @@ to, so that a buffer previewed there, such as by Consult, shows its view."
     (or (and (eq window (active-minibuffer-window)) (minibuffer-selected-window))
         window)))
 
+(defun portal-view-shrunk-p ()
+  "Whether the minibuffer shrinks the pane of the current buffer's view.
+See `portal-view-shrunk-hook'."
+  (and portal-view--shrunk t))
+
+(defun portal-view--shrunk-by-minibuffer (base geometry window)
+  "Whether GEOMETRY is BASE with only its bottom raised by the minibuffer.
+BASE and GEOMETRY are placements, as `portal-view--geometry' has them;
+WINDOW is the pane of GEOMETRY, which must not be the selected window."
+  (and base geometry (not (eq window (selected-window)))
+       (eq (car base) (car geometry))
+       (eql (nth 1 base) (nth 1 geometry))
+       (let ((before (nth 2 base)) (after (nth 2 geometry)))
+         (and (= (aref before 0) (aref after 0))
+              (= (aref before 1) (aref after 1))
+              (= (aref before 2) (aref after 2))
+              (< (aref after 3) (aref before 3))))
+       (let ((minibuffer (minibuffer-window (car geometry))))
+         (and (window-live-p minibuffer) (minibuffer-window-active-p minibuffer)))))
+
 (defun portal-view--sync-buffer (buffer)
   "Place BUFFER's view in its chosen window, or hide it when no window shows it.
 The view stays in its window while that window shows BUFFER, whichever
@@ -371,7 +407,14 @@ another frame moves it there.  Nothing is sent when nothing moved.
                          (t (car windows))))
            (frame (and window (window-frame window)))
            (geometry (and window (list frame (frame-pixel-height frame)
-                                       (vconcat (window-inside-pixel-edges window))))))
+                                       (vconcat (window-inside-pixel-edges window)))))
+           (base (or portal-view--shrunk portal-view--geometry))
+           (shrunk (and (portal-view--shrunk-by-minibuffer base geometry window) base)))
+      ;; Shrinking starts before the view is placed in the shrunk pane, and
+      ;; ends after it is placed in the pane it has then.
+      (when (and shrunk (not portal-view--shrunk))
+        (setq portal-view--shrunk shrunk)
+        (run-hooks 'portal-view-shrunk-hook))
       (unless (equal geometry portal-view--geometry)
         (if geometry
             (portal-view--with-frame-title
@@ -380,6 +423,9 @@ another frame moves it there.  Nothing is sent when nothing moved.
           (portal--hide portal-view--target))
         (portal-view--drawn-soon (or frame (car portal-view--geometry)))
         (setq portal-view--geometry geometry))
+      (when (and portal-view--shrunk (not shrunk))
+        (setq portal-view--shrunk nil)
+        (run-hooks 'portal-view-shrunk-hook))
       (let ((moved (not (eq window portal-view--window))))
         (setq portal-view--window window
               portal-view--showing windows)

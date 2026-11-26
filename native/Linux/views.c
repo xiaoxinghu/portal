@@ -186,7 +186,8 @@ static bool same_place(struct portal_placement a, struct portal_placement b)
 {
     return a.placed == b.placed
         && (!a.placed
-            || (a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height));
+            || (a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height
+                && a.from_bottom == b.from_bottom));
 }
 
 /* What shows of a placed frame, and where.  A subsurface sits on whole
@@ -207,14 +208,15 @@ struct cut {
 /* The cut of a frame BUFFER_WIDTH by BUFFER_HEIGHT placed at PLACE in a
    pane PANE_WIDTH by PANE_HEIGHT of Emacs's pixels at SCALE.  A frame of
    another size than PLACE's, drawn before or after it, hangs from the
-   same bottom-left corner. */
+   same corner, PLACE's bottom-left or top-left. */
 static struct cut cut_of(struct portal_placement place, int32_t pane_width, int32_t pane_height,
                          int32_t scale, int32_t buffer_width, int32_t buffer_height)
 {
     int32_t left = ceil_to(MAX(place.x, 0), scale), top = ceil_to(MAX(place.y, 0), scale);
     int32_t right = floor_to(MIN(place.x + place.width, pane_width * scale), scale);
     int32_t bottom = floor_to(MIN(place.y + place.height, pane_height * scale), scale);
-    int32_t frame_x = place.x, frame_y = place.y + place.height - buffer_height;
+    int32_t frame_x = place.x;
+    int32_t frame_y = place.from_bottom ? place.y + place.height - buffer_height : place.y;
     struct cut cut = {.left = left / scale, .top = top / scale};
     cut.x = MAX(left - frame_x, 0);
     cut.y = MAX(top - frame_y, 0);
@@ -259,7 +261,7 @@ static bool for_wanted(const struct portal_view *view, int32_t width, int32_t he
 static bool ready(struct portal_view *view)
 {
     pthread_mutex_lock(&view->lock);
-    bool resized = resizing(view);
+    bool resized = resizing(view) && !view->holding_frame;
     /* A frame held since before the view was last hidden is not one the
        content drew for this change. */
     bool has = view->held_buffer && !view->held_stale
@@ -409,6 +411,8 @@ enum portal_presented portal_linux_present(struct portal_view *view, struct wl_b
     pthread_mutex_lock(&view->lock);
     if (!view->surface || !view->wanted.shown) {
         result = PORTAL_REFUSED;
+    } else if (view->holding_frame && view->applied.shown && view->showing) {
+        result = PORTAL_PASSED;
     } else if (!view->applied.shown || (resizing(view) && for_wanted(view, width, height))) {
         if (view->held_buffer && view->held_buffer != buffer)
             *unused = view->held_buffer;
@@ -946,6 +950,17 @@ void portal_linux_view_place(struct portal_view *view, struct portal_placement p
     if (view->frame && view->attached)
         freeze(view->frame, true);
     portal_linux_view_repaint(view);
+}
+
+void portal_linux_view_hold(struct portal_view *view, bool hold)
+{
+    pthread_mutex_lock(&view->lock);
+    bool changed = view->holding_frame != hold;
+    view->holding_frame = hold;
+    pthread_mutex_unlock(&view->lock);
+    /* Let go, a window waiting for this view's frame may wait no more. */
+    if (changed && !hold && view->frame && view->frame->frozen)
+        consider(view->frame);
 }
 
 void portal_linux_view_backdrop(struct portal_view *view, uint8_t red, uint8_t green,

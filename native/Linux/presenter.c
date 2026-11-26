@@ -389,6 +389,11 @@ static void offer(struct portal_stage *stage, struct wl_buffer *buffer, int32_t 
         /* It never reaches the screen. */
         frame_seen(stage);
         break;
+    case PORTAL_PASSED:
+        /* The view holds the frame it shows: the next is taken as it comes. */
+        give_back(stage, buffer);
+        frame_seen(stage);
+        break;
     }
 }
 

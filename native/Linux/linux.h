@@ -140,10 +140,14 @@ struct portal_geometry {
    size: a frame WIDTH by HEIGHT device pixels whose top left is X and Y
    device pixels from the pane's, either of which may be negative, and
    clipped to the pane.  A fed terminal that holds a grid of its own is so
-   (terminal.c).  Unplaced, a frame is shown from the pane's top left. */
+   (terminal.c).  A frame of another size than the placement's, drawn
+   before or after it, hangs from the same corner of the placement, its
+   bottom-left one when FROM_BOTTOM, else its top-left.  Unplaced, a frame
+   is shown from the pane's top left. */
 struct portal_placement {
     bool placed;
     int32_t x, y, width, height;
+    bool from_bottom;
 };
 
 /* A view, as the core holds it from portal_view_create to
@@ -235,6 +239,9 @@ struct portal_view {
     struct wl_buffer *held_buffer;
     int32_t held_width, held_height;
     bool held_stale; /* It was held before the view was last hidden. */
+    /* The frame showing stays, wherever the view is placed, and the
+       content's frames are passed over (portal_linux_view_hold). */
+    bool holding_frame;
     /* The frame showing is the one the content presented last, so the
        damage it gives with its next is against what the screen has. */
     bool sequential;
@@ -282,6 +289,12 @@ void portal_linux_view_repaint(struct portal_view *view);
    with the first frame presented for it, the content's frames being of
    PLACEMENT's size; unplaced, of the pane's.  On the module thread. */
 void portal_linux_view_place(struct portal_view *view, struct portal_placement placement);
+/* While HOLD, VIEW keeps the frame it shows on the screen, cut to its pane
+   as the pane and the placement change, and its window waits for no frame
+   of its content's, which are passed over (PORTAL_PASSED): the content
+   draws again once it is let go, for its next frame to show.  On the
+   module thread. */
+void portal_linux_view_hold(struct portal_view *view, bool hold);
 /* VIEW, which has a backdrop, shows it in RED, GREEN and BLUE, from 0 to
    255, at ALPHA from 0 to 1, from the next paint on.  On the module
    thread. */
@@ -293,6 +306,7 @@ enum portal_presented {
     PORTAL_PRESENTED, /* Attached and committed: the compositor will release it. */
     PORTAL_HELD,      /* Kept for the main thread to commit after GTK paints. */
     PORTAL_REFUSED,   /* The view is not shown: the buffer is the caller's still. */
+    PORTAL_PASSED,    /* The view holds its frame: the buffer is the caller's still. */
 };
 /* Show BUFFER on VIEW's surface, a frame WIDTH by HEIGHT device pixels, or
    0 by 0 for a frame that fills the pane whatever its size, as a single

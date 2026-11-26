@@ -624,5 +624,6 @@ What differs from macOS:
 - **Rex blocks** show their screens as on macOS
   ([the Rex guide](rex.md#on-linux)). Portal feeds a block's terminal on a
   thread of its own, where on macOS the Ghostty wrapper does, and a block
-  that another client sizes is drawn from the pane's bottom-left corner
-  over the theme's background at the terminal's opacity, as there.
+  that another client sizes is drawn from the pane's bottom-left corner,
+  and any other from its top-left, over the theme's background at the
+  terminal's opacity, as there.
