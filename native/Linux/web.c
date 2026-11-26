@@ -165,6 +165,9 @@ struct page {
     char *preedit;
     int preedit_cursor;
     bool mapped;
+    /* A load started and has not committed, failed or ended: WebKit's URL
+       is then where it is going, not a move of the document on screen. */
+    bool provisional;
     /* What the main thread last told WebKit's of the view, for a web view
        made again (load_on_webkit). */
     int32_t width, height, scale;
@@ -796,6 +799,7 @@ struct news {
     uint64_t serial;
     enum news_kind kind;
     char *text, *url;
+    bool within; /* NEWS_URL: a move of the document on screen. */
 };
 
 static void news_free(gpointer data)
@@ -839,9 +843,10 @@ static gboolean news_on_main(gpointer data)
         page->loading = false;
         break;
     case NEWS_URL:
-        /* Within the document: its key reports stay. */
+        /* Its key reports stay; and the core hears only of a move of the
+           document on screen, not of where a load is going. */
         replace(&page->url, &news->url);
-        if (page->url)
+        if (page->url && news->within)
             host->moved(target, (portal_string) {page->url, strlen(page->url)});
         break;
     case NEWS_TITLE:
@@ -881,6 +886,7 @@ static void web_terminated(WebKitWebView *web, WebKitWebProcessTerminationReason
                            gpointer data)
 {
     (void) web;
+    ((struct page *) data)->provisional = false;
     tell(data, NEWS_ENDED,
          reason == WEBKIT_WEB_PROCESS_EXCEEDED_MEMORY_LIMIT
              ? "The page's web process stopped: it used too much memory."
@@ -890,7 +896,12 @@ static void web_terminated(WebKitWebView *web, WebKitWebProcessTerminationReason
 
 static void web_load_changed(WebKitWebView *web, WebKitLoadEvent event, gpointer data)
 {
+    struct page *page = data;
     const char *url = webkit_web_view_get_uri(web);
+    if (event == WEBKIT_LOAD_STARTED)
+        page->provisional = true;
+    else if (event == WEBKIT_LOAD_COMMITTED)
+        page->provisional = false;
     if (event == WEBKIT_LOAD_STARTED)
         tell(data, NEWS_LOADING, NULL, url);
     else if (event == WEBKIT_LOAD_COMMITTED)
@@ -903,6 +914,7 @@ static gboolean web_load_failed(WebKitWebView *web, WebKitLoadEvent event, char 
                                 GError *error, gpointer data)
 {
     (void) web, (void) event, (void) url;
+    ((struct page *) data)->provisional = false;
     /* A load cancelled, as by another, or turned into a download. */
     if (!g_error_matches(error, WEBKIT_NETWORK_ERROR, WEBKIT_NETWORK_ERROR_CANCELLED) &&
         !g_error_matches(error, WEBKIT_POLICY_ERROR,
@@ -914,9 +926,17 @@ static gboolean web_load_failed(WebKitWebView *web, WebKitLoadEvent event, char 
 static void web_uri(GObject *web, GParamSpec *property, gpointer data)
 {
     (void) property;
+    struct page *page = data;
     const char *url = webkit_web_view_get_uri(WEBKIT_WEB_VIEW(web));
-    if (url)
-        tell(data, NEWS_URL, NULL, url);
+    if (!url)
+        return;
+    struct news *news = g_new0(struct news, 1);
+    news->serial = page->serial;
+    news->kind = NEWS_URL;
+    news->url = g_strdup(url);
+    /* WebKit says where a load is going before it says it started. */
+    news->within = !page->provisional && !webkit_web_view_is_loading(WEBKIT_WEB_VIEW(web));
+    on_main(news_on_main, news, news_free);
 }
 
 static void web_title(GObject *web, GParamSpec *property, gpointer data)
@@ -945,6 +965,10 @@ static WebKitWebContext *context_of(const char *directory)
     WebKitWebContext *context = g_hash_table_lookup(contexts, key);
     if (!context) {
         context = webkit_web_context_new();
+        /* WebKit's web browser model keeps processes for reuse, one for
+           the site a load was going to among them, which would outlive the
+           view; a document browser's keeps none, and a small page cache. */
+        webkit_web_context_set_cache_model(context, WEBKIT_CACHE_MODEL_DOCUMENT_BROWSER);
         if (directory)
             webkit_web_context_add_path_to_sandbox(context, directory, TRUE);
         g_hash_table_insert(contexts, g_strdup(key), context);
@@ -988,6 +1012,7 @@ static gboolean page_make(gpointer data)
     webkit_user_script_unref(script);
     WebKitNetworkSession *session = webkit_network_session_new_ephemeral();
     page->context = context_of(page->directory);
+    page->provisional = false;
     making = page;
     page->web = g_object_new(WEBKIT_TYPE_WEB_VIEW, "display", webkit.display, "web-context",
                              page->context, "network-session", session,
@@ -1040,6 +1065,9 @@ static gboolean page_unmake(gpointer data)
     /* With a context of Portal's, a page's web process would outlive its
        view, and its network process and D-Bus proxy with it: each page has
        a process of its own, WebKit's process model since 2.40, ended here. */
+    /* A load under way may have a process of its own, for the site it is
+       going to, which ending the page's would leave running. */
+    webkit_web_view_stop_loading(page->web);
     webkit_web_view_terminate_web_process(page->web);
     g_clear_object(&page->web);
     page->wpe = NULL;

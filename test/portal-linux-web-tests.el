@@ -234,6 +234,33 @@ Returns the view's target once the page has loaded and shows."
               (portal-linux-terminal--covers (selected-window) target)))
         (delete-directory other t)))))
 
+(ert-deftest portal-linux-gui-web-page-loads-again-what-it-is-still-loading ()
+  :tags '(:gui)
+  "Where a load is going is not the document on screen: loading it again loads it."
+  (portal-linux-web--with
+    (let* ((target (portal-linux-web--open))
+           (requests 0)
+           ;; A server that takes each request and never answers it.
+           (server (make-network-process
+                    :name "portal-linux-web-slow" :server t :host "127.0.0.1" :service t
+                    :family 'ipv4 :noquery t
+                    :log (lambda (_server _client _message) (cl-incf requests))
+                    :filter #'ignore)))
+      (unwind-protect
+          (let ((url (format "http://127.0.0.1:%d/slow" (process-contact server :service))))
+            (portal-web-load-url url)
+            (portal-linux-gui--wait (lambda () (>= requests 1)))
+            (portal-linux-gui--wait (lambda () (portal-linux-gui--get :loading target)))
+            (portal-linux-gui--pause 0.3)
+            ;; Reloading would load the page on screen again, and ask nothing.
+            (portal-web-load-url url)
+            (portal-linux-gui--wait (lambda () (>= requests 2)))
+            ;; Closed with the load under way, nothing of it runs on.
+            (kill-buffer (window-buffer (selected-window)))
+            (portal-linux-gui--wait
+             (lambda () (null (portal-linux-web--processes "WPEWebProcess")))))
+        (delete-process server)))))
+
 ;;; Busy Lisp
 
 (ert-deftest portal-linux-gui-web-page-draws-while-lisp-is-busy ()

@@ -934,7 +934,10 @@ shown.
 never freed: WebKit's default one is freed by `exit()` on Emacs's main
 thread, which aborts Emacs when WebKit is on another. Each page's web
 process is ended with its view, which a context of Portal's would otherwise
-keep running, and its network process with it. JavaScriptCore stops
+keep running, and its network process with it. Portal's contexts are
+document browsers to WebKit (`WEBKIT_CACHE_MODEL_DOCUMENT_BROWSER`): a web
+browser's keeps web processes for reuse, among them one started for the
+site a load was going to, which would outlive the view. JavaScriptCore stops
 threads for its collector with a signal and takes the signal's handler
 over: Portal names one that Emacs does not use, `SIGRTMIN + 6`, in
 `JSC_SIGNAL_FOR_GC` before WebKit starts, since it would take SIGUSR1, which
@@ -970,8 +973,10 @@ where on macOS WebKit hands back what neither used.
 load for a fragment link and `history.pushState`; the page tells the core
 with `portal_web_moved`, which changes the page the core knows without a
 new document, so that loading the URL the page left loads it rather than
-reloading the one it moved to. macOS's WebKit tells of no such move, and
-its core keeps the committed URL.
+reloading the one it moved to. Where a load is going is not such a move:
+WebKit changes the URL then too, before the load starts, and the core hears
+of none while a load is under way. macOS's WebKit tells of no such move,
+and its core keeps the committed URL.
 
 **The pointer** goes to the page at the pane's coordinates, with WPE's own
 press counting for double clicks. A wheel's notch is one of WebKit's steps,
