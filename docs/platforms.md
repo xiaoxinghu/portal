@@ -16,7 +16,7 @@ separate claims.
 | GNU Emacs 31.1 NS | any | Intel | Unverified | Unverified |
 | x86_64 Emacs under Rosetta | any | Apple Silicon | Unsupported | Unsupported |
 | GNU Emacs 30 or earlier | any | any | Unsupported: refused | Unsupported: refused |
-| GNU Emacs 31.1 pgtk on Linux, Wayland | — | any | Terminals, Rex connections and blocks' screens unverified, run on one machine; no web views yet. See [Linux](#linux) | Unsupported: refused |
+| GNU Emacs 31.1 pgtk on Linux, Wayland | — | any | Terminals, Rex connections, blocks' screens and pages unverified, run on one machine; no hosted apps yet. See [Linux](#linux) | Unsupported: refused |
 | Text frames, terminal-only builds, non-NS builds on macOS, other systems | — | — | Unsupported: refused | Unsupported: refused |
 
 Revision `a360712c9d272d950d8d8255ef74570f7e90b7d9` is the `emacs-31.1` release
@@ -79,14 +79,20 @@ other than US English have not run.
 
 ## Linux
 
-On Linux Portal has terminals and no web views yet. Its native module
-builds there and loads into an Emacs 31.1 built with pgtk, and a terminal
-runs your login shell in a pane of a frame on Wayland, drawn by
-[Portal's own build of Ghostty](../CONTRIBUTING.md#ghostty-on-linux).
+On Linux Portal has terminals and pages, and no hosted apps yet. Its
+native module builds there and loads into an Emacs 31.1 built with pgtk,
+and a terminal runs your login shell in a pane of a frame on Wayland, drawn
+by [Portal's own build of Ghostty](../CONTRIBUTING.md#ghostty-on-linux).
 Emacs [connects to a Rex server](rex.md#on-linux) there, and a window that
-shows a block's buffer shows the block's screen. Opening a page fails with
-"Portal has no web views on Linux yet", so the build makes no app host and
-needs no Bun.
+shows a block's buffer shows the block's screen. A web view shows a page of
+WPE WebKit's, which the system provides, WPE WebKit 2.0 with its
+WPEPlatform API: `M-x portal-open-url` and `portal-render-html` load a
+page, and the other web commands fail, saying what Linux lacks. Without
+WPE WebKit, or with a build made without its development files, Portal
+loads and terminals work, and a web view fails saying what to install.
+The [downloaded runtimes](install.md#downloaded-runtimes) have no web views
+yet. A hosted app needs the app host, which a Linux build does not make, so
+it needs no Bun.
 Other frames are refused before any native code loads, with the reason: an
 Emacs built without pgtk, a text terminal, or a pgtk frame that GDK put on
 X11. [Building on Linux](../CONTRIBUTING.md#building-on-linux) says what a
@@ -130,6 +136,20 @@ fake server's 21 and a held grid read from the screen to the pixel;
 `sh test/rex-server-gui.sh` passed all 12 tests against the real server,
 none skipped; and `sh test/linux-follow.sh fed` found no frame out of place
 in recordings of a block fed all the while, about 1,195 frames each.
+
+Pages were run on 2026-11-26 on the same machine and test desktop, with
+Arch's `wpewebkit` 2.54.1 and GStreamer 1.28.8: `sh test/linux-gui.sh`
+passed, 60 tests, among them a page in its pane, its web process killed,
+a video of its directory, half a second of busy Lisp leaving it no gap of
+50 ms, a terminal beside it at 60 frames a second, typing and chords, the
+pointer and the wheel; and in Emacsen of their own a page drawn in memory
+and a web view where WPE WebKit's library cannot be opened. `sh
+test/linux-follow.sh page` found no frame out of place in a recording of
+1,197 frames. A touchpad, a screen at 120 Hz and a real input method have
+not been tried, nor any web primitive beyond loading a page and its
+history. YouTube's player stops with an error about half a minute into a
+video in about half the runs in a pane, where WPE WebKit's own MiniBrowser
+plays.
 
 ## Requirements
 

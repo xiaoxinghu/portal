@@ -16,7 +16,7 @@ the one its tag's manifest names. `M-x portal-build` runs the same script with
 a cache under `user-emacs-directory`, so package upgrades reuse it. See
 [Bun in the installation guide](install.md#bun).
 
-On Linux, which has no web views yet, the build makes no host and needs no
+On Linux, which has no hosted apps yet, the build makes no host and needs no
 Bun. CMake runs the host's Bun tests with `BUN` or a `bun` on `PATH`, and
 reports them skipped without one.
 This follows the native package installation research, which preferred an

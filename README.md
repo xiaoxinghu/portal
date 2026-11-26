@@ -46,8 +46,8 @@ Add Portal to your Emacs configuration:
 moves to the next one. Keep the `:rev`: without it the install cannot be
 upgraded. To follow every change on `main` instead, write `:rev :newest`.
 
-Then run `M-x portal-hello`, or on Linux, which has terminals and no web views
-yet, `M-x portal-terminal`. Installing compiles Portal's Lisp only, so the
+Then run `M-x portal-hello`, or on Linux, which has terminals and pages but no
+hosted apps yet, `M-x portal-terminal` or `M-x portal-open-url`. Installing compiles Portal's Lisp only, so the
 first native command asks how to get its native part:
 
 - **Download** fetches the runtime that Portal's release attaches, about 46 MB
@@ -79,8 +79,9 @@ the app host's locked dependencies, the pinned GhosttyKit binary (about 77 MB)
 and its Swift wrapper; a build with tests, as from a clone, also downloads Emacs
 packages for them. Bun and SwiftPM keep about 400 MB of these downloads in
 their caches, outside Portal: see [disk use](docs/install.md#disk-use-and-removal).
-No Zig installation is needed. On Linux, which has terminals and no web views
-yet, the build makes no app host and needs no Bun: see
+No Zig installation is needed. On Linux, which has no hosted apps yet, the
+build makes no app host and needs no Bun, and makes web views where WPE
+WebKit's development files are: see
 [building on Linux](CONTRIBUTING.md#building-on-linux).
 
 Graphical Emacs started from the Dock does not see your shell's `PATH`. Portal's

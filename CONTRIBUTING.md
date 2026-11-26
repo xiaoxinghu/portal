@@ -135,9 +135,11 @@ with the pin already moved, it checks the patches and resolves again.
 ### Building on Linux
 
 Portal's module builds and loads on Linux, and has views there,
-terminals with a local shell and Rex blocks' screens, but no web views yet. `./build.sh` makes `build/portal.so` in place of
+terminals with a local shell, Rex blocks' screens and pages, but no hosted
+apps yet. `./build.sh` makes `build/portal.so` in place of
 `build/portal.bundle`, with `build/ghostty-linux` beside it and
-`build/licenses` as on macOS, and no `build/portal-host`: with no web views,
+`build/licenses` as on macOS, `build/portal-web.so` where WPE WebKit's
+development files are, and no `build/portal-host`: with no hosted apps,
 Linux has no use for the app host, so it does not build one. CMake compiles the
 module itself: the C bindings and core with the backend in
 [`native/Linux`](native/Linux), for an Emacs built with pgtk, linked against
@@ -145,16 +147,17 @@ GTK 3, `wayland-client` and Ghostty's library, which
 [the next section](#ghostty-on-linux) says how Portal builds. No Swift is
 involved.
 
-The backend has the view machinery, input, timers, terminals and message
-sockets: [the architecture notes](docs/architecture.md#views-on-linux) say
-how a view gets into a frame and how a terminal's frames reach it, and
+The backend has the view machinery, input, timers, terminals, pages and
+message sockets: [the architecture notes](docs/architecture.md#views-on-linux)
+say how a view gets into a frame, how a terminal's frames reach it and
+[how a page's do](docs/architecture.md#pages-on-linux), and
 [where the sockets are](docs/architecture.md#rex-connections), in
 [`native/Shared`](native/Shared), which holds what a backend needs nothing
 of its platform for: the message sockets. A fed terminal's rules, which
 the fed terminals (a Rex block's screen) of both backends follow, are the
-core's, in `native/Core/fed.c`. A web view, the
-system-wide keys, the status panel and the launcher fail, saying what Linux
-lacks. A view can also show a test
+core's, in `native/Core/fed.c`. Most web primitives beyond loading a
+page, the system-wide keys, the status panel and the launcher fail, saying
+what Linux lacks. A view can also show a test
 pattern, made with the option `:test-pattern`, which exists for the checks
 of the machinery. `native/Linux/linux.h` says which file has what, and
 `backend.c`'s first comment what is real and what each missing piece waits
@@ -162,6 +165,17 @@ for. The link fails when the backend lacks a primitive of `portal.h`, or
 Ghostty's library a function the backend calls, and
 `native/Linux/portal.map` keeps every symbol but Emacs's two entry points
 inside the module.
+
+A page is WPE WebKit's, which `portal.so` links nothing of, so that it
+loads and runs terminals where WPE WebKit is not installed. The page is a
+second object, `build/portal-web.so`, from `native/Linux/web.c`, which
+`portal.so` opens at the first web view: CMake builds it when pkg-config
+finds `wpe-webkit-2.0` and `wpe-platform-2.0`, WPE WebKit 2.0 with its
+WPEPlatform API (Arch's `wpewebkit`, 2.54 here), and says "Web views: none"
+when it does not. Such a build has no web views, and `M-x portal-build`
+and a web view say what to install; at run time a web view needs WPE
+WebKit's library, `libWPEWebKit-2.0.so.1`, and fails, saying so, without
+it. WPE WebKit stays the system's: Portal ships none of it.
 
 A build needs:
 
@@ -172,6 +186,8 @@ A build needs:
   `gtk+-3.0`, `wayland-client` and `egl`, and `wayland-protocols` with
   `wayland-scanner`, which make the C of the viewporter and linux-dmabuf
   protocols;
+- for web views, and only for them, WPE WebKit's, `wpe-webkit-2.0` and
+  `wpe-platform-2.0`;
 - for Ghostty's library, Zig at the version `native/ghostty.json` names or a
   later patch release of it, as `zig` on `PATH` or in `ZIG`, ncurses' `tic`
   and Git;
@@ -195,6 +211,7 @@ sh test/linux-gui.sh
 sh test/linux-follow.sh
 sh test/linux-follow.sh terminal
 sh test/linux-follow.sh fed
+sh test/linux-follow.sh page
 ```
 
 CTest leaves out the suite of the macOS Ghostty wrapper, `libghostty-spm`,
@@ -206,9 +223,9 @@ them on a Mac. The Python tests skip those of Swift helpers and of
 the macOS Ghostty wrapper. `linux-gui.sh` runs the views, their input,
 terminals and Rex blocks' screens in a graphical Emacs, and
 `linux-follow.sh` records a view following its pane and checks every frame,
-and with `terminal` does so for a terminal under output, and with `fed` for
-a Rex block's; both are in the default loop for a change to
-`native/Linux` or `portal-view.el`, and `sh test/gui-all.sh` runs both, and
+and with `terminal` does so for a terminal under output, with `fed` for
+a Rex block's, and with `page` for a page drawing every frame; both are in
+the default loop for a change to `native/Linux` or `portal-view.el`, and `sh test/gui-all.sh` runs both, and
 the [real-server tier](docs/testing.md#against-a-real-rex-server) where
 `rex` is installed.
 They need Hyprland, and run on a desktop of their own, off your screen:

@@ -3,8 +3,8 @@
 [Documentation index](README.md) · [Build and run](../README.md#build-and-run)
 
 Portal's single native module has C Emacs bindings and a C core over a Swift
-macOS backend; a Linux backend, in C, has views, input and terminals with a
-local shell, and no page yet. Navigate by boundaries, not separate feature
+macOS backend; a Linux backend, in C, has views, input, terminals with a
+local shell and pages, but not yet most of the web primitives. Navigate by boundaries, not separate feature
 libraries:
 
 - [`portal-view.el`](../portal-view.el) owns Lisp-side view lifetime, placement and
@@ -23,8 +23,9 @@ libraries:
   with pgtk, on GTK 3 and Wayland, which CMake links with the core into
   `portal.so`, with Portal's own build of Ghostty's library, which it
   starts. [Views on Linux](#views-on-linux) says how a view gets into a
-  frame there, and [terminals on Linux](#terminals-on-linux) how Ghostty's
-  frames reach it; what it lacks, each operation says as it fails
+  frame there, [terminals on Linux](#terminals-on-linux) how Ghostty's
+  frames reach it, and [pages on Linux](#pages-on-linux) how WPE WebKit's
+  do; what it lacks, each operation says as it fails
   ([building on Linux](../CONTRIBUTING.md#building-on-linux)).
 - The [input bridge](terminal-input-bridge.md), [hosted-app bridge](editor-bridge.md)
   and [launcher panel](launcher-native-panel.md) explain their protocols and platform-specific hazards.
@@ -876,3 +877,94 @@ ends the shell, after which Ghostty announces no frame; the view's surface
 destroyed; the buffers destroyed and the frames they showed freed, which
 Ghostty allows after its surface is gone; the view's queue round-tripped
 and destroyed.
+
+## Pages on Linux
+
+A web view on Linux is a view whose content is a page of WPE WebKit's
+(`native/Linux/web.c`), drawn through a WPEPlatform of Portal's own and
+shown by the presenter that shows terminals. macOS has WebKit's own view.
+
+**A page is a second object, opened at the first web view.** `portal.so`
+links nothing of WPE WebKit, so that it loads and runs terminals where WPE
+WebKit is not installed: Ubuntu 26.04, which the release archives are built
+on, packages none. The page is `portal-web.so`, beside `portal.so`, which
+the build makes where WPE WebKit's development files are and links to
+`libWPEWebKit-2.0.so.1`; `portal.so` opens it at the first web view, after
+checking that WPE WebKit's library opens, and fails saying what to install
+when it does not, or when the build made none (`native/Linux/web.h`). The
+object exports one function, which takes the module's functions it calls
+and returns its own: it links nothing of `portal.so` either, which keeps
+every symbol but Emacs's entry points inside each.
+
+**WebKit runs on a thread of its own**, iterating a GLib context of its own,
+so a page draws, plays and scrolls while Lisp is busy or collecting. On
+Emacs's main thread a page stopped for as long as Lisp was busy, and for
+each collection; on the presenter's thread it would share the thread that
+shows every terminal with WebKit's UI process. Every call into WebKit is
+queued to its thread, in order; what WebKit tells Portal, a load, a title,
+a key report, a cursor, is queued back to Emacs's, from GLib's default
+context, which Emacs runs whenever it waits for input. Making a page and
+ending one wait for WebKit's thread; WebKit's thread never waits for
+Emacs's. A frame costs two queued calls, its `rendered` and its `released`.
+
+**Frames go through the presenter's stages, as a terminal's do.** A stage
+takes its frames from a source (`struct portal_stage_source` in
+`native/Linux/linux.h`): Ghostty's surface for a terminal, the page for a
+web view. WebKit hands each finished frame, a DMABUF, to the platform's
+view, which keeps the latest for the presenter; the presenter imports and
+presents it at the view's frame callback, keeps it until the compositor
+releases its buffer, and tells WebKit when the frame reached the screen,
+which a source may ask to hear and WebKit does: it draws the next frame
+only then.
+
+**WebKit is told of the GPU once for the process**, at the first page's
+first load: a page draws DMABUFs from the compositor's GPU, which an EGL
+display on Emacs's own connection names, or in memory, which the presenter
+copies into shared memory. Pages draw in memory where the compositor takes
+no DMABUF, or refused a terminal's before the first page, and where EGL
+names no GPU; at a page as large as a pane, about 20 frames a second. A
+compositor that refuses a page's DMABUF later cannot have that page, or any
+other, in memory until Emacs starts again: the page says it cannot be
+shown.
+
+**What WebKit needs of a process that is Emacs's.** A context of Portal's,
+never freed: WebKit's default one is freed by `exit()` on Emacs's main
+thread, which aborts Emacs when WebKit is on another. Each page's web
+process is ended with its view, which a context of Portal's would otherwise
+keep running, and its network process with it. JavaScriptCore stops
+threads for its collector with a signal and takes the signal's handler
+over: Portal names one that Emacs does not use, `SIGRTMIN + 6`, in
+`JSC_SIGNAL_FOR_GC` before WebKit starts, since it would take SIGUSR1, which
+Emacs binds. WebKit's sandbox shows a web process only the paths its
+context was given before it started any: a page of a file goes in a context
+of its directory's, made once, so that the media its web process reads
+there play; a page that moves to a file of another directory is a web view
+made again there, starting a history of its own.
+
+**Keys and the offer.** A key reaches the page's WebKit view with the text
+Portal's input method committed for it, which an input method context of
+the page's hands to WebKit. WPE WebKit does not say whether a page used a
+key. A script in a world of its own in every frame reports each trusted
+keydown once its dispatch is over, with its modifiers and whether the page
+prevented its default. WebKit dispatches the presses in the order it was
+given them and the script reports them in that order, so a report is for
+the oldest press not reported yet; a press whose keydown never reached a
+document, as when its process ended, is known by the next report's
+modifiers not being its own, and dropped. An offered chord is used when the
+page prevented its default, and only its own report settles it: one that
+comes after its offer gave up, the page busy past the second an offer
+waits, is that press's, never a later one's. A chord WebKit's own editing
+acts on without the page preventing it reaches both the page and Emacs,
+where on macOS WebKit hands back what neither used.
+
+**The pointer** goes to the page at the pane's coordinates, with WPE's own
+press counting for double clicks. A wheel's notch is one of WebKit's steps,
+as WebKit's own Wayland seat counts it; a touchpad's or pointing stick's
+scroll is in pixels, precise, as GDK's source device for the event says.
+The pointer's shape is the page's, by its CSS name.
+
+**Closing a page** goes: an offer still waiting answered "not used"; the
+presenter forgets it; the view's surface destroyed; its WebKit view's
+process ended and the view released, on WebKit's thread, which Emacs's
+waits for; the stage's buffers destroyed, the frames they held given back
+to WebKit.
