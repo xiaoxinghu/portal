@@ -17,11 +17,12 @@
    that texture.  A source that asks is told when each frame reaches the
    screen (`shown'), as WebKit is before it draws the next.
 
-   A compositor that refuses the first DMABUF, or has no way to take one,
-   makes every source hear that its DMABUFs cannot be shown (`memory'):
-   Ghostty's frames then come as pixels in memory, which the presenter
-   copies into wl_shm buffers.  A page cannot change how it draws once
-   made, so it is shown only when WebKit drew in memory from the start
+   The first DMABUF of each format and modifier is asked for and waited
+   for: a compositor that refuses it, or that has no way to take one,
+   makes the source that drew it hear that its DMABUFs cannot be shown
+   (`memory').  Ghostty's frames then come as pixels in memory, which the
+   presenter copies into wl_shm buffers.  A page cannot change how it draws
+   once made, so it is shown only when WebKit drew in memory from the start
    (web.c).
 
    Wayland.  The presenter reads the display on a queue of its own, as GDK
@@ -65,6 +66,8 @@
    at one size, and those of the size before a resize go as they are
    released.  Canvases: wl_shm buffers for frames in memory. */
 enum { CACHED = 12, CANVASES = 4 };
+/* The DMABUF formats whose answers are kept: a renderer uses one or two. */
+enum { FORMATS = 16 };
 
 /* A buffer imported for one of the renderer's textures, and the frame of
    it that is shown or held, if any. */
@@ -137,9 +140,17 @@ static struct {
     struct wl_event_queue *home;
     int wake; /* An eventfd. */
     struct portal_stage *stages;
-    /* Whether the compositor took the first DMABUF: 0 not tried yet, 1 it
-       did, -1 it did not, or none can be offered. */
-    int dmabufs;
+    /* The DMABUF formats the compositor was asked about, a fourcc and a
+       modifier each, and whether it took the first of each; and whether it
+       refused any.  A source's format says nothing of another's: Ghostty's
+       and WebKit's differ. */
+    struct {
+        uint32_t fourcc;
+        uint64_t modifier;
+        bool taken;
+    } formats[FORMATS];
+    size_t format_count;
+    bool refused;
 } presenter = {.lock = PTHREAD_MUTEX_INITIALIZER, .wake = -1};
 
 static void wake(void)
@@ -297,15 +308,22 @@ static void add_planes(struct zwp_linux_buffer_params_v1 *params,
 }
 
 /* FRAME as a wl_buffer on SCREEN's view's queue, or NULL if the compositor
-   does not take it.  The first one is asked for and waited for, so that a
-   refusal is an answer and not a protocol error, which would end Emacs's
-   connection; once one is taken, the rest are made without waiting. */
+   does not take it.  The first of each format and modifier is asked for and
+   waited for, so that a refusal is an answer and not a protocol error,
+   which would end Emacs's connection; once one is taken, the rest of that
+   format are made without waiting.  Under the presenter's lock. */
 static struct wl_buffer *import(struct portal_stage *stage, const struct portal_linux_frame *frame)
 {
-    if (presenter.dmabufs < 0 || !stage->dmabuf)
+    if (!stage->dmabuf)
         return NULL;
     int32_t width = (int32_t) frame->width, height = (int32_t) frame->height;
-    if (presenter.dmabufs > 0) {
+    size_t known = 0;
+    while (known < presenter.format_count && (presenter.formats[known].fourcc != frame->fourcc ||
+                                              presenter.formats[known].modifier != frame->modifier))
+        known++;
+    if (known < presenter.format_count && !presenter.formats[known].taken)
+        return NULL;
+    if (known < presenter.format_count) {
         struct zwp_linux_buffer_params_v1 *params =
             zwp_linux_dmabuf_v1_create_params(stage->dmabuf);
         add_planes(params, frame);
@@ -330,11 +348,18 @@ static struct wl_buffer *import(struct portal_stage *stage, const struct portal_
     if (asked.buffer)
         wl_proxy_set_queue((struct wl_proxy *) asked.buffer, stage->view->queue);
     wl_event_queue_destroy(queue);
-    presenter.dmabufs = asked.answer > 0 ? 1 : -1;
-    if (asked.answer <= 0)
+    /* Past FORMATS formats, each new one is asked about each time. */
+    if (presenter.format_count < FORMATS) {
+        presenter.formats[presenter.format_count].fourcc = frame->fourcc;
+        presenter.formats[presenter.format_count].modifier = frame->modifier;
+        presenter.formats[presenter.format_count++].taken = asked.answer > 0;
+    }
+    if (asked.answer <= 0) {
+        presenter.refused = true;
         fprintf(stderr, "Portal: the compositor took no DMABUF of a view's (%.4s, modifier "
-                        "0x%llx): views draw into memory from now on\n",
+                        "0x%llx): what drew it draws into memory from now on\n",
                 (const char *) &frame->fourcc, (unsigned long long) frame->modifier);
+    }
     return asked.buffer;
 }
 
@@ -708,7 +733,7 @@ struct portal_stage *portal_linux_stage_new(struct portal_view *view,
 bool portal_linux_dmabufs_refused(void)
 {
     pthread_mutex_lock(&presenter.lock);
-    bool refused = presenter.dmabufs < 0 && presenter.wayland && presenter.wayland->dmabuf;
+    bool refused = presenter.refused;
     pthread_mutex_unlock(&presenter.lock);
     return refused;
 }
@@ -729,8 +754,6 @@ bool portal_linux_stage_start(struct portal_stage *stage, void *data, portal_tex
         presenter.wayland = stage->view->wayland;
         presenter.wake = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
         presenter.home = wl_display_create_queue(presenter.wayland->display);
-        if (!presenter.wayland->dmabuf)
-            presenter.dmabufs = -1;
         pthread_t thread;
         pthread_attr_t attributes;
         pthread_attr_init(&attributes);
@@ -750,8 +773,8 @@ bool portal_linux_stage_start(struct portal_stage *stage, void *data, portal_tex
         pthread_rwlock_wrlock(&stage->lock);
         stage->data = data;
         pthread_rwlock_unlock(&stage->lock);
-        /* Once a compositor has refused one, no DMABUF is offered. */
-        stage->memory = presenter.dmabufs < 0;
+        /* A compositor that takes no DMABUF at all is offered none. */
+        stage->memory = !presenter.wayland->dmabuf;
         stage->next = presenter.stages;
         presenter.stages = stage;
     }
