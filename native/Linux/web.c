@@ -163,10 +163,13 @@ struct page {
     int32_t width, height, scale;
     bool shown, focused;
 
-    /* The latest frame WebKit rendered and the stage has not taken, under
-       LOCK. */
+    /* The latest frame WebKit rendered and the stage has not taken, and
+       the WebKit view that rendered it, under LOCK: the presenter's thread
+       takes them, and never reads WPE, which a web view made again
+       replaces on WebKit's (page_remake). */
     pthread_mutex_t lock;
     WPEBuffer *latest;
+    WPEView *latest_view;
 
     /* What WebKit said of the page, the main thread's. */
     char *url, *title, *error;
@@ -187,6 +190,11 @@ struct page {
        for that press, and for no other, settles it. */
     uint64_t pressed;
     GQueue presses;
+    /* Reports still to come for presses dropped from PRESSES, which a busy
+       page let pile up past its length: the next this many are theirs.
+       Should one never come, no report settles an offer, which then gives
+       up, until the document or its process goes. */
+    unsigned dropped;
     bool offering;
     guint offer_timer;
     uint64_t offer_number;
@@ -354,14 +362,18 @@ static gboolean view_render_buffer(WPEView *view, WPEBuffer *buffer, const WPERe
     }
     atomic_fetch_add(&page->rendered, 1);
     pthread_mutex_lock(&page->lock);
-    if (page->latest) {
-        /* Never taken: WebKit draws one at a time, so this does not come. */
-        wpe_view_buffer_rendered(view, page->latest);
-        wpe_view_buffer_released(view, page->latest);
-        g_object_unref(page->latest);
-    }
+    WPEBuffer *untaken = page->latest;
+    WPEView *untaken_view = page->latest_view;
     page->latest = g_object_ref(buffer);
+    page->latest_view = g_object_ref(view);
     pthread_mutex_unlock(&page->lock);
+    if (untaken) {
+        /* Never taken: WebKit draws one at a time, so this does not come. */
+        wpe_view_buffer_rendered(untaken_view, untaken);
+        wpe_view_buffer_released(untaken_view, untaken);
+        g_object_unref(untaken);
+        g_object_unref(untaken_view);
+    }
     host->stage_ready(page->stage);
     return TRUE;
 }
@@ -440,12 +452,14 @@ static struct portal_linux_frame *page_take(void *data)
     struct page *page = data;
     pthread_mutex_lock(&page->lock);
     WPEBuffer *buffer = page->latest;
+    WPEView *view = page->latest_view;
     page->latest = NULL;
+    page->latest_view = NULL;
     pthread_mutex_unlock(&page->lock);
     if (!buffer)
         return NULL;
     struct held *held = g_new0(struct held, 1);
-    held->view = g_object_ref(page->wpe);
+    held->view = view;
     held->buffer = buffer;
     struct portal_linux_frame *frame = &held->frame;
     frame->own = held;
@@ -627,6 +641,7 @@ static void offer_settle(struct page *page, bool used)
 static void presses_clear(struct page *page)
 {
     g_queue_clear_full(&page->presses, g_free);
+    page->dropped = 0;
 }
 
 struct key_report {
@@ -641,6 +656,10 @@ static gboolean key_report_on_main(gpointer data)
     if (!view)
         return G_SOURCE_REMOVE;
     struct page *page = view->content;
+    if (page->dropped) {
+        page->dropped--;
+        return G_SOURCE_REMOVE;
+    }
     struct press *press;
     while ((press = g_queue_pop_head(&page->presses))) {
         bool same = press->modifier || (press->control == report->control &&
@@ -894,12 +913,15 @@ static gboolean page_unmake(gpointer data)
     page->method = NULL;
     pthread_mutex_lock(&page->lock);
     WPEBuffer *latest = page->latest;
+    WPEView *latest_view = page->latest_view;
     page->latest = NULL;
+    page->latest_view = NULL;
     pthread_mutex_unlock(&page->lock);
     if (latest) {
-        wpe_view_buffer_rendered(page->wpe, latest);
-        wpe_view_buffer_released(page->wpe, latest);
+        wpe_view_buffer_rendered(latest_view, latest);
+        wpe_view_buffer_released(latest_view, latest);
         g_object_unref(latest);
+        g_object_unref(latest_view);
     }
     WebKitUserContentManager *content = webkit_web_view_get_user_content_manager(page->web);
     g_signal_handlers_disconnect_by_data(content, page);
@@ -1123,8 +1145,10 @@ static uint64_t give_key(struct page *page, const GdkEventKey *event, const char
         .modifier = event->is_modifier,
     };
     g_queue_push_tail(&page->presses, pressed);
-    while (g_queue_get_length(&page->presses) > PRESSES)
+    while (g_queue_get_length(&page->presses) > PRESSES) {
         g_free(g_queue_pop_head(&page->presses));
+        page->dropped++;
+    }
     return pressed->number;
 }
 
