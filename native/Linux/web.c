@@ -195,11 +195,12 @@ struct page {
        Presses older than the one a report is for are dropped: theirs never
        came.  OFFSET is learned, CALIBRATED, from the first report that
        came with one press waiting, which is that press's, and follows each
-       report after, as the document's clock drifts from Emacs's.  Before
-       that, and after three reports in a row fit no press, as when the
-       wall clock was set, a report is the oldest press's whose modifiers
-       are its own, as WebKit dispatches presses in order and the script
-       reports them in order.  A press numbered OFFER_NUMBER is with the
+       report after, as the document's clock drifts from Emacs's.  A report
+       no later than a press dropped from a full queue is that press's.
+       Three reports in a row that fit no press, as when the wall clock was
+       set, empty the queue and calibrate again.  Before calibration, a
+       report is the oldest press's whose modifiers are its own, as WebKit
+       dispatches presses in order and the script reports them in order.  A press numbered OFFER_NUMBER is with the
        page while OFFERING: the report for that press, and for no other,
        settles it. */
     uint64_t pressed;
@@ -207,6 +208,9 @@ struct page {
     bool calibrated;
     double offset;
     unsigned misses;
+    /* The time of the newest press dropped from PRESSES, or 0: a report of
+       that time or before is a dropped press's. */
+    guint32 dropped_until;
     /* Reports still to come, before calibration, for presses dropped from
        PRESSES, which a busy page let pile up past its length: the next
        this many are theirs.  Should one never come, no report settles an
@@ -662,6 +666,7 @@ static void presses_clear(struct page *page)
 {
     g_queue_clear_full(&page->presses, g_free);
     page->dropped = 0;
+    page->dropped_until = 0;
     /* A new document's clock has an origin of its own. */
     page->calibrated = false;
     page->misses = 0;
@@ -703,8 +708,20 @@ static struct press *press_by_time(struct page *page, const struct key_report *r
         page->misses = 0;
         return press;
     }
-    if (!g_queue_is_empty(&page->presses) && ++page->misses >= 3)
+    /* A press dropped from a full queue, whose report came late: never
+       another's. */
+    if (page->dropped_until && report->time - page->offset <= page->dropped_until + report_tolerance)
+        return NULL;
+    /* Three in a row that fit no press, as when the wall clock was set: the
+       presses waiting cannot be told apart from reports of others, so they
+       go, and an offer waiting gives up; the next report with one press
+       waiting calibrates again. */
+    if (!g_queue_is_empty(&page->presses) && ++page->misses >= 3) {
+        g_queue_clear_full(&page->presses, g_free);
+        page->dropped_until = 0;
         page->calibrated = false;
+        page->misses = 0;
+    }
     return NULL;
 }
 
@@ -1216,18 +1233,20 @@ static uint64_t give_key(struct page *page, const GdkEventKey *event, const char
     struct given *given = g_new0(struct given, 1);
     bool press = event->type == GDK_KEY_PRESS;
     given->type = press ? WPE_EVENT_KEYBOARD_KEY_DOWN : WPE_EVENT_KEYBOARD_KEY_UP;
-    given->time = event_time(press);
+    guint32 time = event_time(press);
+    given->time = time;
     given->modifiers = modifiers_of(event->state);
     given->keycode = event->hardware_keycode;
     given->keyval = event->keyval;
     given->text = text && *text ? g_strdup(text) : NULL;
+    /* GIVEN is WebKit's thread's from here on. */
     give(page, given);
     if (!press)
         return 0;
     struct press *pressed = g_new(struct press, 1);
     *pressed = (struct press) {
         .number = ++page->pressed,
-        .time = given->time,
+        .time = time,
         .control = event->state & GDK_CONTROL_MASK,
         .alt = event->state & GDK_MOD1_MASK,
         .meta = event->state & (GDK_SUPER_MASK | GDK_MOD4_MASK | GDK_META_MASK),
@@ -1235,7 +1254,9 @@ static uint64_t give_key(struct page *page, const GdkEventKey *event, const char
     };
     g_queue_push_tail(&page->presses, pressed);
     while (g_queue_get_length(&page->presses) > PRESSES) {
-        g_free(g_queue_pop_head(&page->presses));
+        struct press *dropped = g_queue_pop_head(&page->presses);
+        page->dropped_until = dropped->time;
+        g_free(dropped);
         if (!page->calibrated)
             page->dropped++;
     }
