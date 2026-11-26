@@ -198,16 +198,21 @@ struct page {
        report after, as the document's clock drifts from Emacs's.  A report
        no later than a press dropped from a full queue is that press's.
        Three reports in a row that fit no press, as when the wall clock was
-       set, empty the queue and calibrate again.  Before calibration, a
+       set, leave the page ADRIFT: no report settles an offer, each giving
+       up, until the document or its process goes.  Before calibration, a
        report is the oldest press's whose modifiers are its own, as WebKit
-       dispatches presses in order and the script reports them in order.  A press numbered OFFER_NUMBER is with the
-       page while OFFERING: the report for that press, and for no other,
-       settles it. */
+       dispatches presses in order and the script reports them in order.
+       A press numbered OFFER_NUMBER is with the page while OFFERING: the
+       report for that press, and for no other, settles it. */
     uint64_t pressed;
     GQueue presses;
     bool calibrated;
     double offset;
     unsigned misses;
+    /* Calibration was lost: no report settles an offer until the document
+       or its process goes (presses_clear), as reports still on their way
+       could not be told from a new press's. */
+    bool adrift;
     /* The time of the newest press dropped from PRESSES, or 0: a report of
        that time or before is a dropped press's. */
     guint32 dropped_until;
@@ -669,6 +674,7 @@ static void presses_clear(struct page *page)
     page->dropped_until = 0;
     /* A new document's clock has an origin of its own. */
     page->calibrated = false;
+    page->adrift = false;
     page->misses = 0;
 }
 
@@ -712,15 +718,14 @@ static struct press *press_by_time(struct page *page, const struct key_report *r
        another's. */
     if (page->dropped_until && report->time - page->offset <= page->dropped_until + report_tolerance)
         return NULL;
-    /* Three in a row that fit no press, as when the wall clock was set: the
-       presses waiting cannot be told apart from reports of others, so they
-       go, and an offer waiting gives up; the next report with one press
-       waiting calibrates again. */
+    /* Three in a row that fit no press, as when the wall clock was set: no
+       report can be told to be a press's any more, so the presses go, an
+       offer waiting gives up, and none is settled by a report until the
+       document or its process goes. */
     if (!g_queue_is_empty(&page->presses) && ++page->misses >= 3) {
         g_queue_clear_full(&page->presses, g_free);
-        page->dropped_until = 0;
         page->calibrated = false;
-        page->misses = 0;
+        page->adrift = true;
     }
     return NULL;
 }
@@ -733,7 +738,9 @@ static gboolean key_report_on_main(gpointer data)
         return G_SOURCE_REMOVE;
     struct page *page = view->content;
     struct press *press;
-    if (page->calibrated) {
+    if (page->adrift) {
+        return G_SOURCE_REMOVE;
+    } else if (page->calibrated) {
         press = press_by_time(page, report);
     } else if (page->dropped) {
         page->dropped--;
@@ -1257,7 +1264,7 @@ static uint64_t give_key(struct page *page, const GdkEventKey *event, const char
         struct press *dropped = g_queue_pop_head(&page->presses);
         page->dropped_until = dropped->time;
         g_free(dropped);
-        if (!page->calibrated)
+        if (!page->calibrated && !page->adrift)
             page->dropped++;
     }
     return pressed->number;
