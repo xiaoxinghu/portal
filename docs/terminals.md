@@ -302,7 +302,8 @@ The sidebar is drawn afresh, at most ten times a second and only while a
 window shows it, when a status changes, a session or block comes, goes or is
 renamed, a connection ends or comes back, and a terminal starts, ends, is
 renamed or runs another program. Point stays on its row. Hidden and shown
-again, it is drawn first. It asks the server nothing.
+again, by the command or by going back to a tab that shows it, it is drawn
+afresh at once if anything changed meanwhile. It asks the server nothing.
 
 | Key | On a row | On a session's heading |
 | --- | --- | --- |

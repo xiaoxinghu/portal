@@ -120,6 +120,10 @@ named then.")
 (defvar portal-terminal-sidebar--drawn-at 0
   "When the sidebar was last drawn, as `float-time' gives it.")
 
+(defvar portal-terminal-sidebar--missed nil
+  "Non-nil when the sidebar was not drawn for a change, as no window showed it.
+A window that shows it again draws it, such as one of a tab restored.")
+
 (defvar-local portal-terminal-sidebar--overlay nil
   "The overlay that highlights the row of the terminal in use.")
 
@@ -275,7 +279,8 @@ That of the narrowest window showing it, less a column at the right."
                     (list buffer (buffer-name buffer) (portal-terminal-sidebar--program buffer)))
                   (nreverse drawn))
           portal-terminal-sidebar--drawn-width width
-          portal-terminal-sidebar--drawn-at (float-time))))
+          portal-terminal-sidebar--drawn-at (float-time)
+          portal-terminal-sidebar--missed nil)))
 
 (defun portal-terminal-sidebar--find (item)
   "Return where ITEM's lines start in the sidebar, or nil."
@@ -364,10 +369,18 @@ A row folded away highlights its session's heading."
 
 (defun portal-terminal-sidebar--selection-changed (&rest _)
   "Move the sidebar's highlight to the terminal now in use, drawing nothing.
-On `window-selection-change-functions' and `window-buffer-change-functions'
-while the sidebar's buffer lives."
+On `window-selection-change-functions' while the sidebar's buffer lives."
   (when-let* ((sidebar (get-buffer portal-terminal-sidebar--name)))
     (with-current-buffer sidebar (portal-terminal-sidebar--highlight))))
+
+(defun portal-terminal-sidebar--windows-changed (&rest _)
+  "Follow windows that changed buffers, or came, as a tab's do when it is restored.
+The highlight moves to the terminal now in use, and a sidebar shown again
+after missing a change is drawn afresh.  On `window-buffer-change-functions'
+while the sidebar's buffer lives."
+  (portal-terminal-sidebar--selection-changed)
+  (when portal-terminal-sidebar--missed
+    (portal-terminal-sidebar--schedule)))
 
 ;;; When it is drawn
 
@@ -376,20 +389,23 @@ while the sidebar's buffer lives."
 
 (defun portal-terminal-sidebar--schedule (&rest _)
   "Draw the sidebar afresh soon, if a window shows it.
-It is drawn at most once in a tenth of a second."
+It is drawn at most once in a tenth of a second.  With no window showing
+it, it is drawn once one does."
   (when-let* ((sidebar (get-buffer portal-terminal-sidebar--name))
-              ((not (timerp portal-terminal-sidebar--timer)))
-              ((get-buffer-window sidebar t)))
-    (setq portal-terminal-sidebar--timer
-          (run-at-time (max 0 (- (+ portal-terminal-sidebar--drawn-at 0.1) (float-time)))
-                       nil #'portal-terminal-sidebar--redraw))))
+              ((not (timerp portal-terminal-sidebar--timer))))
+    (if (not (get-buffer-window sidebar t))
+        (setq portal-terminal-sidebar--missed t)
+      (setq portal-terminal-sidebar--timer
+            (run-at-time (max 0 (- (+ portal-terminal-sidebar--drawn-at 0.1) (float-time)))
+                         nil #'portal-terminal-sidebar--redraw)))))
 
 (defun portal-terminal-sidebar--redraw ()
   "Draw the sidebar afresh if a window still shows it."
   (setq portal-terminal-sidebar--timer nil)
-  (when-let* ((sidebar (get-buffer portal-terminal-sidebar--name))
-              ((get-buffer-window sidebar t)))
-    (portal-terminal-sidebar--refresh sidebar)))
+  (when-let* ((sidebar (get-buffer portal-terminal-sidebar--name)))
+    (if (get-buffer-window sidebar t)
+        (portal-terminal-sidebar--refresh sidebar)
+      (setq portal-terminal-sidebar--missed t))))
 
 (defun portal-terminal-sidebar--drawn-entry (buffer)
   "Return BUFFER's entry in what the sidebar was last drawn with, or nil."
@@ -441,7 +457,7 @@ new width.  On the sidebar's `window-size-change-functions'."
     (portal-view-close-hook . portal-terminal-sidebar--view-closed)
     (buffer-list-update-hook . portal-terminal-sidebar--buffers-changed)
     (window-selection-change-functions . portal-terminal-sidebar--selection-changed)
-    (window-buffer-change-functions . portal-terminal-sidebar--selection-changed))
+    (window-buffer-change-functions . portal-terminal-sidebar--windows-changed))
   "The hooks the sidebar follows while its buffer lives, and its function on each.")
 
 (defun portal-terminal-sidebar--follow (install)

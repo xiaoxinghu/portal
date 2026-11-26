@@ -383,5 +383,28 @@ STATUS holds the other keys of `:status' in `portal-terminal-metadata'."
       (portal-terminal-sidebar)
       (should (member "third" (portal-sidebar-test--rows))))))
 
+(ert-deftest portal-terminal-sidebar-shown-again-by-a-tab-draws-what-it-missed ()
+  (portal-sidebar-test--environment
+    (let ((file (current-buffer)))
+      (portal-sidebar-test--open "one/app" "first")
+      (switch-to-buffer file)
+      (portal-terminal-sidebar)
+      (let ((with (current-window-configuration)))
+        ;; Another tab, without it: a terminal starts there.
+        (delete-other-windows (get-buffer-window file))
+        (let ((ignore-window-parameters t)) (delete-other-windows))
+        (should-not (portal-sidebar-test--window))
+        (portal-sidebar-test--open "two/app" "second")
+        (switch-to-buffer file)
+        (portal-sidebar-test--settle)
+        (should (equal (portal-sidebar-test--rows) '("first")))
+        ;; Back in the first tab, its window shows the sidebar again,
+        ;; without the toggle: what redisplay runs then draws it.
+        (set-window-configuration with)
+        (should (portal-sidebar-test--window))
+        (run-hook-with-args 'window-buffer-change-functions (selected-frame))
+        (portal-sidebar-test--settle)
+        (should (equal (portal-sidebar-test--rows) '("first" "second")))))))
+
 (provide 'portal-terminal-sidebar-tests)
 ;;; portal-terminal-sidebar-tests.el ends here
