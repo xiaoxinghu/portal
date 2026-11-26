@@ -77,6 +77,19 @@ resizes leave alone, and which \\[delete-other-windows] keeps."
   "Face of a clickable row or heading under the mouse pointer."
   :group 'portal-terminal)
 
+(defface portal-terminal-sidebar-cursor '((t :inherit portal-terminal-sidebar-hover))
+  "Face of the clickable row or heading at point while the sidebar is selected."
+  :group 'portal-terminal)
+
+(defcustom portal-terminal-sidebar-preview t
+  "Non-nil previews the terminal under point in the main window.
+While the sidebar is selected, moving point to a terminal row displays
+it in the window used last without selecting it.  Visiting a terminal
+keeps it; leaving the sidebar or moving to a heading restores the buffer
+that window originally showed."
+  :type 'boolean
+  :group 'portal-terminal)
+
 (defcustom portal-terminal-sidebar-evil-keys t
   "Non-nil starts the sidebar in Evil's normal state with keys for it.
 Set it before Evil or this file loads; nil leaves Evil untouched."
@@ -148,6 +161,14 @@ A window that shows it again draws it, such as one of a tab restored.")
 
 (defvar-local portal-terminal-sidebar--bar-overlays nil
   "The overlays drawing the left-edge bar on each line of the terminal in use.")
+
+(defvar-local portal-terminal-sidebar--cursor-overlay nil
+  "The overlay highlighting the clickable item at point while selected.")
+
+(defvar-local portal-terminal-sidebar--preview nil
+  "State of an active preview while the sidebar is selected, or nil.
+When non-nil, a plist (:window WINDOW :buffer BUFFER :point POS
+:start START :hscroll HSCROLL :shown BUFFER-OR-NIL).")
 
 (defun portal-terminal-sidebar--program (buffer)
   "Return what names the program of terminal BUFFER on its row, or nil.
@@ -368,18 +389,26 @@ Point stays on its row in each window that shows it."
       (pcase-dolist (`(,window . ,place) places)
         (set-window-point window (portal-terminal-sidebar--go-to place)))
       (portal-terminal-sidebar--go-to here)
-      (portal-terminal-sidebar--highlight))))
+      (portal-terminal-sidebar--highlight)
+      (portal-terminal-sidebar--highlight-cursor)
+      (when (eq (window-buffer (portal-view--selected-pane)) (current-buffer))
+        (portal-terminal-sidebar--preview-update)))))
 
-;;; The terminal in use
+;;; The terminal in use, cursor highlight and preview
 
 (defun portal-terminal-sidebar--in-use ()
   "Return the buffer of the terminal in use, as the sidebar highlights it.
 That of the selected window, or, while the sidebar is selected, of the
-window used last."
-  (let ((window (portal-view--selected-pane)))
-    (when (eq (window-buffer window) (get-buffer portal-terminal-sidebar--name))
-      (setq window (get-mru-window nil nil t)))
-    (and window (window-buffer window))))
+window used last (its original buffer while previewing)."
+  (let ((window (portal-view--selected-pane))
+        (sidebar (get-buffer portal-terminal-sidebar--name)))
+    (if (and sidebar (eq (window-buffer window) sidebar))
+        (let ((preview (buffer-local-value 'portal-terminal-sidebar--preview sidebar)))
+          (if (and preview (buffer-live-p (plist-get preview :buffer)))
+              (plist-get preview :buffer)
+            (when-let* ((last (get-mru-window nil nil t)))
+              (window-buffer last))))
+      (and window (window-buffer window)))))
 
 (defun portal-terminal-sidebar--fringe-p ()
   "Return non-nil when the sidebar can draw its bar in the left fringe."
@@ -439,11 +468,129 @@ A row folded away marks its session's heading."
                 (portal-terminal-sidebar--make-bars start end)))
       (delete-overlay portal-terminal-sidebar--overlay))))
 
+(defun portal-terminal-sidebar--item-bounds (&optional position)
+  "Return (START . END) of the clickable item at POSITION, or nil.
+END stops before the item's final newline, matching its hover stretch."
+  (save-excursion
+    (when position (goto-char position))
+    (let* ((pos (line-beginning-position))
+           (item (and (< pos (point-max))
+                      (get-text-property pos 'mouse-face)
+                      (get-text-property pos 'portal-terminal-sidebar-item))))
+      (when item
+        (let* ((start (if (and (> pos (point-min))
+                               (equal (get-text-property (1- pos) 'portal-terminal-sidebar-item)
+                                      item))
+                          (or (previous-single-property-change pos 'portal-terminal-sidebar-item)
+                              (point-min))
+                        pos))
+               (end (or (next-single-property-change start 'portal-terminal-sidebar-item)
+                        (point-max))))
+          (when (> end start)
+            (cons start (if (eq (char-before end) ?\n) (1- end) end))))))))
+
+(defun portal-terminal-sidebar--highlight-cursor ()
+  "Highlight the clickable item at point while the sidebar is selected."
+  (unless (overlayp portal-terminal-sidebar--cursor-overlay)
+    (setq portal-terminal-sidebar--cursor-overlay (make-overlay (point-min) (point-min)))
+    (overlay-put portal-terminal-sidebar--cursor-overlay 'face 'portal-terminal-sidebar-cursor)
+    (overlay-put portal-terminal-sidebar--cursor-overlay 'priority -25))
+  (let* ((selected (portal-view--selected-pane))
+         (bounds (and (window-live-p selected)
+                      (eq (window-buffer selected) (current-buffer))
+                      (portal-terminal-sidebar--item-bounds (window-point selected)))))
+    (if bounds
+        (progn
+          (overlay-put portal-terminal-sidebar--cursor-overlay 'window selected)
+          (move-overlay portal-terminal-sidebar--cursor-overlay (car bounds) (cdr bounds)))
+      (delete-overlay portal-terminal-sidebar--cursor-overlay))))
+
+(defun portal-terminal-sidebar--preview-target ()
+  "Return the window the sidebar previews terminals in, or nil.
+That is the window used last on this frame, if it is neither dedicated
+nor a side window nor showing the sidebar."
+  (let* ((sidebar (get-buffer portal-terminal-sidebar--name))
+         (window (get-mru-window nil nil t)))
+    (and window
+         (not (eq (window-buffer window) sidebar))
+         (not (window-dedicated-p window))
+         (not (window-parameter window 'window-side))
+         window)))
+
+(defun portal-terminal-sidebar--preview-restore-window (preview)
+  "Restore PREVIEW's window to its original buffer and scroll state.
+Does nothing if the window is no longer showing PREVIEW's shown buffer."
+  (let ((window (plist-get preview :window))
+        (orig (plist-get preview :buffer))
+        (shown (plist-get preview :shown)))
+    (when (and shown (window-live-p window) (buffer-live-p orig)
+               (eq (window-buffer window) shown))
+      (set-window-buffer window orig)
+      (set-window-start window (plist-get preview :start) t)
+      (set-window-point window (plist-get preview :point))
+      (set-window-hscroll window (plist-get preview :hscroll)))
+    (plist-put preview :shown nil)))
+
+(defun portal-terminal-sidebar--preview-restore ()
+  "End any active preview in the sidebar and restore the original buffer."
+  (when portal-terminal-sidebar--preview
+    (let ((preview portal-terminal-sidebar--preview))
+      (setq portal-terminal-sidebar--preview nil)
+      (portal-terminal-sidebar--preview-restore-window preview))))
+
+(defun portal-terminal-sidebar--preview-update ()
+  "Preview the terminal at point in the main window, if preview is enabled.
+Moving onto a heading or a terminal already shown in another window
+restores the original buffer."
+  (if (not portal-terminal-sidebar-preview)
+      (portal-terminal-sidebar--preview-restore)
+    (let ((selected (portal-view--selected-pane)))
+      (when (and (window-live-p selected)
+                 (eq (window-buffer selected) (current-buffer)))
+        (unless (and portal-terminal-sidebar--preview
+                     (window-live-p (plist-get portal-terminal-sidebar--preview :window)))
+          (setq portal-terminal-sidebar--preview nil)
+          (when-let* ((target (portal-terminal-sidebar--preview-target)))
+            (setq portal-terminal-sidebar--preview
+                  (list :window target
+                        :buffer (window-buffer target)
+                        :point (window-point target)
+                        :start (window-start target)
+                        :hscroll (window-hscroll target)
+                        :shown nil))))
+        (when-let* ((preview portal-terminal-sidebar--preview)
+                    (target (plist-get preview :window))
+                    ((window-live-p target)))
+          (let* ((orig (plist-get preview :buffer))
+                 (item (save-excursion
+                         (goto-char (window-point selected))
+                         (portal-terminal-sidebar--at 'portal-terminal-sidebar-item)))
+                 (buffer (and (bufferp item) (portal-terminal-metadata item) item))
+                 (existing (and buffer (get-buffer-window buffer t))))
+            (if (and buffer
+                     (not (eq buffer orig))
+                     (or (null existing) (eq existing target)))
+                (progn
+                  (unless (eq (window-buffer target) buffer)
+                    (set-window-buffer target buffer))
+                  (plist-put preview :shown buffer))
+              (portal-terminal-sidebar--preview-restore-window preview))))))))
+
+(defun portal-terminal-sidebar--post-command ()
+  "Update the cursor highlight and preview after a command in the sidebar."
+  (portal-terminal-sidebar--highlight-cursor)
+  (portal-terminal-sidebar--preview-update))
+
 (defun portal-terminal-sidebar--selection-changed (&rest _)
-  "Move the sidebar's highlight to the terminal now in use, drawing nothing.
+  "Move the sidebar's highlights and preview on window selection changes.
 On `window-selection-change-functions' while the sidebar's buffer lives."
   (when-let* ((sidebar (get-buffer portal-terminal-sidebar--name)))
-    (with-current-buffer sidebar (portal-terminal-sidebar--highlight))))
+    (with-current-buffer sidebar
+      (if (eq (window-buffer (portal-view--selected-pane)) sidebar)
+          (portal-terminal-sidebar--preview-update)
+        (portal-terminal-sidebar--preview-restore))
+      (portal-terminal-sidebar--highlight)
+      (portal-terminal-sidebar--highlight-cursor))))
 
 (defun portal-terminal-sidebar--windows-changed (&rest _)
   "Follow windows that changed buffers, or came, as a tab's do when it is restored.
@@ -535,11 +682,14 @@ new width.  On the sidebar's `window-size-change-functions'."
 (defun portal-terminal-sidebar--follow (install)
   "INSTALL the sidebar's functions on the hooks it follows, or remove them."
   (pcase-dolist (`(,hook . ,function) portal-terminal-sidebar--hooks)
-    (if install (add-hook hook function) (remove-hook hook function))))
+    (if install
+        (add-hook hook function (when (eq hook 'window-selection-change-functions) -10))
+      (remove-hook hook function))))
 
 (defun portal-terminal-sidebar--stop ()
   "Follow nothing more, as the sidebar's buffer goes or changes its mode.
 On its `kill-buffer-hook' and `change-major-mode-hook'."
+  (portal-terminal-sidebar--preview-restore)
   (when (timerp portal-terminal-sidebar--timer)
     (cancel-timer portal-terminal-sidebar--timer))
   (setq portal-terminal-sidebar--timer nil)
@@ -574,6 +724,7 @@ the window used last."
   (if (eq (car-safe (portal-terminal-sidebar--at 'portal-terminal-sidebar-item)) 'session)
       (portal-terminal-sidebar-toggle-fold)
     (let ((buffer (portal-terminal-sidebar--terminal)))
+      (portal-terminal-sidebar--preview-restore)
       (portal-terminal-sidebar--leave)
       (portal-terminal--visit buffer))))
 
@@ -588,6 +739,7 @@ EVENT is the click."
   "Select the terminal on the current line in another window."
   (interactive nil portal-terminal-sidebar-mode)
   (let ((buffer (portal-terminal-sidebar--terminal)))
+    (portal-terminal-sidebar--preview-restore)
     (portal-terminal-sidebar--leave)
     (switch-to-buffer-other-window buffer)))
 
@@ -597,11 +749,19 @@ From the side window it is shown in the window used last, as \\`RET'
 shows it, without selecting it."
   (interactive nil portal-terminal-sidebar-mode)
   (let* ((buffer (portal-terminal-sidebar--terminal))
-         (sidebar (portal-terminal-sidebar--leave)))
+         (sidebar (progn
+                    (portal-terminal-sidebar--preview-restore)
+                    (portal-terminal-sidebar--leave))))
     (if (eq (selected-window) sidebar)
         (display-buffer buffer t)
       (unwind-protect (portal-terminal--visit buffer)
         (select-window sidebar)))))
+
+(defun portal-terminal-sidebar-quit ()
+  "Hide the sidebar, restoring any previewed buffer in the main window."
+  (interactive nil portal-terminal-sidebar-mode)
+  (portal-terminal-sidebar--preview-restore)
+  (quit-window))
 
 (defun portal-terminal-sidebar-toggle-fold ()
   "Fold the Rex session whose heading is on the current line, or unfold it.
@@ -627,6 +787,7 @@ Portal's own.  It starts in the directory of that window's buffer."
         (session-id (portal-terminal-sidebar--at 'portal-terminal-sidebar-session)))
     (when (eq (car-safe (portal-terminal-sidebar--at 'portal-terminal-sidebar-item)) 'server)
       (user-error "Not in a session: start a terminal from a session's heading"))
+    (portal-terminal-sidebar--preview-restore)
     (portal-terminal-sidebar--leave)
     (if session-id
         (portal-rex-new-terminal connection session-id)
@@ -639,6 +800,7 @@ Portal's own.  It starts in the directory of that window's buffer."
   "o" #'portal-terminal-sidebar-visit-other-window
   "C-o" #'portal-terminal-sidebar-display
   "c" #'portal-terminal-sidebar-new
+  "q" #'portal-terminal-sidebar-quit
   "n" #'next-line
   "p" #'previous-line
   "<mouse-2>" #'portal-terminal-sidebar-click
@@ -655,11 +817,12 @@ Does nothing when `portal-terminal-sidebar-evil-keys' is nil."
     (evil-define-key* 'normal portal-terminal-sidebar-mode-map
       (kbd "RET") #'portal-terminal-sidebar-visit
       (kbd "TAB") #'portal-terminal-sidebar-toggle-fold
+      (kbd "<mouse-2>") #'portal-terminal-sidebar-click
       "o" #'portal-terminal-sidebar-visit-other-window
       (kbd "C-o") #'portal-terminal-sidebar-display
       "c" #'portal-terminal-sidebar-new
       "gr" #'revert-buffer
-      "q" #'quit-window)))
+      "q" #'portal-terminal-sidebar-quit)))
 
 (with-eval-after-load 'evil
   (portal-terminal-sidebar--setup-evil))
@@ -680,6 +843,7 @@ afresh as the terminals change while a window shows it, and by \\[revert-buffer]
   (setq mode-line-format nil
         truncate-lines t)
   (setq-local revert-buffer-function (lambda (&rest _) (portal-terminal-sidebar--refresh)))
+  (add-hook 'post-command-hook #'portal-terminal-sidebar--post-command nil t)
   (add-hook 'window-size-change-functions #'portal-terminal-sidebar--resized nil t)
   (add-hook 'kill-buffer-hook #'portal-terminal-sidebar--stop nil t)
   (add-hook 'change-major-mode-hook #'portal-terminal-sidebar--stop nil t)
@@ -727,6 +891,9 @@ columns wide."
   (interactive)
   (if-let* ((windows (portal-terminal-sidebar--windows)))
       (let ((selected (selected-window)))
+        (when-let* ((buffer (get-buffer portal-terminal-sidebar--name)))
+          (with-current-buffer buffer
+            (portal-terminal-sidebar--preview-restore)))
         (dolist (window windows)
           (if (window-parameter window 'window-side)
               (delete-window window)

@@ -300,7 +300,9 @@ out. The row of the terminal in use is marked with a left-edge bar
 (`portal-terminal-sidebar-current-indicator`) and bold text
 (`portal-terminal-sidebar-current`): that of the selected window, or, from
 the sidebar, of the window used last. Hovering a clickable row or heading
-highlights only that item with `portal-terminal-sidebar-hover`.
+highlights only that item with `portal-terminal-sidebar-hover`; moving point
+with the keyboard while the sidebar is selected highlights the item at point
+the same way with `portal-terminal-sidebar-cursor`.
 
 `portal-terminal-next` and `-previous` walk the terminals in this order,
 moving the highlight down or up a row and from the last row to the first;
@@ -328,15 +330,19 @@ afresh at once if anything changed meanwhile. It asks the server nothing.
 
 A folded session's rows are left out; its heading ends with the mark of its
 most urgent block and how many blocks it has, so a block that starts to wait
-shows there. Folds stay through redraws and renames, and are not saved. Nothing
-previews as point moves. With
+shows there. Folds stay through redraws and renames, and are not saved. While
+the sidebar is selected, moving point to a terminal row previews it in the
+window used last without selecting it (`portal-terminal-sidebar-preview`, on by
+default); visiting with `RET` or a click keeps it, while moving to a heading or
+leaving the sidebar restores that window's original buffer. With
 [`portal-terminal-embark-mode`](#consult-and-embark) on, a row is a terminal
 target, so Embark's actions rename it, set its project or end it.
 `M-x portal-terminal-sidebar-select` selects the sidebar, showing it first.
 Portal binds neither command to a key. When Evil is loaded, the sidebar starts
-in normal state with `RET`, `TAB`, `o`, `C-o`, `c`, `gr` and `q` bound while
-leaving Evil's motions and leader alone; set `portal-terminal-sidebar-evil-keys`
-to nil before loading to leave Evil untouched.
+in normal state with `RET`, `TAB`, `<mouse-2>` (for clicks), `o`, `C-o`, `c`,
+`gr` and `q` bound while leaving Evil's motions and leader alone; set
+`portal-terminal-sidebar-evil-keys` to nil before loading to leave Evil
+untouched.
 
 The sidebar is shown by `display-buffer` with
 `portal-terminal-sidebar-display-action`: a side window on the left whose width
