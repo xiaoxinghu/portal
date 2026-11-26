@@ -368,6 +368,11 @@ to, so that a buffer previewed there, such as by Consult, shows its view."
 See `portal-view-shrunk-hook'."
   (and portal-view--shrunk t))
 
+(defun portal-view--minibuffer-active-p (frame)
+  "Whether FRAME's minibuffer window is the active minibuffer's."
+  (let ((minibuffer (and (frame-live-p frame) (minibuffer-window frame))))
+    (and (window-live-p minibuffer) (minibuffer-window-active-p minibuffer))))
+
 (defun portal-view--shrunk-by-minibuffer (base geometry window)
   "Whether GEOMETRY is BASE with only its bottom raised by the minibuffer.
 BASE and GEOMETRY are placements, as `portal-view--geometry' has them;
@@ -380,8 +385,7 @@ WINDOW is the pane of GEOMETRY, which must not be the selected window."
               (= (aref before 1) (aref after 1))
               (= (aref before 2) (aref after 2))
               (< (aref after 3) (aref before 3))))
-       (let ((minibuffer (minibuffer-window (car geometry))))
-         (and (window-live-p minibuffer) (minibuffer-window-active-p minibuffer)))))
+       (portal-view--minibuffer-active-p (car geometry))))
 
 (defun portal-view--sync-buffer (buffer)
   "Place BUFFER's view in its chosen window, or hide it when no window shows it.
@@ -409,7 +413,12 @@ another frame moves it there.  Nothing is sent when nothing moved.
            (geometry (and window (list frame (frame-pixel-height frame)
                                        (vconcat (window-inside-pixel-edges window)))))
            (base (or portal-view--shrunk portal-view--geometry))
-           (shrunk (and (portal-view--shrunk-by-minibuffer base geometry window) base)))
+           ;; A view hidden while shrunk, as by a preview of another
+           ;; buffer in its pane, stays so until the minibuffer goes.
+           (shrunk (and (if (and portal-view--shrunk (null geometry))
+                            (portal-view--minibuffer-active-p (car base))
+                          (portal-view--shrunk-by-minibuffer base geometry window))
+                        base)))
       ;; Shrinking starts before the view is placed in the shrunk pane, and
       ;; ends after it is placed in the pane it has then.
       (when (and shrunk (not portal-view--shrunk))
