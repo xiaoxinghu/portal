@@ -177,10 +177,12 @@ struct page {
     /* Keys, the main thread's.  Each press given to WebKit is numbered and
        kept in PRESSES until the key script reports it: WebKit dispatches
        the presses in order, and the script reports each keydown in order,
-       so a report is for the oldest press not yet reported.  A press whose
-       keydown never reached a document, as when its process ended, would
-       take the next one's report: a report whose modifiers are not that
-       press's is the next press's, and the press is dropped.  A press
+       so a report is for the oldest press not yet reported.  The presses
+       go when the document that had them does, or its process: their
+       reports never come.  A press whose keydown reached no document
+       otherwise would take the next one's report: a report whose
+       modifiers are not that press's is the next press's, and the press
+       is dropped.  A press
        numbered OFFER_NUMBER is with the page while OFFERING: the report
        for that press, and for no other, settles it. */
     uint64_t pressed;
@@ -709,6 +711,10 @@ static gboolean news_on_main(gpointer data)
         page->terminated = false;
         break;
     case NEWS_COMMITTED:
+        /* The document before has gone, and with it the reports of the
+           presses it had not reported: WebKit's thread passes its reports
+           on before it says the next one committed. */
+        presses_clear(page);
         replace(&page->url, &news->url);
         if (page->url)
             host->committed(target, (portal_string) {page->url, strlen(page->url)});
