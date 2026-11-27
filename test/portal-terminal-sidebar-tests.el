@@ -259,6 +259,21 @@ as `face-font' gives it; a character not in it has no font."
           (should (equal (seq-take (portal-sidebar-test--rows) 3)
                          '("C agent claude-code ◌" "Z shell zsh" "\uEC81 other"))))))))
 
+(ert-deftest portal-terminal-sidebar-uses-an-icon-only-where-every-frame-draws-it ()
+  ;; The sidebar is one buffer on every frame that shows it: an icon one
+  ;; of them has no Nerd Font for is used on none.
+  (let ((portal-terminal-sidebar-program-icons '(("claude" . "\uEC82") ("zsh" . "\uE6B9")))
+        (nerd "-*-Hack Nerd Font-regular-normal-normal-*-13-*-*-*-m-0-iso10646-1"))
+    (cl-letf (((symbol-function 'face-font)
+               (lambda (_face &optional frame character)
+                 (cond ((eq frame 'nerd) nerd)
+                       ((eq character #xE6B9) nerd)
+                       (t "-*-Hannotate TC-regular-normal-normal-*-13-*-*-*-p-0-iso10646-1")))))
+      (should (equal (portal-terminal-sidebar--icons '(nerd))
+                     portal-terminal-sidebar-program-icons))
+      (should (equal (portal-terminal-sidebar--icons '(nerd other)) '(("zsh" . "\uE6B9"))))
+      (should (equal (portal-terminal-sidebar--icons '(other nerd)) '(("zsh" . "\uE6B9")))))))
+
 (ert-deftest portal-terminal-sidebar-keeps-the-mark-on-a-narrow-row ()
   ;; On a line too narrow for the name, the program and the mark, the
   ;; program is left out and the mark stays at the right.

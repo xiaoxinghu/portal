@@ -301,8 +301,8 @@ the mark alone.
 `portal-terminal-sidebar-program-icons` maps a program to its icon, a string.
 Out of the box they are the Nerd Fonts' glyphs for Claude Code, Codex, Copilot,
 pi, zsh, bash, fish, tmux, Neovim, Vim and Emacs; Claude's and OpenAI's came
-with Nerd Fonts 3.5. An icon is used only where the sidebar's frame draws it
-as meant, each icon checked on its own: every character needs a font, and a
+with Nerd Fonts 3.5. An icon is used only when every frame that shows the
+sidebar draws it as meant, each icon checked on its own: every character needs a font, and a
 private-use character, which any font may draw as something else, a font
 whose name matches `portal-terminal-sidebar-icon-fonts`, by default a Nerd
 Font's. A program whose icon is not used, or that has none, has its initial

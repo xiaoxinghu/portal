@@ -106,13 +106,13 @@ that window originally showed."
   "The icon at the left of a row of the sidebar of terminals, by program.
 A program is named as the row names it: the app that reports its status,
 such as \"claude-code\", else the file name of the program in the
-terminal's foreground.  The icon is a string.  It is used only where the
-sidebar's frame draws it as meant: each of its characters has a font
-there, and a private-use character, as an icon font's are, a font that
-`portal-terminal-sidebar-icon-fonts' matches.  A program whose icon is
-not used, or that has none, has its initial in the icon's place and its
-name at the right of its row.  The icons here are Nerd Fonts': Claude's
-and OpenAI's came with 3.5."
+terminal's foreground.  The icon is a string.  It is used only when
+every frame that shows the sidebar draws it as meant: each of its
+characters has a font there, and a private-use character, as an icon
+font's are, a font that `portal-terminal-sidebar-icon-fonts' matches.
+A program whose icon is not used, or that has none, has its initial in
+the icon's place and its name at the right of its row.  The icons here
+are Nerd Fonts': Claude's and OpenAI's came with 3.5."
   :type '(alist :key-type string :value-type string)
   :group 'portal-terminal)
 
@@ -214,20 +214,24 @@ in its foreground."
     (or (plist-get (buffer-local-value 'portal-terminal--status buffer) :app)
         (and program (file-name-nondirectory program)))))
 
-(defun portal-terminal-sidebar--icons (frame)
-  "Return the icons FRAME draws as meant.
+(defun portal-terminal-sidebar--icons (frames)
+  "Return the icons every frame of FRAMES draws as meant.
 They are the entries of `portal-terminal-sidebar-program-icons' whose
-every character has a font on FRAME, a private-use one a font that
-`portal-terminal-sidebar-icon-fonts' matches."
+every character has a font on each frame, a private-use one a font that
+`portal-terminal-sidebar-icon-fonts' matches.  The sidebar is one
+buffer, the same text on every frame that shows it."
   (let ((case-fold-search nil))
     (seq-filter
      (lambda (entry)
        (and (not (string-empty-p (cdr entry)))
             (seq-every-p
              (lambda (char)
-               (when-let* ((font (face-font 'default frame char)))
-                 (or (not (eq (get-char-code-property char 'general-category) 'Co))
-                     (string-match-p portal-terminal-sidebar-icon-fonts font))))
+               (seq-every-p
+                (lambda (frame)
+                  (when-let* ((font (face-font 'default frame char)))
+                    (or (not (eq (get-char-code-property char 'general-category) 'Co))
+                        (string-match-p portal-terminal-sidebar-icon-fonts font))))
+                frames))
              (cdr entry))))
      portal-terminal-sidebar-program-icons)))
 
@@ -382,9 +386,10 @@ That of the narrowest window showing it, less a column at the right."
          (tree (portal-terminal-sidebar-tree))
          (several (cdar tree))
          (indent (if several "   " " "))
-         (window (get-buffer-window (current-buffer) t))
          (icons (portal-terminal-sidebar--icons
-                 (if window (window-frame window) (selected-frame))))
+                 (or (delete-dups (mapcar #'window-frame
+                                          (get-buffer-window-list (current-buffer) 'nomini t)))
+                     (list (selected-frame)))))
          drawn)
     (erase-buffer)
     (pcase-dolist (`(,connection . ,sessions) (car tree))
