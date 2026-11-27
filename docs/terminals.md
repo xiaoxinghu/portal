@@ -275,23 +275,40 @@ Portal's own terminals follow, with no heading, in the order they were made:
 
 ```
  workspace
-   ai                    zsh
-   shell                 zsh
- ◌ general            claude
+   ai                     zsh
+   shell                  zsh
+   general             claude ◌
  portal
- ● linux-web-view-page claude
+   linux-web-vie… claude-code ●
    approve Bash: git push
  obento
-   terminal: workspace     zsh
+   terminal: workspace    zsh
 ```
 
-A row has the mark of what its [program is doing](rex.md#what-a-blocks-program-is-doing),
-in the pickers' faces and with `portal-terminal-status-marks`; the block's
-label, or the buffer's name without its asterisks; and at the right, dimmed,
-the program: the app that reports its status, else the file name of the
-program in its foreground, once that is known. A blocked or failed row has a
+A row starts with the block's label, or the buffer's name without its
+asterisks. With a [Nerd Font](https://www.nerdfonts.com/), the icon of its
+program comes before that, in the two columns left for it, and stands for the
+program's name at the right. It ends with the mark of what its
+[program is doing](rex.md#what-a-blocks-program-is-doing), in the pickers'
+faces and with `portal-terminal-status-marks`; the mark's place is kept on a
+row without a status, so nothing moves as one comes and goes. The program is
+the app that reports its status, else the file name of the program in the
+terminal's foreground, once that is known. A blocked or failed row has a
 second line, with what its program said, cut to the window. A working row has
-the mark alone. Rows never move with their status: `*Rex agents*`
+the mark alone.
+
+`portal-terminal-sidebar-program-icons` maps a program to its icon, a string.
+Out of the box they are the Nerd Fonts' glyphs for Claude Code, Codex, Copilot,
+pi, zsh, bash, fish, tmux, Neovim, Vim and Emacs; Claude's and OpenAI's came
+with Nerd Fonts 3.5. An icon is used only where the sidebar's frame draws it
+as meant, each icon checked on its own: every character needs a font, and a
+private-use character, which any font may draw as something else, a font
+whose name matches `portal-terminal-sidebar-icon-fonts`, by default a Nerd
+Font's. A program whose icon is not used, or that has none, has its name,
+dimmed, before the mark; on a row too narrow for both, the name is left out.
+After changing fonts, `g` draws the sidebar afresh.
+
+Rows never move with their status: `*Rex agents*`
 ([In a list](rex.md#in-a-list)) is the list sorted by urgency. A session's
 heading is bold, an empty session's dimmed, and Portal's own terminals have
 the face `portal-terminal-sidebar-terminal`. With a second Rex server
@@ -328,9 +345,9 @@ afresh at once if anything changed meanwhile. It asks the server nothing.
 | `c` | A new terminal: a block in the row's session, or one of Portal's own from a row at the root | A new block in the session |
 | `g`, `q` | Draw afresh; hide the sidebar | The same |
 
-A folded session's rows are left out; its heading ends with the mark of its
-most urgent block and how many blocks it has, so a block that starts to wait
-shows there. Folds stay through redraws and renames, and are not saved. While
+A folded session's rows are left out; its heading ends with how many blocks it has
+and the mark of its most urgent one, where a row's mark is, so a block that
+starts to wait shows there. Folds stay through redraws and renames, and are not saved. While
 the sidebar is selected, moving point to a terminal row previews it in the
 window used last without selecting it (`portal-terminal-sidebar-preview`, on by
 default); visiting with `RET` or a click keeps it, while moving to a heading or
