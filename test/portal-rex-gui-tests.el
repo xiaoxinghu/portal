@@ -323,13 +323,15 @@ its messages: only the module's record can bring them."
   :tags '(:gui)
   ;; The sidebar shown: an agent in a block never visited asks, and its
   ;; row says so in its place with no key pressed.  Resized, as by a drag,
-  ;; it keeps the width through balancing and a hide and show.
+  ;; it keeps the width through balancing and a hide and show.  Without
+  ;; icons, whatever fonts this machine has.
   (portal-fake-rex-with (server)
     (let* ((portal-rex-socket (portal-fake-rex-socket server))
            (connection (portal-rex-connect))
            (buffer (portal-rex-block-buffer connection "block:fake-1"))
            (portal-terminal-sidebar-width 32)
            (portal-terminal-sidebar--folded nil)
+           (portal-terminal-sidebar-program-icons nil)
            (display-buffer-alist nil)
            (rows (lambda ()
                    (with-current-buffer portal-terminal-sidebar--name
@@ -352,7 +354,7 @@ its messages: only the module's record can bring them."
                             :reason "report"))
             (portal-rex-gui-tests--wait
              (lambda () (equal (funcall rows)
-                               '("fake" "● shell claude-code" "Clean up the task now?"))))
+                               '("fake" "C shell claude-code ●" "Clean up the task now?"))))
             (should-not (get-buffer-window buffer t))
             ;; Wider by a drag's worth: redisplay records it.
             (split-window-right)

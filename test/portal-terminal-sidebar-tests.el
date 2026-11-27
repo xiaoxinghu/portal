@@ -122,16 +122,21 @@ STATUS holds the other keys of `:status' in `portal-terminal-metadata'."
       (should (equal (portal-terminal-sidebar-buffers) (list first second)))
       (portal-terminal-sidebar)
       ;; No Rex connection: no heading, the terminals in the order they
-      ;; were made, named without the asterisks, the program at the right.
+      ;; were made, named without the asterisks.  Batch Emacs has no font
+      ;; for an icon, so the program's initial is in its place and its
+      ;; name at the right.
       (let ((lines (portal-sidebar-test--lines)))
-        (should (equal (portal-sidebar-test--rows) '("terminal: app zsh" "server")))
-        (should (string-prefix-p "   terminal: app" (car lines)))
-        ;; Drawn to the window's width, less a column.
+        (should (equal (portal-sidebar-test--rows) '("Z terminal: app zsh" "server")))
+        (should (string-prefix-p " Z  terminal: app" (car lines)))
+        (should (string-prefix-p "    server" (cadr lines)))
+        ;; Drawn to the window's width, less a column, where the name
+        ;; ends while the row has no status.
         (should (= (string-width (car lines))
                    (1- (window-max-chars-per-line (portal-sidebar-test--window))))))
       (with-current-buffer portal-terminal-sidebar--name
         (goto-char (point-min))
-        (should (eq (get-text-property (+ (point) 3) 'face) 'portal-terminal-sidebar-terminal))
+        (should (eq (get-text-property (+ (point) 1) 'face) 'portal-terminal-sidebar-program))
+        (should (eq (get-text-property (+ (point) 4) 'face) 'portal-terminal-sidebar-terminal))
         (should (eq (get-text-property (- (line-end-position) 1) 'face)
                     'portal-terminal-sidebar-program))
         (should-not mode-line-format))
@@ -158,36 +163,164 @@ STATUS holds the other keys of `:status' in `portal-terminal-metadata'."
       (portal-sidebar-test--status working 'working :app "claude-code" :message "Reading slides.ts")
       (portal-terminal-sidebar)
       (let ((lines (portal-sidebar-test--lines)))
-        ;; A blocked or failed row has its message on a second line, cut
-        ;; to the window; one without a message, why it is blocked.  A done
-        ;; or working row has its mark alone.  The app is the program.
+        ;; A row ends with its mark.  A blocked or failed one has its
+        ;; message on a second line, cut to the window; one without a
+        ;; message, why it is blocked.  A done or working row has its mark
+        ;; alone.  The app is the program.
         (should (equal (portal-sidebar-test--rows)
-                       (list "● asking claude-code"
+                       (list "C asking claude-code ●"
                              (string-trim
                               (truncate-string-to-width
-                               (concat "   Clean up the task now? " (make-string 80 ?x))
+                               (concat "    Clean up the task now? " (make-string 80 ?x))
                                (1- (window-max-chars-per-line (portal-sidebar-test--window)))
                                nil nil t))
-                             "● permission"
+                             "permission ●"
                              "permission"
-                             "✗ failed codex"
+                             "C failed codex ✗"
                              "API error"
-                             "✓ done claude-code"
-                             "◌ working claude-code"
+                             "C done claude-code ✓"
+                             "C working claude-code ◌"
                              "shell")))
         (should (string-suffix-p "…" (nth 1 lines)))
         ;; The message starts under the name.
-        (should (string-prefix-p "   Clean" (nth 1 lines))))
-      ;; The marks and messages in the status faces.
+        (should (string-prefix-p "    Clean" (nth 1 lines))))
+      ;; The marks, each the last character of its row, and the messages
+      ;; in the status faces.
       (with-current-buffer portal-terminal-sidebar--name
         (goto-char (point-min))
-        (dolist (face '(portal-terminal-status-blocked portal-terminal-status-blocked
-                        portal-terminal-status-blocked portal-terminal-status-blocked
-                        portal-terminal-status-error portal-terminal-status-error
-                        portal-terminal-status-done portal-terminal-status-working))
-          (skip-chars-forward " ")
-          (should (eq (get-text-property (point) 'face) face))
+        (pcase-dolist (`(,face . ,message)
+                       '((portal-terminal-status-blocked) (portal-terminal-status-blocked . t)
+                         (portal-terminal-status-blocked) (portal-terminal-status-blocked . t)
+                         (portal-terminal-status-error) (portal-terminal-status-error . t)
+                         (portal-terminal-status-done) (portal-terminal-status-working)
+                         (nil)))
+          (should (eq (get-text-property (if message
+                                             (progn (skip-chars-forward " ") (point))
+                                           (1- (line-end-position)))
+                                         'face)
+                      face))
           (forward-line 1))))))
+
+(defmacro portal-sidebar-test--with-fonts (fonts &rest body)
+  "Run BODY on a frame whose fonts for characters are FONTS.
+FONTS is an alist of a character and the name of the font that draws it,
+as `face-font' gives it; a character not in it has no font."
+  (declare (indent 1))
+  `(cl-letf (((symbol-function 'face-font)
+              (lambda (_face &optional _frame character) (alist-get character ,fonts))))
+     ,@body))
+
+(ert-deftest portal-terminal-sidebar-starts-a-row-with-its-programs-icon ()
+  (portal-sidebar-test--environment
+    (let* ((nerd "-*-JetBrainsMono Nerd Font-regular-normal-normal-*-13-*-*-*-m-0-iso10646-1")
+           (portal-terminal-sidebar-program-icons
+            '(("claude-code" . "\uEC82") ("zsh" . "\uE6B9") ("codex" . "\uEC81") ("pi" . "π")
+              ("fish" . "\uE000")))
+           (programs '(("agent" . "/opt/bin/claude") ("shell" . "/bin/zsh")
+                       ("other" . "/opt/bin/codex") ("letter" . "/opt/bin/pi")
+                       ("fishy" . "/opt/bin/fish") ("gravity" . "/opt/bin/agy") ("new")))
+           (buffers (mapcar (lambda (entry)
+                              (let ((buffer (portal-sidebar-test--open "one/app" (car entry))))
+                                (when (cdr entry)
+                                  (portal-fake-native-report
+                                   (buffer-local-value 'portal-view--target buffer)
+                                   :program (cdr entry)))
+                                buffer))
+                            programs)))
+      (portal-sidebar-test--status (car buffers) 'working :app "claude-code")
+      (portal-sidebar-test--status (nth 5 buffers) 'blocked :kind "question" :message "Which?")
+      ;; A Nerd Font draws Claude's and zsh's icons.  Another font draws
+      ;; the private-use character that is OpenAI's there, and a plain
+      ;; font the letter; no font draws fish's.
+      (portal-sidebar-test--with-fonts
+          `((#xEC82 . ,nerd) (#xE6B9 . "-*-Hack NFM-regular-normal-normal-*-13-*-*-*-m-0-iso10646-1")
+            (#xEC81 . "-*-Hannotate TC-regular-normal-normal-*-13-*-*-*-p-0-iso10646-1")
+            (?π . "-*-Menlo-regular-normal-normal-*-13-*-*-*-m-0-iso10646-1"))
+        (portal-terminal-sidebar)
+        ;; A program with an icon starts with it, by its app or its file's
+        ;; name, and has no name at the right.  One whose icon the frame
+        ;; does not draw as meant, or without one, starts with its initial
+        ;; and keeps its name, before the mark.  A terminal whose program
+        ;; is not known has neither.
+        (should (equal (portal-sidebar-test--rows)
+                       '("\uEC82 agent ◌" "\uE6B9 shell" "C other codex" "π letter"
+                         "F fishy fish" "A gravity agy ●" "Which?" "new")))
+        ;; The names start in one column, two after the icon's.
+        (dolist (line (portal-sidebar-test--lines))
+          (should (string-match-p "\\` .  [^ ]" line)))
+        ;; A name ends its row until a mark does.
+        (let ((lines (portal-sidebar-test--lines)))
+          (should (= (string-width (nth 2 lines)) (string-width (nth 5 lines))))
+          (should (string-suffix-p " codex" (nth 2 lines)))
+          (should (string-suffix-p " agy ●" (nth 5 lines))))
+        ;; Any font is trusted once the option matches it.
+        (let ((portal-terminal-sidebar-icon-fonts "Hannotate"))
+          (with-current-buffer portal-terminal-sidebar--name (revert-buffer))
+          (should (equal (seq-take (portal-sidebar-test--rows) 3)
+                         '("C agent claude-code ◌" "Z shell zsh" "\uEC81 other"))))))))
+
+(ert-deftest portal-terminal-sidebar-uses-an-icon-only-where-every-frame-draws-it ()
+  ;; The sidebar is one buffer on every frame that shows it: an icon one
+  ;; of them has no Nerd Font for is used on none.
+  (let ((portal-terminal-sidebar-program-icons '(("claude" . "\uEC82") ("zsh" . "\uE6B9")))
+        (nerd "-*-Hack Nerd Font-regular-normal-normal-*-13-*-*-*-m-0-iso10646-1"))
+    (cl-letf (((symbol-function 'face-font)
+               (lambda (_face &optional frame character)
+                 (cond ((eq frame 'nerd) nerd)
+                       ((eq character #xE6B9) nerd)
+                       (t "-*-Hannotate TC-regular-normal-normal-*-13-*-*-*-p-0-iso10646-1")))))
+      (should (equal (portal-terminal-sidebar--icons '(nerd))
+                     portal-terminal-sidebar-program-icons))
+      (should (equal (portal-terminal-sidebar--icons '(nerd other)) '(("zsh" . "\uE6B9"))))
+      (should (equal (portal-terminal-sidebar--icons '(other nerd)) '(("zsh" . "\uE6B9")))))))
+
+(ert-deftest portal-terminal-sidebar-draws-afresh-for-another-frame ()
+  ;; A window of another frame comes to show the sidebar, as a tab
+  ;; restored there does, with nothing else changed: what redisplay runs
+  ;; then draws it afresh, without the icon that frame has no font for.
+  (portal-sidebar-test--environment
+    (let* ((portal-terminal-sidebar-program-icons '(("zsh" . "\uE6B9")))
+           (file (current-buffer))
+           (terminal (portal-sidebar-test--open "one/app" "shell"))
+           (frames (list (selected-frame))))
+      (portal-fake-native-report (buffer-local-value 'portal-view--target terminal)
+                                 :program "/bin/zsh")
+      (switch-to-buffer file)
+      (cl-letf (((symbol-function 'face-font)
+                 (lambda (_face &optional frame _character)
+                   (and (framep frame)
+                        "-*-Hack Nerd Font-regular-normal-normal-*-13-*-*-*-m-0-iso10646-1")))
+                ((symbol-function 'portal-terminal-sidebar--frames) (lambda () frames)))
+        (portal-terminal-sidebar)
+        (should (equal (portal-sidebar-test--rows) '("\uE6B9 shell")))
+        (run-hook-with-args 'window-buffer-change-functions (selected-frame))
+        (portal-sidebar-test--settle)
+        (should (equal (portal-sidebar-test--rows) '("\uE6B9 shell")))
+        (setq frames (list (selected-frame) 'plain))
+        (run-hook-with-args 'window-buffer-change-functions (selected-frame))
+        (portal-sidebar-test--settle)
+        (should (equal (portal-sidebar-test--rows) '("Z shell zsh")))
+        ;; That frame's window gone, the icon is back.
+        (setq frames (list (selected-frame)))
+        (run-hook-with-args 'window-buffer-change-functions (selected-frame))
+        (portal-sidebar-test--settle)
+        (should (equal (portal-sidebar-test--rows) '("\uE6B9 shell")))))))
+
+(ert-deftest portal-terminal-sidebar-keeps-the-mark-on-a-narrow-row ()
+  ;; On a line too narrow for the name, the program and the mark, the
+  ;; program is left out and the mark stays at the right.
+  (should (equal (portal-terminal-sidebar--line "   " "linux-web-view" nil "claude-code" 22 "●")
+                 "   linux-web-view    ●"))
+  (should (equal (portal-terminal-sidebar--line "   " "linux-web-view" nil "claude-code" 34 "●")
+                 "   linux-web-view    claude-code ●"))
+  (should (equal (portal-terminal-sidebar--line "   " "linux-web-view-page" nil "claude-code" 33 "●")
+                 "   linux-web-view-… claude-code ●"))
+  ;; A blank mark's place is kept before the program, which ends the
+  ;; line: the name is cut the same with a mark and without.
+  (should (equal (portal-terminal-sidebar--line "   " "linux-web-view-page" nil "claude-code" 33 " ")
+                 "   linux-web-view-…   claude-code"))
+  (should (equal (portal-terminal-sidebar--line "   " "linux-web-view" nil "claude-code" 22 " ")
+                 "   linux-web-view     ")))
 
 (ert-deftest portal-terminal-sidebar-shows-and-hides-beside-the-selection ()
   (portal-sidebar-test--environment
@@ -361,10 +494,10 @@ STATUS holds the other keys of `:status' in `portal-terminal-metadata'."
         (portal-fake-native-report (buffer-local-value 'portal-view--target second)
                                    :program "/opt/bin/claude")
         (portal-sidebar-test--settle)
-        (should (equal (portal-sidebar-test--rows) '("first" "second claude")))
+        (should (equal (portal-sidebar-test--rows) '("first" "C second claude")))
         (with-current-buffer second (portal-terminal-rename "api"))
         (portal-sidebar-test--settle)
-        (should (equal (portal-sidebar-test--rows) '("first" "api claude")))
+        (should (equal (portal-sidebar-test--rows) '("first" "C api claude")))
         ;; Point stayed on its row.
         (with-current-buffer portal-terminal-sidebar--name
           (should (eq (get-text-property (window-point (portal-sidebar-test--window))
