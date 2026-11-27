@@ -3847,7 +3847,7 @@ It has the target of a terminal view, as one shown in a window has, and no view.
               (should (equal (portal-rex-tests--sidebar-rows)
                              '("workspace" "ai" "shell"
                                ;; Cut to the window, the program and the mark kept.
-                               "portal" "linux-web-v… claude-code ●" "approve Bash: git push"
+                               "portal" "C linux-web-… claude-code ●" "approve Bash: git push"
                                "obento"
                                "terminal: workspace")))
               (with-current-buffer portal-terminal-sidebar--name
@@ -3867,7 +3867,7 @@ It has the target of a terminal view, as one shown in a window has, and no view.
                 (goto-char (point-min))
                 (should (looking-at " workspace"))
                 (forward-line 1)
-                (should (looking-at "   ai"))))
+                (should (looking-at "    ai"))))
             ;; A block's row is an Embark terminal target.
             (portal-rex-tests--sidebar
               (portal-rex-tests--sidebar-on "shell")
@@ -3966,7 +3966,7 @@ It has the target of a terminal view, as one shown in a window has, and no view.
                  :msg "Clean up the task now?")
         (portal-rex-tests--sidebar-drawn connection)
         (should (equal (portal-rex-tests--sidebar-rows)
-                       '("work" "claude claude-code ●" "Clean up the task now?" "codex"
+                       '("work" "C claude claude-code ●" "Clean up the task now?" "codex"
                          "portal" "agent")))
         (should (equal (portal-rex-tests--sidebar-at) "codex"))
         ;; Each state its mark, a row never moving: failed and done.
@@ -3974,21 +3974,21 @@ It has the target of a terminal view, as one shown in a window has, and no view.
         (funcall report "block:3" :state "working" :app "pi" :msg "Reading slides.ts")
         (portal-rex-tests--sidebar-drawn connection)
         (should (equal (portal-rex-tests--sidebar-rows)
-                       '("work" "claude claude-code ●" "Clean up the task now?"
-                         "codex codex ✗" "API error" "portal" "agent pi ◌")))
-        (should (equal (portal-rex-tests--sidebar-at) "codex codex ✗"))
+                       '("work" "C claude claude-code ●" "Clean up the task now?"
+                         "C codex codex ✗" "API error" "portal" "P agent pi ◌")))
+        (should (equal (portal-rex-tests--sidebar-at) "C codex codex ✗"))
         (funcall report "block:1" :state "done" :app "claude-code")
         (portal-rex-tests--sidebar-drawn connection)
         (should (equal (portal-rex-tests--sidebar-rows)
-                       '("work" "claude claude-code ✓" "codex codex ✗" "API error"
-                         "portal" "agent pi ◌")))
+                       '("work" "C claude claude-code ✓" "C codex codex ✗" "API error"
+                         "portal" "P agent pi ◌")))
         ;; A block that closes leaves; a session made appears, dimmed.
         (portal-rex-tests--blocks server "a" (portal-rex-tests--block "1" "claude"))
         (portal-rex-tests--session-event server "a" "block_closed" :block_id "block:2")
         (portal-fake-rex-command server :event (portal-rex-tests--event "later"))
         (portal-rex-tests--sidebar-drawn connection)
         (should (equal (portal-rex-tests--sidebar-rows)
-                       '("work" "claude claude-code ✓" "portal" "agent pi ◌" "later")))))))
+                       '("work" "C claude claude-code ✓" "portal" "P agent pi ◌" "later")))))))
 
 (ert-deftest portal-terminal-sidebar-folds-a-session ()
   (portal-rex-tests--with (server)

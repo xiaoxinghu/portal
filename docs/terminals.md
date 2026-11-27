@@ -275,23 +275,24 @@ Portal's own terminals follow, with no heading, in the order they were made:
 
 ```
  workspace
-   ai                     zsh
-   shell                  zsh
-   general             claude ◌
+ Z  ai                      zsh
+ Z  shell                   zsh
+ C  general            claude ◌
  portal
-   linux-web-vie… claude-code ●
-   approve Bash: git push
+ C  linux-web-vi… claude-code ●
+    approve Bash: git push
  obento
-   terminal: workspace    zsh
+ Z  terminal: workspace     zsh
 ```
 
-A row starts with the block's label, or the buffer's name without its
-asterisks. With a [Nerd Font](https://www.nerdfonts.com/), the icon of its
-program comes before that, in the two columns left for it, and stands for the
-program's name at the right. It ends with the mark of what its
+A row starts with its program's initial, dimmed, and the block's label, or
+the buffer's name without its asterisks; a terminal whose program is not
+known has the label alone. With a [Nerd Font](https://www.nerdfonts.com/),
+the program's icon takes the initial's place and stands for its name at the
+right. A row ends with the mark of what its
 [program is doing](rex.md#what-a-blocks-program-is-doing), in the pickers'
 faces and with `portal-terminal-status-marks`; the mark's place is kept on a
-row without a status, so nothing moves as one comes and goes. The program is
+row without a status, so a label is cut the same as one comes and goes. The program is
 the app that reports its status, else the file name of the program in the
 terminal's foreground, once that is known. A blocked or failed row has a
 second line, with what its program said, cut to the window. A working row has
@@ -304,9 +305,10 @@ with Nerd Fonts 3.5. An icon is used only where the sidebar's frame draws it
 as meant, each icon checked on its own: every character needs a font, and a
 private-use character, which any font may draw as something else, a font
 whose name matches `portal-terminal-sidebar-icon-fonts`, by default a Nerd
-Font's. A program whose icon is not used, or that has none, has its name,
-dimmed, before the mark; on a row too narrow for both, the name is left out.
-After changing fonts, `g` draws the sidebar afresh.
+Font's. A program whose icon is not used, or that has none, has its initial
+in the icon's place and its name, dimmed, at the right: at the end of the row,
+or before the mark once the row has one. On a row too narrow for both, the
+name is left out. After changing fonts, `g` draws the sidebar afresh.
 
 Rows never move with their status: `*Rex agents*`
 ([In a list](rex.md#in-a-list)) is the list sorted by urgency. A session's

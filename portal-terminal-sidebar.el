@@ -62,7 +62,7 @@ resizes leave alone, and which \\[delete-other-windows] keeps."
   :group 'portal-terminal)
 
 (defface portal-terminal-sidebar-program '((t :inherit shadow))
-  "Face of the program at the right of a row, and of a folded session's count."
+  "Face of a program's name and initial on a row, and of a folded session's count."
   :group 'portal-terminal)
 
 (defface portal-terminal-sidebar-current '((t :inherit bold))
@@ -110,8 +110,9 @@ terminal's foreground.  The icon is a string.  It is used only where the
 sidebar's frame draws it as meant: each of its characters has a font
 there, and a private-use character, as an icon font's are, a font that
 `portal-terminal-sidebar-icon-fonts' matches.  A program whose icon is
-not used, or that has none, has its name at the right of its row.  The
-icons here are Nerd Fonts': Claude's and OpenAI's came with 3.5."
+not used, or that has none, has its initial in the icon's place and its
+name at the right of its row.  The icons here are Nerd Fonts': Claude's
+and OpenAI's came with 3.5."
   :type '(alist :key-type string :value-type string)
   :group 'portal-terminal)
 
@@ -234,8 +235,9 @@ every character has a font on FRAME, a private-use one a font that
   "Return ICON, a string or nil, padded to the width of the widest of ICONS.
 ICONS are entries of `portal-terminal-sidebar-program-icons'.  Without
 an icon, spaces: a row's name starts in the same column either way."
-  (let ((width (apply #'max 1 (mapcar (lambda (entry) (string-width (cdr entry))) icons))))
-    (concat icon (make-string (- width (if icon (string-width icon) 0)) ?\s))))
+  (let* ((width (apply #'max 1 (mapcar (lambda (entry) (string-width (cdr entry))) icons)))
+         (icon (truncate-string-to-width (or icon "") width)))
+    (concat icon (make-string (- width (string-width icon)) ?\s))))
 
 (defun portal-terminal-sidebar--label (buffer)
   "Return the name of terminal BUFFER's row.
@@ -268,12 +270,16 @@ Without a status or a mark for it, spaces."
 (defun portal-terminal-sidebar--line (prefix text face right width &optional end)
   "Return a line WIDTH columns wide: PREFIX, TEXT in FACE, then RIGHT and END.
 RIGHT and END, a space between them, end at the right, and TEXT is cut
-short to leave them room.  On a line too narrow for all three, RIGHT is
-left out; END, a status's mark, never is.  A line is padded with spaces
-to WIDTH so hover and clicks span the full row."
+short to leave them room.  A blank END is the place of a status's mark
+without one: RIGHT ends the line then, the place kept before it, so TEXT
+is cut the same with a mark and without.  On a line too narrow for all
+three, RIGHT is left out; END never is.  A line is padded with spaces to
+WIDTH so hover and clicks span the full row."
   (let* ((room (lambda (tail)
                  (- width (string-width prefix) (if tail (1+ (string-width tail)) 0))))
-         (tail (if (and right end) (concat right " " end) (or right end))))
+         (tail (cond ((not (and right end)) (or right end))
+                     ((string-blank-p end) (concat end " " right))
+                     (t (concat right " " end)))))
     (when (and right (< (funcall room tail) 6))
       (setq tail end))
     (let* ((text (truncate-string-to-width text (max (funcall room tail) 1) nil nil t))
@@ -310,14 +316,18 @@ including, its final newline so consecutive items hover separately."
                                                   &optional connection session-id)
   "Insert the row of terminal BUFFER, INDENT before its icon, WIDTH columns wide.
 ICONS are the icons to use, as `portal-terminal-sidebar--icons' gives
-them: a program without one has its name at the right, before the mark
+them: a program without one has its initial in the icon's place, as a
+person without a picture has, and its name at the right, before the mark
 of the terminal's status.  CONNECTION and SESSION-ID are those of a
 block's session.  A blocked or failed terminal has a second line,
 saying what its program said."
   (let* ((status (buffer-local-value 'portal-terminal--status buffer))
          (program (portal-terminal-sidebar--program buffer))
          (icon (and program (cdr (assoc program icons))))
-         (prefix (concat indent (portal-terminal-sidebar--icon icon icons) " "))
+         (initial (and program (not icon)
+                       (propertize (upcase (truncate-string-to-width program 1))
+                                   'face 'portal-terminal-sidebar-program)))
+         (prefix (concat indent (portal-terminal-sidebar--icon (or icon initial) icons) "  "))
          (lines (list (portal-terminal-sidebar--line
                        prefix (portal-terminal-sidebar--label buffer)
                        (and (not connection) 'portal-terminal-sidebar-terminal)
@@ -904,9 +914,10 @@ Does nothing when `portal-terminal-sidebar-evil-keys' is nil."
 Each Rex session has a heading, in the server's order, and its blocks
 under it in the order they were made; Portal's own terminals follow,
 with no heading.  A row starts with its program's icon and its name,
-and ends with the mark of what its program is doing, after the program's
-name when it has no icon; a blocked or failed one has a second line with
-what its program said.  Rows keep their places whatever their status.
+and ends with the mark of what its program is doing; a program without
+an icon has its initial there and its name at the right.  A blocked or
+failed row has a second line with what its program said.  Rows keep
+their places whatever their status.
 The row of the terminal in use is highlighted.  The sidebar is drawn
 afresh as the terminals change while a window shows it, and by \\[revert-buffer].
 

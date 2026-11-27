@@ -123,21 +123,21 @@ STATUS holds the other keys of `:status' in `portal-terminal-metadata'."
       (portal-terminal-sidebar)
       ;; No Rex connection: no heading, the terminals in the order they
       ;; were made, named without the asterisks.  Batch Emacs has no font
-      ;; for an icon, so the program's name is at the right.
+      ;; for an icon, so the program's initial is in its place and its
+      ;; name at the right.
       (let ((lines (portal-sidebar-test--lines)))
-        (should (equal (portal-sidebar-test--rows) '("terminal: app zsh" "server")))
-        (should (string-prefix-p "   terminal: app" (car lines))))
+        (should (equal (portal-sidebar-test--rows) '("Z terminal: app zsh" "server")))
+        (should (string-prefix-p " Z  terminal: app" (car lines)))
+        (should (string-prefix-p "    server" (cadr lines)))
+        ;; Drawn to the window's width, less a column, where the name
+        ;; ends while the row has no status.
+        (should (= (string-width (car lines))
+                   (1- (window-max-chars-per-line (portal-sidebar-test--window))))))
       (with-current-buffer portal-terminal-sidebar--name
         (goto-char (point-min))
-        ;; Drawn to the window's width, less a column: the name ends
-        ;; before the place of a status's mark, kept on every row.
-        (should (= (- (line-end-position) (point))
-                   (1- (window-max-chars-per-line (portal-sidebar-test--window)))))
-        (should (equal (buffer-substring-no-properties (- (line-end-position) 5)
-                                                       (line-end-position))
-                       "zsh  "))
-        (should (eq (get-text-property (+ (point) 3) 'face) 'portal-terminal-sidebar-terminal))
-        (should (eq (get-text-property (- (line-end-position) 3) 'face)
+        (should (eq (get-text-property (+ (point) 1) 'face) 'portal-terminal-sidebar-program))
+        (should (eq (get-text-property (+ (point) 4) 'face) 'portal-terminal-sidebar-terminal))
+        (should (eq (get-text-property (- (line-end-position) 1) 'face)
                     'portal-terminal-sidebar-program))
         (should-not mode-line-format))
       ;; With none, it says so.
@@ -168,22 +168,22 @@ STATUS holds the other keys of `:status' in `portal-terminal-metadata'."
         ;; message, why it is blocked.  A done or working row has its mark
         ;; alone.  The app is the program.
         (should (equal (portal-sidebar-test--rows)
-                       (list "asking claude-code ●"
+                       (list "C asking claude-code ●"
                              (string-trim
                               (truncate-string-to-width
-                               (concat "   Clean up the task now? " (make-string 80 ?x))
+                               (concat "    Clean up the task now? " (make-string 80 ?x))
                                (1- (window-max-chars-per-line (portal-sidebar-test--window)))
                                nil nil t))
                              "permission ●"
                              "permission"
-                             "failed codex ✗"
+                             "C failed codex ✗"
                              "API error"
-                             "done claude-code ✓"
-                             "working claude-code ◌"
+                             "C done claude-code ✓"
+                             "C working claude-code ◌"
                              "shell")))
         (should (string-suffix-p "…" (nth 1 lines)))
         ;; The message starts under the name.
-        (should (string-prefix-p "   Clean" (nth 1 lines))))
+        (should (string-prefix-p "    Clean" (nth 1 lines))))
       ;; The marks, each the last character of its row, and the messages
       ;; in the status faces.
       (with-current-buffer portal-terminal-sidebar--name
@@ -239,19 +239,25 @@ as `face-font' gives it; a character not in it has no font."
         (portal-terminal-sidebar)
         ;; A program with an icon starts with it, by its app or its file's
         ;; name, and has no name at the right.  One whose icon the frame
-        ;; does not draw as meant, or without one, keeps its name, before
-        ;; the mark.  A terminal whose program is not known has neither.
+        ;; does not draw as meant, or without one, starts with its initial
+        ;; and keeps its name, before the mark.  A terminal whose program
+        ;; is not known has neither.
         (should (equal (portal-sidebar-test--rows)
-                       '("\uEC82 agent ◌" "\uE6B9 shell" "other codex" "π letter"
-                         "fishy fish" "gravity agy ●" "Which?" "new")))
-        ;; The names start in one column, with an icon or without.
+                       '("\uEC82 agent ◌" "\uE6B9 shell" "C other codex" "π letter"
+                         "F fishy fish" "A gravity agy ●" "Which?" "new")))
+        ;; The names start in one column, two after the icon's.
         (dolist (line (portal-sidebar-test--lines))
-          (should (string-match-p "\\` . [^ ]" line)))
+          (should (string-match-p "\\` .  [^ ]" line)))
+        ;; A name ends its row until a mark does.
+        (let ((lines (portal-sidebar-test--lines)))
+          (should (= (string-width (nth 2 lines)) (string-width (nth 5 lines))))
+          (should (string-suffix-p " codex" (nth 2 lines)))
+          (should (string-suffix-p " agy ●" (nth 5 lines))))
         ;; Any font is trusted once the option matches it.
         (let ((portal-terminal-sidebar-icon-fonts "Hannotate"))
           (with-current-buffer portal-terminal-sidebar--name (revert-buffer))
           (should (equal (seq-take (portal-sidebar-test--rows) 3)
-                         '("agent claude-code ◌" "shell zsh" "\uEC81 other"))))))))
+                         '("C agent claude-code ◌" "Z shell zsh" "\uEC81 other"))))))))
 
 (ert-deftest portal-terminal-sidebar-keeps-the-mark-on-a-narrow-row ()
   ;; On a line too narrow for the name, the program and the mark, the
@@ -261,7 +267,13 @@ as `face-font' gives it; a character not in it has no font."
   (should (equal (portal-terminal-sidebar--line "   " "linux-web-view" nil "claude-code" 34 "●")
                  "   linux-web-view    claude-code ●"))
   (should (equal (portal-terminal-sidebar--line "   " "linux-web-view-page" nil "claude-code" 33 "●")
-                 "   linux-web-view-… claude-code ●")))
+                 "   linux-web-view-… claude-code ●"))
+  ;; A blank mark's place is kept before the program, which ends the
+  ;; line: the name is cut the same with a mark and without.
+  (should (equal (portal-terminal-sidebar--line "   " "linux-web-view-page" nil "claude-code" 33 " ")
+                 "   linux-web-view-…   claude-code"))
+  (should (equal (portal-terminal-sidebar--line "   " "linux-web-view" nil "claude-code" 22 " ")
+                 "   linux-web-view     ")))
 
 (ert-deftest portal-terminal-sidebar-shows-and-hides-beside-the-selection ()
   (portal-sidebar-test--environment
@@ -435,10 +447,10 @@ as `face-font' gives it; a character not in it has no font."
         (portal-fake-native-report (buffer-local-value 'portal-view--target second)
                                    :program "/opt/bin/claude")
         (portal-sidebar-test--settle)
-        (should (equal (portal-sidebar-test--rows) '("first" "second claude")))
+        (should (equal (portal-sidebar-test--rows) '("first" "C second claude")))
         (with-current-buffer second (portal-terminal-rename "api"))
         (portal-sidebar-test--settle)
-        (should (equal (portal-sidebar-test--rows) '("first" "api claude")))
+        (should (equal (portal-sidebar-test--rows) '("first" "C api claude")))
         ;; Point stayed on its row.
         (with-current-buffer portal-terminal-sidebar--name
           (should (eq (get-text-property (window-point (portal-sidebar-test--window))
