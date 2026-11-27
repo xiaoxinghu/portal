@@ -185,6 +185,10 @@ named then.")
 (defvar-local portal-terminal-sidebar--drawn-width nil
   "The width, in columns, the sidebar's text was last drawn to.")
 
+(defvar-local portal-terminal-sidebar--drawn-frames nil
+  "The frames with a window showing the sidebar when it was last drawn.
+Its icons are the ones each of them draws.")
+
 (defvar portal-terminal-sidebar--drawn-at 0
   "When the sidebar was last drawn, as `float-time' gives it.")
 
@@ -234,6 +238,10 @@ buffer, the same text on every frame that shows it."
                 frames))
              (cdr entry))))
      portal-terminal-sidebar-program-icons)))
+
+(defun portal-terminal-sidebar--frames ()
+  "Return the frames with a window showing the sidebar, the current buffer."
+  (delete-dups (mapcar #'window-frame (get-buffer-window-list nil 'nomini t))))
 
 (defun portal-terminal-sidebar--icon (icon icons)
   "Return ICON, a string or nil, padded to the width of the widest of ICONS.
@@ -386,10 +394,8 @@ That of the narrowest window showing it, less a column at the right."
          (tree (portal-terminal-sidebar-tree))
          (several (cdar tree))
          (indent (if several "   " " "))
-         (icons (portal-terminal-sidebar--icons
-                 (or (delete-dups (mapcar #'window-frame
-                                          (get-buffer-window-list (current-buffer) 'nomini t)))
-                     (list (selected-frame)))))
+         (frames (portal-terminal-sidebar--frames))
+         (icons (portal-terminal-sidebar--icons (or frames (list (selected-frame)))))
          drawn)
     (erase-buffer)
     (pcase-dolist (`(,connection . ,sessions) (car tree))
@@ -416,6 +422,7 @@ That of the narrowest window showing it, less a column at the right."
                     (list buffer (buffer-name buffer) (portal-terminal-sidebar--program buffer)))
                   (nreverse drawn))
           portal-terminal-sidebar--drawn-width width
+          portal-terminal-sidebar--drawn-frames frames
           portal-terminal-sidebar--drawn-at (float-time)
           portal-terminal-sidebar--missed nil)))
 
@@ -681,11 +688,16 @@ and would also preview while a mouse click is held down."
 
 (defun portal-terminal-sidebar--windows-changed (&rest _)
   "Follow windows that changed buffers, or came, as a tab's do when it is restored.
-The highlight moves to the terminal now in use, and a sidebar shown again
-after missing a change is drawn afresh.  On `window-buffer-change-functions'
-while the sidebar's buffer lives."
+The highlight moves to the terminal now in use.  A sidebar shown again
+after missing a change is drawn afresh, and so is one that other frames
+show than when it was drawn: its icons are those each of them draws.  On
+`window-buffer-change-functions' while the sidebar's buffer lives."
   (portal-terminal-sidebar--selection-changed)
-  (when portal-terminal-sidebar--missed
+  (when (or portal-terminal-sidebar--missed
+            (when-let* ((sidebar (get-buffer portal-terminal-sidebar--name)))
+              (with-current-buffer sidebar
+                (cl-set-exclusive-or (portal-terminal-sidebar--frames)
+                                     portal-terminal-sidebar--drawn-frames))))
     (portal-terminal-sidebar--schedule)))
 
 ;;; When it is drawn

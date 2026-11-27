@@ -274,6 +274,38 @@ as `face-font' gives it; a character not in it has no font."
       (should (equal (portal-terminal-sidebar--icons '(nerd other)) '(("zsh" . "\uE6B9"))))
       (should (equal (portal-terminal-sidebar--icons '(other nerd)) '(("zsh" . "\uE6B9")))))))
 
+(ert-deftest portal-terminal-sidebar-draws-afresh-for-another-frame ()
+  ;; A window of another frame comes to show the sidebar, as a tab
+  ;; restored there does, with nothing else changed: what redisplay runs
+  ;; then draws it afresh, without the icon that frame has no font for.
+  (portal-sidebar-test--environment
+    (let* ((portal-terminal-sidebar-program-icons '(("zsh" . "\uE6B9")))
+           (file (current-buffer))
+           (terminal (portal-sidebar-test--open "one/app" "shell"))
+           (frames (list (selected-frame))))
+      (portal-fake-native-report (buffer-local-value 'portal-view--target terminal)
+                                 :program "/bin/zsh")
+      (switch-to-buffer file)
+      (cl-letf (((symbol-function 'face-font)
+                 (lambda (_face &optional frame _character)
+                   (and (framep frame)
+                        "-*-Hack Nerd Font-regular-normal-normal-*-13-*-*-*-m-0-iso10646-1")))
+                ((symbol-function 'portal-terminal-sidebar--frames) (lambda () frames)))
+        (portal-terminal-sidebar)
+        (should (equal (portal-sidebar-test--rows) '("\uE6B9 shell")))
+        (run-hook-with-args 'window-buffer-change-functions (selected-frame))
+        (portal-sidebar-test--settle)
+        (should (equal (portal-sidebar-test--rows) '("\uE6B9 shell")))
+        (setq frames (list (selected-frame) 'plain))
+        (run-hook-with-args 'window-buffer-change-functions (selected-frame))
+        (portal-sidebar-test--settle)
+        (should (equal (portal-sidebar-test--rows) '("Z shell zsh")))
+        ;; That frame's window gone, the icon is back.
+        (setq frames (list (selected-frame)))
+        (run-hook-with-args 'window-buffer-change-functions (selected-frame))
+        (portal-sidebar-test--settle)
+        (should (equal (portal-sidebar-test--rows) '("\uE6B9 shell")))))))
+
 (ert-deftest portal-terminal-sidebar-keeps-the-mark-on-a-narrow-row ()
   ;; On a line too narrow for the name, the program and the mark, the
   ;; program is left out and the mark stays at the right.
